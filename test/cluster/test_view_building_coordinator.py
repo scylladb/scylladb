@@ -533,7 +533,8 @@ async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient)
 
         tablet_token = 0 # Doesn't matter since there is one tablet
         replica = await get_tablet_replica(manager, servers[0], ks, 'tab', tablet_token)
-        await manager.api.enable_injection(servers[0].ip_addr, "stream_tablet_fail", one_shot=True)
+        await manager.api.enable_injection(servers[0].ip_addr, "stream_tablet_fail", one_shot=False)
+        await manager.api.enable_injection(servers[0].ip_addr, "stream_tablet_move_to_cleanup", one_shot=False)
         await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK) for s in servers))
         await manager.api.move_tablet(servers[0].ip_addr, ks, "tab", replica[0], replica[1], s1_host_id, 0, tablet_token)
 
