@@ -6,6 +6,7 @@
 
 # Tests for CDC tables in tablets enabled keyspaces
 
+from collections import defaultdict
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
@@ -133,39 +134,115 @@ async def test_drop_and_recreate_cdc(manager: ManagerClient):
     rows = await cql.run_async("SELECT * FROM system.cdc_streams_state")
     assert len(rows) == 0
 
+async def validate_virtual_tables(manager, servers, cql, log_table_id, ks, table):
+    await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
+
+    # read all streams from the internal tables and verify against the virtual tables
+    base_rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) AS ts, stream_id FROM system.cdc_streams_state WHERE table_id={log_table_id}")
+    history_rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) AS ts, stream_id, stream_state FROM system.cdc_streams_history WHERE table_id={log_table_id} ORDER BY timestamp ASC")
+
+    all_streams = defaultdict(list)
+    for r in base_rows:
+        all_streams[r.ts].append((r.stream_id, CdcStreamState.OPENED))
+    for r in history_rows:
+        all_streams[r.ts].append((r.stream_id, r.stream_state))
+
+    # verify the timestamps in the internal table match those in the virtual table
+    virtual_ts_rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) AS ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='{table}' ORDER BY timestamp ASC")
+    virtual_ts = [r.ts for r in virtual_ts_rows]
+
+    assert list(all_streams.keys()) == virtual_ts, f"Timestamps mismatch: internal {all_streams.keys()}, virtual {virtual_ts}"
+
+    # verify the current stream set for each timestamp in the virtual table matches the stream set
+    # we get from the internal tables by starting from the base and applying the diffs
+    current_streams = set()
+    for ts, streams in all_streams.items():
+        closed_streams = set([s for s, state in streams if state == CdcStreamState.CLOSED])
+        opened_streams = set([s for s, state in streams if state == CdcStreamState.OPENED])
+
+        assert closed_streams.issubset(current_streams)
+
+        current_streams = (current_streams - closed_streams) | opened_streams
+
+        rows = await cql.run_async(f"SELECT stream_id FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table}' AND timestamp = {ts} AND stream_state = {CdcStreamState.CURRENT}")
+        current_streams_virtual = set([r.stream_id for r in rows])
+        assert current_streams_virtual == current_streams
+
 # Read CDC stream information from the virtual tables system.cdc_timestamps and system.cdc_streams
+# and verify it against the internal CDC tables.
 @pytest.mark.asyncio
-async def test_cdc_virtual_table(manager: ManagerClient):
-    servers = await manager.servers_add(1)
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_cdc_virtual_tables(manager: ManagerClient):
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
 
-        rows = await cql.run_async("SELECT * FROM system.cdc_timestamps")
-        assert len(rows) == 1
+        assert [] == await cql.run_async("SELECT * FROM system.cdc_timestamps")
+        assert [] == await cql.run_async("SELECT * FROM system.cdc_streams")
 
-        await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        log_table_id = await manager.get_table_id(ks, "test_scylla_cdc_log")
 
-        rows = await cql.run_async("SELECT * FROM system.cdc_timestamps")
-        assert len(rows) == 2
+        await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
 
-        rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) as ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test1'")
-        assert len(rows) == 1
-        ts1 = rows[0].ts
+        # trigger multiple tablet splits to create new cdc timestamps and streams and validate the
+        # virtual tables after each one.
+        for _ in range(3):
+            prev_history_count = (await cql.run_async(f"SELECT COUNT(*) AS cnt FROM system.cdc_streams_history WHERE table_id={log_table_id}"))[0].cnt
+            prev_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test_scylla_cdc_log')
+            await cql.run_async(f"ALTER TABLE {ks}.test_scylla_cdc_log WITH tablets = {{'min_tablet_count': {prev_tablet_count * 2}}};")
 
-        rows = await cql.run_async(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='test1' AND timestamp={ts1} AND stream_state={CdcStreamState.CURRENT}")
-        assert len(rows) == 2
+            async def tablet_count_is(expected_tablet_count):
+                new_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test_scylla_cdc_log')
+                if new_tablet_count == expected_tablet_count:
+                    return True
+            await wait_for(lambda: tablet_count_is(prev_tablet_count * 2), time.time() + 60)
+            new_history_count = (await cql.run_async(f"SELECT COUNT(*) AS cnt FROM system.cdc_streams_history WHERE table_id={log_table_id}"))[0].cnt
+            assert new_history_count > prev_history_count
 
-        await cql.run_async(f"DROP TABLE {ks}.test1")
-        rows = await cql.run_async("SELECT * FROM system.cdc_timestamps")
-        assert len(rows) == 1
+            await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
 
-        await cql.run_async(f"DROP TABLE {ks}.test2")
-        rows = await cql.run_async("SELECT * FROM system.cdc_timestamps")
-        assert len(rows) == 0
+        # drop the table and verify the virtual tables are cleared
+        await cql.run_async(f"DROP TABLE {ks}.test")
 
-        rows = await cql.run_async("SELECT * FROM system.cdc_streams")
-        assert len(rows) == 0
+        assert [] == await cql.run_async("SELECT * FROM system.cdc_timestamps")
+        assert [] == await cql.run_async("SELECT * FROM system.cdc_streams")
+        await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClient):
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    servers = await manager.servers_add(1, config=cfg)
+    cql = manager.get_cql()
+    N = 3
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        for i in range(N):
+            await cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+
+        log_table_id = [await manager.get_table_id(ks, f"test{i}_scylla_cdc_log") for i in range(N)]
+
+        virt_tables = await cql.run_async(f"SELECT table_name FROM system.cdc_timestamps WHERE keyspace_name='{ks}' ALLOW FILTERING")
+        assert set([r.table_name for r in virt_tables]) == set([f'test{i}' for i in range(N)])
+
+        for i in range(N):
+            await validate_virtual_tables(manager, servers, cql, log_table_id[i], ks, f'test{i}')
+
+        # drop one table and verify it's removed from the virtual tables and the others remain valid.
+        await cql.run_async(f"DROP TABLE {ks}.test{N-1}")
+        log_table_id = log_table_id[:-1]
+        N = N - 1
+
+        virt_tables = await cql.run_async(f"SELECT table_name FROM system.cdc_timestamps WHERE keyspace_name='{ks}' ALLOW FILTERING")
+        assert set([r.table_name for r in virt_tables]) == set([f'test{i}' for i in range(N)])
+
+        for i in range(N):
+            await validate_virtual_tables(manager, servers, cql, log_table_id[i], ks, f'test{i}')
+
+    assert [] == await cql.run_async("SELECT * FROM system.cdc_timestamps")
+    assert [] == await cql.run_async("SELECT * FROM system.cdc_streams")
+
 
 # Split the tablets of a CDC table and wait for the CDC streams to split and become synchronized.
 # Then read the sequence of stream sets in two ways - by reading the current stream set for each
