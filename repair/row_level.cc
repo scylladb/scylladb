@@ -1172,6 +1172,7 @@ private:
         bool full = is_incremental_repair_using_all_sstables();
         auto& tinfo = tmap.get_tablet_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
+        co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(60s));
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
