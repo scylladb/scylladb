@@ -36,10 +36,11 @@ public:
     future<> add_sstable(sstables::shared_sstable sstable, sstables::offstrategy offstrategy = sstables::offstrategy::no) {
         if (offstrategy) {
             // Otherwise, on_compaction_completion always adds the new_sstabes to the main set
-            return _cf->add_sstable_and_update_cache(sstable, offstrategy);
+            co_await _cf->add_sstable_and_update_cache(sstable, offstrategy);
+            co_return;
         }
         auto new_sstables = { sstable };
-        return _cf->try_get_compaction_group_view_with_static_sharding().on_compaction_completion(compaction::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
+        co_return co_await _cf->try_get_compaction_group_view_with_static_sharding().on_compaction_completion(compaction::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
     future<> rebuild_sstable_list(compaction::compaction_group_view& table_s, const std::vector<sstables::shared_sstable>& new_sstables,

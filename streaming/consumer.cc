@@ -67,26 +67,37 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();
-                }).then([cf, sst, offstrategy, origin, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] -> future<> {
+                }).then([cf, sst, offstrategy, origin, repaired_at, frozen_guard] -> future<std::vector<sstables::shared_sstable>> {
+                    // Mark sstables as being repaired, before adding them into the table, so repair is properly
+                    // synchronized with compaction.
                     if (repaired_at && sstables::repair_origin == origin) {
                         sst->being_repaired = frozen_guard;
-                        if (sstable_list_to_mark_as_repaired) {
-                            sstable_list_to_mark_as_repaired->insert(sst);
-                        }
                     }
                     if (offstrategy && sstables::repair_origin == origin) {
                         sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
                                 cf->schema()->ks_name(), cf->schema()->cf_name());
                         cf->enable_off_strategy_trigger();
                     }
-                    co_await cf->add_sstable_and_update_cache(sst, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
-                    if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
-                        return vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
-                    } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
-                        return vb.local().register_staging_sstable(sst, std::move(cf));
+                    co_return co_await cf->add_sstable_and_update_cache(sst, offstrategy);
+                }).then([cf, s, sst, use_view_update_path, &vb, &vbw, sstable_list_to_mark_as_repaired, origin, repaired_at]
+                        (std::vector<sstables::shared_sstable> new_sstables) mutable -> future<> {
+                    auto new_sstables_ = std::move(new_sstables);
+                    auto table = cf;
+
+                    // The sstables added into the table might have been split, so the actual sstables added will be marked
+                    // as repairing on completion.
+                    if (repaired_at && sstables::repair_origin == origin && sstable_list_to_mark_as_repaired) {
+                        sstable_list_to_mark_as_repaired->insert(new_sstables_.begin(), new_sstables_.end());
                     }
-                    return make_ready_future<>();
+
+                    if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
+                        co_return co_await vbw.local().register_staging_sstable_tasks(new_sstables_, table->schema()->id());
+                    } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
+                        co_await coroutine::parallel_for_each(new_sstables_, [&vb, &table] (sstables::shared_sstable sst) -> future<> {
+                            return vb.local().register_staging_sstable(sst, table);
+                        });
+                    }
+                    co_return;
                 });
             };
             if (!offstrategy) {
