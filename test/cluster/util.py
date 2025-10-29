@@ -22,8 +22,7 @@ from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
-from typing import Optional, List
-
+from typing import Optional, List, Union
 
 logger = logging.getLogger(__name__)
 
@@ -609,7 +608,11 @@ def disable_schema_agreement_wait(cql: Session):
         cql.cluster.max_schema_agreement_wait = old_value
 
 
-def parse_replication_options(replication_column) -> dict:
+ReplicationOption = Union[str, List[str]]
+ReplicationOptions = dict[str, ReplicationOption]
+
+
+def parse_replication_options(replication_column) -> ReplicationOptions:
     """
     Parses the value of "replication_v2" or "replication" column from system_schema.keyspaces,
     which is a flattened map of options, into an expanded map.
@@ -630,3 +633,24 @@ def parse_replication_options(replication_column) -> dict:
         else:
             result[key] = value
     return result
+
+
+def get_replication(cql, keyspace) -> ReplicationOptions:
+    """
+    Returns replication options for a given keyspace.
+
+    Example result: {"dc1": "2", "dc2": ["rack1", "rack2"]}
+    """
+    row = cql.execute(f"SELECT replication, replication_v2 FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+    return parse_replication_options(row.replication_v2 or row.replication)
+
+
+def get_replica_count(rf: ReplicationOption) -> int:
+    """
+    Returns replica count corresponding to the given replication option.
+
+    Examples:
+        get_replica_count(["rack1", "rack2"]) == 2
+        get_replica_count(["2"]) == 2
+    """
+    return len(rf) if type(rf) is list else int(rf)
