@@ -24,6 +24,7 @@
 #include "sstables/sstable_compressor_factory.hh"
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/config_file_impl.hh"
 #include "utils/class_registrator.hh"
 #include "gms/feature_service.hh"
 
@@ -488,6 +489,8 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
 
     if (auto v = get_option(SSTABLE_COMPRESSION)) {
         _algorithm = name_to_algorithm(*v);
+    } else if (!options.empty()) {
+        throw exceptions::configuration_exception(seastar::format("Missing compression option '{}'", SSTABLE_COMPRESSION));
     } else {
         _algorithm = algorithm::none;
     }
@@ -511,7 +514,7 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
         try {
             _crc_check_chance = std::stod(*v);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid double value ") + *v + "for " + CRC_CHECK_CHANCE);
+            throw exceptions::syntax_exception(sstring("Invalid double value ") + *v + " for " + CRC_CHECK_CHANCE);
         }
     }
 
@@ -536,7 +539,7 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
     }
 }
 
-void compression_parameters::validate(dicts_feature_enabled dicts_enabled, dicts_usage_allowed dicts_allowed) {
+void compression_parameters::validate(dicts_feature_enabled dicts_enabled, dicts_usage_allowed dicts_allowed) const {
     if (_algorithm == algorithm::zstd_with_dicts || _algorithm == algorithm::lz4_with_dicts) {
         if (!dicts_enabled) {
             throw std::runtime_error(std::format("sstable_compression {} can't be used before "
@@ -591,6 +594,13 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
         opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
     }
     return opts;
+}
+
+std::istream& operator>>(std::istream& is, compression_parameters& cp) {
+    std::unordered_map<sstring, sstring> options_map;
+    is >> options_map;
+    cp = compression_parameters(options_map | std::ranges::to<std::map>());
+    return is;
 }
 
 lz4_processor::lz4_processor(cdict_ptr cdict, ddict_ptr ddict)
