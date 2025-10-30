@@ -129,6 +129,7 @@ static const std::unordered_map<compaction_type, sstring> compaction_types = {
     { compaction_type::Upgrade, "UPGRADE" },
     { compaction_type::Reshape, "RESHAPE" },
     { compaction_type::Split, "SPLIT" },
+    { compaction_type::Major, "MAJOR" },
 };
 
 sstring compaction_name(compaction_type type) {
@@ -159,6 +160,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Upgrade: return "Upgrade";
     case compaction_type::Reshape: return "Reshape";
     case compaction_type::Split: return "Split";
+    case compaction_type::Major: return "Major";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
@@ -2045,6 +2047,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Reshard,
         compaction_type::Reshape,
         compaction_type::Split,
+        compaction_type::Major,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -2064,6 +2067,9 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
             return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
+            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::major) {
             return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::cleanup) {
