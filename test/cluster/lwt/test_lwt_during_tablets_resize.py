@@ -131,6 +131,7 @@ async def run_random_resizes(
     }
 
 
+@pytest.mark.nightly_unstable  # marked to run as unstable and highlight new possible issues before #26801 is closed
 @pytest.mark.asyncio
 @skip_mode("release", "error injections are not supported in release mode")
 @skip_mode("debug", "debug mode is too slow for this test")
