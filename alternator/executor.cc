@@ -61,6 +61,7 @@
 #include "alternator/extract_from_attrs.hh"
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 
 using namespace std::chrono_literals;
 
@@ -5889,7 +5890,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
 
 static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
     locator::replication_strategy_config_options options;
-    for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
+    for (const auto& dc : sp.get_token_metadata_ptr()->get_datacenter_racks_token_owners() | std::views::keys) {
         options.emplace(dc, std::to_string(rf));
     }
     return options;
@@ -5929,15 +5930,6 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                keyspace_name, rf, endpoint_count);
-    }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
-
     // Even if the "tablets" experimental feature is available, we currently
     // do not enable tablets by default on Alternator tables because LWT is
     // not yet fully supported with tablets.
@@ -5967,7 +5959,26 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
             }
         }
     }
-    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets, std::nullopt);
+
+    int endpoint_count = gossiper.num_endpoints();
+    int rf = 3;
+    if (endpoint_count < rf) {
+        rf = 1;
+        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                     keyspace_name, rf, endpoint_count);
+    }
+    auto opts = get_network_topology_options(sp, gossiper, rf);
+    cql3::statements::ks_prop_defs props;
+    opts["class"] = sstring("NetworkTopologyStrategy");
+    props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, opts);
+    std::map<sstring, sstring> tablet_opts;
+    if (initial_tablets) {
+        tablet_opts["initial"] = std::to_string(*initial_tablets);
+    }
+    tablet_opts["enabled"] = initial_tablets ? "true" : "false";
+    props.add_property(cql3::statements::ks_prop_defs::KW_TABLETS, std::move(tablet_opts));
+    props.validate();
+    return props.as_ks_metadata(sstring(keyspace_name), *sp.get_token_metadata_ptr(), feat, sp.local_db().get_config());
 }
 
 future<> executor::start() {

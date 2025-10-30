@@ -988,7 +988,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto tmptr = get_token_metadata_ptr();
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
                     new_ks_props.validate();
-                    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features());
+                    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
@@ -2325,12 +2325,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             break;
                         }
 
-                        builder.set_transition_state(topology::transition_state::tablet_draining)
+                        guard = take_guard(std::move(node));
+                        builder.set_transition_state(topology::transition_state::write_both_read_old)
                                .set_version(_topo_sm._topology.version + 1)
+                               .set_session(session_id(guard.new_group0_state_id()))
                                .with_node(node.id)
                                .set("tokens", it->second.ring->tokens);
-                        co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
-                                "replace: transition to tablet_draining and take ownership of the replaced node's tokens");
+                        co_await update_topology_state(std::move(guard), {builder.build()},
+                                "replace: transition to write_both_read_old and take ownership of the replaced node's tokens");
                     }
                         break;
                     default:

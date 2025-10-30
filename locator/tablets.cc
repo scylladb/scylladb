@@ -1373,6 +1373,26 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
+rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc) {
+    auto& topo = tm.get_topology();
+    auto normal_nodes = [&] (const sstring& rack) {
+        int count = 0;
+        for (auto n : topo.get_datacenter_rack_nodes().at(dc).at(rack)) {
+            count += int(n.get().is_normal());
+        }
+        return count;
+    };
+
+    const auto& all_dcs = tm.get_datacenter_racks_token_owners();
+    auto it = all_dcs.find(dc);
+    if (it != all_dcs.end()) {
+        return it->second | std::views::keys
+            | std::views::filter([&] (const sstring& rack) { return normal_nodes(rack) > 0; })
+            | std::ranges::to<std::vector<sstring>>();
+    }
+    return {};
+}
+
 }
 
 auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_decision_way& way, fmt::format_context& ctx) const

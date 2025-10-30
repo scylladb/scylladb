@@ -227,34 +227,27 @@ void check_tablets_balance(const tablet_map& tmap,
     testlog.debug("load_map={}", load_map);
 
     for (const auto& [dc, dc_racks] : load_map) {
-        size_t replicas_in_dc = 0;
-        size_t num_racks = dc_racks.size();
-        size_t num_shards = 0;
+        std::unordered_map<sstring, double> avg_replicas_per_shard;
+
         for (const auto& [rack, rack_nodes] : dc_racks) {
+            size_t num_shards = 0;
             for (const auto& [host, shards] : rack_nodes) {
                 num_shards += shards.size();
                 for (const auto& [shard, n] : shards) {
-                    replicas_in_dc += n;
+                    avg_replicas_per_shard[rack] += n;
                 }
             }
+            testlog.debug("dc={} rack={}: replicas={} num_shards={} avg_replicas_per_shard={}", dc, rack, avg_replicas_per_shard[rack], num_shards, avg_replicas_per_shard[rack] / num_shards);
+            avg_replicas_per_shard[rack] /= num_shards;
         }
 
-        auto avg_replicas_per_rack = double(replicas_in_dc) / num_racks;
-        auto avg_replicas_per_shard = double(replicas_in_dc) / num_shards;
-
         for (const auto& [rack, rack_nodes] : dc_racks) {
-            size_t replicas_in_rack = 0;
             for (const auto& [host, shards] : rack_nodes) {
-                size_t replicas_in_node = 0;
                 for (const auto& [shard, n] : shards) {
-                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard - 1));
-                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard + 1));
-                    replicas_in_node += n;
+                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard[rack] - 1));
+                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard[rack] + 1));
                 }
-                replicas_in_rack += replicas_in_node;
             }
-            BOOST_REQUIRE_GE(replicas_in_rack, floor(avg_replicas_per_rack - 1));
-            BOOST_REQUIRE_LE(replicas_in_rack, ceil(avg_replicas_per_rack + 1));
         }
     }
 }
@@ -999,18 +992,18 @@ SEASTAR_TEST_CASE(test_rack_list_rf) {
             BOOST_REQUIRE(describe(e, "ks22").contains("'dc2': ['rack2a', 'rack2b']"));
         }
 
-        // Two DCs, one using rack list, one using numeric RF
-        // No auto-expansion to rack list.
+        // Two DCs, one using rack list, one using numeric RF (auto-expanded)
         {
             e.execute_cql("CREATE KEYSPACE ks2n2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2, "
                 "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
             auto& opts = e.local_db().find_keyspace("ks2n2").get_replication_strategy().get_config_options();
-            BOOST_REQUIRE(replication_factor_data(opts.at("dc1")).is_numeric());
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).get_rack_list(),
+                                std::vector<sstring>({"rack1a", "rack1b"}));
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
                                 std::vector<sstring>({"rack2a", "rack2b"}));
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
-            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': '2'"));
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': ['rack1a', 'rack1b']"));
             BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc2': ['rack2a', 'rack2b']"));
         }
 
@@ -1070,6 +1063,29 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
         BOOST_REQUIRE_THROW(e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
                                                       " '{}': ['{}']}}", loc.dc, loc.rack)).get(),
                             exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_altering_to_numeric_forbidden) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.disabled_features.insert("RACK_LIST_RF");
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        topo.start_new_dc({"dc1", "rack1a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack1b");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        e.execute_cql("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1}").get();
+        e.get_feature_service().local().rack_list_rf.enable();
+
+        // Only altering to rack list should be allowed once rf_rack_valid is enabled.
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2}").get(),
+            exceptions::configuration_exception);
     }, cfg);
 }
 

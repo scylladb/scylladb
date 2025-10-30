@@ -26,6 +26,7 @@ from cassandra.auth import PlainTextAuthProvider
 import threading
 import random
 
+from test.cluster.util import get_replication
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_all_tablet_replicas
@@ -92,7 +93,7 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
        in the wrong scheduling group. We can assume this because we don't
        run multiple tests in parallel on the same cluster.
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternator = get_alternator(servers[0].ip_addr)
     table = alternator.create_table(TableName=unique_table_name(),
         BillingMode='PAY_PER_REQUEST',
@@ -867,9 +868,10 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
     # the assignment of data (tablets or vnodes) to nodes isn't trivial,
     # which will allow us to check that non-trivial request forwarding works.
-    servers = await manager.servers_add(4, config=alternator_config)
+    servers = await manager.servers_add(4, config=alternator_config, auto_rack_dc="dc1")
     # Add a fifth node, with zero tokens (no data), by setting join_ring=false:
-    zero_token_server = await manager.server_add(config=alternator_config | {'join_ring': False})
+    zero_token_server = await manager.server_add(config=alternator_config | {'join_ring': False},
+                                                 property_file={'dc': 'dc1', 'rack': 'rack-zero-token'})
 
     # Get an Alternator connection to the zero-token node:
     alternator = get_alternator(zero_token_server.ip_addr)
@@ -895,7 +897,12 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     # the list of node uuids which contain *any* data for the given table -
     # we want this to be just the first four nodes in "servers", not the
     # fifth node zero_token_server.
-    expected = { await manager.get_host_id(s.server_id) for s in servers }
+    ks = f"alternator_{table.name}"
+    repl = get_replication(manager.get_cql(), ks)
+    if type(repl["dc1"]) is list:
+        expected = { await manager.get_host_id(s.server_id) for s in servers if s.rack in repl["dc1"] }
+    else:
+        expected = { await manager.get_host_id(s.server_id) for s in servers }
     got = await nodes_with_data(manager, 'alternator_'+table.name, table.name, zero_token_server)
     assert got == expected
     table.delete()

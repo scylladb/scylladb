@@ -12,7 +12,8 @@ from cassandra.protocol import InvalidRequest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.conftest import skip_mode
-from test.cluster.util import disable_schema_agreement_wait, create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import disable_schema_agreement_wait, parse_replication_options, create_new_test_keyspace, \
+    new_test_keyspace, get_replication
 
 logger = logging.getLogger(__name__)
 
@@ -76,28 +77,25 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
     }
 
     logger.info("starting a node (the leader)")
-    servers = [await manager.server_add(config=config, property_file={"dc": "dc1", "rack": "r1"})]
+    this_dc = "dc1"
+    servers = [await manager.server_add(config=config, property_file={"dc": this_dc, "rack": "r1"})]
 
     logger.info("starting a second node (the follower)")
-    servers += [await manager.server_add(config=config, property_file={"dc": "dc1", "rack": "r2"})]
+    servers += [await manager.server_add(config=config, property_file={"dc": this_dc, "rack": "r2"})]
 
-    async with new_test_keyspace(manager, "with "
-                                      "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and "
-                                      "tablets = {'initial': 2}") as ks:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', "
+                                          f"'{this_dc}': ['r1']"
+                                          "} and tablets = {'initial': 2}") as ks:
         await manager.get_cql().run_async(f"create table {ks}.t (pk int primary key)")
 
         logger.info(f"injecting wait-before-committing-rf-change-event into the leader node {servers[0]}")
         injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr,
                                                         'wait-before-committing-rf-change-event')
 
-        # ALTER tablets KS only accepts a specific DC, it rejects the generic 'replication_factor' tag
-        res = await manager.get_cql().run_async("select data_center from system.local")
-        this_dc = res[0].data_center
-
         async def alter_tablets_ks_without_waiting_to_complete():
             logger.info("scheduling ALTER KS to change the RF from 1 to 2")
             await manager.get_cql().run_async(f"alter keyspace {ks} "
-                                            f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+                                            f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': ['r1','r2']}}")
 
         # by creating a task this way we ensure it's immediately executed,
         # but we don't want to wait until the task is completed here,
@@ -127,7 +125,6 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
         assert matches
 
         # ensure that the ALTER has eventually succeeded and we changed RF from 1 to 2
-        res = manager.get_cql().execute(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
-        assert res[0].replication[this_dc] == '2'
+        assert get_replication(manager.get_cql(), ks)[this_dc] == ['r1', 'r2']
 
         await manager.get_cql().run_async(f"drop keyspace {ks2}")

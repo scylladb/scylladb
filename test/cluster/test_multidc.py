@@ -14,7 +14,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.cqlpy import nodetool
 from cassandra import ConsistencyLevel
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement
 from test.pylib.async_cql import _wrap_future
 from test.pylib.manager_client import ManagerClient
@@ -178,9 +178,9 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
 
     async def create_fail(rfs: Union[List[int], int], failed_dc: int, rf: int, rack_count: int):
         ks = unique_name()
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
+        err = rf"Replication factor {rf} exceeds the number of racks|The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
               f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
-        with pytest.raises(InvalidRequest, match=err):
+        with pytest.raises((ConfigurationException, InvalidRequest), match=err):
             await create_aux(ks, rfs)
 
     async def alter_ok(ks: str, rfs: List[int]) -> None:
@@ -189,10 +189,7 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
 
     async def alter_fail(ks: str, rfs: List[int], failed_dc: int, rack_count: int) -> None:
         rf = rfs[failed_dc - 1]
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
-
-        with pytest.raises(InvalidRequest, match=err):
+        with pytest.raises((ConfigurationException, InvalidRequest)):
             await alter_ok(ks, rfs)
 
     # Step 1.
@@ -289,14 +286,16 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
         for task in tasks:
             _ = tg.create_task(task)
 
-    await alter_ok(ks1, [2, 1])
+    # Altering from rack list to numeric not supported.
+    await alter_fail(ks1, [2, 1], 1, 2)
+    # await alter_ok(ks1, [2, 1])
     await alter_fail(ks1, [2, 2], 2, 1)
 
-    await alter_ok(ks2, [2, 1])
+    await alter_fail(ks2, [2, 1], 1, 2)
     await alter_ok(ks3, [2, 1])
-    await alter_ok(ks4, [2, 1])
+    await alter_fail(ks4, [2, 1], 1, 2)
     # RF = 1 is always OK!
-    await alter_ok(ks3, [1, 1])
+    await alter_fail(ks3, [1, 1], 1, 2)
 
 @pytest.mark.asyncio
 async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
@@ -341,14 +340,16 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
 
     async def create_fail(rfs: Union[List[int], int], failed_dc: int, rf: int, rack_count: int):
         ks = unique_name()
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
+        err = rf"Replication factor {rf} exceeds the number of racks|The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
               f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
-        with pytest.raises(InvalidRequest, match=err):
+        with pytest.raises((ConfigurationException, InvalidRequest), match=err):
             await create_aux(ks, rfs)
+            logger.error(f"create_aux({ks}, {rfs}) should have failed")
 
     valid_keyspaces = [
         create_ok([0, 0]),
         create_ok([1, 0]),
+        create_ok([2, 0]),
         create_ok([3, 0]),
         create_ok(0)
     ]
@@ -357,7 +358,6 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     # because then we can't predict what error will say.
     invalid_keyspaces = [
         create_fail([4, 0], 1, 4, 3),
-        create_fail([2, 0], 1, 2, 3),
         create_fail([0, 1], 2, 1, 0),
         create_fail([0, 2], 2, 2, 0),
         create_fail([0, 3], 2, 3, 0),

@@ -19,6 +19,7 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "db/config.hh"
+#include <random>
 
 namespace cql3 {
 
@@ -26,9 +27,74 @@ namespace statements {
 
 static logging::logger logger("ks_prop_defs");
 
+static
+locator::replication_strategy_config_option
+expand_to_racks(const locator::token_metadata& tm,
+                const sstring& dc,
+                const locator::replication_strategy_config_option& rf,
+                const locator::replication_strategy_config_options& old_options)
+{
+    auto dc_racks = locator::get_allowed_racks(tm, dc);
+
+    logger.debug("expand_to_racks: dc={} rf={} allowed_racks={}", dc, rf, dc_racks);
+
+    if (!tm.get_topology().get_datacenters().contains(dc)) {
+        throw exceptions::configuration_exception(fmt::format("Unrecognized datacenter name '{}'", dc));
+    }
+
+    auto data = locator::abstract_replication_strategy::parse_replication_factor(rf);
+    data.validate(std::ranges::to<std::unordered_set<sstring>>(dc_racks));
+
+    if (data.is_rack_based()) {
+        return rf;
+    }
+
+    if (data.count() == 0) {
+        return locator::rack_list();
+    }
+
+    if (data.count() > dc_racks.size()) {
+        throw exceptions::configuration_exception(fmt::format(
+                "Replication factor {} exceeds the number of racks ({}) in dc {}", data.count(), dc_racks.size(), dc));
+    }
+
+    // Handle ALTER:
+    // ([]|0) -> numeric is allowed, there are no existing replicas
+    // numeric -> numeric' is not supported. User should convert RF to rack list of equal count first.
+    // rack_list -> len(rack_list) is allowed (no-op)
+    // rack_list -> numeric is not allowed
+    if (old_options.contains(dc)) {
+        auto& old_rf_val = old_options.at(dc);
+        auto old_rf = locator::replication_factor_data(old_rf_val);
+        if (old_rf.is_rack_based()) {
+            if (old_rf.count() == data.count()) {
+                return old_rf_val;
+            } else if (old_rf.count() > 0) {
+                throw exceptions::configuration_exception(fmt::format(
+                        "Cannot change replication factor for '{}' from {} to numeric {}, use rack list instead",
+                        dc, old_rf_val, data.count()));
+            }
+        } else if (old_rf.count() > 0) {
+            throw exceptions::configuration_exception(fmt::format(
+                    "Cannot change replication factor for '{}' from {} to {}, only rack list is allowed",
+                    dc, old_rf_val, data.count()));
+        }
+    }
+
+    // If the replication factor is less than the number of racks, pick rf racks at random.
+    if (data.count() < dc_racks.size()) {
+        static thread_local auto gen = std::default_random_engine(std::random_device{}());
+        std::ranges::shuffle(dc_racks, gen);
+        dc_racks.resize(data.count());
+    }
+
+    return dc_racks;
+}
+
 static locator::replication_strategy_config_options prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
+        bool rf_rack_valid_keyspaces,
         locator::replication_strategy_config_options options,
         const locator::replication_strategy_config_options& old_options,
         bool rack_list_enabled,
@@ -36,8 +102,12 @@ static locator::replication_strategy_config_options prepare_options(
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
+    auto is_alter = !old_options.empty();
+    const auto& all_dcs = tm.get_datacenter_racks_token_owners();
+    auto auto_expand_racks = uses_tablets && rf_rack_valid_keyspaces && rack_list_enabled;
 
-    logger.debug("prepare_options: {}: is_nts={} old_options={} new_options={}", strategy_class, is_nts, old_options, options);
+    logger.debug("prepare_options: {}: is_nts={} auto_expand_racks={} rack_list_enabled={} old_options={} new_options={} all_dcs={}",
+                 strategy_class, is_nts, auto_expand_racks, rack_list_enabled, old_options, options, all_dcs);
 
     if (!is_nts) {
         return options;
@@ -47,7 +117,6 @@ static locator::replication_strategy_config_options prepare_options(
     // If the user simply switches from another strategy without providing any options,
     // but the other strategy used the 'replication_factor' option, it will also be expanded.
     // See issue CASSANDRA-14303.
-
     std::optional<sstring> rf;
     auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
     if (it != options.end()) {
@@ -65,6 +134,10 @@ static locator::replication_strategy_config_options prepare_options(
             // and didn't provide any additional options.
             rf = std::get<sstring>(it->second);
         }
+    }
+
+    if (rf && uses_tablets && is_alter) {
+        throw exceptions::invalid_request_exception("'replication_factor' tag is not allowed when executing ALTER KEYSPACE with tablets, please list the DCs explicitly");
     }
 
     // Validate options.
@@ -110,6 +183,18 @@ static locator::replication_strategy_config_options prepare_options(
         }
     }
 
+    if (!rf && options.empty() && old_options.empty()) {
+        if (all_dcs.empty()) {
+            throw request_validations::invalid_request("No data centers found in the cluster, cannot determine replication factor");
+        }
+        for (const auto& [dc, racks_map] : all_dcs) {
+            if (racks_map.empty()) {
+                continue;
+            }
+            options.emplace(dc, std::to_string(racks_map.size()));
+        }
+    }
+
     if (rf.has_value()) {
         locator::replication_factor_data::parse(*rf);
 
@@ -123,17 +208,11 @@ static locator::replication_strategy_config_options prepare_options(
         for (const auto& dc : tm.get_topology().get_datacenters()) {
             options.emplace(dc, *rf);
         }
-    } else if (options.empty() && old_options.empty()) {
-        // For default replication factor consider only racks with nodes that are NOT zero-token only nodes,
-        auto dc_racks = tm.get_datacenter_racks_token_owners();
-        if (dc_racks.empty()) {
-            throw request_validations::invalid_request("No data centers found in the cluster, cannot determine replication factor");
-        }
-        for (const auto& [dc, racks_map] : dc_racks) {
-            if (racks_map.empty()) {
-                continue;
-            }
-            options.emplace(dc, std::to_string(racks_map.size()));
+    }
+
+    if (auto_expand_racks) {
+        for (const auto& [dc, dc_rf] : options) {
+            options[dc] = expand_to_racks(tm, dc, dc_rf, old_options);
         }
     }
 
@@ -322,12 +401,12 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = feat.rack_list_rf;
-    auto options = prepare_options(sc, tm, get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
     locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     // if tablets options have not been specified, inherit them if it's tablets-enabled KS
@@ -339,7 +418,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     auto sc = get_replication_strategy_class();
     bool rack_list_enabled = feat.rack_list_rf;
     if (sc) {
-        options = prepare_options(*sc, tm, get_replication_options(), old_options, rack_list_enabled, uses_tablets);
+        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), get_replication_options(), old_options, rack_list_enabled, uses_tablets);
     } else {
         sc = old->strategy_name();
         options = old_options;

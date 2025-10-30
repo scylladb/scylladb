@@ -10,7 +10,7 @@ import random
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.conftest import skip_mode
-from test.cluster.util import wait_for_cql_and_get_hosts
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication
 from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_first_completed
@@ -661,7 +661,11 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
         scope_nodes = set([ str(host_ids[s.server_id]) ])
         # See comment near merge_tocs() above for explanation of servers list filtering below
         if scope == 'rack':
-            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
+            rf = get_replication(cql, ks)[s.datacenter]
+            if type(rf) is list:
+                scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] if s.rack in rf])
+            else:
+                scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
         elif scope == 'dc':
             scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
         logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')

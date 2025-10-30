@@ -79,7 +79,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         current_options.type_string(), new_options.type_string()));
             }
 
-            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
+            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features(), qp.db().get_config());
 
             auto tmptr = qp.proxy().get_token_metadata_ptr();
             const auto& topo = tmptr->get_topology();
@@ -145,7 +145,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         const auto tmptr = qp.proxy().get_token_metadata_ptr();
         const auto& topo = tmptr->get_topology();
         const auto& feat = qp.proxy().features();
-        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
+        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat, qp.db().get_config());
         utils::chunked_vector<mutation> muts;
         std::vector<sstring> warnings;
 
@@ -160,10 +160,6 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             if (!qp.proxy().features().topology_global_request_queue && !qp.topology_global_queue_empty()) {
                 return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
-            }
-            if (_attrs->get_replication_options().contains(ks_prop_defs::REPLICATION_FACTOR_KEY)) {
-                return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(
-                       exceptions::invalid_request_exception("'replication_factor' tag is not allowed when executing ALTER KEYSPACE with tablets, please list the DCs explicitly"));
             }
             qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
