@@ -198,7 +198,7 @@ def test_two_same_name_indexes_on_different_tables_with_if_not_exists(cql, test_
         schema = "p int primary key, v vector<float, 3>"
         with new_test_table(cql, test_keyspace, schema) as table2:
             cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ann_index ON {table}(v) USING 'vector_index'")
-            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ann_indes ON {table2}(v) USING 'vector_index'")
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ann_index ON {table2}(v) USING 'vector_index'")
 
 ###############################################################################
 # Tests for CDC with vector indexes
