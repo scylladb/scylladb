@@ -1190,7 +1190,7 @@ static unsigned get_cas_shard(const schema& s, dht::token token, const locator::
     if (const auto& rs = erm.get_replication_strategy(); rs.uses_tablets()) {
         const auto& tablet_map = erm.get_token_metadata().tablets().get_tablet_map(s.id());
         const auto tablet_id = tablet_map.get_tablet_id(token);
-        return tablet_map.get_primary_replica(tablet_id).shard % smp::count;
+        return tablet_map.get_primary_replica(tablet_id, erm.get_topology()).shard % smp::count;
     } else {
         on_internal_error(paxos::paxos_state::logger,
             format("failed to detect shard for reads for non-tablet-based rs {}, table {}.{}", 

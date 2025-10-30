@@ -355,7 +355,7 @@ class tablet_map;
 /// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
 tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
 // If filter returns true, the replica can be chosen as primary replica.
-tablet_replica_set get_primary_replicas(const locator::tablet_map&, tablet_id, std::function<bool(const tablet_replica&)> filter);
+tablet_replica_set get_primary_replicas(const locator::tablet_map&, tablet_id, const locator::topology&, std::function<bool(const tablet_replica&)> filter);
 tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
 
 /// Describes streaming required for a given tablet transition.
@@ -606,7 +606,7 @@ public:
     dht::token_range get_token_range(tablet_id id) const;
 
     /// Returns the primary replica for the tablet
-    tablet_replica get_primary_replica(tablet_id id) const;
+    tablet_replica get_primary_replica(tablet_id id, const locator::topology& topo) const;
 
     /// Returns the secondary replica for the tablet, which is assumed to be directly following the primary replica in the replicas vector
     /// \throws std::runtime_error if the tablet has less than 2 replicas.
@@ -794,7 +794,7 @@ public:
 // Check that all tablets which have replicas on this host, have a valid replica shard (< smp::count).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
-std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter);
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter);
 
 struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
@@ -869,6 +869,10 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
 
 /// Returns the list of racks that can be used for placing replicas in a given DC.
 rack_list get_allowed_racks(const locator::token_metadata&, const sstring& dc);
+
+/// Returns a comparator function that can be used to sort tablet_replicas
+/// according to <dc, rack, host_id> order in the given topology. 
+auto tablet_replica_comparator(const locator::topology& topo);
 
 }
 

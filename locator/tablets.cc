@@ -13,6 +13,7 @@
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "db/system_keyspace.hh"
+#include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 #include "utils/rjson.hh"
@@ -240,7 +241,7 @@ tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migra
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
-tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, std::function<bool(const tablet_replica&)> filter) {
+tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter) {
     const auto& info = tablet_map.get_tablet_info(tid);
     const auto* transition = tablet_map.get_tablet_transition_info(tid);
 
@@ -250,8 +251,8 @@ tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, t
         }
         return transition->writes;
     };
-    auto primary = [tid, filter = std::move(filter)] (tablet_replica_set set) -> std::optional<tablet_replica> {
-        return maybe_get_primary_replica(tid, set, filter);
+    auto primary = [tid, filter = std::move(filter), &topo] (tablet_replica_set set) -> std::optional<tablet_replica> {
+        return maybe_get_primary_replica(tid, set, topo, filter);
     };
     auto add = [] (tablet_replica r1, tablet_replica r2) -> tablet_replica_set {
         // if primary replica is not the one leaving, then only primary will be streamed to.
@@ -555,14 +556,30 @@ dht::token_range tablet_map::get_token_range_after_split(const token& t) const n
     return get_token_range(id_after_split, log2_tablets_after_split);
 }
 
-std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter) {
-    const auto replicas = replica_set | std::views::filter(std::move(filter)) | std::ranges::to<tablet_replica_set>();
+auto tablet_replica_comparator(const locator::topology& topo) {
+    return [&topo](const tablet_replica& a, const tablet_replica& b) {
+        const auto loc_a = topo.get_location(a.host);
+        const auto loc_b = topo.get_location(b.host);
+        if (loc_a.dc != loc_b.dc) {
+            return loc_a.dc < loc_b.dc;
+        }
+        if (loc_a.rack != loc_b.rack) {
+            return loc_a.rack < loc_b.rack;
+        }
+        return a.host < b.host;
+    };
+}
+
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter) {
+    tablet_replica_set replica_set_copy = replica_set;
+    std::ranges::sort(replica_set_copy, tablet_replica_comparator(topo));
+    const auto replicas = replica_set_copy | std::views::filter(std::move(filter)) | std::ranges::to<tablet_replica_set>();
     return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
 }
 
-tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
+tablet_replica tablet_map::get_primary_replica(tablet_id id, const locator::topology& topo) const {
     const auto& replicas = get_tablet_info(id).replicas;
-    return replicas.at(size_t(id) % replicas.size());
+    return maybe_get_primary_replica(id, replicas, topo, [&] (const auto& _) { return true; }).value();
 }
 
 tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
@@ -574,7 +591,7 @@ tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
 }
 
 std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
-    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
+    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, topo, [&] (const auto& tr) {
         return tablet_task_info.selected_by_filters(tr, topo);
     });
 }
