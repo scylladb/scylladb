@@ -66,19 +66,6 @@ future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s
     // Once the global barrier completes, no requests remain on the old shard,
     // so we can safely switch to acquiring locks only on the new shard.
     auto shards = s.table().get_effective_replication_map()->shards_ready_for_reads(s, token);
-
-    if (const auto it = std::ranges::find(shards, this_shard_id()); it == shards.end()) {
-        const auto& erm = s.table().get_effective_replication_map();
-        const auto& rs = erm->get_replication_strategy();
-        sstring tablet_map_desc;
-        if (rs.uses_tablets()) {
-            const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s.id());
-            tablet_map_desc = ::format(", tablet id {}, tablet map {}",
-                tablet_map.get_tablet_id(token), tablet_map);
-        }
-        on_internal_error(paxos_state::logger,
-            format("invalid shard, shards {}, token {}{}", shards, token, tablet_map_desc));
-    }
     std::ranges::sort(shards);
 
     replica_guard replica_guard;
