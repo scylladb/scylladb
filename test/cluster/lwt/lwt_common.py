@@ -11,7 +11,6 @@ import logging
 import random
 import re
 import time
-from collections import defaultdict
 from functools import cached_property
 from functools import wraps
 from typing import List, Dict, Callable
@@ -148,24 +147,13 @@ class Worker:
                 update.serial_consistency_level = ConsistencyLevel.LOCAL_SERIAL
                 try:
                     res = await self.cql.run_async(update)
+                    applied = bool(res and res[0].applied)
+                    assert applied, f"LWT not applied: pk={pk} s{self.worker_id} new={new_val} guard={guard_vals} prev={prev_val}"
                 except (WriteTimeout, OperationTimedOut, ReadTimeout) as e:
                     if not is_uncertainty_timeout(e):
                         raise
                     applied = await self.verify_update_through_select(pk, new_val, prev_val)
-                else:
-                    applied = bool(res and res[0].applied)
-                    if not applied:
-                        logger.error(
-                            "LWT_NOT_APPLIED pk=%r worker=s%d new=%r guard=%r prev=%r ts_ms=%d",
-                            pk,
-                            self.worker_id,
-                            new_val,
-                            guard_vals,
-                            prev_val,
-                        )
-                        raise AssertionError(
-                            f"LWT not applied: pk={pk} s{self.worker_id} new={new_val} guard={guard_vals} prev={prev_val}"
-                        )
+
                 if applied:
                     self.on_applied(pk, self.worker_id, new_val)
                     self.success_counts[pk] += 1
@@ -201,7 +189,7 @@ class BaseLWTTester:
         self.pk_to_token: Dict[int, int] = {}
         self.migrations = 0
         self.phase = "warmup"  # "warmup" -> "migrating" -> "post"
-        self.phase_ops = defaultdict(int)
+        self.phase_ops = {"warmup": 0, "migrating": 0, "post": 0}
 
     def _get_lower_bound(self, pk: int, col_idx: int) -> int:
         return self.lb_counts[pk][col_idx]
