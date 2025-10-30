@@ -58,6 +58,8 @@ async def test_not_enough_token_owners(manager: ManagerClient):
         await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
         await cql.run_async(f'INSERT INTO {ks_name}.tbl (pk, v) VALUES (1, 1)')
 
+        manager.ignore_log_patterns.append("There are nodes with tablets to drain but no candidate nodes in DC")
+
         # FIXME: Once scylladb/scylladb#16195 is fixed, we will have to replace the expected error message.
         # A similar change may be needed for remove_node below.
         logging.info(f'Trying to decommission {server_a} - one of the two token owners')

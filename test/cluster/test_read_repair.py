@@ -330,6 +330,7 @@ async def test_read_repair_with_trace_logging(request, manager):
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, c) VALUES (?, ?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ONE
 
+        manager.ignore_log_patterns.append("injected error")
         await manager.api.enable_injection(node1.ip_addr, "database_apply", one_shot=False)
         for ck in range(0, 100):
             await cql.run_async(insert_stmt, (0, ck, ck))

@@ -81,12 +81,15 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
 
     log_file1 = await manager.server_open_log(srv1.server_id)
     logging.info(f"Checking if Raft upgrade procedure failed on {srv1}")
-    await log_file1.wait_for("error injection before group 0 upgrade enters synchronize")
+    expected_error = "error injection before group 0 upgrade enters synchronize"
+    manager.ignore_log_patterns.append(expected_error)
+    await log_file1.wait_for(expected_error)
 
     logging.info(f"Setting recovery state on {hosts}")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {others}")
+    manager.ignore_log_patterns.append("raft_group0_upgrade - Raft upgrade failed: seastar::sleep_aborted")
     await manager.rolling_restart(others)
 
     # Prevent scylladb/scylladb#21724

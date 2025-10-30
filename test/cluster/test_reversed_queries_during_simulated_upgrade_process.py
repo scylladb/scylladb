@@ -59,6 +59,7 @@ async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
             await manager.server_update_config(
                 node1.server_id, "error_injections_at_startup", config
             )
+            manager.ignore_log_patterns.append("error_injections_at_startup")
             await manager.server_start(node1.server_id)
 
             for query, expected_data in queries:
