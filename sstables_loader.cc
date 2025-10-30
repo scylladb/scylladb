@@ -245,7 +245,7 @@ host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::to
 
 host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
     auto tid = _tablet_map.get_tablet_id(token);
-    auto replicas = locator::get_primary_replicas(_tablet_map, tid, [filter = std::move(filter)] (const locator::tablet_replica& replica) {
+    auto replicas = locator::get_primary_replicas(_tablet_map, tid, _erm->get_topology(), [filter = std::move(filter)] (const locator::tablet_replica& replica) {
         return filter(replica.host);
     });
     return to_replica_set(replicas);
