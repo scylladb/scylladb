@@ -48,8 +48,7 @@ static const class_registrator<
         password_authenticator,
         cql3::query_processor&,
         ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        utils::alien_worker&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
+        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
@@ -63,13 +62,12 @@ std::string password_authenticator::default_superuser(const db::config& cfg) {
 password_authenticator::~password_authenticator() {
 }
 
-password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, utils::alien_worker& hashing_worker)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>()) 
     , _superuser(default_superuser(qp.db().get_config()))
-    , _hashing_worker(hashing_worker)
 {}
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
@@ -319,9 +317,7 @@ future<authenticated_user> password_authenticator::authenticate(
         if (!salted_hash) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
-        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
-            return passwords::check(password, *salted_hash);
-        });
+        const bool password_match = passwords::check(password, *salted_hash);
         if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
