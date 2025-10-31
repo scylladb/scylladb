@@ -7307,7 +7307,7 @@ future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const ab
             // iterator_guard handles safe iterator updates while allowing prompt
             // handler destruction and client response.
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
-            co_await maybe_yield();
+            co_await coroutine::maybe_yield();
         }
     }
     co_await g.close();
@@ -7354,7 +7354,7 @@ future<> storage_proxy::cancel_all_write_response_handlers() {
     auto f = _write_handlers_gate.close();
     while (!_response_handlers.empty()) {
         _response_handlers.begin()->second->timeout_cb();
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
     co_await std::move(f);
 }
