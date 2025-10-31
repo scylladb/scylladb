@@ -133,10 +133,11 @@ check_jenkins_job_status() {
 
   lastCompletedJobName="$jenkins_url/job/$jenkins_job/lastCompletedBuild"
   getBuildResult=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedJobName/api/json?tree=result)
-  if [[ "$getBuildResult" == "*Unauthorized*" ]]; then
-      echo -e "${ORANGE}WARNING:${NC} Failed to authenticate with Jenkins. please check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
+  if [[ $getBuildResult =~ (Access Denied|401 Unauthorized) ]]; then
+      echo -e "${ORANGE}WARNING:${NC} Access Denied to $lastCompletedJobName. \nPlease check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
       exit 1
   fi
+
   lastCompleted=$(echo "$getBuildResult" | jq -r '.result')
 
   if [[ "$lastCompleted" == "SUCCESS" ]]; then
