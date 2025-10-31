@@ -660,7 +660,7 @@ def test_ttl_expiration_streams(dynamodb, dynamodbstreams, waits_for_expiration)
     # Alternator Streams currently doesn't work with tablets, so until
     # #23838 is solved, skip this test on tablets.
     for tag in TAGS:
-        if tag['Key'] == 'experimental:initial_tablets' and tag['Value'].isdigit():
+        if tag['Key'] == 'system:initial_tablets' and tag['Value'].isdigit():
             pytest.skip("Streams test skipped on tablets due to #23838")
 
     # In my experiments, a 30-minute (1800 seconds) is the typical
