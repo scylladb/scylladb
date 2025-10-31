@@ -192,7 +192,9 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
                 m.set_clustered_cell(ck, "session", data_value(tr_info->session_id.uuid()), ts);
             }
         }
-        tid = *tablets.next_tablet(tid);
+        if (auto next_tid = tablets.next_tablet(tid)) {
+            tid = *next_tid;
+        }
     }
     co_await process_mutation(std::move(m));
 }
@@ -659,7 +661,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                                         persisted_last_token, current_last_token, table, tid));
     }
 
-    return *map.next_tablet(tid);
+    return map.next_tablet(tid).value_or(tid);
 }
 
 struct tablet_metadata_builder {
