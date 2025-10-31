@@ -154,9 +154,6 @@ public:
             , _unlink_sstables(unlink)
             , _stream_scope(scope)
     {
-        if (_primary_replica_only && _stream_scope != stream_scope::all) {
-            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
-        }
         // By sorting SSTables by their primary key, we allow SSTable runs to be
         // incrementally streamed.
         // Overlapping run fragments can have their content deduplicated, reducing
@@ -225,8 +222,8 @@ host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& tok
     };
 
     if (_primary_replica_only) {
-        if (_stream_scope != stream_scope::all) {
-            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
+        if (_stream_scope == stream_scope::node) {
+            throw std::runtime_error("Node scoped streaming of primary replica only is not supported");
         }
         return get_primary_endpoints(token, std::move(host_filter));
     }
