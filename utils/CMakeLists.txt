@@ -15,6 +15,7 @@ target_sources(utils
     buffer_input_stream.cc
     build_id.cc
     config_file.cc
+    crypt_sha512.cc
     directories.cc
     disk-error-handler.cc
     disk_space_monitor.cc
