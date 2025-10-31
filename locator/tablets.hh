@@ -66,6 +66,9 @@ struct global_tablet_id {
 
 struct range_based_tablet_id {
     table_id table;
+
+    // This represents the token range of the tablet in the form (a, b]
+    // and only such ranges are allowed
     dht::token_range range;
 
     bool operator==(const range_based_tablet_id&) const = default;
@@ -445,7 +448,9 @@ struct tablet_load_stats {
     // Sum of all tablet sizes on a node and available disk space.
     uint64_t effective_capacity = 0;
 
-    std::unordered_map<range_based_tablet_id, uint64_t> tablet_sizes;
+    // Contains tablet sizes per table.
+    // The token ranges must be in the form (a, b] and only such ranges are allowed
+    std::unordered_map<table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 
     // returns the aggregated size of all the tablets added
     uint64_t add_tablet_sizes(const tablet_load_stats& tls);
@@ -479,6 +484,12 @@ struct load_stats {
     }
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
+
+    // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
+    // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
+    // corresponding to the post-resize tablet_map.
+    // In case any pre-resize tablet replica is not found, the function returns nullptr
+    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 };
 
 using load_stats_v2 = load_stats;
