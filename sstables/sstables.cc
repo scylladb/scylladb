@@ -2895,18 +2895,16 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
         co_return ret;
     }
 
-    input_stream<char> data_stream;
-    if (sst->get_compression()) {
-        data_stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit,
-                nullptr, nullptr, sstable::raw_stream::yes);
-    } else {
-        data_stream = co_await sst->data_stream(0, sst->data_size(), permit,
+    input_stream<char> data_stream = co_await (sst->get_compression()
+        ? sst->data_stream(0, sst->ondisk_data_size(), permit,
+                nullptr, nullptr, sstable::raw_stream::yes)
+        : sst->data_stream(0, sst->data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::no,
                 integrity_check::yes, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
                     ret.status = validate_checksums_status::invalid;
-                });
-    }
+                })
+        );
 
     auto valid = true;
     std::exception_ptr ex;
