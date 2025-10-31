@@ -21,6 +21,11 @@ import urllib.request
 from pkg_resources import parse_version
 import multiprocessing as mp
 
+# Python 3.14 changed the default to 'forkserver', which is not compatible
+# with our relocatable python. It execs our Python binary, but without our
+# ld.so. Change it back to 'fork' to avoid issues.
+mp.set_start_method('fork')
+
 VERSION = "1.0"
 quiet = False
 # Temporary url for the review
