@@ -30,6 +30,7 @@ Nodetool
    nodetool-commands/enablebackup
    nodetool-commands/enablebinary
    nodetool-commands/enablegossip
+   nodetool-commands/excludenode
    nodetool-commands/flush
    nodetool-commands/getcompactionthroughput
    nodetool-commands/getendpoints
@@ -104,6 +105,7 @@ Operations that are not listed below are currently not available.
 * :doc:`enablebackup </operating-scylla/nodetool-commands/enablebackup/>` - Enable incremental backup.
 * :doc:`enablebinary </operating-scylla/nodetool-commands/enablebinary/>` - Re-enable native transport (binary protocol).
 * :doc:`enablegossip </operating-scylla/nodetool-commands/enablegossip/>` - Re-enable gossip.
+* :doc:`excludenode </operating-scylla/nodetool-commands/excludenode/>`- Mark nodes as permanently down.
 * :doc:`flush </operating-scylla/nodetool-commands/flush/>` - Flush one or more column families.
 * :doc:`getcompactionthroughput </operating-scylla/nodetool-commands/getcompactionthroughput>` - Print the throughput cap for compaction in the system
 * :doc:`getendpoints <nodetool-commands/getendpoints/>` :code:`<keyspace>` :code:`<table>` :code:`<key>`- Print the end points that owns the key.

@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+import uuid
+
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.cluster.test_tablets2 import safe_rolling_restart
@@ -920,6 +922,45 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
         logger.info(f"Replacing {node_to_replace} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
+
+@pytest.mark.asyncio
+async def test_excludenode(manager: ManagerClient):
+    """
+    Verifies recovery scenario involving marking the node as excluded using excludenode.
+
+    1. Create a cluster with 3 racks, 1 node in rack1, 2 nodes in rack2, and 1 in rack3.
+    2. The keyspace is initially replicated to rack1 and rack2.
+    3. We down one node in rack2, which should cause unavailability.
+    4. We mark the node as excluded using excludenode. This unblocks the next ALTER
+    5. We add rack3 to RF of the keyspace. This wouldn't succeed without marking the node as excluded.
+    6. We verify that downed node can be removed successfully, while there are still tablets on it. That's
+       why we need two nodes in rack2.
+    """
+    servers = await manager.servers_add(servers_num=3, auto_rack_dc='dc1')
+    await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack2'})
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
+                                          "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        live_node = servers[0]
+        node_to_remove = servers[1]
+        with pytest.raises(Exception, match="Cannot mark host .* as excluded because it's alive"):
+            await manager.api.exclude_node(live_node.ip_addr, hosts=[await manager.get_host_id(node_to_remove.server_id)])
+
+        with pytest.raises(Exception, match=".* does not belong to this cluster"):
+            await manager.api.exclude_node(live_node.ip_addr, hosts=[str(uuid.uuid4())])
+
+        await manager.server_stop(node_to_remove.server_id)
+        await manager.others_not_see_server(node_to_remove.ip_addr)
+        await manager.api.exclude_node(live_node.ip_addr, hosts=[await manager.get_host_id(node_to_remove.server_id)])
+
+        # Check that tablets can be rebuilt in a new rack with rack2 down.
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']}}")
+
+        # Check that removenode succeeds on the node which is excluded
+        await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])

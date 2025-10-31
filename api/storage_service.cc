@@ -846,6 +846,25 @@ rest_remove_node(sharded<service::storage_service>& ss, std::unique_ptr<http::re
 
 static
 future<json::json_return_type>
+rest_exclude_node(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto hosts = utils::split_comma_separated_list(req->get_query_param("hosts"))
+        | std::views::transform([] (const sstring& s) { return locator::host_id(utils::UUID(s)); })
+        | std::ranges::to<std::vector<locator::host_id>>();
+
+    auto& topo = ss.local().get_token_metadata().get_topology();
+    for (auto host : hosts) {
+        if (!topo.has_node(host)) {
+            throw bad_param_exception(fmt::format("Host ID {} does not belong to this cluster", host));
+        }
+    }
+
+    apilog.info("exclude_node: hosts={}", hosts);
+    co_await ss.local().mark_excluded(hosts);
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
 rest_get_removal_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         return ss.local().get_removal_status().then([] (auto status) {
             return make_ready_future<json::json_return_type>(status);
@@ -1769,6 +1788,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::decommission.set(r, rest_bind(rest_decommission, ss));
     ss::move.set(r, rest_bind(rest_move, ss));
     ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
+    ss::exclude_node.set(r, rest_bind(rest_exclude_node, ss));
     ss::get_removal_status.set(r, rest_bind(rest_get_removal_status, ss));
     ss::force_remove_completion.set(r, rest_bind(rest_force_remove_completion, ss));
     ss::set_logging_level.set(r, rest_bind(rest_set_logging_level));
@@ -1846,6 +1866,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::decommission.unset(r);
     ss::move.unset(r);
     ss::remove_node.unset(r);
+    ss::exclude_node.unset(r);
     ss::get_removal_status.unset(r);
     ss::force_remove_completion.unset(r);
     ss::set_logging_level.unset(r);

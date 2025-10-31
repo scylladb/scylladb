@@ -1687,6 +1687,21 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
     }
 }
 
+void excludenode_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("exclude-operation")) {
+        throw std::invalid_argument("Host ID list is required.");
+    }
+
+    const auto hosts = vm["exclude-operation"].as<std::vector<sstring>>();
+    if (hosts.empty()) {
+        throw std::invalid_argument("Host ID list is required.");
+    }
+
+    std::unordered_map<sstring, sstring> params;
+    params["hosts"] = fmt::to_string(fmt::join(hosts, ","));
+    client.post("/storage_service/exclude_node", std::move(params));
+}
+
 void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::vector<sstring> keyspaces, tables;
     if (vm.contains("keyspace")) {
@@ -2397,6 +2412,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto joining = get_nodes_of_state(client, "joining");
     const auto leaving = get_nodes_of_state(client, "leaving");
     const auto moving = get_nodes_of_state(client, "moving");
+    const auto excluded = get_nodes_of_state(client, "excluded");
     const auto endpoint_load = rjson_to_map<ssize_t>(client.get("/storage_service/load_map"));
 
     const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
@@ -2441,7 +2457,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         const auto dc_header = fmt::format("Datacenter: {}", dc);
         fmt::print("{}\n", dc_header);
         fmt::print("{}\n", std::string(dc_header.size(), '='));
-        fmt::print("Status=Up/Down\n");
+        fmt::print("Status=Up/Down/eXcluded\n");
         fmt::print("|/ State=Normal/Leaving/Joining/Moving\n");
         Tabulate table;
         if (keyspace) {
@@ -2450,13 +2466,19 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
             table.add("--", "Address", "Load", "Tokens", "Owns", "Host ID", "Rack");
         }
         for (const auto& ep : endpoints) {
-            char status, state;
-            if (live.contains(ep)) {
-                status = 'U';
+            char state;
+            sstring status;
+            if (endpoint_host_id.contains(ep) && excluded.contains(endpoint_host_id.at(ep))) {
+                status = "X";
+                if (live.contains(ep)) {
+                    status = "XU"; // Should not happen, but when it does, we better know.
+                }
+            } else if (live.contains(ep)) {
+                status = "U";
             } else if (down.contains(ep)) {
-                status = 'D';
+                status = "D";
             } else {
-                status = '?';
+                status = "?";
             }
             if (joining.contains(ep)) {
                 state = 'J';
@@ -4301,6 +4323,37 @@ For more information, see: {}
             {
                 removenode_operation
             }
+        },
+        {
+                {
+                    "excludenode",
+                    "Mark nodes as permanently down (excluded).",
+    fmt::format(R"(
+The cluster will no longer attempt to contact excluded nodes.
+This can be used to unblock topology operations, tablet load balancing, replication changes, etc.
+
+Data ownership is not changed, and the nodes are still cluster members,
+so should be eventually removed or replaced.
+
+After nodes are excluded, there is no need to pass them in the list of ignored
+nodes to removnenode, replace, or repair.
+
+Important: use this command *only* on nodes that are not reachable by other nodes
+by any means, and they are not going to become reachable again.
+
+Excluded nodes will be banned from connecting to any of the nodes in the cluster,
+not only to current members but also to any node added later.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/excludenode.html")),
+                    {},
+                    {
+                        typed_option<std::vector<sstring>>("exclude-operation", "List of host IDs to exclude", -1),
+                    },
+                },
+                {
+                    excludenode_operation
+                }
         },
         {
             {

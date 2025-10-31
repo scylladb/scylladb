@@ -62,6 +62,17 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         return addr | std::ranges::to<std::vector>();
     });
 
+    ss::get_excluded_nodes.set(r, [&tm](const_req req) {
+        const auto& local_tm = *tm.local().get();
+        std::vector<sstring> eps;
+        local_tm.get_topology().for_each_node([&] (auto& node) {
+            if (node.is_excluded()) {
+                eps.push_back(node.host_id().to_sstring());
+            }
+        });
+        return eps;
+    });
+
     ss::get_joining_nodes.set(r, [&tm, &g](const_req req) {
         const auto& local_tm = *tm.local().get();
         const auto& points = local_tm.get_bootstrap_tokens();
@@ -130,6 +141,7 @@ void unset_token_metadata(http_context& ctx, routes& r) {
     ss::get_leaving_nodes.unset(r);
     ss::get_moving_nodes.unset(r);
     ss::get_joining_nodes.unset(r);
+    ss::get_excluded_nodes.unset(r);
     ss::get_host_id_map.unset(r);
     httpd::endpoint_snitch_info_json::get_datacenter.unset(r);
     httpd::endpoint_snitch_info_json::get_rack.unset(r);

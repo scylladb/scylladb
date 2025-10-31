@@ -47,6 +47,12 @@ Example:
 
     nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
 
+To only mark the node as permanently down without doing actual removal, use :doc:`nodetool excludenode </operating-scylla/nodetool-commands/excludenode>`:
+
+.. code-block:: console
+
+    nodetool excludenode <Host ID of the node>
+
 
 .. _removenode-ignore-dead-nodes:
 
