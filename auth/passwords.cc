@@ -21,24 +21,27 @@ static thread_local crypt_data tlcrypt = {};
 
 namespace detail {
 
+void verify_hashing_output(const char * res) {
+    if (!res || (res[0] == '*')) {
+        throw std::system_error(errno, std::system_category());
+    }
+}
+
 void verify_scheme(scheme scheme) {
     const sstring random_part_of_salt = "aaaabbbbccccdddd";
 
     const sstring salt = sstring(prefix_for_scheme(scheme)) + random_part_of_salt;
     const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
-
-    if (e && (e[0] != '*')) {
-        return;
+    try {
+        verify_hashing_output(e);
+    } catch (const std::system_error& ex) {
+        throw no_supported_schemes();
     }
-
-    throw no_supported_schemes();
 }
 
 sstring hash_with_salt(const sstring& pass, const sstring& salt) {
     auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
-    if (!res || (res[0] == '*')) {
-        throw std::system_error(errno, std::system_category());
-    }
+    verify_hashing_output(res);
     return res;
 }
 
