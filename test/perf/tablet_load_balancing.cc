@@ -113,7 +113,7 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::load_stats& load_stats) {
     for (auto&& mig : plan.migrations()) {
         co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&mig] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -121,6 +121,32 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
             tmap.set_tablet(mig.tablet.tablet, tinfo);
             return make_ready_future();
         });
+        // Move tablet size in load_stats to account for the migration
+        if (mig.src.host != mig.dst.host) {
+            if (!load_stats.tablet_stats.contains(mig.src.host)) {
+                throw std::runtime_error(format("Source host not found in load_stats for migration {}", mig));
+            }
+            if (!load_stats.tablet_stats.contains(mig.dst.host)) {
+                throw std::runtime_error(format("Destination host not found in load_stats for migration {}", mig));
+            }
+
+            auto& src_stats = load_stats.tablet_stats.at(mig.src.host);
+            auto& dst_stats = load_stats.tablet_stats.at(mig.dst.host);
+
+            auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
+            const range_based_tablet_id rb_tid{mig.tablet.table, tmap.get_token_range(mig.tablet.tablet)};
+
+            if (!src_stats.tablet_sizes.contains(rb_tid.table) || src_stats.tablet_sizes.at(rb_tid.table).contains(rb_tid.range)) {
+                throw std::runtime_error(format("Tablet not found on source load_stats for migration: {}", mig));
+            }
+            if (dst_stats.tablet_sizes.contains(rb_tid.table) && dst_stats.tablet_sizes.at(rb_tid.table).contains(rb_tid.range)) {
+                throw std::runtime_error(format("Tablet already on destination load_stats for migration: {}", mig));
+            }
+
+            const uint64_t tablet_size = src_stats.tablet_sizes.at(rb_tid.table).at(rb_tid.range);
+            dst_stats.tablet_sizes[rb_tid.table][rb_tid.range] = tablet_size;
+            src_stats.tablet_sizes.at(rb_tid.table).erase(rb_tid.range);
+        }
     }
     co_await apply_resize_plan(tm, plan);
 }
@@ -141,7 +167,7 @@ struct rebalance_stats {
 };
 
 static
-rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
+rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats& load_stats, std::unordered_set<host_id> skiplist = {}) {
     rebalance_stats stats;
     abort_source as;
 
@@ -155,9 +181,10 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
 
     for (size_t i = 0; i < max_iterations; ++i) {
         auto prev_lb_stats = talloc.stats().for_dc(dc);
+        auto load_stats_p = make_lw_shared<locator::load_stats>(load_stats);
         auto start_time = std::chrono::steady_clock::now();
 
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats_p, skiplist).get();
 
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
@@ -191,7 +218,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
             return stats;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            return apply_plan(tm, plan);
+            return apply_plan(tm, plan, load_stats);
         }).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
@@ -207,11 +234,11 @@ struct params {
     int shards;
     int scale1 = 1;
     int scale2 = 1;
+    double tablet_size_deviation_factor = 0.5;
 };
 
 struct table_balance {
     double shard_overcommit;
-    double best_shard_overcommit;
     double node_overcommit;
 };
 
@@ -232,8 +259,8 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
-                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={:.2f} node={:.2f}}}",
+                              b.shard_overcommit, b.node_overcommit);
     }
 };
 
@@ -251,13 +278,52 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     auto format(const params& p, FormatContext& ctx) const {
         auto tablets1_per_shard = double(p.tablets1.value_or(0)) * p.rf1 / (p.nodes * p.shards);
         auto tablets2_per_shard = double(p.tablets2.value_or(0)) * p.rf2 / (p.nodes * p.shards);
-        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}}}",
+        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}, tablet_size_deviation_factor={}}}",
                          p.iterations, p.nodes,
                          p.tablets1.value_or(0), tablets1_per_shard,
                          p.tablets2.value_or(0), tablets2_per_shard,
-                         p.rf1, p.rf2, p.shards);
+                         p.rf1, p.rf2, p.shards, p.tablet_size_deviation_factor);
     }
 };
+
+class tablet_size_generator {
+    std::default_random_engine rnd_engine{std::random_device{}()};
+    std::normal_distribution<> dist;
+public:
+    explicit tablet_size_generator(double deviation_factor)
+        : dist(default_target_tablet_size, default_target_tablet_size * deviation_factor) {
+    }
+
+    uint64_t generate() {
+        // We can't have a negative tablet size, which is why we need to minimize it to 0 (with std::max()).
+        // One consequence of this is that the average generated tablet size will actually
+        // be larger than default_target_tablet_size.
+        // This will be especially pronounced as deviation_factor gets larger. For instance:
+        //
+        // deviation_factor | avg tablet size
+        // -----------------+----------------------------------------
+        //              1   | default_target_tablet_size * 1.08
+        //              1.5 | default_target_tablet_size * 1.22
+        //              2   | default_target_tablet_size * 1.39
+        //              3   | default_target_tablet_size * 1.76
+        return std::max(0.0, dist(rnd_engine));
+    }
+};
+
+void generate_tablet_sizes(double tablet_size_deviation_factor, locator::load_stats& stats, locator::shared_token_metadata& stm) {
+    tablet_size_generator tsg(tablet_size_deviation_factor);
+    for (auto&& [table, tmap] : stm.get()->tablets().all_tables_ungrouped()) {
+        tmap->for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+            for (const auto& replica : ti.replicas) {
+                const uint64_t tablet_size = tsg.generate();
+                locator::range_based_tablet_id rb_tid {table, tmap->get_token_range(tid)};
+                stats.tablet_stats[replica.host].tablet_sizes[rb_tid.table][rb_tid.range] = tablet_size;
+                testlog.trace("Generated tablet size {} for {}:{}", tablet_size, table, tid);
+            }
+            return make_ready_future<>();
+        }).get();
+    }
+}
 
 future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
     auto cfg = tablet_cql_test_config();
@@ -295,16 +361,16 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         populate_racks(rf1);
 
         const size_t rack_count = racks.size();
+        std::unordered_map<sstring, uint64_t> rack_capacity;
 
         auto add_host = [&] (endpoint_dc_rack dc_rack) {
             auto host = topo.add_node(service::node_state::normal, shard_count, dc_rack);
             hosts.emplace_back(host, dc_rack);
-            stats.capacity[host] = default_target_tablet_size * shard_count;
+            const uint64_t capacity = default_target_tablet_size * shard_count * 100;
+            stats.capacity[host] = capacity;
+            stats.tablet_stats[host].effective_capacity = capacity;
+            rack_capacity[dc_rack.rack] += capacity;
             testlog.info("Added new node: {} / {}:{}", host, dc_rack.dc, dc_rack.rack);
-        };
-
-        auto make_stats = [&] {
-            return make_lw_shared<locator::load_stats>(stats);
         };
 
         for (size_t i = 0; i < n_hosts; ++i) {
@@ -315,7 +381,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         auto bootstrap = [&] (endpoint_dc_rack dc_rack) {
             add_host(std::move(dc_rack));
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
         };
 
         auto decommission = [&] (host_id host) {
@@ -326,13 +392,15 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 throw std::runtime_error(format("No such host: {}", host));
             }
             topo.set_node_state(host, service::node_state::decommissioning);
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
             if (stm.get()->tablets().has_replica_on(host)) {
                 throw std::runtime_error(format("Host {} still has replicas!", host));
             }
             topo.set_node_state(host, service::node_state::left);
             testlog.info("Node decommissioned: {}", host);
+            rack_capacity[it->dc_rack.rack] -= stats.capacity.at(host);
             hosts.erase(it);
+            stats.tablet_stats.erase(host);
         };
 
         auto ks1 = add_keyspace(e, {{dc1, rf1}}, p.tablets1.value_or(1));
@@ -342,49 +410,70 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         schema_ptr s1 = e.local_db().find_schema(id1);
         schema_ptr s2 = e.local_db().find_schema(id2);
 
+        generate_tablet_sizes(p.tablet_size_deviation_factor, stats, stm);
+
+        // Compute table size per rack
+        std::unordered_map<sstring, std::unordered_map<table_id, uint64_t>> table_sizes_per_rack;
+        for (auto& [host, tls] : stats.tablet_stats) {
+            auto host_i = std::ranges::find(hosts, host, &host_info::id);
+            if (host_i == hosts.end()) {
+                throw std::runtime_error(format("Host {} not found in hosts", host));
+            }
+            auto rack = host_i->dc_rack.rack;
+            for (auto& [table, ranges] : tls.tablet_sizes) {
+                for (auto& [trange, tablet_size] : ranges) {
+                    table_sizes_per_rack[rack][table] += tablet_size;
+                }
+            }
+        }
+
         auto check_balance = [&] () -> cluster_balance {
             cluster_balance res;
 
             testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
+            auto load_stats_p = make_lw_shared<locator::load_stats>(stats);
             int table_index = 0;
             for (auto s : {s1, s2}) {
-                load_sketch load(stm.get());
+                load_sketch load(stm.get(), load_stats_p);
                 load.populate(std::nullopt, s->id()).get();
 
-                min_max_tracker<uint64_t> shard_load_minmax;
-                min_max_tracker<uint64_t> node_load_minmax;
-                uint64_t sum_node_load = 0;
-                uint64_t shard_count = 0;
-                for (auto [h, _] : hosts) {
-                    auto minmax = load.get_shard_minmax(h);
-                    auto node_load = load.get_load(h);
-                    auto avg_shard_load = load.get_real_avg_shard_load(h);
-                    auto overcommit = double(minmax.max()) / avg_shard_load;
-                    shard_load_minmax.update(minmax.max());
-                    shard_count += load.get_shard_count(h);
-                    testlog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_shard_load, overcommit);
-                    node_load_minmax.update(node_load);
-                    sum_node_load += node_load;
+                min_max_tracker<double> shard_overcommit_minmax;
+                min_max_tracker<double> node_overcommit_minmax;
+                for (auto dc_rack : racks) {
+                    auto rack = dc_rack.rack;
+                    auto table_size = table_sizes_per_rack.at(rack).at(s->id());
+                    auto ideal_load = double(table_size) / rack_capacity.at(rack);
+                    min_max_tracker<double> shard_load_minmax;
+                    min_max_tracker<double> node_load_minmax;
+                    for (auto [h, host_dc_rack] : hosts) {
+                        if (host_dc_rack.rack != rack) {
+                            continue;
+                        }
+                        auto minmax = load.get_shard_minmax(h);
+                        auto node_load = load.get_load(h);
+                        auto overcommit = double(minmax.max()) / ideal_load;
+                        testlog.info("Load for rack {} on host {} for table {}: total={}, min={}, max={}, spread={}, ideal={}, overcommit={}",
+                                    rack, h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), ideal_load, overcommit);
+                        node_load_minmax.update(node_load);
+                        shard_load_minmax.update(minmax.max());
+                    }
+
+                    auto shard_overcommit = shard_load_minmax.max() / ideal_load;
+                    testlog.info("Shard overcommit: {} in rack: {}", shard_overcommit, rack);
+
+                    auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
+                    auto node_overcommit = node_load_minmax.max() / ideal_load;
+                    testlog.info("Node imbalance in rack={} min={}, max={}, spread={}, ideal={}, overcommit={}",
+                                rack, node_load_minmax.min(), node_load_minmax.max(), node_imbalance, ideal_load, node_overcommit);
+
+                    shard_overcommit_minmax.update(shard_overcommit);
+                    node_overcommit_minmax.update(node_overcommit);
                 }
 
-                auto avg_shard_load = double(sum_node_load) / shard_count;
-                auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
-                // Overcommit given the best distribution of tablets given current number of tablets.
-                auto best_shard_overcommit = div_ceil(sum_node_load, shard_count) / avg_shard_load;
-                testlog.info("Shard overcommit: {:.2f}, best={:.2f}", shard_overcommit, best_shard_overcommit);
-
-                auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
-                auto avg_node_load = double(sum_node_load) / hosts.size();
-                auto node_overcommit = node_load_minmax.max() / avg_node_load;
-                testlog.info("Node imbalance: min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                              node_load_minmax.min(), node_load_minmax.max(), node_imbalance, avg_node_load, node_overcommit);
-
                 res.tables[table_index++] = {
-                    .shard_overcommit = shard_overcommit,
-                    .best_shard_overcommit = best_shard_overcommit,
-                    .node_overcommit = node_overcommit
+                    .shard_overcommit = shard_overcommit_minmax.max(),
+                    .node_overcommit = node_overcommit_minmax.max(),
                 };
             }
 
@@ -404,7 +493,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         check_balance();
 
-        rebalance_tablets(e, make_stats());
+        rebalance_tablets(e, stats);
 
         global_res.init = global_res.worst = check_balance();
 
@@ -428,6 +517,7 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
     const int nr_racks = opts["racks"].as<int>();
     const int initial_nodes = nr_racks * opts["nodes-per-rack"].as<int>();
     const int extra_nodes = nr_racks * opts["extra-nodes-per-rack"].as<int>();
+    const bool tablet_size_deviation_factor = opts["tablet-size-deviation-factor"].as<double>();
 
     auto cfg = tablet_cql_test_config();
     cfg.db_config->rf_rack_valid_keyspaces(true);
@@ -435,10 +525,6 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
     do_with_cql_env_thread([&] (auto& e) {
         topology_builder topo(e);
         locator::load_stats stats;
-
-        auto make_stats = [&] {
-            return make_lw_shared<locator::load_stats>(stats);
-        };
 
         std::vector<endpoint_dc_rack> racks;
         racks.push_back(topo.rack());
@@ -448,7 +534,9 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
 
         auto add_host = [&] (endpoint_dc_rack rack) {
             auto host = topo.add_node(service::node_state::normal, shard_count, rack);
-            stats.capacity[host] = default_target_tablet_size * shard_count;
+            const uint64_t capacity = default_target_tablet_size * shard_count * 100;
+            stats.capacity[host] = capacity;
+            stats.tablet_stats[host].effective_capacity = capacity;
             testlog.info("Added new node: {}", host);
         };
 
@@ -466,12 +554,14 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
             return add_table(e, ks1).discard_result();
         }).get();
 
+        generate_tablet_sizes(tablet_size_deviation_factor, stats, e.shared_token_metadata().local());
+
         testlog.info("Initial rebalancing");
-        rebalance_tablets(e, make_stats());
+        rebalance_tablets(e, stats);
 
         testlog.info("Scaleout");
         add_hosts(extra_nodes);
-        global_res.stats += rebalance_tablets(e, make_stats());
+        global_res.stats += rebalance_tablets(e, stats);
     }, cfg).get();
 }
 
@@ -524,6 +614,8 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
         auto scale1 = 1 << tests::random::get_int(0, 5);
         auto scale2 = 1 << tests::random::get_int(0, 5);
         auto nodes = tests::random::get_int(rf1 + rf2, 2 *  MAX_RF);
+        // results in a deviation factor of 0.0 - 2.0
+        auto tablet_size_deviation_factor = tests::random::get_int(0, 200) / 100.0;
 
         params p {
             .iterations = app_cfg["iterations"].as<int>(),
@@ -535,6 +627,7 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
             .shards = shards,
             .scale1 = scale1,
             .scale2 = scale2,
+            .tablet_size_deviation_factor = tablet_size_deviation_factor
         };
 
         auto name = format("#{}", i);
@@ -556,6 +649,7 @@ void run_add_dec(const bpo::variables_map& opts) {
             .rf1 = opts["rf1"].as<int>(),
             .rf2 = opts["rf2"].as<int>(),
             .shards = opts["shards"].as<int>(),
+            .tablet_size_deviation_factor = opts["tablet-size-deviation-factor"].as<double>(),
         };
         run_simulation(p).get();
     }
@@ -579,7 +673,8 @@ const std::map<operation, operation_func> operations_with_func{
             typed_option<int>("rf1", 1, "Replication factor for the first table."),
             typed_option<int>("rf2", 1, "Replication factor for the second table."),
             typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
-            typed_option<int>("shards", 30, "Number of shards per node.")
+            typed_option<int>("shards", 30, "Number of shards per node."),
+            typed_option<double>("tablet-size-deviation-factor", 0.5, "Deviation factor for the tablet size random generator.")
           }
         }, &run_add_dec},
 
@@ -592,7 +687,8 @@ const std::map<operation, operation_func> operations_with_func{
             typed_option<int>("nodes-per-rack", 5, "Number of initial nodes per rack."),
             typed_option<int>("extra-nodes-per-rack", 3, "Number of nodes to add per rack."),
             typed_option<int>("racks", 2, "Number of racks."),
-            typed_option<int>("shards", 88, "Number of shards per node.")
+            typed_option<int>("shards", 88, "Number of shards per node."),
+            typed_option<double>("tablet-size-deviation-factor", 0.5, "Deviation factor for the tablet size random generator.")
           }
         }, &test_parallel_scaleout},
     }
