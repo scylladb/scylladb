@@ -1,4 +1,9 @@
 /*
+ * This file originates from musl libc (git.musl-libc.org).
+ * Modifications have been made and are licensed under the following terms:
+ * Copyright (C) 2025-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ *
  * public domain sha512 crypt implementation
  *
  * original sha crypt design: http://people.redhat.com/drepper/SHA-crypt.txt
@@ -12,6 +17,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+
+#include "crypt_sha512.hh"
 
 /* public domain sha512 implementation based on fips180-3 */
 /* >=2^64 bits messages are not supported (about 2000 peta bytes) */
@@ -155,7 +162,7 @@ static void sha512_sum(struct sha512 *s, uint8_t *md)
 
 static void sha512_update(struct sha512 *s, const void *m, unsigned long len)
 {
-	const uint8_t *p = m;
+	const uint8_t *p = (const uint8_t *)m;
 	unsigned r = s->len % 128;
 
 	s->len += len;
@@ -217,12 +224,12 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	/* reject large keys */
 	for (i = 0; i <= KEY_MAX && key[i]; i++);
 	if (i > KEY_MAX)
-		return 0;
+		return nullptr;
 	klen = i;
 
 	/* setting: $6$rounds=n$salt$ (rounds=n$ and closing $ are optional) */
 	if (strncmp(setting, "$6$", 3) != 0)
-		return 0;
+		return nullptr;
 	salt = setting + 3;
 
 	r = ROUNDS_DEFAULT;
@@ -244,15 +251,15 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 		 */
 		salt += sizeof "rounds=" - 1;
 		if (!isdigit(*salt))
-			return 0;
+			return nullptr;
 		u = strtoul(salt, &end, 10);
 		if (*end != '$')
-			return 0;
+			return nullptr;
 		salt = end+1;
 		if (u < ROUNDS_MIN)
 			r = ROUNDS_MIN;
 		else if (u > ROUNDS_MAX)
-			return 0;
+			return nullptr;
 		else
 			r = u;
 		/* needed when rounds is zero prefixed or out of bounds */
@@ -262,7 +269,7 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	for (i = 0; i < SALT_MAX && salt[i] && salt[i] != '$'; i++)
 		/* reject characters that interfere with /etc/shadow parsing */
 		if (salt[i] == '\n' || salt[i] == ':')
-			return 0;
+			return nullptr;
 	slen = i;
 
 	/* B = sha(key salt key) */
@@ -319,11 +326,11 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	p += sprintf(p, "$6$%s%.*s$", rounds, slen, salt);
 #if 1
 	static const unsigned char perm[][3] = {
-		0,21,42,22,43,1,44,2,23,3,24,45,25,46,4,
-		47,5,26,6,27,48,28,49,7,50,8,29,9,30,51,
-		31,52,10,53,11,32,12,33,54,34,55,13,56,14,35,
-		15,36,57,37,58,16,59,17,38,18,39,60,40,61,19,
-		62,20,41 };
+		{0,21,42},{22,43,1},{44,2,23},{3,24,45},{25,46,4},
+		{47,5,26},{6,27,48},{28,49,7},{50,8,29},{9,30,51},
+		{31,52,10},{53,11,32},{12,33,54},{34,55,13},{56,14,35},
+		{15,36,57},{37,58,16},{59,17,38},{18,39,60},{40,61,19},
+		{62,20,41} };
 	for (i=0; i<21; i++) p = to64(p,
 		(md[perm[i][0]]<<16)|(md[perm[i][1]]<<8)|md[perm[i][2]], 4);
 #else
@@ -354,7 +361,7 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	return output;
 }
 
-char *__crypt_sha512(const char *key, const char *setting, char *output)
+const char *__crypt_sha512(const char *key, const char *setting, char *output)
 {
 	static const char testkey[] = "Xy01@#\x01\x02\x80\x7f\xff\r\n\x81\t !";
 	static const char testsetting[] = "$6$rounds=1234$abc0123456789$";
