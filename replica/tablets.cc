@@ -577,7 +577,7 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
 
 namespace {
 
-tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
+std::optional<tablet_id> process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
         tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -661,7 +661,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                                         persisted_last_token, current_last_token, table, tid));
     }
 
-    return map.next_tablet(tid).value_or(tid);
+    return map.next_tablet(tid);
 }
 
 struct tablet_metadata_builder {
@@ -716,7 +716,9 @@ struct tablet_metadata_builder {
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+            if (auto next_tid = process_one_row(db, current->table, current->map, current->tid, row)) {
+                current->tid = *next_tid;
+            }
         }
     }
 
