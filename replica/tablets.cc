@@ -1187,4 +1187,3 @@ sstables::sstable_set_impl::selector_and_schema_t tablet_sstable_set::make_incre
 }
 
 } // namespace replica
-// Temporary change to trigger push
