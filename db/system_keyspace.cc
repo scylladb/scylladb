@@ -766,9 +766,6 @@ schema_ptr system_keyspace::size_estimates() {
         "partitions larger than specified threshold"
         );
         builder.set_gc_grace_seconds(0);
-        // FIXME re-enable caching for this and the other two
-        // system.large_* tables once
-        // https://github.com/scylladb/scylla/issues/3288 is fixed
         builder.set_caching_options(caching_options::get_disabled_caching_options());
         builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
