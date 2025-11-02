@@ -5974,11 +5974,11 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // manually create the keyspace to override this predefined behavior.
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
             const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
-    // Whether to use tablets for the table (actually for the keyspace
-    // of the table) is determined by the parameter `tablets_mode` (which is
-    // determined by "tablets_mode_for_new_keyspaces" config flag), as well as
-    // the presence and the value of a per-table tag "system:initial_tablets"
-    // mapped into INITIAL_TABLETS_TAG_KEY.
+    // Whether to use tablets for the table (actually for the keyspace of the
+    // table) is determined by tablets_mode (taken from the configuration
+    // option "tablets_mode_for_new_keyspaces"), as well as the presence and
+    // the value of a per-table tag system:initial_tablets
+    // (INITIAL_TABLETS_TAG_KEY).
     // Setting the tag with a numeric value will enable a specific initial number
     // of tablets (setting the value to 0 means enabling tablets with
     // an automatic selection of the best number of tablets).
@@ -5996,12 +5996,15 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
             try {
                 initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
             } catch (...) {
+                if (tablets_mode == db::tablets_mode_t::mode::enforced) {
+                    throw api_error::validation(format("Tag {} containing non-numerical value requests vnodes, but vnodes are forbidden by configuration option `tablets_mode_for_new_keyspaces: enforced`", INITIAL_TABLETS_TAG_KEY));
+                }
                 initial_tablets = std::nullopt;
                 elogger.trace("Following {} tag containing non-numerical value, Alternator will attempt to create a keyspace {} with vnodes.", INITIAL_TABLETS_TAG_KEY, keyspace_name);
             }
         } else {
             // No per-table tag present, use the value from config
-            if(tablets_mode == db::tablets_mode_t::mode::enabled || tablets_mode == db::tablets_mode_t::mode::enforced) {
+            if (tablets_mode == db::tablets_mode_t::mode::enabled || tablets_mode == db::tablets_mode_t::mode::enforced) {
                 initial_tablets = 0;
                 elogger.trace("Following the `tablets_mode_for_new_keyspaces` flag from the settings, Alternator will attempt to create a keyspace {} with tablets.", keyspace_name);
             } else {
