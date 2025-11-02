@@ -14,6 +14,7 @@
 #include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
 #include "index/vector_index.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "prepared_statement.hh"
 #include "replica/database.hh"
 #include "types/types.hh"
@@ -259,7 +260,7 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _properties->validate();
 }
 
-std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
+std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -283,7 +284,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
     // Custom indexes need to validate this property themselves, if they need it.
     if (!_properties || !_properties->custom_class) {
         try {
-            db::view::validate_view_keyspace(db, keyspace());
+            db::view::validate_view_keyspace(db, keyspace(), tmptr);
         } catch (const std::exception& e) {
             // The type of the thrown exception is not specified, so we need to wrap it here.
             throw exceptions::invalid_request_exception(e.what());
@@ -537,8 +538,8 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-std::optional<create_index_statement::base_schema_with_new_index> create_index_statement::build_index_schema(data_dictionary::database db) const {
-    auto targets = validate_while_executing(db);
+std::optional<create_index_statement::base_schema_with_new_index> create_index_statement::build_index_schema(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
+    auto targets = validate_while_executing(db, tmptr);
 
     auto schema = db.find_schema(keyspace(), column_family());
 
@@ -596,7 +597,7 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
-    auto res = build_index_schema(qp.db());
+    auto res = build_index_schema(qp.db(), qp.proxy().get_token_metadata_ptr());
 
     ::shared_ptr<event::schema_change> ret;
     utils::chunked_vector<mutation> muts;
