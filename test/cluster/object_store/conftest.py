@@ -248,7 +248,7 @@ class GSServer(GSFront):
             await self.server.stop()
         self.unpublish()
 
-@pytest.fixture(scope="function", params=['s3','gs'])
+@pytest.fixture(scope="function", params=['s3', 'gs'])
 async def object_storage(request, pytestconfig, tmpdir):
     server = None
 
@@ -263,6 +263,16 @@ async def object_storage(request, pytestconfig, tmpdir):
             server = GSServer(tmpdir)
     else:
         server = create_s3_server(pytestconfig, tmpdir)
+
+    try:
+        await server.start()
+        yield server
+    finally:
+        await server.stop()
+
+@pytest.fixture(scope="function")
+async def s3_storage(pytestconfig, tmpdir):
+    server = create_s3_server(pytestconfig, tmpdir)
 
     try:
         await server.start()
