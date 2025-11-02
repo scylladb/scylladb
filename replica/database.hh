@@ -2102,19 +2102,6 @@ public:
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const locator::token_metadata_ptr) const;
 
-    /// Verify that all existing materialized views are valid.
-    ///
-    /// We consider a materialized view valid if one of the following
-    /// conditions is satisfied:
-    /// * it resides in a vnode-based keyspace,
-    /// * it resides in a tablet-based keyspace, the cluster feature `VIEWS_WITH_TABLETS`
-    ///   is enabled, and the configuration option `rf_rack_valid_keyspaces` is enabled.
-    ///
-    /// Result:
-    /// * Depending on whether there are invalid materialized views, the function will
-    ///   log that either everything's OK, or that there are some keyspaces that violate
-    ///   the requirement.
-    void validate_tablet_views_indexes() const;
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.

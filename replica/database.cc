@@ -3489,37 +3489,6 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
-void database::validate_tablet_views_indexes() const {
-    dblog.info("Verifying that all existing materialized views are valid");
-    const data_dictionary::database& db = this->as_data_dictionary();
-
-    std::flat_set<std::string_view> invalid_keyspaces;
-
-    for (const view_ptr& view : get_views()) {
-        const auto& ks = view->ks_name();
-        try {
-            db::view::validate_view_keyspace(db, ks);
-        } catch (...) {
-            invalid_keyspaces.emplace(ks);
-        }
-    }
-
-    if (invalid_keyspaces.empty()) {
-        dblog.info("All existing materialized views are valid");
-        return;
-    }
-
-    // `std::flat_set` guarantees iteration in the increasing order.
-    const std::string ks_list = invalid_keyspaces
-            | std::views::join_with(std::string_view(", "))
-            | std::ranges::to<std::string>();
-
-    dblog.warn("Some of the existing keyspaces violate the requirements "
-            "for using materialized views or secondary indexes. Those features require enabling "
-            "the configuration option `rf_rack_valid_keyspaces` and the cluster feature "
-            "`VIEWS_WITH_TABLETS`. The keyspaces that violate that condition: {}", ks_list);
-}
-
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     static thread_local std::minstd_rand rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(0, max_value);
