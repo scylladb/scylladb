@@ -95,37 +95,41 @@ def test_initial_tablets_not_int(dynamodb):
 # "tablets_mode_for_new_keyspaces", as well as by the per-table
 # "system:initial_tablets" tag. The tag overrides the configuration,
 # except when the configuration flag's value is "enforced" -
-# then if the tag asks for vnodes, an exception is thrown.
-# The test could have been quite a nice one, however
-# scylla_config_temporary() requires the config variable to be
-# live-updatable, which "tablets_mode_for_new_keyspaces" is not.
-@pytest.mark.xfail(reason="tablets_mode_for_new_keyspaces config flag is not live-updatable")
+# then if the tag asks for vnodes, an error is generated.
 def test_tablets_tag_vs_config(dynamodb):
-    # Begin with the per-table tag asking for tablets
     schema = {
-        'Tags': [{'Key': initial_tablets_tag, 'Value': '0'}],
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
-        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    schema_tablets = {**schema, 'Tags': [{'Key': initial_tablets_tag, 'Value': '0'}]}
+    schema_vnodes = {**schema, 'Tags': [{'Key': initial_tablets_tag, 'Value': 'none'}]}
+    # With tablets_mode_for_new_keyspaces=enabled, tablets are used unless
+    # the user explicitly asks for vnodes (schema_vnodes).
     with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'):
         with new_test_table(dynamodb, **schema) as table:
             assert uses_tablets(dynamodb, table)
-    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'disabled'):
-        with new_test_table(dynamodb, **schema) as table:
+        with new_test_table(dynamodb, **schema_tablets) as table:
             assert uses_tablets(dynamodb, table)
-    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
-        with new_test_table(dynamodb, **schema) as table:
-            assert uses_tablets(dynamodb, table)
-    # Now change the per-table tag to ask for vnodes.
-    schema = {**schema, 'Tags': [{'Key': initial_tablets_tag, 'Value': 'none'}]}
-    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'):
-        with new_test_table(dynamodb, **schema) as table:
+        with new_test_table(dynamodb, **schema_vnodes) as table:
             assert not uses_tablets(dynamodb, table)
+    # With tablets_mode_for_new_keyspaces=disabled, vnodes are used unless
+    # the user explicitly asks tablets (schema_tablets)
     with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'disabled'):
         with new_test_table(dynamodb, **schema) as table:
             assert not uses_tablets(dynamodb, table)
+        with new_test_table(dynamodb, **schema_tablets) as table:
+            assert uses_tablets(dynamodb, table)
+        with new_test_table(dynamodb, **schema_vnodes) as table:
+            assert not uses_tablets(dynamodb, table)
+    # With tablets_mode_for_new_keyspaces=enforced, tablets are used except
+    # when the user requests vnodes, which is a ValidationException.
     with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
+        with new_test_table(dynamodb, **schema) as table:
+            assert uses_tablets(dynamodb, table)
+        with new_test_table(dynamodb, **schema_tablets) as table:
+            assert uses_tablets(dynamodb, table)
         with pytest.raises(ClientError, match='ValidationException.*tablets'):
-            with new_test_table(dynamodb, **schema) as table:
+            with new_test_table(dynamodb, **schema_vnodes) as table:
                 pass
 
 # Before Alternator Streams is supported with tablets (#23838), let's verify
