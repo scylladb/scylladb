@@ -109,8 +109,13 @@ extern const sstring TTL_TAG_KEY("system:ttl_attribute");
 // following ones are base table's keys added as needed or range key list will be empty.
 static const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY("system:spurious_range_key_added_to_gsi_and_user_didnt_specify_range_key");
 
-// Alternator-specific table properties stored as table tags, that are not considered internal:
-//
+// The following tags also have the "system:" prefix but are NOT used
+// by Alternator to store table properties - only the user ever writes to
+// them, as a way to configure the table. As such, these tags are writable
+// (and readable) by the user, and not hidden by tag_key_is_internal().
+// The reason why both hidden (internal) and user-configurable tags share the
+// same "system:" prefix is historic.
+
 // Setting the tag with a numeric value will enable a specific initial number
 // of tablets (setting the value to 0 means enabling tablets with
 // an automatic selection of the best number of tablets).
