@@ -3454,9 +3454,10 @@ database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
-void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr tmptr) const {
+void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
+    const bool enforce_rf_rack_valid_keyspaces = _cfg.rf_rack_valid_keyspaces();
 
     for (const auto& [name, info] : keyspaces) {
         try {
