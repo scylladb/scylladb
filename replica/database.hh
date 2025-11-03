@@ -2088,12 +2088,14 @@ public:
     }
 
     // Verify that the existing keyspaces are all RF-rack-valid.
+    // Throws an exception or prints a warning depending on whether RF-rack-validity must be enforced for the keyspace
+    // as determined by `enforce_rf_rack_validity_for_keyspace`.
     //
     // Result:
-    // * If `rf_rack_valid_keyspaces` is set, throws an exception with a relevant message
-    //   if there is a keyspace that violates RF-rack-validity.
-    // * If `rf_rack_valid_keyspaces` is not set, a warning will be printed for each keyspace
-    //   that is not RF-rack-valid, but no exception should be produced.
+    // * throws an exception with a relevant message if there is a keyspace that violates RF-rack-validity
+    //   and RF-rack-validity must be enforced for that keyspace.
+    // * Otherwise, a warning will be printed for all keyspaces that are not RF-rack-valid but not
+    //   enforced, and no exception should be produced.
     //
     // Preconditions:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`

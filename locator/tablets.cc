@@ -1353,8 +1353,8 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
 
         if (invalid_rf || invalid_arbiter_dc) {
             throw std::invalid_argument(std::format(
-                    "The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. "
-                    "That condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': RF={} vs. rack count={}.",
+                    "The keyspace '{}' is required to be RF-rack-valid. "
+                    "That condition is violated for DC '{}': RF={} vs. rack count={}.",
                     ks, std::string_view(dc), rf, normal_rack_count));
         }
     }
