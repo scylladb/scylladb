@@ -378,6 +378,12 @@ auto make_vs_mock_server(Args&&... args) -> future<std::unique_ptr<vs_mock_serve
     co_return server;
 }
 
+cql_test_config make_config() {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
@@ -552,7 +558,7 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
 }
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set("http://bad.authority.here:6080");
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
@@ -571,7 +577,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 }
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
@@ -594,7 +600,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
 }
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
@@ -623,7 +629,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     auto server = co_await make_vs_mock_server();
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
@@ -777,7 +783,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
                std::get<vector_store_client::service_error>(keys.error()).status == status_type::service_unavailable;
     };
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -808,7 +814,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
     auto responding_s = co_await make_vs_mock_server();
     auto unavail_s = co_await make_unavailable_server(responding_s->port());
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", responding_s->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -842,7 +848,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
     auto s1 = co_await make_vs_mock_server();
     auto s2 = co_await make_vs_mock_server(s1->port());
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -872,7 +878,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
     auto responding_s = co_await make_vs_mock_server();
     auto unavail_s = co_await make_unavailable_server();
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", unavail_s->port(), responding_s->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -906,7 +912,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
     auto s1 = co_await make_vs_mock_server();
     auto s2 = co_await make_vs_mock_server();
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", s1->port(), s2->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -933,7 +939,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
 
 SEASTAR_TEST_CASE(vector_search_metrics_test) {
 
-    auto cfg = cql_test_config();
+    auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set("http://good.authority.here:6080");
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {

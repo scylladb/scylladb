@@ -10,7 +10,6 @@ import pytest
 from .util import new_test_table, is_scylla, unique_name
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
-@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_create_vector_search_index(cql, test_keyspace, scylla_only):
     schema = 'p int primary key, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -251,7 +250,6 @@ def create_index(cql, test_keyspace, table, column):
     return True
 
 
-@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_try_create_cdc_with_vector_search_enabled(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -289,7 +287,6 @@ def test_try_create_cdc_with_vector_search_enabled(scylla_only, cql, test_keyspa
         assert not alter_cdc(cql, table, {'enabled': True, 'delta': 'keys', 'postimage': False})
 
 
-@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_try_disable_cdc_with_vector_search_enabled(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -301,7 +298,6 @@ def test_try_disable_cdc_with_vector_search_enabled(scylla_only, cql, test_keysp
             cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': False}}")
 
 
-@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_try_enable_vector_search_with_cdc_enabled(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -330,7 +326,6 @@ def test_try_enable_vector_search_with_cdc_enabled(scylla_only, cql, test_keyspa
         assert create_index(cql, test_keyspace, table, "v")
 
 
-@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_try_enable_vector_search_with_cdc_disabled(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
