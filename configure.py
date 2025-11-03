@@ -1480,7 +1480,6 @@ deps = {
 
 pure_boost_tests = set([
     'test/boost/anchorless_list_test',
-    'test/boost/auth_passwords_test',
     'test/boost/auth_resource_test',
     'test/boost/big_decimal_test',
     'test/boost/caching_options_test',
