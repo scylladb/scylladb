@@ -127,7 +127,7 @@ void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
     for (auto frag : **_last_key) {
         // The first fragment contains the entire token,
         // and token collisions are rare, hence [[unlikely]].
-        if (i + frag.size() < _last_key_mismatch) [[unlikely]] {
+        if (i + frag.size() <= _last_key_mismatch) [[unlikely]] {
             i += frag.size();
             continue;
         }
