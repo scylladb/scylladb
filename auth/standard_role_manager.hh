@@ -37,7 +37,7 @@ class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
     ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
-    cache& _cache [[maybe_unused]];
+    cache& _cache;
     future<> _stopped;
     abort_source _as;
     std::string _superuser;
