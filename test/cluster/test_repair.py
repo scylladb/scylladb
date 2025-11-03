@@ -10,6 +10,7 @@ import time
 import asyncio
 import json
 import random
+import uuid
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -284,3 +285,57 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
             natural_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, "tbl", key)
             ring_endpoints = get_ring_endpoints(token)
             assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
+
+
+@pytest.mark.asyncio
+async def test_repair_timtestamp_difference(manager):
+    cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck UUID, v text, PRIMARY KEY (pk, ck))")
+
+    nodes = [node1, node2]
+    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
+
+    pk = 1
+    ck = uuid.uuid1()
+    v = 'ze-value'
+    original_timestamp = 1000
+    update1_timestamp = 2000
+    update2_timestamp = 3000
+
+    cql.execute(f"INSERT INTO ks.tbl (pk, ck, v) VALUES ({pk}, {ck}, '{v}') USING TIMESTAMP {original_timestamp}")
+
+    async def write(node, timestamp):
+        other_nodes = [n for n in nodes if n != node]
+
+        for other_node in other_nodes:
+            await manager.api.enable_injection(other_node.ip_addr, "database_apply", False, {})
+
+        await manager.driver_connect(node)
+
+        query = f"UPDATE ks.tbl USING TIMESTAMP {timestamp} SET v = '{v}' WHERE pk = {pk} AND ck = {ck}"
+        manager.get_cql().execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE))
+
+        for other_node in other_nodes:
+            await manager.api.disable_injection(other_node.ip_addr, "database_apply")
+
+    await write(node1, update1_timestamp)
+    await write(node2, update2_timestamp)
+
+    async def check(expected_timestamps):
+        for host, expected_timestamp in expected_timestamps.items():
+            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = {pk} AND ck = {ck} ALLOW FILTERING", host=host))
+            assert len(rows) == 1
+            assert json.loads(rows[0].metadata)['v']['timestamp'] == expected_timestamp
+
+    logger.info("Checking timestamps before repair")
+    check({host1: update1_timestamp, host2: update2_timestamp})
+
+    await manager.api.repair(node1.ip_addr, "ks", "tbl")
+
+    logger.info("Checking timestamps after repair")
+    check({host1: update2_timestamp, host2: update2_timestamp})
