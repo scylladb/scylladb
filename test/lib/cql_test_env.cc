@@ -1127,7 +1127,7 @@ private:
 
             const uint64_t niceness = 19;
             auto hashing_worker = utils::alien_worker(startlog, niceness, "pwd-hash");
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache), std::ref(hashing_worker)).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
             }).get();
@@ -1248,6 +1248,10 @@ public:
 
     db::config& db_config() override {
         return *_db_config;
+    }
+
+    sharded<auth::cache>& auth_cache() override {
+        return _auth_cache;
     }
 };
 
