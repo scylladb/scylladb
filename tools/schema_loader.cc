@@ -327,7 +327,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             }
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::create_index_statement*>(statement)) {
-            auto res = p->build_index_schema(db, token_metadata.local().get());
+            auto [res, warnings] = p->build_index_schema(db, token_metadata.local().get());
             if (!res) {
                 continue; // index already exists
             }
