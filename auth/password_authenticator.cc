@@ -317,11 +317,20 @@ future<authenticated_user> password_authenticator::authenticate(
     const sstring password = credentials.at(PASSWORD_KEY);
 
     try {
-        const std::optional<sstring> salted_hash = co_await get_password_hash(username);
-        if (!salted_hash) {
-            throw exceptions::authentication_exception("Username and/or password are incorrect");
+        std::optional<sstring> salted_hash;
+        if (legacy_mode(_qp)) {
+            salted_hash = co_await get_password_hash(username);
+            if (!salted_hash) {
+                throw exceptions::authentication_exception("Username and/or password are incorrect");
+            }
+        } else {
+            auto role = _cache.get(username);
+            if (!role || role->salted_hash.empty()) {
+                throw exceptions::authentication_exception("Username and/or password are incorrect");
+            }
+            salted_hash = role->salted_hash;
         }
-        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
+        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash] {
             return passwords::check(password, *salted_hash);
         });
         if (!password_match) {
