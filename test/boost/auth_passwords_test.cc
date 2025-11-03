@@ -58,6 +58,45 @@ SEASTAR_TEST_CASE(correct_passwords_authenticate) {
     }
 }
 
+std::string long_password(uint32_t len) {
+    std::string out;
+    auto pattern = "0123456789";
+    for (uint32_t i = 0; i < len; ++i) {
+        out.push_back(pattern[i % strlen(pattern)]);
+    }
+
+    return out;
+}
+
+SEASTAR_TEST_CASE(same_hashes_as_crypt_h) {
+
+    std::string long_pwd_254 = long_password(254);
+    std::string long_pwd_255 = long_password(255);
+    std::string long_pwd_511 = long_password(511);
+
+    std::array<const char*, 8> passwords{
+        "12345",
+        "1_am_the_greatest!",
+        "password1",
+        // Some special characters
+        "!@#$%^&*()_+-=[]{}|\n;:'\",.<>/?",
+        // UTF-8 characters
+        "こんにちは、世界！",
+        // Passwords close to __crypt_sha512 length limit
+        long_pwd_254.c_str(),
+        long_pwd_255.c_str(),
+        // Password of maximal accepted length
+        long_pwd_511.c_str(),
+    };
+
+    auto salt = "$6$aaaabbbbccccdddd";
+
+    for (const char* p : passwords) {
+        auto res = co_await auth::passwords::detail::hash_with_salt_async(p, salt);
+        BOOST_REQUIRE(res == auth::passwords::detail::hash_with_salt(p, salt));
+    }
+}
+
 //
 // A hashed password that does not match the password in cleartext does not authenticate.
 //
