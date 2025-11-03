@@ -12,7 +12,7 @@ add_scylla_test(alternator_unit_test
 add_scylla_test(anchorless_list_test
   KIND BOOST)
 add_scylla_test(auth_passwords_test
-  KIND BOOST
+  KIND SEASTAR
   LIBRARIES auth)
 add_scylla_test(auth_resource_test
   KIND BOOST)
