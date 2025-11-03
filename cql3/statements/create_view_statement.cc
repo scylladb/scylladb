@@ -159,6 +159,15 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         throw exceptions::invalid_request_exception(e.what());
     }
 
+    if (db.find_keyspace(keyspace()).uses_tablets()) {
+        warnings.emplace_back(
+            "Creating a materialized view in a keyspaces that uses tablets requires "
+            "the keyspace to remain RF-rack-valid while the materialized view exists. "
+            "Some operations will be restricted to enforce this: altering the keyspace's replication "
+            "factor, adding a node in a new rack, and removing or decommissioning a node that would "
+            "eliminate a rack.");
+    }
+
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on counter tables"));
     }

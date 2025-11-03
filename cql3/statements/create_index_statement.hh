@@ -53,7 +53,7 @@ public:
         schema_ptr schema;
         index_metadata index;
     };
-    std::optional<base_schema_with_new_index> build_index_schema(data_dictionary::database db, locator::token_metadata_ptr tmptr) const;
+    std::pair<std::optional<base_schema_with_new_index>, cql3::cql_warnings_vec> build_index_schema(data_dictionary::database db, locator::token_metadata_ptr tmptr) const;
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;
@@ -68,7 +68,7 @@ private:
                                               const sstring& name,
                                               index_metadata_kind kind,
                                               const index_options_map& options);
-    std::vector<::shared_ptr<index_target>> validate_while_executing(data_dictionary::database db, locator::token_metadata_ptr tmptr) const;
+    std::pair<std::vector<::shared_ptr<index_target>>, cql3::cql_warnings_vec> validate_while_executing(data_dictionary::database db, locator::token_metadata_ptr tmptr) const;
 };
 
 }

@@ -76,7 +76,10 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _properties->validate();
 }
 
-std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
+std::pair<std::vector<::shared_ptr<index_target>>, cql3::cql_warnings_vec>
+create_index_statement::validate_while_executing(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
+    cql3::cql_warnings_vec warnings;
+
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -104,6 +107,15 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         } catch (const std::exception& e) {
             // The type of the thrown exception is not specified, so we need to wrap it here.
             throw exceptions::invalid_request_exception(e.what());
+        }
+
+        if (db.find_keyspace(keyspace()).uses_tablets()) {
+            warnings.emplace_back(
+                "Creating an index in a keyspace that uses tablets requires "
+                "the keyspace to remain RF-rack-valid while the index exists. "
+                "Some operations will be restricted to enforce this: altering the keyspace's replication "
+                "factor, adding a node in a new rack, and removing or decommissioning a node that would "
+                "eliminate a rack.");
         }
     }
 
@@ -201,7 +213,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         }
     }
 
-    return targets;
+    return std::make_pair(std::move(targets), std::move(warnings));
 }
 
 void create_index_statement::validate_for_local_index(const schema& schema) const {
@@ -354,8 +366,9 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-std::optional<create_index_statement::base_schema_with_new_index> create_index_statement::build_index_schema(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
-    auto targets = validate_while_executing(db, tmptr);
+std::pair<std::optional<create_index_statement::base_schema_with_new_index>, cql3::cql_warnings_vec>
+create_index_statement::build_index_schema(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
+    auto [targets, warnings] = validate_while_executing(db, tmptr);
 
     auto schema = db.find_schema(keyspace(), column_family());
 
@@ -381,7 +394,7 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     auto existing_index = schema->find_index_noname(index);
     if (existing_index) {
         if (_if_not_exists) {
-            return {};
+            return std::make_pair(std::nullopt, std::move(warnings));
         } else {
             throw exceptions::invalid_request_exception(
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
@@ -391,7 +404,7 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     bool custom_index_with_same_name = _properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
     if (existing_vector_index || custom_index_with_same_name) {
         if (_if_not_exists) {
-            return {};
+            return std::make_pair(std::nullopt, std::move(warnings));
         } else {
             throw exceptions::invalid_request_exception("There exists a duplicate custom index");
         }
@@ -407,13 +420,13 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     schema_builder builder{schema};
     builder.with_index(index);
 
-    return base_schema_with_new_index{builder.build(), index};
+    return std::make_pair(base_schema_with_new_index{builder.build(), index}, std::move(warnings));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
-    auto res = build_index_schema(qp.db(), qp.proxy().get_token_metadata_ptr());
+    auto [res, warnings] = build_index_schema(qp.db(), qp.proxy().get_token_metadata_ptr());
 
     ::shared_ptr<event::schema_change> ret;
     utils::chunked_vector<mutation> m;
@@ -428,7 +441,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
                 column_family());
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
