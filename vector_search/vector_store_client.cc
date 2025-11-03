@@ -249,7 +249,7 @@ struct vector_store_client::impl {
                       co_await handle_addresses_changed(addrs);
                   },
                   dns_refreshes)
-        , _clients([this]() {
+        , _clients(vslogger, [this]() {
             dns.trigger_refresh();
         }) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {

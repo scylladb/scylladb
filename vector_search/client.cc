@@ -14,7 +14,9 @@
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/api.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <chrono>
+#include <fmt/format.h>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -67,9 +69,10 @@ auto constexpr BACKOFF_RETRY_MAX_TIME = 20s;
 
 } // namespace
 
-client::client(endpoint_type endpoint_)
+client::client(logging::logger& logger, endpoint_type endpoint_)
     : _endpoint(std::move(endpoint_))
-    , _http_client(std::make_unique<client_connection_factory>(socket_address(endpoint_.ip, endpoint_.port))) {
+    , _http_client(std::make_unique<client_connection_factory>(socket_address(endpoint_.ip, endpoint_.port)))
+    , _logger(logger) {
 }
 
 seastar::future<client::request_result> client::request(
@@ -127,13 +130,21 @@ void client::handle_server_unavailable() {
 
 seastar::future<> client::run_checking_status() {
     struct stop_retry {};
-    co_await exponential_backoff_retry::do_until_value(BACKOFF_RETRY_MIN_TIME, BACKOFF_RETRY_MAX_TIME, _as, [this] -> future<std::optional<stop_retry>> {
-        auto success = co_await check_status();
-        if (success) {
-            co_return stop_retry{};
+    auto f = co_await coroutine::as_future(
+            exponential_backoff_retry::do_until_value(BACKOFF_RETRY_MIN_TIME, BACKOFF_RETRY_MAX_TIME, _as, [this] -> future<std::optional<stop_retry>> {
+                auto success = co_await check_status();
+                if (success) {
+                    co_return stop_retry{};
+                }
+                co_return std::nullopt;
+            }));
+    if (f.failed()) {
+        if (auto err = f.get_exception(); !is_request_aborted(err)) {
+            // Report internal error for exceptions other than abort
+            on_internal_error_noexcept(_logger, fmt::format("exception while checking status: {}", err));
         }
-        co_return std::nullopt;
-    });
+    }
+    co_return;
 }
 
 bool client::is_checking_status_in_progress() const {

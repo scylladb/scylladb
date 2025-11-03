@@ -9,6 +9,7 @@
 #pragma once
 
 #include "error.hh"
+#include "utils/log.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/abort_source.hh>
@@ -36,7 +37,7 @@ public:
     using request_error = std::variant<aborted_error, service_unavailable_error>;
     using request_result = std::expected<response, request_error>;
 
-    explicit client(endpoint_type endpoint_);
+    explicit client(logging::logger& logger, endpoint_type endpoint_);
 
     seastar::future<request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as);
@@ -50,7 +51,6 @@ public:
 private:
     seastar::future<response> request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
             std::optional<seastar::http::reply::status_type>&& expected, seastar::abort_source& as);
-
     seastar::future<bool> check_status();
     void handle_server_unavailable();
     seastar::future<> run_checking_status();
@@ -60,6 +60,7 @@ private:
     seastar::http::experimental::client _http_client;
     seastar::future<> _checking_status_future = seastar::make_ready_future();
     seastar::abort_source _as;
+    logging::logger& _logger;
 };
 
 } // namespace vector_search

@@ -13,6 +13,7 @@
 #include "uri.hh"
 #include "utils/sequential_producer.hh"
 #include "vector_search/error.hh"
+#include "utils/log.hh"
 #include <expected>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
@@ -32,7 +33,7 @@ public:
     using get_clients_error = std::variant<aborted_error, addr_unavailable_error>;
     using get_clients_result = std::expected<clients_vec, get_clients_error>;
 
-    explicit clients(refresh_trigger_callback trigger_refresh);
+    explicit clients(logging::logger& logger, refresh_trigger_callback trigger_refresh);
 
     seastar::future<request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as);
@@ -60,6 +61,7 @@ private:
     seastar::condition_variable _refresh_cv;
     std::chrono::milliseconds _timeout;
     clients_vec _old_clients;
+    logging::logger& _logger;
 };
 
 } // namespace vector_search
