@@ -51,7 +51,7 @@ auto make_unexpected(const auto& err) {
 
 } // namespace
 
-clients::clients(refresh_trigger_callback trigger_refresh)
+clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh)
     : _producer([&]() -> future<clients_vec> {
         return try_with_gate(_gate, [this] -> future<clients_vec> {
             _trigger_refresh();
@@ -60,7 +60,8 @@ clients::clients(refresh_trigger_callback trigger_refresh)
         });
     })
     , _trigger_refresh(std::move(trigger_refresh))
-    , _timeout(WAIT_FOR_CLIENT_TIMEOUT) {
+    , _timeout(WAIT_FOR_CLIENT_TIMEOUT)
+    , _logger(logger) {
 }
 
 future<clients::request_result> clients::request(
@@ -118,7 +119,7 @@ future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_a
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
             for (const auto& addr : it->second) {
-                _clients.push_back(make_lw_shared<client>(client::endpoint_type{uri.host, uri.port, addr}));
+                _clients.push_back(make_lw_shared<client>(_logger, client::endpoint_type{uri.host, uri.port, addr}));
             }
         }
     }
