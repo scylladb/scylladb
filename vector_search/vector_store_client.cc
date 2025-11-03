@@ -244,6 +244,15 @@ std::vector<sstring> get_hosts(const std::vector<uri>& uris) {
     return ret;
 }
 
+template <typename Variant>
+auto make_unexpected(const auto& err) {
+    return std::unexpected{std::visit(
+            [](auto&& err) {
+                return Variant{err};
+            },
+            err)};
+};
+
 } // namespace
 
 namespace vector_search {
@@ -380,28 +389,20 @@ struct vector_store_client::impl {
         for (auto retries = 0; retries < ANN_RETRIES; ++retries) {
             auto clients = co_await get_clients(as);
             if (!clients) {
-                co_return std::unexpected{std::visit(
-                        [](auto&& err) {
-                            return make_request_error{err};
-                        },
-                        clients.error())};
+                co_return make_unexpected<make_request_error>(clients.error());
             }
 
             load_balancer lb(std::move(*clients), random_engine);
             while (auto client = lb.next()) {
-                auto result = co_await coroutine::as_future(client->request(method, path, content, as));
-                if (result.failed()) {
-                    auto err = result.get_exception();
-                    if (as.abort_requested()) {
-                        co_return std::unexpected{aborted{}};
-                    }
-                    if (try_catch<std::system_error>(err) == nullptr) {
-                        co_await coroutine::return_exception_ptr(std::move(err));
-                    }
-                    // std::system_error means that the server is unavailable, so we retry
-                } else {
-                    co_return co_await std::move(result);
+                auto result = co_await client->request(method, path, content, as);
+                if (result) {
+                    co_return std::move(result.value());
                 }
+                if (std::holds_alternative<service_unavailable_error>(result.error())) {
+                    // try next client
+                    continue;
+                }
+                co_return make_unexpected<make_request_error>(result.error());
             }
 
             dns.trigger_refresh();
