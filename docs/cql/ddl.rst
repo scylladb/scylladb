@@ -422,7 +422,7 @@ An empty list is allowed, and it's equivalent to numeric replication factor of 0
 
 Altering from a rack list to a numeric replication factor is not supported.
 
-Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>`.
+Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>` if each rack in the rack list contains at least one node (excluding :doc:`zero-token nodes </architecture/zero-token-nodes>`).
 
 .. _drop-keyspace-statement:
 
