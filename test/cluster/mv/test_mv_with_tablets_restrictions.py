@@ -12,6 +12,7 @@ from cassandra.cluster import Session as CassandraSession
 from cassandra.protocol import InvalidRequest
 
 from test.cluster.conftest import skip_mode
+from test.pylib.async_cql import _wrap_future
 from test.pylib.manager_client import ManagerClient
 
 logger = logging.getLogger(__name__)
@@ -28,18 +29,23 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
     be always allowed.
     """
 
-    async def create_mv_or_index(cql: CassandraSession, schema_kind: str):
+    async def create_mv_or_index(cql: CassandraSession, schema_kind: str, expected_warning: str = None):
         if schema_kind == "view":
-            await cql.run_async("CREATE MATERIALIZED VIEW ks.mv "
+            result = cql.execute_async("CREATE MATERIALIZED VIEW ks.mv "
                                 "AS SELECT * FROM ks.t "
                                 "WHERE p IS NOT NULL AND v IS NOT NULL "
                                 "PRIMARY KEY (v, p)")
         elif schema_kind == "index":
-            await cql.run_async("CREATE INDEX myindex ON ks.t(v)")
+            result = cql.execute_async("CREATE INDEX myindex ON ks.t(v)")
         else:
             assert False, "Unknown schema kind"
 
-    async def test_create_mv_or_index_with_rf(cql: CassandraSession, schema_kind: str, rf: int, expected_error: str = None):
+        await _wrap_future(result)
+
+        if expected_warning:
+            assert any(expected_warning in w for w in result.warnings), f"Expected warning '{expected_warning}' not found in {result.warnings}"
+
+    async def test_create_mv_or_index_with_rf(cql: CassandraSession, schema_kind: str, rf: int, expected_error: str = None, expected_warning: str = None):
         if rf_kind == "numeric":
             rf_str = str(rf)
         else:
@@ -52,9 +58,9 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
             await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
             if expected_error:
                 with pytest.raises(InvalidRequest, match=expected_error):
-                    await create_mv_or_index(cql, schema_kind)
+                    await create_mv_or_index(cql, schema_kind, expected_warning)
             else:
-                await create_mv_or_index(cql, schema_kind)
+                await create_mv_or_index(cql, schema_kind, expected_warning)
         finally:
             await cql.run_async("DROP KEYSPACE IF EXISTS ks")
 
@@ -71,7 +77,11 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
 
     for schema_kind in ["view", "index"]:
         # Create MV/index with RF=Racks - should always succeed
-        await test_create_mv_or_index_with_rf(cql, schema_kind, 3)
+        if rf_kind == "numeric":
+            expected_warning = "requires the keyspace to remain RF-rack-valid"
+        else:
+            expected_warning = None
+        await test_create_mv_or_index_with_rf(cql, schema_kind, 3, expected_warning=expected_warning)
 
         # Create MV/index with RF!=Racks - should fail for numeric RF
         if rf_kind == "numeric":
