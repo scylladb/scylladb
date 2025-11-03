@@ -278,9 +278,6 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
 @pytest.mark.parametrize("output_format", ["text", "json"])
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, merge, output_format):
-    if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
-        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
-
     with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
         if merge:
@@ -821,9 +818,6 @@ def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_dat
         table_with_counters,
 ])
 def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_data_dir, table_factory):
-    if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
-        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
-
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     slice_script_path = os.path.join(scripts_path, 'slice.lua')
     dump_script_path = os.path.join(scripts_path, 'dump.lua')
@@ -1844,9 +1838,6 @@ def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table
     This test focuses on checkig the correct formatting and handling of all CQL
     data-types.
     """
-    if test_table == scylla_sstable_query_simple_counter_param and util.keyspace_has_tablets(cql, test_keyspace):
-        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
-
     if test_table.prepare is not None:
         cql.execute(test_table.prepare.format(test_keyspace))
 

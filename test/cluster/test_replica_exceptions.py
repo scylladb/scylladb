@@ -22,7 +22,7 @@ class Measurement(NamedTuple):
     metric_error_threshold: int = 1000
 
 class DB(NamedTuple):
-    ks_opts: str = "WITH REPLICATION = { 'replication_factor' : '1' } AND tablets = { 'enabled' : false }"
+    ks_opts: str = "WITH REPLICATION = { 'replication_factor' : '1' }"
     tbl_schema: str = "p int, c int, PRIMARY KEY (p)"
     tbl_opts: str = ""
     prep_stmt_gen: Callable[[str], str] | None = None

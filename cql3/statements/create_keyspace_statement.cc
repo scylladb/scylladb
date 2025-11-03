@@ -112,14 +112,8 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
             ksm->strategy_name(),
             locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option()),
             tmptr->get_topology());
-        if (rs->uses_tablets()) {
-            warnings.push_back(
-                "Tables in this keyspace will be replicated using Tablets "
-                "and will not support counters features. To use counters, drop this keyspace and re-create it "
-                "without tablets by adding AND TABLETS = {'enabled': false} to the CREATE KEYSPACE statement.");
-            if (ksm->initial_tablets().value()) {
-                warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");
-            }
+        if (rs->uses_tablets() && ksm->initial_tablets().value()) {
+            warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");
         }
 
         // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.

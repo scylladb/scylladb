@@ -19,6 +19,7 @@
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
+#include "cell_locking.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
 #include <chrono>
@@ -1500,6 +1501,11 @@ struct string_pair_eq {
     bool operator()(spair lhs, spair rhs) const;
 };
 
+struct counter_update_guard {
+    utils::phased_barrier::operation op;
+    std::vector<locked_cell> locks;
+};
+
 class db_user_types_storage;
 
 // Policy for sharded<database>:
@@ -1728,11 +1734,12 @@ private:
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
-    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
-                                             tracing::trace_state_ptr trace_state);
+    future<mutation> read_and_transform_counter_mutation_to_shards(mutation m, column_family& cf, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
 
     template<typename Future>
     Future update_write_metrics(Future&& f);
+    template<typename Future>
+    Future update_write_metrics_if_failed(Future&& f);
     void update_write_metrics_for_timed_out_write();
     void update_write_metrics_for_rejected_writes();
     future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
@@ -1912,7 +1919,11 @@ public:
     // Mutations may be partially visible to reads until restart on exception (FIXME).
     future<> apply(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
-    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+
+    future<counter_update_guard> acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+    future<mutation> prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+    future<> apply_counter_update(schema_ptr, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+
     const sstring& get_snitch_name() const;
     /*!
      * \brief clear snapshot based on a tag

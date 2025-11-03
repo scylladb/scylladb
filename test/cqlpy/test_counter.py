@@ -25,9 +25,6 @@ def table2(cql, test_keyspace):
 # Test that the function counterasblob() exists and works as expected -
 # same as bigintasblob on the same number (a counter is a 64-bit number).
 # Reproduces #14742
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_counter_to_blob(cql, table1, table2):
     p = unique_key_int()
     cql.execute(f'UPDATE {table1} SET i = 1000 WHERE p = {p}')
@@ -72,9 +69,6 @@ def test_blobascounter_wrong_size(cql, table1):
 # Drop a table while there is a counter update operation in progress.
 # Verify the table waits for the operation to complete before it's destroyed.
 # Reproduces scylladb/scylla-enterprise#4475
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_counter_update_while_table_dropped(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table, \
          scylla_inject_error(cql, "apply_counter_update_delay_5s", one_shot=True):

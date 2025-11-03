@@ -1649,9 +1649,6 @@ def executeFilteringOnly(cql, table, statement):
     assert_invalid(cql, table, statement)
     return execute_without_paging(cql, table, statement + " ALLOW FILTERING")
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testAllowFilteringOnPartitionKeyWithCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, cnt counter, PRIMARY KEY ((a, b), c))") as table:
         execute(cql, table, "UPDATE %s SET cnt = cnt + ? WHERE a = ? AND b = ? AND c = ?", 14, 11, 12, 13)
@@ -1975,9 +1972,6 @@ def testCustomIndexWithFiltering(cql, test_keyspace):
             assert_rows(executeFilteringOnly(cql, table, "SELECT * FROM %s WHERE c = 'b' AND d = 4"),
                        ["c", 3, "b", 4])
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testFilteringWithCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, cnt counter, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "UPDATE %s SET cnt = cnt + ? WHERE a = ? AND b = ? AND c = ?", 14, 11, 12, 13)
