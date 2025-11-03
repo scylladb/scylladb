@@ -183,8 +183,14 @@ index_entry_dataset generate_random_dataset(const schema& the_schema, const rand
 
     // Generate a few partition keys.
     std::vector<partition_key> pks;
-    for (int i = 0; i < cfg.partition_key_component_values; ++i) {
-        pks.push_back(partition_key::from_deeply_exploded(s, std::vector<data_value>{data_value(int16_t(i))}));
+    {
+        std::set<int16_t> pks_set;
+        while (pks_set.size() < static_cast<size_t>(cfg.partition_key_component_values)) {
+            pks_set.insert(tests::random::get_int<int16_t>());
+        }
+        for (auto& x : pks_set) {
+            pks.push_back(partition_key::from_deeply_exploded(s, std::vector<data_value>{data_value(x)}));
+        }
     }
 
     // Generate the set of decorated keys participating in the test.
