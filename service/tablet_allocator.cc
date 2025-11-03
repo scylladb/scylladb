@@ -1273,21 +1273,9 @@ public:
         migration_plan plan;
         table_resize_plan resize_plan;
 
-        auto can_proceed_with_colocation = [this] (table_id tid, const locator::tablet_map& tmap) {
-            if (tmap.needs_merge()) {
-                // Tablet merge in base tables is only safe if there is at most one replica in each rack.
-                // For more details why, see https://github.com/scylladb/scylladb/issues/17265.
-                // This condition is satisfied when rf-rack-valid keyspaces restriction is turned on.
-                return _db.get_config().rf_rack_valid_keyspaces()
-                        || (_db.column_family_exists(tid) && _db.find_column_family(tid).views().empty());
-            } else {
-                return false;
-            }
-        };
-
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
-            if (!can_proceed_with_colocation(table, tmap)) {
+            if (!tmap.needs_merge()) {
                 continue;
             }
 
