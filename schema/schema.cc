@@ -1692,6 +1692,10 @@ int schema_builder::register_static_configurator(static_configurator&& configura
     return 0;
 }
 
+void schema_builder::set_properties(schema::user_properties props) {
+    _raw._props = std::move(props);
+}
+
 const cdc::options& schema::user_properties::get_cdc_options() const {
     static const cdc::options default_cdc_options;
     const auto& schema_extensions = extensions;
