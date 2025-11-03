@@ -49,7 +49,8 @@ static const class_registrator<
         standard_role_manager,
         cql3::query_processor&,
         ::service::raft_group0_client&,
-        ::service::migration_manager&> registration("org.apache.cassandra.auth.CassandraRoleManager");
+        ::service::migration_manager&,
+        cache&> registration("org.apache.cassandra.auth.CassandraRoleManager");
 
 struct record final {
     sstring name;
@@ -106,10 +107,11 @@ static bool has_can_login(const cql3::untyped_result_set_row& row) {
     return row.has("can_login") && !(boolean_type->deserialize(row.get_blob_unfragmented("can_login")).is_null());
 }
 
-standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
+standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
+    , _cache(cache)
     , _stopped(make_ready_future<>())
     , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
 {}

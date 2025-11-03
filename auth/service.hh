@@ -21,6 +21,7 @@
 #include "auth/authorizer.hh"
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
+#include "auth/cache.hh"
 #include "auth/role_manager.hh"
 #include "auth/common.hh"
 #include "cql3/description.hh"
@@ -130,6 +131,7 @@ public:
             ::service::migration_manager&,
             const service_config&,
             maintenance_socket_enabled,
+            cache&,
             utils::alien_worker&);
 
     future<> start(::service::migration_manager&, db::system_keyspace&);

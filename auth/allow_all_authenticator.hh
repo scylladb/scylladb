@@ -12,6 +12,7 @@
 
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
+#include "auth/cache.hh"
 #include "auth/common.hh"
 #include "utils/alien_worker.hh"
 
@@ -29,7 +30,7 @@ extern const std::string_view allow_all_authenticator_name;
 
 class allow_all_authenticator final : public authenticator {
 public:
-    allow_all_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&) {
+    allow_all_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, utils::alien_worker&) {
     }
 
     virtual future<> start() override {
