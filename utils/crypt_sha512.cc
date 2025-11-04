@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include "crypt_sha512.hh"
+#include <seastar/core/coroutine.hh>
 
 struct sha512 {
 	uint64_t len;     /* processed message length */
@@ -216,7 +217,7 @@ static void hashmd(struct sha512 *s, unsigned int n, const void *md)
 	sha512_update(s, md, i);
 }
 
-static char *sha512crypt(const char *key, const char *setting, char *output)
+static seastar::future<char *> sha512crypt(const char *key, const char *setting, char *output)
 {
 	struct sha512 ctx;
 	unsigned char md[64], kmd[64], smd[64];
@@ -228,12 +229,12 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	/* reject large keys */
 	for (i = 0; i <= KEY_MAX && key[i]; i++);
 	if (i > KEY_MAX)
-		return nullptr;
+		co_return nullptr;
 	klen = i;
 
 	/* setting: $6$rounds=n$salt$ (rounds=n$ and closing $ are optional) */
 	if (strncmp(setting, "$6$", 3) != 0)
-		return nullptr;
+		co_return nullptr;
 	salt = setting + 3;
 
 	r = ROUNDS_DEFAULT;
@@ -255,15 +256,15 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 		 */
 		salt += sizeof "rounds=" - 1;
 		if (!isdigit(*salt))
-			return nullptr;
+			co_return nullptr;
 		u = strtoul(salt, &end, 10);
 		if (*end != '$')
-			return nullptr;
+			co_return nullptr;
 		salt = end+1;
 		if (u < ROUNDS_MIN)
 			r = ROUNDS_MIN;
 		else if (u > ROUNDS_MAX)
-			return nullptr;
+			co_return nullptr;
 		else
 			r = u;
 		/* needed when rounds is zero prefixed or out of bounds */
@@ -273,7 +274,7 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 	for (i = 0; i < SALT_MAX && salt[i] && salt[i] != '$'; i++)
 		/* reject characters that interfere with /etc/shadow parsing */
 		if (salt[i] == '\n' || salt[i] == ':')
-			return nullptr;
+			co_return nullptr;
 	slen = i;
 
 	/* B = sha(key salt key) */
@@ -362,10 +363,10 @@ static char *sha512crypt(const char *key, const char *setting, char *output)
 #endif
 	p = to64(p, md[63], 2);
 	*p = 0;
-	return output;
+	co_return output;
 }
 
-const char *__crypt_sha512(const char *key, const char *setting, char *output)
+seastar::future<const char *> __crypt_sha512(const char *key, const char *setting, char *output)
 {
 	static const char testkey[] = "Xy01@#\x01\x02\x80\x7f\xff\r\n\x81\t !";
 	static const char testsetting[] = "$6$rounds=1234$abc0123456789$";
@@ -373,10 +374,10 @@ const char *__crypt_sha512(const char *key, const char *setting, char *output)
 	char testbuf[128];
 	char *p, *q;
 
-	p = sha512crypt(key, setting, output);
+	p = co_await sha512crypt(key, setting, output);
 	/* self test and stack cleanup */
-	q = sha512crypt(testkey, testsetting, testbuf);
+	q = co_await sha512crypt(testkey, testsetting, testbuf);
 	if (!p || q != testbuf || memcmp(testbuf, testhash, sizeof testhash))
-		return "*";
-	return p;
+		co_return "*";
+	co_return p;
 }
