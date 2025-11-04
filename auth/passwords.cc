@@ -7,6 +7,8 @@
  */
 
 #include "auth/passwords.hh"
+#include "utils/crypt_sha512.hh"
+#include <seastar/core/coroutine.hh>
 
 #include <cerrno>
 
@@ -45,6 +47,24 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt) {
     return res;
 }
 
+seastar::future<sstring> hash_with_salt_async(const sstring& pass, const sstring& salt) {
+    sstring res;
+    // Only SHA-512 hashes for passphrases shorter than 256 bytes can be computed using
+    // the __crypt_sha512 method. For other computations, we fall back to the
+    // crypt_r implementation from `<crypt.h>`, which can stall.
+    if (salt.starts_with(prefix_for_scheme(scheme::sha_512)) && pass.size() <= 255) {
+        char buf[128];
+        const char * output_ptr = co_await __crypt_sha512(pass.c_str(), salt.c_str(), buf);
+        verify_hashing_output(output_ptr);
+        res = output_ptr;
+    } else {
+        const char * output_ptr = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
+        verify_hashing_output(output_ptr);
+        res = output_ptr;
+    }
+    co_return res;
+}
+
 std::string_view prefix_for_scheme(scheme c) noexcept {
     switch (c) {
     case scheme::bcrypt_y: return "$2y$";
@@ -61,8 +81,9 @@ no_supported_schemes::no_supported_schemes()
         : std::runtime_error("No allowed hashing schemes are supported on this system") {
 }
 
-bool check(const sstring& pass, const sstring& salted_hash) {
-    return detail::hash_with_salt(pass, salted_hash) == salted_hash;
+seastar::future<bool> check(const sstring& pass, const sstring& salted_hash) {
+    const auto pwd_hash = co_await detail::hash_with_salt_async(pass, salted_hash);
+    co_return pwd_hash == salted_hash;
 }
 
 } // namespace auth::passwords
