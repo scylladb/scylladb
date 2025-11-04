@@ -317,7 +317,7 @@ future<authenticated_user> password_authenticator::authenticate(
         if (!salted_hash) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
-        const bool password_match = passwords::check(password, *salted_hash);
+        const bool password_match = co_await passwords::check(password, *salted_hash);
         if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
