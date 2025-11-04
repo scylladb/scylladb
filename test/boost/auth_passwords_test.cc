@@ -97,6 +97,38 @@ SEASTAR_TEST_CASE(same_hashes_as_crypt_h) {
     }
 }
 
+SEASTAR_TEST_CASE(too_long_password) {
+    auto p1 = long_password(71);
+    auto p2 = long_password(72);
+    auto p3 = long_password(73);
+    auto too_long_password = long_password(512);
+
+    auto salt_bcrypt = "$2a$05$mAyzaIeJu41dWUkxEbn8hO";
+    auto h1_bcrypt = co_await auth::passwords::detail::hash_with_salt_async(p1, salt_bcrypt);
+    auto h2_bcrypt = co_await auth::passwords::detail::hash_with_salt_async(p2, salt_bcrypt);
+    auto h3_bcrypt = co_await auth::passwords::detail::hash_with_salt_async(p3, salt_bcrypt);
+    BOOST_REQUIRE(h1_bcrypt != h2_bcrypt);
+
+    // The check below documents the behavior of the current bcrypt
+    // implementation that compares only the first 72 bytes of the password.
+    // Although we don't typically use bcrypt for password hashing, it is
+    // possible to insert such a hash using`CREATE ROLE ... WITH HASHED PASSWORD ...`.
+    // Refs: scylladb/scylladb#26842
+    BOOST_REQUIRE(h2_bcrypt == h3_bcrypt);
+
+    // The current implementation of bcrypt password hasing fails with passwords of length 512 and above
+    BOOST_CHECK_THROW(co_await auth::passwords::detail::hash_with_salt_async(too_long_password, salt_bcrypt), std::system_error);
+
+    auto salt_sha512 = "$6$aaaabbbbccccdddd";
+    auto h1_sha512 = co_await auth::passwords::detail::hash_with_salt_async(p1, salt_sha512);
+    auto h2_sha512 = co_await auth::passwords::detail::hash_with_salt_async(p2, salt_sha512);
+    auto h3_sha512 = co_await auth::passwords::detail::hash_with_salt_async(p3, salt_sha512);
+    BOOST_REQUIRE(h1_sha512 != h2_sha512);
+    BOOST_REQUIRE(h2_sha512 != h3_sha512);
+    // The current implementation of SHA-512 password hasing fails with passwords of length 512 and above
+    BOOST_CHECK_THROW(co_await auth::passwords::detail::hash_with_salt_async(too_long_password, salt_sha512), std::system_error);
+}
+
 //
 // A hashed password that does not match the password in cleartext does not authenticate.
 //
