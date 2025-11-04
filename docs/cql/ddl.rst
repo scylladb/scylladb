@@ -629,7 +629,7 @@ Some examples of primary key definition are:
   key), and ``c`` is the clustering column.
 
 
-.. note:: A *null* value is not allowed as any partition-key or clustering-key column. A Null value is *not* the same as an empty string.
+.. note:: A *null* value is not allowed as any partition-key or clustering-key column. A *null* value is *not* the same as an empty string.
 
 .. _partition-key:
 
