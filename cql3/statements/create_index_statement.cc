@@ -276,20 +276,22 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
-    try {
-        db::view::validate_view_keyspace(db, keyspace(), tmptr);
-    } catch (const std::exception& e) {
-        // The type of the thrown exception is not specified, so we need to wrap it here.
-        throw exceptions::invalid_request_exception(e.what());
-    }
+    if (!_properties || !_properties->custom_class) {
+        try {
+            db::view::validate_view_keyspace(db, keyspace(), tmptr);
+        } catch (const std::exception& e) {
+            // The type of the thrown exception is not specified, so we need to wrap it here.
+            throw exceptions::invalid_request_exception(e.what());
+        }
 
-    if (db.find_keyspace(keyspace()).uses_tablets()) {
-        warnings.emplace_back(
-            "Creating an index in a keyspace that uses tablets requires "
-            "the keyspace to remain RF-rack-valid while the index exists. "
-            "Some operations will be restricted to enforce this: altering the keyspace's replication "
-            "factor, adding a node in a new rack, and removing or decommissioning a node that would "
-            "eliminate a rack.");
+        if (db.find_keyspace(keyspace()).uses_tablets()) {
+            warnings.emplace_back(
+                "Creating an index in a keyspace that uses tablets requires "
+                "the keyspace to remain RF-rack-valid while the index exists. "
+                "Some operations will be restricted to enforce this: altering the keyspace's replication "
+                "factor, adding a node in a new rack, and removing or decommissioning a node that would "
+                "eliminate a rack.");
+        }
     }
 
     validate_for_local_index(*schema);
