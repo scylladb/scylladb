@@ -8,4 +8,6 @@
 
 #pragma once
 
-const char * __crypt_sha512(const char *key, const char *setting, char *output);
+#include <seastar/core/future.hh>
+
+seastar::future<const char *> __crypt_sha512(const char *key, const char *setting, char *output);
