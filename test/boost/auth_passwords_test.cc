@@ -54,9 +54,8 @@ SEASTAR_TEST_CASE(correct_passwords_authenticate) {
     };
 
     for (const char* p : passwords) {
-        BOOST_REQUIRE(auth::passwords::check(p, auth::passwords::hash(p, rng_for_salt, auth::passwords::scheme::sha_512)));
+        BOOST_REQUIRE(co_await auth::passwords::check(p, auth::passwords::hash(p, rng_for_salt, auth::passwords::scheme::sha_512)));
     }
-    co_return;
 }
 
 //
@@ -64,6 +63,5 @@ SEASTAR_TEST_CASE(correct_passwords_authenticate) {
 //
 SEASTAR_TEST_CASE(incorrect_passwords_do_not_authenticate) {
     const sstring hashed_password = auth::passwords::hash("actual_password", rng_for_salt,auth::passwords::scheme::sha_512);
-    BOOST_REQUIRE(!auth::passwords::check("password_guess", hashed_password));
-    co_return;
+    BOOST_REQUIRE(!co_await auth::passwords::check("password_guess", hashed_password));
 }
