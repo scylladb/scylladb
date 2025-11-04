@@ -36,6 +36,8 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
                                 "PRIMARY KEY (v, p)")
         elif schema_kind == "index":
             result = cql.execute_async("CREATE INDEX myindex ON ks.t(v)")
+        elif schema_kind == "vector":
+            result = cql.execute_async("CREATE INDEX myindex ON ks.t(v) USING 'vector_index'")
         else:
             assert False, "Unknown schema kind"
 
@@ -49,7 +51,10 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
             await cql.run_async(f"CREATE KEYSPACE ks WITH replication = "
                                  f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf}}} "
                                  "AND tablets = {'enabled': true}")
-            await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
+            if schema_kind == "vector":
+                await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v vector<float, 3>)")
+            else:
+                await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
             if expected_error:
                 with pytest.raises(InvalidRequest, match=expected_error):
                     await create_mv_or_index(cql, schema_kind, expected_warning)
@@ -67,13 +72,20 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
     ])
     cql, _ = await manager.get_ready_cql(servers)
 
-    for schema_kind in ["view", "index"]:
+    for schema_kind in ["view", "index", "vector"]:
         # Create MV/index with RF=Racks - should always succeed
-        expected_warning = "requires the keyspace to remain RF-rack-valid"
+        if schema_kind != "vector":
+            expected_warning = "requires the keyspace to remain RF-rack-valid"
+        else:
+            expected_warning = None
         await test_create_mv_or_index_with_rf(cql, schema_kind, 3, expected_warning=expected_warning)
 
-        # Create MV/index with RF!=Racks - should fail for numeric RF
-        expected_error = "required to be RF-rack-valid"
+        # Create MV/index with RF!=Racks - should fail for numeric RF.
+        # vector indexes are exempted from this restriction.
+        if schema_kind != "vector":
+            expected_error = "required to be RF-rack-valid"
+        else:
+            expected_error = None
         await test_create_mv_or_index_with_rf(cql, schema_kind, 2, expected_error=expected_error)
 
 
@@ -88,6 +100,8 @@ async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: Man
 
     The constraint is relevant only for numeric-RF keyspaces. For rack-list keyspaces, it should
     be always allowed.
+
+    For vector indexes, ALTER KEYSPACE should not be restricted.
     """
     config = {'rf_rack_valid_keyspaces': False}
 
@@ -98,37 +112,46 @@ async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: Man
     ])
     cql, _ = await manager.get_ready_cql(servers)
 
-    for schema_kind in ["view", "index"]:
-        # Create a keyspace and MV/index with RF=Racks
+    for schema_kind in ["view", "index", "vector"]:
+        # Create a keyspace and MV/index/vector with RF=Racks
         ks = f"ks_{schema_kind}"
 
         await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = "
                             f"{{'class': 'NetworkTopologyStrategy', 'dc1': 3}} "
                             "AND tablets = {'enabled': true}")
-        await cql.run_async(f"CREATE TABLE {ks}.t (p int PRIMARY KEY, v int)")
-        if schema_kind == "view":
-            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv "
-                                f"AS SELECT * FROM {ks}.t "
-                                "WHERE p IS NOT NULL AND v IS NOT NULL "
-                                "PRIMARY KEY (v, p)")
-        elif schema_kind == "index":
-            await cql.run_async(f"CREATE INDEX myindex ON {ks}.t(v)")
+        if schema_kind == "vector":
+            await cql.run_async(f"CREATE TABLE {ks}.t (p int PRIMARY KEY, v vector<float, 3>)")
+            await cql.run_async(f"CREATE INDEX myindex ON {ks}.t(v) USING 'vector_index'")
         else:
-            assert False, "Unknown schema kind"
+            await cql.run_async(f"CREATE TABLE {ks}.t (p int PRIMARY KEY, v int)")
+            if schema_kind == "view":
+                await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv "
+                                    f"AS SELECT * FROM {ks}.t "
+                                    "WHERE p IS NOT NULL AND v IS NOT NULL "
+                                    "PRIMARY KEY (v, p)")
+            elif schema_kind == "index":
+                await cql.run_async(f"CREATE INDEX myindex ON {ks}.t(v)")
+            else:
+                assert False, "Unknown schema kind"
 
-        # Try to ALTER KEYSPACE to RF!=Racks - should fail because it has MV/index
-        with pytest.raises(InvalidRequest, match="required to be RF-rack-valid"):
+        if schema_kind == "vector":
+            # For vector index, ALTER KEYSPACE should always succeed
             await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = "
                                 f"{{'class': 'NetworkTopologyStrategy', 'dc1': 2}}")
+        else:
+            # Try to ALTER KEYSPACE to RF!=Racks - should fail because it has MV/index
+            with pytest.raises(InvalidRequest, match="required to be RF-rack-valid"):
+                await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = "
+                                    f"{{'class': 'NetworkTopologyStrategy', 'dc1': 2}}")
 
-        # drop the view/index and verify that ALTER KEYSPACE is now allowed
-        if schema_kind == "view":
-            await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv")
-        elif schema_kind == "index":
-            await cql.run_async(f"DROP INDEX {ks}.myindex")
+            # drop the view/index and verify that ALTER KEYSPACE is now allowed
+            if schema_kind == "view":
+                await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv")
+            elif schema_kind == "index":
+                await cql.run_async(f"DROP INDEX {ks}.myindex")
 
-        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = "
-                            f"{{'class': 'NetworkTopologyStrategy', 'dc1': 2}}")
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = "
+                                f"{{'class': 'NetworkTopologyStrategy', 'dc1': 2}}")
 
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
