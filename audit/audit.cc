@@ -26,6 +26,17 @@ namespace audit {
 
 logging::logger logger("audit");
 
+static std::unique_ptr<storage_helper> create_storage_helper(const sstring& class_name, cql3::query_processor& qp, service::migration_manager& mm) {
+    try {
+        return create_object<storage_helper>(class_name, qp, mm);
+    } catch (no_such_class& e) {
+        logger.error("Can't create audit storage helper {}: not supported", class_name);
+        throw;
+    } catch (...) {
+        throw;
+    }
+}
+
 static sstring category_to_string(statement_category category)
 {
     switch (category) {
@@ -103,6 +114,8 @@ static std::set<sstring> parse_audit_keyspaces(const sstring& data) {
 }
 
 audit::audit(locator::shared_token_metadata& token_metadata,
+             cql3::query_processor& qp,
+             service::migration_manager& mm,
              sstring&& storage_helper_name,
              std::set<sstring>&& audited_keyspaces,
              std::map<sstring, std::set<sstring>>&& audited_tables,
@@ -117,7 +130,9 @@ audit::audit(locator::shared_token_metadata& token_metadata,
     , _cfg_keyspaces_observer(cfg.audit_keyspaces.observe([this] (sstring const& new_value){ update_config<std::set<sstring>>(new_value, parse_audit_keyspaces, _audited_keyspaces); }))
     , _cfg_tables_observer(cfg.audit_tables.observe([this] (sstring const& new_value){ update_config<std::map<sstring, std::set<sstring>>>(new_value, parse_audit_tables, _audited_tables); }))
     , _cfg_categories_observer(cfg.audit_categories.observe([this] (sstring const& new_value){ update_config<category_set>(new_value, parse_audit_categories, _audited_categories); }))
-{ }
+{
+    _storage_helper_ptr = create_storage_helper(_storage_helper_class_name, qp, mm);
+}
 
 audit::~audit() = default;
 
@@ -143,17 +158,19 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
                 cfg.audit(), cfg.audit_categories(), cfg.audit_keyspaces(), cfg.audit_tables());
 
     return audit_instance().start(std::ref(stm),
+                                  std::ref(qp),
+                                  std::ref(mm),
                                   std::move(storage_helper_name),
                                   std::move(audited_keyspaces),
                                   std::move(audited_tables),
                                   std::move(audited_categories),
                                   std::cref(cfg))
-    .then([&cfg, &qp, &mm] {
+    .then([&cfg] {
         if (!audit_instance().local_is_initialized()) {
             return make_ready_future<>();
         }
-        return audit_instance().invoke_on_all([&cfg, &qp, &mm] (audit& local_audit) {
-            return local_audit.start(cfg, qp.local(), mm.local());
+        return audit_instance().invoke_on_all([&cfg] (audit& local_audit) {
+            return local_audit.start(cfg);
         });
     });
 }
@@ -180,15 +197,7 @@ audit_info_ptr audit::create_no_audit_info() {
     return audit_info_ptr();
 }
 
-future<> audit::start(const db::config& cfg, cql3::query_processor& qp, service::migration_manager& mm) {
-    try {
-        _storage_helper_ptr = create_object<storage_helper>(_storage_helper_class_name, qp, mm);
-    } catch (no_such_class& e) {
-        logger.error("Can't create audit storage helper {}: not supported", _storage_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
-    }
+future<> audit::start(const db::config& cfg) {
     return _storage_helper_ptr->start(cfg);
 }
 

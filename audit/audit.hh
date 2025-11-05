@@ -129,13 +129,16 @@ public:
     static future<> stop_audit();
     static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table);
     static audit_info_ptr create_no_audit_info();
-    audit(locator::shared_token_metadata& stm, sstring&& storage_helper_name,
+    audit(locator::shared_token_metadata& stm,
+          cql3::query_processor& qp,
+          service::migration_manager& mm,
+          sstring&& storage_helper_name,
           std::set<sstring>&& audited_keyspaces,
           std::map<sstring, std::set<sstring>>&& audited_tables,
           category_set&& audited_categories,
           const db::config& cfg);
     ~audit();
-    future<> start(const db::config& cfg, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> start(const db::config& cfg);
     future<> stop();
     future<> shutdown();
     bool should_log(const audit_info* audit_info) const;
