@@ -17,6 +17,7 @@
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <time.h>
 #include <algorithm>
 #include <functional>
@@ -810,12 +811,31 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (done) {
             co_return json::json_return_type(0);
         }
-        // fall back to the local global cleanup if topology coordinator is not enabled
+        // fall back to the local cleanup if topology coordinator is not enabled or local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<global_cleanup_compaction_task_impl>({}, db);
         co_await task->done();
+
+        // Mark this node as clean
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+            if (ss.is_topology_coordinator_enabled()) {
+                co_await ss.reset_cleanup_needed();
+            }
+        });
+
         co_return json::json_return_type(0);
+    });
+
+    ss::reset_cleanup_needed.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("reset_cleanup_needed");
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) {
+            if (!ss.is_topology_coordinator_enabled()) {
+                throw std::runtime_error("mark_node_as_clean is only supported when topology over raft is enabled");
+            }
+            return ss.reset_cleanup_needed();
+        });
+        co_return json_void();
     });
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
@@ -1592,6 +1612,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::force_keyspace_compaction.unset(r);
     ss::force_keyspace_cleanup.unset(r);
     ss::cleanup_all.unset(r);
+    ss::reset_cleanup_needed.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);
     ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
