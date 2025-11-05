@@ -136,6 +136,7 @@ future<> controller::start_server() {
                 [this, addr, alternator_port, alternator_https_port, creds = std::move(creds)] (server& server) mutable {
             return server.init(addr, alternator_port, alternator_https_port, creds,
                     _config.alternator_enforce_authorization,
+                    _config.alternator_warn_authorization,
                     _config.alternator_max_users_query_size_in_trace_output,
                     &_memory_limiter.local().get_semaphore(),
                     _config.max_concurrent_requests_per_shard);
