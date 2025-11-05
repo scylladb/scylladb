@@ -1047,7 +1047,7 @@
          ]
       },
       {
-         "path":"/storage_service/cleanup_all",
+         "path":"/storage_service/cleanup_all/",
          "operations":[
             {
                "method":"POST",
@@ -1057,7 +1057,16 @@
                "produces":[
                   "application/json"
                ],
-               "parameters":[]
+               "parameters":[
+                    {
+                     "name":"global",
+                     "description":"true if cleanup of entire cluster is requested",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
             }
          ]
       },

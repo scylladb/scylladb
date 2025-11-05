@@ -764,8 +764,14 @@ rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::un
 static
 future<json::json_return_type>
 rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        apilog.info("cleanup_all");
-        auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
+        bool global = true;
+        if (auto global_param = req->get_query_param("global"); !global_param.empty()) {
+            global = validate_bool(global_param);
+        }
+
+        apilog.info("cleanup_all global={}", global);
+
+        auto done = !global ? false : co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
             if (!ss.is_topology_coordinator_enabled()) {
                 co_return false;
             }

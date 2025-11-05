@@ -395,7 +395,7 @@ class ScyllaRESTAPIClient:
         await self.client.post(f"/storage_service/keyspace_cleanup/{ks}", host=node_ip)
 
     async def cleanup_all(self, node_ip: str):
-        await self.client.post("/storage_service/cleanup_all", node_ip)
+        await self.client.post("/storage_service/cleanup_all/", node_ip)
 
     async def load_new_sstables(self, node_ip: str, keyspace: str, table: str, primary_replica : bool = False, scope: str = "all", load_and_stream : bool = False) -> None:
         """Load sstables from upload directory"""
