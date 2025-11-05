@@ -929,6 +929,8 @@ public:
 
     future<> do_cluster_cleanup();
 
+    future<> reset_cleanup_needed();
+
     // Starts the upgrade procedure to topology on raft.
     // Must be called on shard 0.
     future<> start_upgrade_to_raft_topology();
