@@ -188,7 +188,7 @@ Function name         Output type
 
 For example, to retrieve data up to today, run the following query::
 
-   SELECT * FROM myTable WHERE date >= currentDate()
+   SELECT * FROM myTable WHERE currentDate() >= date
 
 Time conversion functions
 #########################
