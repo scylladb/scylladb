@@ -1062,6 +1062,21 @@
          ]
       },
       {
+         "path":"/storage_service/mark_node_as_clean",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Mark the node as clean. After that the node will not be considered as needing cleanup during automatic cleanup which is triggered by some topology operations",
+               "type":"void",
+               "nickname":"reset_cleanup_needed",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_offstrategy_compaction/{keyspace}",
          "operations":[
             {

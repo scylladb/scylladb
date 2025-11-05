@@ -20,6 +20,7 @@
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <time.h>
 #include <algorithm>
 #include <functional>
@@ -774,12 +775,33 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         if (done) {
             co_return json::json_return_type(0);
         }
-        // fall back to the local global cleanup if topology coordinator is not enabled
+        // fall back to the local cleanup if topology coordinator is not enabled or local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
         co_await task->done();
+
+        // Mark this node as clean
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+            if (ss.is_topology_coordinator_enabled()) {
+                co_await ss.reset_cleanup_needed();
+            }
+        });
+
         co_return json::json_return_type(0);
+}
+
+static
+future<json::json_return_type>
+rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+        apilog.info("reset_cleanup_needed");
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) {
+            if (!ss.is_topology_coordinator_enabled()) {
+                throw std::runtime_error("mark_node_as_clean is only supported when topology over raft is enabled");
+            }
+            return ss.reset_cleanup_needed();
+        });
+        co_return json_void();
 }
 
 static
@@ -1783,6 +1805,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_natural_endpoints_v2.set(r, rest_bind(rest_get_natural_endpoints_v2, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
+    ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
     ss::decommission.set(r, rest_bind(rest_decommission, ss));
@@ -1861,6 +1884,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
     ss::cleanup_all.unset(r);
+    ss::reset_cleanup_needed.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
     ss::decommission.unset(r);
