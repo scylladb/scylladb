@@ -800,8 +800,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::cleanup_all.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        apilog.info("cleanup_all");
-        auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
+        bool global = true;
+        if (auto global_param = req->get_query_param("global"); !global_param.empty()) {
+            global = validate_bool(global_param);
+        }
+
+        apilog.info("cleanup_all global={}", global);
+
+        auto done = !global ? false : co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
             if (!ss.is_topology_coordinator_enabled()) {
                 co_return false;
             }
