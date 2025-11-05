@@ -312,7 +312,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   Currently, *all* Alternator tables are created as global tables and can
   be accessed from all the DCs existing at the time of the table's creation.
   If a DC is added after a table is created, the table won't be visible from
-  the new DC and changing that requires a CQL "ALTER TABLE" statement to
+  the new DC and changing that requires a CQL "ALTER KEYSPACE" statement to
   modify the table's replication strategy.
   <https://github.com/scylladb/scylla/issues/5062>
 
