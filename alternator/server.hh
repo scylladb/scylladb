@@ -43,6 +43,7 @@ class server : public peering_sharded_service<server> {
 
     key_cache _key_cache;
     utils::updateable_value<bool> _enforce_authorization;
+    utils::updateable_value<bool> _warn_authorization;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     named_gate _pending_requests;
     // In some places we will need a CQL updateable_timeout_config object even
@@ -94,7 +95,8 @@ public:
     server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-            utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
+            utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization,
+            semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of
