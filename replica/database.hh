@@ -2079,6 +2079,14 @@ public:
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
 
+    // Returns true if RF-rack-validity must be enforced for the given keyspace and config, and false otherwise.
+    static bool enforce_rf_rack_validity_for_keyspace(const db::config& cfg, const keyspace_metadata& ksm);
+
+    // Returns true if RF-rack-validity must be enforced for the given keyspace, and false otherwise.
+    bool enforce_rf_rack_validity_for_keyspace(const keyspace& ks) const {
+        return enforce_rf_rack_validity_for_keyspace(_cfg, *ks.metadata());
+    }
+
     // Verify that the existing keyspaces are all RF-rack-valid.
     //
     // Result:

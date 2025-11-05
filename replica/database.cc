@@ -3454,16 +3454,19 @@ database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
+bool database::enforce_rf_rack_validity_for_keyspace(const db::config& cfg, const keyspace_metadata& ksm) {
+    return cfg.rf_rack_valid_keyspaces();
+}
+
 void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
-    const bool enforce_rf_rack_valid_keyspaces = _cfg.rf_rack_valid_keyspaces();
 
     for (const auto& [name, info] : keyspaces) {
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
         } catch (...) {
-            if (enforce_rf_rack_valid_keyspaces) {
+            if (enforce_rf_rack_validity_for_keyspace(info)) {
                 throw;
             }
 
