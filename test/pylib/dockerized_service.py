@@ -76,7 +76,7 @@ class DockerizedServer:
                                 print(f'Got start message: {line}')
                                 done = True
                                 break
-                            if self.is_failure_line(line, port):
+                            if self.is_failure_line(line, port) or "Address already in use" in line or "port is already allocated" in line:
                                 print(f'Got fail message: {line}')
                                 failed = True
                                 break
