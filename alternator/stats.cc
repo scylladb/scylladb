@@ -176,6 +176,16 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             seastar::metrics::make_total_operations("expression_cache_misses", stats.expression_cache.requests[stats::expression_types::PROJECTION_EXPRESSION].misses,
                     seastar::metrics::description("Counts number of misses of cached expressions"), labels)(expression_label("ProjectionExpression")).aggregate(aggregate_labels).set_skip_when_empty()
     });
+
+    // Only register the following metrics for the global metrics, not per-table
+    if (!has_table) {
+        metrics.add_group("alternator", {
+            seastar::metrics::make_counter("authentication_failures", stats.authentication_failures,
+                seastar::metrics::description("total number of authentication failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_counter("authorization_failures", stats.authorization_failures,
+                seastar::metrics::description("total number of authorization failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+        });
+    }
 }
 
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats) {
