@@ -18,6 +18,12 @@
 #
 #   ssh -L *:9042:127.0.0.1:9042 -N <remote-host>
 #
+# Instead of a live cluster, it can also visualize a snapshot directory:
+#
+#   ./tablet-mon.py --snapshot tablet_snap_YYMMDD_HHMMSS
+#
+# See tablets/README.md for how to obtain a snapshot.
+#
 # Key bindings:
 #
 #  t - toggle display of table tags. Each table has a unique color which fills tablets of that table.
@@ -26,14 +32,16 @@
 #        - fixed-size (each tablet has the same displayed size)
 #        - scaled-to-capacity (tablet size is proportional to its utilization of shard's storage capacity)
 #
-
+import argparse
 import math
+import logging
 import threading
 import time
-import logging
+
 import pygame
 
-from cassandra.cluster import Cluster
+from tablets import topology
+from tablets.topology import add_topology_source_args, get_topology_source_from_args
 
 tablet_size_modes = ["fixed size", "scaled to capacity"]
 tablet_size_mode_idx = 1
@@ -438,11 +446,10 @@ table_tag_colors = {}
 # Avoid redrawing if nothing changed
 changed = False
 
-cluster = Cluster(['127.0.0.1'])
-session = cluster.connect()
-topo_query = session.prepare("SELECT host_id, shard_count FROM system.topology")
-tablets_query = session.prepare("SELECT * FROM system.tablets")
-load_per_node_query = session.prepare("SELECT * FROM system.load_per_node")
+parser = argparse.ArgumentParser(description="Tablet topology live monitor")
+add_topology_source_args(parser)
+args = parser.parse_args()
+src = get_topology_source_from_args(args)
 
 data_source_alive = False
 
@@ -457,10 +464,11 @@ def update_from_cql(initial=False):
     global changed
     global data_source_alive
 
-    all_host_ids = set()
-    for host in session.execute(topo_query):
-        id = host.host_id
-        all_host_ids.add(id)
+    topo = src.get_topology()
+    all_host_ids = topo.all_host_ids()
+
+    for host in topo.all_hosts():
+        id = host.id
         if id not in nodes_by_id:
             n = Node(id)
             nodes.append(n)
@@ -471,20 +479,14 @@ def update_from_cql(initial=False):
             n.shards = n.shards[:host.shard_count]
         while len(n.shards) < host.shard_count:
             n.shards.append(Shard())
+        if host.storage_capacity:
+            n.capacity = host.storage_capacity
 
     for id in nodes_by_id:
         if id not in all_host_ids:
             nodes.remove(nodes_by_id[id])
             del nodes_by_id[id]
             changed = True
-
-    for row in session.execute(load_per_node_query):
-        host_id = row.node
-        if host_id in nodes_by_id:
-            n = nodes_by_id[host_id]
-            if row.storage_capacity:
-                n.capacity = int(row.storage_capacity)
-
 
     # Nodes are scaled to the node with smallest capacity.
     # Nodes with more capacity will have smaller tablets (smaller capacity_weight).
@@ -510,7 +512,7 @@ def update_from_cql(initial=False):
         tablet_id_by_table[table_id] += 1
         return ret
 
-    def process_tablet(table_id, tablet, base_id):
+    def process_tablet(table_id, tablet: topology.Tablet, base_id):
         tablet_seq = tablet_id_for_table(table_id)
         id = (table_id, tablet.last_token)
         replicas = set(tablet.replicas)
@@ -568,20 +570,9 @@ def update_from_cql(initial=False):
                 fire_tracer(id, src, dst, light_red, light_green, tablet_h,
                             streaming_trace_decay_ms, streaming_trace_duration_ms)
 
-    all_tablets = {}
-    for tablet in session.execute(tablets_query):
-        if not tablet.table_id in all_tablets:
-            all_tablets[tablet.table_id] = []
-        all_tablets[tablet.table_id].append(tablet)
-
-    for (table_id, tablet) in all_tablets.items():
-        base_id = table_id
-        try:
-            base_id = tablet[0].base_table or table_id
-        except AttributeError:
-            pass
-
-        for t in all_tablets[base_id]:
+    for table_id in topo.iter_table_ids():
+        base_id = topo.get_base_table_id(table_id)
+        for t in topo.get_tablet_map(table_id).tablets:
             process_tablet(table_id, t, base_id)
 
     for n in nodes:
@@ -614,9 +605,10 @@ cassandra_logger.addHandler(console_handler)
 
 update_from_cql(initial=True)
 
-cassandra_thread = threading.Thread(target=cql_updater)
-cassandra_thread.daemon = True
-cassandra_thread.start()
+if src.is_live():
+    cassandra_thread = threading.Thread(target=cql_updater)
+    cassandra_thread.daemon = True
+    cassandra_thread.start()
 
 pygame.init()
 clock = pygame.time.Clock()
@@ -806,7 +798,7 @@ while running:
 
     # Check connectivity with data source
     # and display a pane while reconnecting
-    if data_source_alive:
+    if data_source_alive or not src.is_live():
         last_update = now
         data_source_alive = False
     elif now - last_update > cql_update_timeout_ms:
