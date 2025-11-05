@@ -1366,9 +1366,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
                 tracing.stop().get();
             });
-            audit::audit::create_audit(*cfg, token_metadata).handle_exception([&] (auto&& e) {
-                startlog.error("audit creation failed: {}", e);
-            }).get();
 
             stop_signal.check();
             ctx.http_server.server().invoke_on_all([] (auto& server) { server.set_content_streaming(true); }).get();
@@ -2472,7 +2469,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
 
-            audit::audit::start_audit(*cfg, qp, mm).get();
+            audit::audit::start_audit(*cfg, token_metadata, qp, mm).handle_exception([&] (auto&& e) {
+                startlog.error("audit start failed: {}", e);
+            }).get();
             auto audit_stop = defer([] {
                 audit::audit::stop_audit().get();
             });

@@ -125,8 +125,7 @@ public:
     static audit& local_audit_instance() {
         return audit_instance().local();
     }
-    static future<> create_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm);
-    static future<> start_audit(const db::config& cfg, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
+    static future<> start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
     static future<> stop_audit();
     static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table);
     static audit_info_ptr create_no_audit_info();

@@ -121,7 +121,7 @@ audit::audit(locator::shared_token_metadata& token_metadata,
 
 audit::~audit() = default;
 
-future<> audit::create_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm) {
+future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
     sstring storage_helper_name;
     if (cfg.audit() == "table") {
         storage_helper_name = "audit_cf_storage_helper";
@@ -147,15 +147,14 @@ future<> audit::create_audit(const db::config& cfg, sharded<locator::shared_toke
                                   std::move(audited_keyspaces),
                                   std::move(audited_tables),
                                   std::move(audited_categories),
-                                  std::cref(cfg));
-}
-
-future<> audit::start_audit(const db::config& cfg, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
+                                  std::cref(cfg))
+    .then([&cfg, &qp, &mm] {
     if (!audit_instance().local_is_initialized()) {
         return make_ready_future<>();
     }
     return audit_instance().invoke_on_all([&cfg, &qp, &mm] (audit& local_audit) {
         return local_audit.start(cfg, qp.local(), mm.local());
+    });
     });
 }
 
