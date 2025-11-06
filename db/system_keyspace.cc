@@ -3356,6 +3356,39 @@ future<mutation> system_keyspace::make_view_builder_version_mutation(api::timest
     co_return std::move(muts[0]);
 }
 
+static constexpr auto REPLICATED_KEY_PROVIDER_VERSION_KEY = "replicated_key_provider_version";
+
+future<system_keyspace::replicated_key_provider_version_t> system_keyspace::get_replicated_key_provider_version() {
+    auto str_opt = co_await get_scylla_local_param(REPLICATED_KEY_PROVIDER_VERSION_KEY);
+    if (!str_opt) {
+        co_return replicated_key_provider_version_t::v1;
+    }
+    auto& str = *str_opt;
+    if (str == "" || str == "10") {
+        co_return replicated_key_provider_version_t::v1;
+    }
+    if (str == "15") {
+        co_return replicated_key_provider_version_t::v1_5;
+    }
+    if (str == "20") {
+        co_return replicated_key_provider_version_t::v2;
+    }
+    on_internal_error(slogger, fmt::format("unexpected replicated_key_provider_version in scylla_local got {}", str));
+}
+
+future<std::optional<mutation>> system_keyspace::get_replicated_key_provider_version_mutation() {
+    return get_scylla_local_mutation(_db, REPLICATED_KEY_PROVIDER_VERSION_KEY);
+}
+
+future<mutation> system_keyspace::make_replicated_key_provider_version_mutation(api::timestamp_type ts, db::system_keyspace::replicated_key_provider_version_t version) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {REPLICATED_KEY_PROVIDER_VERSION_KEY, std::to_string(int64_t(version))});
+    if (muts.size() != 1) {
+         on_internal_error(slogger, fmt::format("expected 1 replicated_key_provider_version mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
 static constexpr auto SERVICE_LEVEL_DRIVER_CREATED_KEY = "service_level_driver_created";
 
 future<std::optional<mutation>> system_keyspace::get_service_level_driver_created_mutation() {

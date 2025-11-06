@@ -675,6 +675,16 @@ public:
     future<mutation> make_view_builder_version_mutation(api::timestamp_type ts, view_builder_version_t version);
     future<view_builder_version_t> get_view_builder_version();
 
+    enum class replicated_key_provider_version_t: int64_t {
+        v1 = 10,
+        v1_5 = 15,
+        v2 = 20,
+    };
+
+    future<std::optional<mutation>> get_replicated_key_provider_version_mutation();
+    future<mutation> make_replicated_key_provider_version_mutation(api::timestamp_type ts, replicated_key_provider_version_t version);
+    future<replicated_key_provider_version_t> get_replicated_key_provider_version();
+
     future<> sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status);
     future<> sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state);
