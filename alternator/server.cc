@@ -31,6 +31,13 @@
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/aws_sigv4.hh"
+<<<<<<< HEAD
+||||||| parent of 51186b2f2c (alternator: add alternator_warn_authorization config)
+#include "client_data.hh"
+=======
+#include "client_data.hh"
+#include "utils/updateable_value.hh"
+>>>>>>> 51186b2f2c (alternator: add alternator_warn_authorization config)
 
 static logging::logger slogger("alternator-server");
 
@@ -267,24 +274,57 @@ protected:
     }
 };
 
+// This function increments the authentication_failures counter, and may also
+// log a warn-level message and/or throw an exception, depending on what
+// enforce_authorization and warn_authorization are set to.
+// The username and client address are only used for logging purposes -
+// they are not included in the error message returned to the client, since
+// the client knows who it is.
+// Note that if enforce_authorization is false, this function will return
+// without throwing. So a caller that doesn't want to continue after an
+// authentication_error must explicitly return after calling this function.
+template<typename Exception>
+static void authentication_error(alternator::stats& stats, bool enforce_authorization, bool warn_authorization, Exception&& e, std::string_view user, gms::inet_address client_address) {
+    stats.authentication_failures++;
+    if (enforce_authorization) {
+        if (warn_authorization) {
+            slogger.warn("alternator_warn_authorization=true: {} for user {}, client address {}", e.what(), user, client_address);
+        }
+        throw std::move(e);
+    } else {
+        if (warn_authorization) {
+            slogger.warn("If you set alternator_enforce_authorization=true the following will be enforced: {} for user {}, client address {}", e.what(), user, client_address);
+        }
+    }
+}
+
 future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
-    if (!_enforce_authorization) {
+    if (!_enforce_authorization.get() && !_warn_authorization.get()) {
         slogger.debug("Skipping authorization");
         return make_ready_future<std::string>();
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
-        throw api_error::invalid_signature("Host header is mandatory for signature verification");
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::invalid_signature("Host header is mandatory for signature verification"), 
+            "", req.get_client_address());
+        return make_ready_future<std::string>();
     }
     auto authorization_it = req._headers.find("Authorization");
     if (authorization_it == req._headers.end()) {
-        throw api_error::missing_authentication_token("Authorization header is mandatory for signature verification");
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::missing_authentication_token("Authorization header is mandatory for signature verification"),
+            "", req.get_client_address());
+        return make_ready_future<std::string>();
     }
     std::string host = host_it->second;
     std::string_view authorization_header = authorization_it->second;
     auto pos = authorization_header.find_first_of(' ');
     if (pos == std::string_view::npos || authorization_header.substr(0, pos) != "AWS4-HMAC-SHA256") {
-        throw api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header)),
+            "", req.get_client_address());
+        return make_ready_future<std::string>();
     }
     authorization_header.remove_prefix(pos+1);
     std::string credential;
@@ -319,7 +359,9 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
 
     std::vector<std::string_view> credential_split = split(credential, '/');
     if (credential_split.size() != 5) {
-        throw api_error::validation(fmt::format("Incorrect credential information format: {}", credential));
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::validation(fmt::format("Incorrect credential information format: {}", credential)), "", req.get_client_address());
+        return make_ready_future<std::string>();
     }
     std::string user(credential_split[0]);
     std::string datestamp(credential_split[1]);
@@ -343,7 +385,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     auto cache_getter = [&proxy = _proxy, &as = _auth_service] (std::string username) {
         return get_key_from_roles(proxy, as, std::move(username));
     };
-    return _key_cache.get_ptr(user, cache_getter).then([this, &req, &content,
+    return _key_cache.get_ptr(user, cache_getter).then_wrapped([this, &req, &content,
                                                     user = std::move(user),
                                                     host = std::move(host),
                                                     datestamp = std::move(datestamp),
@@ -351,18 +393,32 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
                                                     signed_headers_map = std::move(signed_headers_map),
                                                     region = std::move(region),
                                                     service = std::move(service),
-                                                    user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
+                                                    user_signature = std::move(user_signature)] (future<key_cache::value_ptr> key_ptr_fut) {
+        key_cache::value_ptr key_ptr(nullptr);
+        try {
+            key_ptr = key_ptr_fut.get();
+        } catch (const api_error& e) {
+            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+                e, user, req.get_client_address());
+            return std::string();
+        }
         std::string signature;
         try {
             signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
                 datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
         } catch (const std::exception& e) {
-            throw api_error::invalid_signature(e.what());
+            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+                api_error::invalid_signature(fmt::format("invalid signature: {}", e.what())),
+                user, req.get_client_address());
+            return std::string();
         }
 
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);
-            throw api_error::unrecognized_client("The security token included in the request is invalid.");
+            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+                api_error::unrecognized_client("wrong signature"),
+                user, req.get_client_address());
+            return std::string();
         }
         return user;
     });
@@ -503,7 +559,14 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _auth_service(auth_service)
         , _sl_controller(sl_controller)
         , _key_cache(1024, 1min, slogger)
+<<<<<<< HEAD
         , _enforce_authorization(false)
+||||||| parent of 51186b2f2c (alternator: add alternator_warn_authorization config)
+        , _enforce_authorization(false)
+        , _max_users_query_size_in_trace_output(1024)
+=======
+        , _max_users_query_size_in_trace_output(1024)
+>>>>>>> 51186b2f2c (alternator: add alternator_warn_authorization config)
         , _enabled_servers{}
         , _pending_requests{}
         , _timeout_config(_proxy.data_dictionary().get_config())
@@ -584,9 +647,18 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
+<<<<<<< HEAD
         utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+||||||| parent of 51186b2f2c (alternator: add alternator_warn_authorization config)
+        utils::updateable_value<bool> enforce_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
+        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+=======
+        utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
+        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+>>>>>>> 51186b2f2c (alternator: add alternator_warn_authorization config)
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
+    _warn_authorization = std::move(warn_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"

@@ -76,6 +76,73 @@ public:
         utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
     } api_operations;
+<<<<<<< HEAD
+||||||| parent of 51186b2f2c (alternator: add alternator_warn_authorization config)
+    // Operation size metrics
+    struct {
+        // Item size statistics collected per table and aggregated per node.
+        // Each histogram covers the range 0 - 446. Resolves #25143.
+        // A size is the retrieved item's size.
+        utils::estimated_histogram get_item_op_size_kb{30};
+        // A size is the maximum of the new item's size and the old item's size.
+        utils::estimated_histogram put_item_op_size_kb{30};
+        // A size is the deleted item's size. If the deleted item's size is
+        // unknown (i.e. read-before-write wasn't necessary and it wasn't
+        // forced by a configuration option), it won't be recorded on the
+        // histogram.
+        utils::estimated_histogram delete_item_op_size_kb{30};
+        // A size is the maximum of existing item's size and the estimated size
+        // of the update. This will be changed to the maximum of the existing item's
+        // size and the new item's size in a subsequent PR.
+        utils::estimated_histogram update_item_op_size_kb{30};
+
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the retrieved items' sizes grouped per table.
+        utils::estimated_histogram batch_get_item_op_size_kb{30};
+        // The sizes are the the written items' sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{30};
+    } operation_sizes;
+=======
+    // Operation size metrics
+    struct {
+        // Item size statistics collected per table and aggregated per node.
+        // Each histogram covers the range 0 - 446. Resolves #25143.
+        // A size is the retrieved item's size.
+        utils::estimated_histogram get_item_op_size_kb{30};
+        // A size is the maximum of the new item's size and the old item's size.
+        utils::estimated_histogram put_item_op_size_kb{30};
+        // A size is the deleted item's size. If the deleted item's size is
+        // unknown (i.e. read-before-write wasn't necessary and it wasn't
+        // forced by a configuration option), it won't be recorded on the
+        // histogram.
+        utils::estimated_histogram delete_item_op_size_kb{30};
+        // A size is the maximum of existing item's size and the estimated size
+        // of the update. This will be changed to the maximum of the existing item's
+        // size and the new item's size in a subsequent PR.
+        utils::estimated_histogram update_item_op_size_kb{30};
+
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the retrieved items' sizes grouped per table.
+        utils::estimated_histogram batch_get_item_op_size_kb{30};
+        // The sizes are the the written items' sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{30};
+    } operation_sizes;
+    // Count of authentication and authorization failures, counted if either
+    // alternator_enforce_authorization or alternator_warn_authorization are
+    // set to true. If both are false, no authentication or authorization
+    // checks are performed, so failures are not recognized or counted.
+    // "authentication" failure means the request was not signed with a valid
+    // user and key combination. "authorization" failure means the request was
+    // authenticated to a valid user - but this user did not have permissions
+    // to perform the operation (considering RBAC settings and the user's
+    // superuser status).
+    uint64_t authentication_failures = 0;
+    uint64_t authorization_failures = 0;
+>>>>>>> 51186b2f2c (alternator: add alternator_warn_authorization config)
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
