@@ -56,7 +56,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
                 return bp.count_all_batches().then([](auto n) {
                     BOOST_CHECK_EQUAL(n, 1);
                 }).then([&bp] () mutable {
-                    return bp.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes);
+                    return bp.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).discard_result();
                 });
             });
         }).then([&qp] {
