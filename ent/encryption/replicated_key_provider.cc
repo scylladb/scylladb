@@ -161,7 +161,24 @@ private:
     bool _use_cache = true;
 
     enum class keys_location { sys_repl_keys_ks, group0, both };
-    keys_location _keys_on = keys_location::sys_repl_keys_ks;
+    std::optional<keys_location> _keys_on;
+
+    // Async/Lazy initialization of `_keys_on` based on the current `replicated_key_provider_version`.
+    // Returns the value of the cached optional if engaged, otherwise queries
+    // the version from the `encryption_context`. The `encryption_context`
+    // returns either a cached value, or loads the value from `system.scylla_local`
+    // if not yet cached.
+    //
+    // Rationale for lazy initialization:
+    // 1. The `encryption_context` loads and caches the version from
+    //    `system.scylla_local` when it starts (`encryption_context::start()`).
+    // 2. Providers can be instantiated very early during node startup while loading
+    //    non-system keyspaces (distributed_loader::init_non_system_keyspaces),
+    //    *before* `encryption_context::start()` runs. In this case, the version
+    //    is not yet cached.
+    // 3. The provider cannot know when it is being used, so a mechanism is needed
+    //    to load the version on first use, if not already cached.
+    future<keys_location> get_keys_location();
 
     friend class replicated_key_provider_factory;
 
@@ -238,6 +255,30 @@ const utils::UUID replicated_key_provider::local_fallback_uuid(0u, 0u); // not v
 const bytes replicated_key_provider::local_fallback_id = encode_id(local_fallback_uuid);
 const bytes_view replicated_key_provider::local_fallback_bytes(local_fallback_id.data() + 1, 16);
 
+future<replicated_key_provider::keys_location> replicated_key_provider::get_keys_location() {
+    if (!_keys_on.has_value()) {
+        auto version = co_await _ctxt.get_or_load_replicated_keys_version();
+        // early return after yield; a value may have been assigned by the state listener while awaiting
+        // ensures shard-local atomicity of writes
+        if (_keys_on.has_value()) {
+            co_return *_keys_on;
+        }
+        _keys_on = [&] {
+            switch (version) {
+            case db::system_keyspace::replicated_key_provider_version_t::v1:
+                return keys_location::sys_repl_keys_ks;
+            case db::system_keyspace::replicated_key_provider_version_t::v1_5:
+                return keys_location::both;
+            case db::system_keyspace::replicated_key_provider_version_t::v2:
+                return keys_location::group0;
+            default:
+                on_internal_error(log, "Unknown replicated key provider version");
+            }
+        }();
+    }
+    co_return *_keys_on;
+}
+
 future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_info& info, opt_bytes input) {
     co_return co_await key_impl(info, std::move(input));
 }
@@ -302,6 +343,8 @@ future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key_impl(const k
 }
 
 future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_info& info, opt_bytes opt_id, std::optional<group0_ctx> g0_ctx) {
+    auto keys_on = co_await get_keys_location();
+
     if (!_initialized) {
         co_await maybe_initialize_tables();
     }
@@ -339,7 +382,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     auto cipher = info.alg.substr(0, info.alg.find('/')); // e.g. "AES"
 
     auto res = co_await [&] -> future<std::optional<std::tuple<UUID, key_ptr>>> {
-        switch (_keys_on) {
+        switch (keys_on) {
         case keys_location::sys_repl_keys_ks:
         case keys_location::both:
             // Try to find the key in the old table first.
@@ -357,10 +400,10 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     }
 
     static const char* key_loc_msgs[] = {"", " in group0", " in both tables"};
-    log.debug("No key found. Generating new key{}", key_loc_msgs[static_cast<int>(_keys_on)]);
+    log.debug("No key found. Generating new key{}", key_loc_msgs[static_cast<int>(keys_on)]);
 
     auto [uuid, k] = co_await [&] -> future<std::tuple<UUID, key_ptr>> {
-        switch (_keys_on) {
+        switch (keys_on) {
         case keys_location::sys_repl_keys_ks:
             co_return co_await create_key(info, cipher);
         case keys_location::both: {
@@ -535,7 +578,7 @@ future<> replicated_key_provider::maybe_initialize_tables() {
     if (_initialized) {
         co_return;
     }
-    if (_keys_on == keys_location::sys_repl_keys_ks) {
+    if (co_await get_keys_location() == keys_location::sys_repl_keys_ks) {
         co_await do_initialize_tables(_ctxt.get_database().local(), _ctxt.get_migration_manager().local());
     }
     _initialized = true;
