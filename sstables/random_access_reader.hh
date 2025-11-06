@@ -17,6 +17,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include "seastarx.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace sstables {
 
@@ -32,6 +33,8 @@ protected:
 
 public:
     future <temporary_buffer<char>> read_exactly(size_t n) noexcept;
+
+    future<fragmented_temporary_buffer> read_exactly_fragmented(size_t n) noexcept;
 
     future<> seek(uint64_t pos) noexcept;
 

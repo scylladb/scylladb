@@ -11,6 +11,7 @@
 #include "sstables/random_access_reader.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/log.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace sstables {
 
@@ -21,6 +22,15 @@ future <temporary_buffer<char>> random_access_reader::read_exactly(size_t n) noe
     return _in->read_exactly(n);
   } catch (...) {
     return current_exception_as_future<temporary_buffer<char>>();
+  }
+}
+
+future<fragmented_temporary_buffer> random_access_reader::read_exactly_fragmented(size_t n) noexcept {
+  try {
+    fragmented_temporary_buffer::reader reader;
+    return reader.read_exactly(*_in, n);
+  } catch (...) {
+    return current_exception_as_future<fragmented_temporary_buffer>();
   }
 }
 
