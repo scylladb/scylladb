@@ -22,6 +22,7 @@
 #include "../../bytes.hh"
 #include "mutation/timestamp.hh"
 #include "utils/chunked_vector.hh"
+#include "db/system_keyspace.hh"
 
 class mutation;
 class service_set;
@@ -192,6 +193,9 @@ public:
 
     virtual future<> start() = 0;
     virtual future<> stop() = 0;
+
+    virtual future<db::system_keyspace::replicated_key_provider_version_t> get_or_load_replicated_keys_version() = 0;
+    virtual future<> set_replicated_keys_version(db::system_keyspace::replicated_key_provider_version_t version) = 0;
 };
 
 future<seastar::shared_ptr<encryption_context>>

@@ -625,8 +625,9 @@ void replicated_key_provider_factory::init(db::extensions& exts) {
     exts.add_extension_internal_keyspace(KSNAME);
 }
 
-future<> replicated_key_provider_factory::on_started(::replica::database& db, service::migration_manager& mm) {
-    return replicated_key_provider::do_initialize_tables(db, mm);
+future<> replicated_key_provider_factory::on_started(encryption_context& ctxt, ::replica::database& db, service::migration_manager& mm) {
+    (void)co_await ctxt.get_or_load_replicated_keys_version(); // load the version if not loaded yet
+    co_await replicated_key_provider::do_initialize_tables(db, mm);
 }
 
 }

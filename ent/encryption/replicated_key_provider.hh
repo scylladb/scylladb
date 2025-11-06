@@ -33,7 +33,7 @@ public:
     shared_ptr<key_provider> get_provider(encryption_context&, const options&) override;
 
     static void init(db::extensions&);
-    static future<> on_started(::replica::database&, service::migration_manager&);
+    static future<> on_started(encryption_context&, ::replica::database&, service::migration_manager&);
 };
 
 }

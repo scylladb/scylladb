@@ -280,6 +280,7 @@ class encryption_context_impl : public encryption_context {
     std::vector<std::unordered_map<sstring, shared_ptr<gcp_host>>> _per_thread_gcp_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<azure_host>>> _per_thread_azure_host_cache;
     std::vector<shared_ptr<encryption_schema_extension>> _per_thread_global_user_extension;
+    std::vector<std::optional<db::system_keyspace::replicated_key_provider_version_t>> _per_thread_replicated_keys_version;
     std::unique_ptr<encryption_config> _cfg;
     sharded<cql3::query_processor>* _qp;;
     sharded<service::migration_manager>* _mm;
@@ -296,6 +297,7 @@ public:
         , _per_thread_gcp_host_cache(smp::count)
         , _per_thread_azure_host_cache(smp::count)
         , _per_thread_global_user_extension(smp::count)
+        , _per_thread_replicated_keys_version(smp::count)
         , _cfg(std::move(cfg))
         , _qp(find_or_null<cql3::query_processor>(services))
         , _mm(find_or_null<service::migration_manager>(services))
@@ -452,7 +454,7 @@ public:
 
     future<> start() override {
         if (_qp && _ss && _db && _mm) {
-            co_await replicated_key_provider_factory::on_started(get_database().local(), get_migration_manager().local());
+            co_await replicated_key_provider_factory::on_started(*this, get_database().local(), get_migration_manager().local());
         }
     }
     future<> stop() override {
@@ -487,6 +489,27 @@ public:
     }
     bool allow_per_table_encryption() const {
         return _allow_per_table_encryption;
+    }
+
+    future<db::system_keyspace::replicated_key_provider_version_t> get_or_load_replicated_keys_version() override {
+        auto& cached = _per_thread_replicated_keys_version[this_shard_id()];
+        if (cached) {
+            co_return *cached;
+        }
+
+        // Load from system.scylla_local and cache it on each shard.
+        // This is potentially wasteful if called concurrently from multiple shards, but not harmful.
+        auto version = co_await get_storage_service().local().get_system_keyspace().get_replicated_key_provider_version();
+        co_await set_replicated_keys_version(version);
+        co_return version;
+    }
+
+    future<> set_replicated_keys_version(db::system_keyspace::replicated_key_provider_version_t version) override {
+        return smp::submit_to(0, [this, version] {
+            for (auto& v : _per_thread_replicated_keys_version) {
+                v = version;
+            }
+        });
     }
 };
 
