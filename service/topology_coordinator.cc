@@ -496,11 +496,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return get_excluded_nodes_for_topology_request(*node.topology, node.id, node.request);
     }
 
-    future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, get_excluded_nodes_for_topology_request(node), drop_guard_and_retake::yes);
-        co_return retake_node(std::move(guard), node.id);
-    };
-
     future<group0_guard> remove_from_group0(group0_guard guard, const raft::server_id& id) {
         rtlogger.info("removing node {} from group 0 configuration...", id);
         release_guard(std::move(guard));
