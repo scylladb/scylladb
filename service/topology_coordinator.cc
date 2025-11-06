@@ -69,6 +69,8 @@
 #include "repair/repair.hh"
 #include "idl/repair.dist.hh"
 
+#include "ent/encryption/replicated_key_provider.hh"
+
 #include "service/topology_coordinator.hh"
 
 #include <boost/range/join.hpp>
@@ -3402,6 +3404,27 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
         if (!sl_driver_created.value_or(false)) {
             co_return co_await _sl_controller.migrate_to_driver_service_level(std::move(guard), _sys_ks);
         }
+    }
+
+    const auto replicated_key_provider_version = co_await _sys_ks.get_replicated_key_provider_version();
+    if (_feature_service.encrypted_keys_on_group0 && replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v1) {
+        rtlogger.info("Migrating encrypted_keys to v1_5");
+        co_await encryption::replicated_keys_migration_manager::migrate_to_v1_5(_sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
+        co_return std::nullopt;
+    }
+
+    if (replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v1_5) {
+        if (!get_dead_nodes().empty()) {
+            rtlogger.debug("Not all nodes are alive. Skipping system table migration until there are no dead nodes.");
+            co_return std::move(guard);
+        }
+
+        rtlogger.info("Migrating encrypted_keys to v2");
+        // do a barrier to ensure all nodes applied the migration to v1_5 before we continue to v2
+        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
+
+        co_await encryption::replicated_keys_migration_manager::migrate_to_v2(_sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
+        co_return std::nullopt;
     }
 
     co_return std::move(guard);

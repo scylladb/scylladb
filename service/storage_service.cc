@@ -737,6 +737,16 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             break;
     }
 
+    if (_replicated_keys_migration_mgr) {
+        auto replicated_key_provider_version = co_await _sys_ks.local().get_replicated_key_provider_version();
+        if (replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v1_5) {
+            co_await _replicated_keys_migration_mgr->upgrade_to_v1_5();
+        }
+        if (replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v2) {
+            co_await _replicated_keys_migration_mgr->upgrade_to_v2();
+        }
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
