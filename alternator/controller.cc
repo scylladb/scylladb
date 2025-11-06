@@ -136,6 +136,13 @@ future<> controller::start_server() {
                 [this, addr, alternator_port, alternator_https_port, creds = std::move(creds)] (server& server) mutable {
             return server.init(addr, alternator_port, alternator_https_port, creds,
                     _config.alternator_enforce_authorization,
+<<<<<<< HEAD
+||||||| parent of 51186b2f2c (alternator: add alternator_warn_authorization config)
+                    _config.alternator_max_users_query_size_in_trace_output,
+=======
+                    _config.alternator_warn_authorization,
+                    _config.alternator_max_users_query_size_in_trace_output,
+>>>>>>> 51186b2f2c (alternator: add alternator_warn_authorization config)
                     &_memory_limiter.local().get_semaphore(),
                     _config.max_concurrent_requests_per_shard);
         }).handle_exception([this, addr, alternator_port, alternator_https_port] (std::exception_ptr ep) {
