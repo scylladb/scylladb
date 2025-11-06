@@ -40,7 +40,7 @@ async def test_maintenance_mode(manager: ManagerClient):
         # Token ranges of the server A
         # [(start_token, end_token)]
         ranges = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"""SELECT start_token, end_token, endpoint
-                                                                                FROM system.token_ring WHERE keyspace_name = 'ks'
+                                                                                FROM system.token_ring WHERE keyspace_name = '{ks}'
                                                                                 AND endpoint = '{server_a.ip_addr}' ALLOW FILTERING""")]
 
         # Insert data to the cluster and find a key that is stored on server A.
@@ -79,7 +79,7 @@ async def test_maintenance_mode(manager: ManagerClient):
 
         # Check that group0 operations are disabled
         with pytest.raises(ConfigurationException):
-            await maintenance_cql.run_async(f"CREATE TABLE ks.t2 (k int PRIMARY KEY, v int)")
+            await maintenance_cql.run_async(f"CREATE TABLE {ks}.t2 (k int PRIMARY KEY, v int)")
 
         await maintenance_cql.run_async(f"UPDATE {table} SET v = {key_on_server_a + 1} WHERE k = {key_on_server_a}")
 
