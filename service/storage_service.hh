@@ -51,6 +51,7 @@
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
 #include "service/topology_coordinator.hh"
+#include "ent/encryption/replicated_key_provider.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -345,6 +346,16 @@ private:
     friend class db::schema_tables::schema_applier;
 public:
 
+    // Called during initialization to set the replicated keys migration manager
+    void set_replicated_keys_migration_manager(std::unique_ptr<encryption::replicated_keys_migration_manager> mgr) {
+        _replicated_keys_migration_mgr = std::move(mgr);
+    }
+
+    // Get the migration manager if it exists (it only exists if migration is needed)
+    encryption::replicated_keys_migration_manager* get_replicated_keys_migration_manager() {
+        return _replicated_keys_migration_mgr.get();
+    }
+
     const gms::gossiper& gossiper() const noexcept {
         return _gossiper;
     };
@@ -629,6 +640,7 @@ private:
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_building_worker>& _view_building_worker;
     bool _isolated = false;
+    std::unique_ptr<encryption::replicated_keys_migration_manager> _replicated_keys_migration_mgr;
 private:
     /**
      * Handle node bootstrap

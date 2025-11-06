@@ -13,6 +13,8 @@
 #include "init.hh"
 #include "encryption_config.hh"
 #include "encryption.hh"
+#include "replicated_key_provider.hh"
+#include "service/storage_service.hh"
 
 #include <fmt/ranges.h>
 
@@ -161,10 +163,22 @@ public:
         auto ccfg = _cfgs.count(&cfg) ? std::move(_cfgs.at(&cfg)) : std::make_unique<encryption::encryption_config>();
         _cfgs.erase(&cfg);
         auto ctxt = co_await encryption::register_extensions(cfg, std::move(ccfg), exts, services);
-        co_return [ctxt](system_state e) -> future<> {
+
+        auto maybe_create_and_register_migration_manager_for_replicated_keys = [] (encryption::encryption_context& ctxt) -> future<> {
+            auto migration_mgr = co_await encryption::replicated_key_provider_factory::create_migration_manager_if_needed(ctxt);
+            if (migration_mgr) {
+                // Set it in storage_service (only on shard 0 since it's not a sharded service)
+                co_await ctxt.get_storage_service().invoke_on(0, [mgr = std::move(migration_mgr)](service::storage_service& ss0) mutable {
+                    ss0.set_replicated_keys_migration_manager(std::move(mgr));
+                });
+            }
+        };
+
+        co_return [ctxt, maybe_create_and_register_migration_manager_for_replicated_keys](system_state e) -> future<> {
             switch (e) {
                 case system_state::started:
                     co_await ctxt->start();
+                    co_await maybe_create_and_register_migration_manager_for_replicated_keys(*ctxt);
                     break;
                 case system_state::stopped:
                     co_await ctxt->stop();

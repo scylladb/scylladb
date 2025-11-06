@@ -73,6 +73,13 @@ public:
 
     static void init(db::extensions&);
     static future<> on_started(encryption_context&, ::replica::database&, service::migration_manager&);
+
+    /**
+     * Create a migration manager if migration is needed.
+     * Returns nullptr if migration is not needed (already on v2).
+     * This should be called during initialization to determine if migration infrastructure is needed.
+     */
+    static future<std::unique_ptr<replicated_keys_migration_manager>>  create_migration_manager_if_needed(encryption_context& ctxt);
 };
 
 }

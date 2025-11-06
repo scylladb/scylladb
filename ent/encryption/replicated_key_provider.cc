@@ -809,4 +809,19 @@ future<> replicated_key_provider_factory::on_started(encryption_context& ctxt, :
     co_await replicated_key_provider::do_initialize_tables(db, mm);
 }
 
+future<std::unique_ptr<replicated_keys_migration_manager>> replicated_key_provider_factory::create_migration_manager_if_needed(encryption_context& ctxt) {
+    auto& sys_ks = ctxt.get_storage_service().local().get_system_keyspace();
+    auto version = co_await sys_ks.get_replicated_key_provider_version();
+
+    bool needs_migration = (version != db::system_keyspace::replicated_key_provider_version_t::v2);
+
+    if (needs_migration) {
+        log.info("Replicated keys migration is needed (current version: {})", static_cast<int64_t>(version));
+        co_return std::make_unique<replicated_keys_migration_manager>(ctxt);
+    } else {
+        log.debug("Replicated keys migration not needed (already on version v2)");
+        co_return nullptr;
+    }
+}
+
 }
