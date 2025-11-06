@@ -1340,7 +1340,9 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
 }
 
 void sstable::rewrite_statistics() {
-    sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
+    if (sstlog.is_enabled(log_level::debug)) {
+        sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
+    }
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1804,7 +1806,9 @@ entry_descriptor sstable::get_descriptor(component_type c) const {
 future<>
 sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {
-        sstlog.trace("{}: shards={}", get_filename(), _shards);
+        if (sstlog.is_enabled(log_level::trace)) {
+            sstlog.trace("{}: shards={}", get_filename(), _shards);
+        }
         co_return;
     }
     co_await read_scylla_metadata();
@@ -1833,7 +1837,9 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     }
 
     _shards = compute_shards_for_this_sstable(sharder);
-    sstlog.trace("{}: shards={}", get_filename(), _shards);
+    if (sstlog.is_enabled(log_level::trace)) {
+        sstlog.trace("{}: shards={}", get_filename(), _shards);
+    }
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
@@ -2061,11 +2067,13 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
             if (auto it = ts_stats->map.find(sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp); it != ts_stats->map.end()) {
                 min_live_row_marker_timestamp = it->second;
             }
-            sstlog.debug("Storing sstable {}: min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}",
-                    get_filename(),
-                    get_stats_metadata().min_timestamp,
-                    min_live_timestamp,
-                    min_live_row_marker_timestamp);
+            if (sstlog.is_enabled(log_level::debug)) {
+                sstlog.debug("Storing sstable {}: min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}",
+                        get_filename(),
+                        get_stats_metadata().min_timestamp,
+                        min_live_timestamp,
+                        min_live_row_marker_timestamp);
+            }
         }
 
         _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
@@ -3007,7 +3015,9 @@ void sstable::set_sstable_level(uint32_t new_level) {
         throw std::runtime_error("Statistics is malformed");
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
-    sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
+    if (sstlog.is_enabled(log_level::debug)) {
+        sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
+    }
     s.sstable_level = new_level;
 }
 
@@ -3255,8 +3265,10 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
         auto start = data_file_range.start;
         auto end = data_file_range.end.value_or(uncompressed_data_size);
         auto total_count = get_estimated_key_count();
-        sstlog.debug("estimated_keys_for_range(sst={}, range={}): data_start: {}, data_end: {}, data_size: {}, estimated_key_count: {}",
-                get_filename(), range, start, end, uncompressed_data_size, total_count);
+        if (sstlog.is_enabled(log_level::debug)) {
+            sstlog.debug("estimated_keys_for_range(sst={}, range={}): data_start: {}, data_end: {}, data_size: {}, estimated_key_count: {}",
+                    get_filename(), range, start, end, uncompressed_data_size, total_count);
+        }
         if (start == end) {
             result = 0;
         } else {
@@ -3300,7 +3312,9 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
                 | std::views::transform(disk_token_range_to_ring_position_range)
                 | std::ranges::to<utils::chunked_vector<dht::partition_range>>();
     }
-    sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
+    if (sstlog.is_enabled(log_level::trace)) {
+        sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
+    }
     auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
@@ -3600,7 +3614,9 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_state));
+    if (sstlog.is_enabled(log_level::trace)) {
+        sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_state));
+    }
     return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
 }
 
@@ -3616,15 +3632,19 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     auto deletion_time = get_max_local_deletion_time();
     // No need to query gc_before for the sstable if the max_deletion_time is max()
     if (deletion_time == gc_clock::time_point(gc_clock::duration(std::numeric_limits<int>::max()))) {
-        sstlog.trace("sstable={}, ks={}, cf={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, shortcut",
-                get_filename(), s->ks_name(), s->cf_name(), deletion_time, seastar::value_of([this] { return get_stats_metadata().min_timestamp; }), s->gc_grace_seconds().count());
+        if (sstlog.is_enabled(log_level::trace)) {
+            sstlog.trace("sstable={}, ks={}, cf={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, shortcut",
+                    get_filename(), s->ks_name(), s->cf_name(), deletion_time, seastar::value_of([this] { return get_stats_metadata().min_timestamp; }), s->gc_grace_seconds().count());
+        }
         return gc_clock::time_point::min();
     }
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
-            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
+    if (sstlog.is_enabled(log_level::trace)) {
+        sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
+                get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
+    }
     auto res = gc_state.get_gc_before_for_range(s, range, compaction_time);
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
