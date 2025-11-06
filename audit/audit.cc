@@ -149,12 +149,12 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
                                   std::move(audited_categories),
                                   std::cref(cfg))
     .then([&cfg, &qp, &mm] {
-    if (!audit_instance().local_is_initialized()) {
-        return make_ready_future<>();
-    }
-    return audit_instance().invoke_on_all([&cfg, &qp, &mm] (audit& local_audit) {
-        return local_audit.start(cfg, qp.local(), mm.local());
-    });
+        if (!audit_instance().local_is_initialized()) {
+            return make_ready_future<>();
+        }
+        return audit_instance().invoke_on_all([&cfg, &qp, &mm] (audit& local_audit) {
+            return local_audit.start(cfg, qp.local(), mm.local());
+        });
     });
 }
 
