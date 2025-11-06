@@ -532,9 +532,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
             update_topology(host_id, t.left_nodes_rs.at(id));
         }
-
-        // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
-        co_await _messaging.local().ban_host(host_id);
     };
 
     auto process_normal_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip, const replica_state& rs) -> future<> {
@@ -837,10 +834,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }
     }
 
-    for (auto& id : topology.ignored_nodes) {
-        // Ban all ignored nodes. We do not allow them to go back online
-        co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
-    }
+    // Ban all left and ignord nodes. We do not allow them to go back online.
+    co_await _messaging.local().ban_hosts(boost::join(topology.left_nodes, topology.ignored_nodes)
+        | std::views::transform([] (auto id) { return locator::host_id{id.uuid()}; })
+        | std::ranges::to<utils::chunked_vector<locator::host_id>>());
 
     slogger.debug("topology_state_load: excluded tablet nodes: {}", topology.excluded_tablet_nodes);
 }

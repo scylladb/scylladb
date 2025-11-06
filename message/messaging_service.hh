@@ -440,11 +440,11 @@ public:
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 
-    // Drops all connections from the given host and prevents further communication from it to happen.
+    // Drops all connections from the given hosts and prevents further communication from it to happen.
     //
     // No further RPC handlers will be called for that node,
     // but we don't prevent handlers that were started concurrently from finishing.
-    future<> ban_host(locator::host_id);
+    future<> ban_hosts(const utils::chunked_vector<locator::host_id>& ids);
 
     msg_addr addr_for_host_id(locator::host_id hid);
 private:
