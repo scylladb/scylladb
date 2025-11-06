@@ -702,10 +702,11 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
     _topology_state_machine.reload_count++;
+    auto& topology = _topology_state_machine._topology;
 
-    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
+    set_topology_change_kind(upgrade_state_to_topology_op_kind(topology.upgrade_state));
 
-    if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
+    if (topology.upgrade_state != topology::upgrade_state_type::done) {
         co_return;
     }
 
@@ -739,13 +740,13 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     }
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
-        return fs.enable(_topology_state_machine._topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
+        return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
 
     // Update the legacy `enabled_features` key in `system.scylla_local`.
     // It's OK to update it after enabling features because `system.topology` now
     // is the source of truth about enabled features.
-    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features, false);
+    co_await _sys_ks.local().save_local_enabled_features(topology.enabled_features, false);
 
     auto saved_tmpr = get_token_metadata_ptr();
     {
@@ -753,7 +754,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         auto tmptr = _shared_token_metadata.make_token_metadata_ptr();
         tmptr->invalidate_cached_rings();
 
-        tmptr->set_version(_topology_state_machine._topology.version);
+        tmptr->set_version(topology.version);
 
         const auto read_new = std::invoke([](std::optional<topology::transition_state> state) {
             using read_new_t = locator::token_metadata::read_new_t;
@@ -786,7 +787,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                 case topology::transition_state::write_both_read_new:
                     return read_new_t::yes;
             }
-        }, _topology_state_machine._topology.tstate);
+        }, topology.tstate);
         tmptr->set_read_new(read_new);
 
         auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::move(prev_normal));
@@ -800,7 +801,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         } else {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
-        tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+        tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
         tmptr->set_tablets(std::move(*tablets));
 
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -808,7 +809,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
     }
 
-    co_await update_fence_version(_topology_state_machine._topology.fence_version);
+    co_await update_fence_version(topology.fence_version);
 
     // As soon as a node joins token_metadata.topology we
     // need to drop all its rpc connections with ignored_topology flag.
@@ -823,25 +824,25 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
     }
 
-    for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
+    for (const auto& gen_id : topology.committed_cdc_generations) {
         rtlogger.trace("topology_state_load: process committed cdc generation {}", gen_id);
         co_await utils::get_local_injector().inject("topology_state_load_before_update_cdc", [](auto& handler) -> future<> {
             rtlogger.info("topology_state_load_before_update_cdc hit, wait for message");
             co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
         });
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
-        if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
+        if (gen_id == topology.committed_cdc_generations.back()) {
             co_await _sys_ks.local().update_cdc_generation_id(gen_id);
             rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
         }
     }
 
-    for (auto& id : _topology_state_machine._topology.ignored_nodes) {
+    for (auto& id : topology.ignored_nodes) {
         // Ban all ignored nodes. We do not allow them to go back online
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-    slogger.debug("topology_state_load: excluded tablet nodes: {}", _topology_state_machine._topology.excluded_tablet_nodes);
+    slogger.debug("topology_state_load: excluded tablet nodes: {}", topology.excluded_tablet_nodes);
 }
 
 future<> storage_service::topology_transition(state_change_hint hint) {
