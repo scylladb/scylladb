@@ -524,17 +524,17 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     // Use fragmented buffer to avoid large contiguous allocations
     auto frag_buf = co_await in.read_exactly_fragmented(len);
     if (frag_buf.empty()) {
-        throw bufsize_mismatch_error(len, 0);
+        throw bufsize_mismatch_exception(0, len);
     }
     if (frag_buf.size_bytes() != len) {
-        throw bufsize_mismatch_error(len, frag_buf.size_bytes());
+        throw bufsize_mismatch_exception(frag_buf.size_bytes(), len);
     }
 
     // Positions are encoded in little-endian.
     auto stream = frag_buf.get_istream();
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
-        auto pos_result = stream.template read<pos_type>();
+        auto pos_result = stream.read<pos_type>();
         if (!pos_result) {
             std::rethrow_exception(pos_result.assume_error());
         }
