@@ -465,11 +465,35 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
                 raft::server_id id, const std::optional<topology_request>& req) const {
-        return topo.get_excluded_nodes(id, req);
+        // ignored_nodes is not per request any longer, but for now consider ignored nodes only
+        // for remove and replace operations since only those operations support it on streaming level.
+        // Specifically, streaming for bootstrapping doesn't support ignored_nodes
+        // (see raft_topology_cmd::command::stream_ranges handler in storage_proxy, neither
+        // bootstrap_with_repair nor bs.bootstrap take an ignored_nodes parameter).
+        // If we ignored a dead node for a join request here, this request wouldn't be cancelled by
+        // get_next_task and the stream_ranges would fail with timeout after wasting some time
+        // trying to access the dead node.
+        const auto is_remove_or_replace = std::invoke([&]() {
+            if (req) {
+                return *req == topology_request::remove || *req == topology_request::replace;
+            }
+            const auto it = topo.transition_nodes.find(id);
+            if (it == topo.transition_nodes.end()) {
+                return false;
+            }
+            const auto s = it->second.state;
+            return s == node_state::removing || s == node_state::replacing;
+        });
+
+        std::unordered_set<raft::server_id> exclude_nodes;
+        if (is_remove_or_replace) {
+            exclude_nodes = topo.ignored_nodes;
+        }
+        return exclude_nodes;
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) const {
-        return node.topology->get_excluded_nodes(node.id, node.request);
+        return get_excluded_nodes(*node.topology, node.id, node.request);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {

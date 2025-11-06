@@ -52,18 +52,6 @@ raft::server_id topology::parse_replaced_node(const std::optional<request_param>
     return {};
 }
 
-std::unordered_set<raft::server_id> topology::get_excluded_nodes(raft::server_id id,
-                                                                 const std::optional<topology_request>& req) const {
-    std::unordered_set<raft::server_id> exclude_nodes;
-    // ignored_nodes is not per request any longer, but for now consider ignored nodes only
-    // for remove and replace operations since only those operations support it on streaming level
-    if ((req && (*req == topology_request::remove || *req == topology_request::replace)) ||
-        (transition_nodes.contains(id) && (transition_nodes.at(id).state == node_state::removing || transition_nodes.at(id).state == node_state::replacing))) {
-        exclude_nodes = ignored_nodes;
-    }
-    return exclude_nodes;
-}
-
 std::optional<request_param> topology::get_request_param(raft::server_id id) const {
     auto rit = req_param.find(id);
     if (rit != req_param.end()) {
