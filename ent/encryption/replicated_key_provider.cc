@@ -661,6 +661,103 @@ future<> replicated_key_provider::do_initialize_tables(::replica::database& db, 
 
 const size_t replicated_key_provider::header_size;
 
+replicated_keys_migration_manager::replicated_keys_migration_manager(encryption_context& ctxt)
+    : _ctxt(ctxt)
+{}
+
+future<> replicated_keys_migration_manager::migrate_to_v1_5(db::system_keyspace& sys_ks,
+        cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as,
+        service::group0_guard&& guard) {
+    log.info("Starting migration of replicated encryption keys to v1_5");
+    auto version_mut = co_await sys_ks.make_replicated_key_provider_version_mutation(
+        guard.write_timestamp(),
+        db::system_keyspace::replicated_key_provider_version_t::v1_5
+    );
+
+    // write the version as topology_change so that we can apply
+    // the change to the replicated key providers in topology_state_load
+    service::topology_change change {
+        .mutations{canonical_mutation(std::move(version_mut))},
+    };
+    auto group0_cmd = group0_client.prepare_command(
+        std::move(change),
+        guard,
+        "migrate encrypted_keys to v1_5"
+    );
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
+
+    log.info("Completed migration of replicated encryption keys to v1_5");
+}
+
+future<> replicated_keys_migration_manager::migrate_to_v2(db::system_keyspace& sys_ks,
+        cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as,
+        service::group0_guard&& guard) {
+    log.info("Starting migration of replicated encryption keys to v2");
+
+    utils::chunked_vector<mutation> migration_muts;
+
+    if (qp.db().has_keyspace(KSNAME)) {
+        auto sel_stmt = fmt::format("SELECT * FROM {}.{};", KSNAME, TABLENAME);
+        auto rows = co_await qp.execute_internal(sel_stmt, db::consistency_level::ALL, rkp_db_query_state(), {}, cql3::query_processor::cache_internal::no);
+
+        migration_muts.reserve(rows->size() + 1);
+
+        for (const auto& row: *rows) {
+            auto insert_stmt = fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", db::system_keyspace::NAME, db::system_keyspace::ENCRYPTED_KEYS);
+            auto key_file = row.get_as<sstring>("key_file");
+            auto cipher = row.get_as<sstring>("cipher");
+            auto strength = row.get_as<int32_t>("strength");
+            auto key_id = row.get_as<UUID>("key_id");
+            auto key = row.get_as<sstring>("key");
+
+            std::vector<data_value_or_unset> values = {
+                data_value_or_unset(key_file),
+                data_value_or_unset(cipher),
+                data_value_or_unset(strength),
+                data_value_or_unset(key_id),
+                data_value_or_unset(key)
+            };
+
+            auto muts = co_await qp.get_mutations_internal(insert_stmt, rkp_db_query_state(), guard.write_timestamp(), values);
+            std::ranges::move(muts, std::back_inserter(migration_muts));
+        }
+    } else {
+        log.info("Keyspace {} doesn't exist. Nothing to migrate.", KSNAME);
+        migration_muts.reserve(1);
+    }
+
+    auto version_mut = co_await sys_ks.make_replicated_key_provider_version_mutation(
+        guard.write_timestamp(),
+        db::system_keyspace::replicated_key_provider_version_t::v2
+    );
+    migration_muts.push_back(std::move(version_mut));
+
+    service::topology_change change {
+        .mutations{migration_muts.begin(), migration_muts.end()}
+    };
+    auto group0_cmd = group0_client.prepare_command(
+        std::move(change),
+        guard,
+        "migrate encrypted_keys to v2"
+    );
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
+
+    log.info("Completed migration of replicated encryption keys to v2");
+}
+
+future<> replicated_keys_migration_manager::upgrade_to_v1_5() {
+    log.debug("Notifying replicated key providers about state change to version v1.5");
+    co_await _ctxt.set_replicated_keys_version(db::system_keyspace::replicated_key_provider_version_t::v1_5);
+    co_await _ctxt.notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t::v1_5);
+}
+
+future<> replicated_keys_migration_manager::upgrade_to_v2() {
+    log.debug("Notifying replicated key providers about state change to version v2");
+    co_await _ctxt.set_replicated_keys_version(db::system_keyspace::replicated_key_provider_version_t::v2);
+    co_await _ctxt.notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t::v2);
+}
+
+
 replicated_key_provider_factory::replicated_key_provider_factory()
 {}
 
