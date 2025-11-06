@@ -294,7 +294,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // it may still fail if down node has data for the rebuild process
                     return !dead_nodes.contains(req.first);
                 }
-                auto exclude_nodes = get_excluded_nodes(topo, req.first, req.second);
+                auto exclude_nodes = get_excluded_nodes_for_topology_request(topo, req.first, req.second);
                 for (auto id : dead_nodes) {
                     if (!exclude_nodes.contains(id)) {
                         return false;
@@ -463,7 +463,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return guard;
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
+    std::unordered_set<raft::server_id> get_excluded_nodes_for_topology_request(const topology_state_machine::topology_type& topo,
                 raft::server_id id, const std::optional<topology_request>& req) const {
         // ignored_nodes is not per request any longer, but for now consider ignored nodes only
         // for remove and replace operations since only those operations support it on streaming level.
@@ -492,12 +492,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return exclude_nodes;
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) const {
-        return get_excluded_nodes(*node.topology, node.id, node.request);
+    std::unordered_set<raft::server_id> get_excluded_nodes_for_topology_request(const node_to_work_on& node) const {
+        return get_excluded_nodes_for_topology_request(*node.topology, node.id, node.request);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, get_excluded_nodes(node), drop_guard_and_retake::yes);
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, get_excluded_nodes_for_topology_request(node), drop_guard_and_retake::yes);
         co_return retake_node(std::move(guard), node.id);
     };
 
@@ -2539,7 +2539,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 try {
-                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes_for_topology_request(node)), node.id);
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
@@ -2579,7 +2579,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     if (!node.rs->ring->tokens.empty()) {
                         if (node.rs->state == node_state::removing) {
                             // tell all token owners to stream data of the removed node to new range owners
-                            auto exclude_nodes = get_excluded_nodes(node);
+                            auto exclude_nodes = get_excluded_nodes_for_topology_request(node);
                             auto normal_zero_token_nodes = _topo_sm._topology.get_normal_zero_token_nodes();
                             std::move(normal_zero_token_nodes.begin(), normal_zero_token_nodes.end(),
                                     std::inserter(exclude_nodes, exclude_nodes.begin()));
@@ -2623,7 +2623,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 try {
-                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes_for_topology_request(node)), node.id);
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
@@ -2801,7 +2801,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 bool barrier_failed = false;
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 try {
-                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes_for_topology_request(node)), node.id);
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
@@ -2869,7 +2869,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 bool barrier_failed = false;
                 auto state = node.rs->state;
                 try {
-                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
+                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes_for_topology_request(node), drop_guard_and_retake::yes);
                 } catch (term_changed_error&) {
                     throw;
                 } catch (raft::request_aborted&) {
@@ -2945,7 +2945,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 co_await wait_for_gossiper(node.id, _gossiper, _as);
                                 node.guard = co_await start_operation();
                             } else {
-                                auto exclude_nodes = get_excluded_nodes(node);
+                                auto exclude_nodes = get_excluded_nodes_for_topology_request(node);
                                 exclude_nodes.insert(node.id);
                                 node.guard = co_await exec_global_command(std::move(node.guard),
                                     raft_topology_cmd::command::wait_for_ip,
