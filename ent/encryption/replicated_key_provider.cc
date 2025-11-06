@@ -142,6 +142,7 @@ private:
     future<std::tuple<UUID, key_ptr>> get_key(const key_info&, opt_bytes = {}, std::optional<group0_ctx> g0_ctx = {});
     future<std::tuple<key_ptr, opt_bytes>> key_impl(const key_info& info, opt_bytes input, std::optional<group0_ctx> g0_ctx = {});
     future<std::optional<std::tuple<UUID, key_ptr>>> find_key(key_id& id, sstring_view cipher, sstring_view ksname, sstring_view tablename);
+    future<> create_key(const UUID uuid, key_ptr k, sstring_view cipher);
     future<std::tuple<UUID, key_ptr>> create_key(const key_info&, sstring_view cipher);
     future<std::tuple<UUID, key_ptr>> create_key_in_group0(const key_info&, sstring_view cipher, std::optional<group0_ctx> g0_ctx = {});
 
@@ -159,7 +160,7 @@ private:
     bool _initialized = false;
     bool _use_cache = true;
 
-    enum class keys_location { sys_repl_keys_ks, group0 };
+    enum class keys_location { sys_repl_keys_ks, group0, both };
     keys_location _keys_on = keys_location::sys_repl_keys_ks;
 
     friend class replicated_key_provider_factory;
@@ -340,6 +341,10 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     auto res = co_await [&] -> future<std::optional<std::tuple<UUID, key_ptr>>> {
         switch (_keys_on) {
         case keys_location::sys_repl_keys_ks:
+        case keys_location::both:
+            // Try to find the key in the old table first.
+            // If not found, we will call create_key_in_group0 in the write path below,
+            // which will check for the key in the group0 table as well.
             co_return co_await find_key(id, cipher, KSNAME, TABLENAME);
         case keys_location::group0:
             co_return co_await find_key(id, cipher, db::system_keyspace::NAME, db::system_keyspace::ENCRYPTED_KEYS);
@@ -351,12 +356,20 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
         co_return std::tuple(uuid, k);
     }
 
-    log.debug("No key found. Generating new key{}", _keys_on == keys_location::group0 ? " in group0" : "");
+    static const char* key_loc_msgs[] = {"", " in group0", " in both tables"};
+    log.debug("No key found. Generating new key{}", key_loc_msgs[static_cast<int>(_keys_on)]);
 
     auto [uuid, k] = co_await [&] -> future<std::tuple<UUID, key_ptr>> {
         switch (_keys_on) {
         case keys_location::sys_repl_keys_ks:
             co_return co_await create_key(info, cipher);
+        case keys_location::both: {
+            // First create key in group0 (or retrieve an existing key).
+            auto [uuid, k] = co_await create_key_in_group0(info, cipher, g0_ctx);
+            // Then write it to the old table as well (in case migration fails and we need to roll back).
+            co_await create_key(uuid, k, cipher);
+            co_return std::tuple(uuid, k);
+        }
         case keys_location::group0:
             co_return co_await create_key_in_group0(info, cipher, g0_ctx);
         }
@@ -397,21 +410,25 @@ future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_k
     co_return std::tuple(uuid, k);
 }
 
+future<> replicated_key_provider::create_key(const UUID uuid, key_ptr k, sstring_view cipher) {
+
+    auto b = co_await _system_key->encrypt(k->key());
+    auto ks = base64_encode(b);
+
+    auto insert_stmt = fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", KSNAME, TABLENAME);
+    co_await query(std::move(insert_stmt), _system_key->name(), cipher, int32_t(k->info().len), uuid, ks);
+    log.trace("Flushing key table");
+    co_await force_blocking_flush();
+}
+
 future<std::tuple<UUID, key_ptr>> replicated_key_provider::create_key(const key_info& info, sstring_view cipher) {
     UUID uuid = utils::UUID_gen::get_time_UUID();
 
     log.debug("Generating key {} ({})", uuid, info);
 
     auto k = make_shared<symmetric_key>(info);
-    auto b = co_await _system_key->encrypt(k->key());
-    auto ks = base64_encode(b);
-
-    auto insert_stmt = fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", KSNAME, TABLENAME);
-    co_await query(std::move(insert_stmt), _system_key->name(), cipher, int32_t(info.len), uuid, ks);
-    log.trace("Flushing key table");
-    co_await force_blocking_flush();
-
-    co_return std::make_tuple(uuid, k);
+    co_await create_key(uuid, k, cipher);
+    co_return std::tuple(uuid, k);
 }
 
 future<std::tuple<UUID, key_ptr>> replicated_key_provider::create_key_in_group0(const key_info& info, sstring_view cipher, std::optional<group0_ctx> g0_ctx) {
