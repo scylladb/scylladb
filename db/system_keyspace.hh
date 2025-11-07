@@ -576,7 +576,6 @@ public:
     // system.view_building_tasks
     future<db::view::building_tasks> get_view_building_tasks();
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
-    future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, db::view::view_building_task::task_state state);
     future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
 
     // system.scylla_local, view_building_processing_base key
