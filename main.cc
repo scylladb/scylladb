@@ -1764,7 +1764,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting the view building worker");
-            view_building_worker.start(std::ref(db), std::ref(sys_ks), std::ref(mm_notifier), std::ref(group0_client), std::ref(view_update_generator), std::ref(messaging), std::ref(vbsm)).get();
+            view_building_worker.start(std::ref(db), std::ref(sys_ks), std::ref(mm_notifier), std::ref(group0_service), std::ref(view_update_generator), std::ref(messaging), std::ref(vbsm)).get();
             auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
                 view_building_worker.stop().get();
             });
