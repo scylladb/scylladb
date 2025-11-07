@@ -229,7 +229,7 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
         for (auto& sst_info: sst_infos) {
             view_building_task task {
-                utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, view_building_task::task_state::idle,
+                utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, false,
                 table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
             };
             auto mut = co_await _group0_client.sys_ks().make_view_building_task_mutation(guard.write_timestamp(), task);
@@ -419,7 +419,7 @@ future<> view_building_worker::check_for_aborted_tasks() {
         auto tasks_map = vbw._state._batch->tasks; // Potentially, we'll remove elements from the map, so we need a copy to iterate over it
         for (auto& [id, t]: tasks_map) {
             auto task_opt = building_state.get_task(t.base_id, my_replica, id);
-            if (!task_opt || task_opt->get().state == view_building_task::task_state::aborted) {
+            if (!task_opt || task_opt->get().aborted) {
                 co_await vbw._state._batch->abort_task(id);
             }
         }
