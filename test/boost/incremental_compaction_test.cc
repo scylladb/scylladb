@@ -528,3 +528,72 @@ SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
         BOOST_REQUIRE_EQUAL(descriptor.sstables.front(), sst);
     });
 }
+
+SEASTAR_TEST_CASE(gc_sstable_incremental_release_test) {
+    return test_env::do_with_async([](test_env& env) {
+        auto schema = schema_builder("ks", "gc_incremental_release_test")
+                              .with_column("p1", utf8_type, column_kind::partition_key)
+                              .with_column("c1", utf8_type, column_kind::clustering_key)
+                              .with_column("data", utf8_type)
+                              .build();
+
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(cf);
+
+        uint64_t key_counter = 0;
+        auto make_mutation = [&](bool insert_tombstones) {
+            mutation mut(schema, partition_key::from_exploded(*schema, {to_bytes(fmt::format("k{:016d}", key_counter++))}));
+            auto c_key = clustering_key::from_exploded(*schema, {to_bytes(fmt::format("k{:016d}", key_counter++))});
+            if (insert_tombstones) {
+                auto expiration_time = (gc_clock::now() - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS * 2)).time_since_epoch().count();
+                auto tombstone = atomic_cell::make_dead(0, gc_clock::time_point(gc_clock::duration(expiration_time)));
+                mut.set_clustered_cell(c_key, *schema->get_column_definition("data"), std::move(tombstone));
+            } else {
+                auto expiration_time = (gc_clock::now() + gc_clock::duration(3600)).time_since_epoch().count();
+                auto live_cell = atomic_cell::make_live(
+                        *utf8_type, 0, bytes("live_data"), gc_clock::time_point(gc_clock::duration(expiration_time)), gc_clock::duration(3600));
+                mut.set_clustered_cell(c_key, *schema->get_column_definition("data"), std::move(live_cell));
+            }
+            return mut;
+        };
+
+        constexpr int num_sstables = 16;
+        constexpr int keys_per_sstable = 10000;
+        std::vector<shared_sstable> input_sstables;
+        for (int i = 0; i < num_sstables; i++) {
+            utils::chunked_vector<mutation> mutations;
+            for (int j = 0; j < keys_per_sstable; j++) {
+                int key_idx = i * keys_per_sstable + j;
+                // 3/4th of the keys are expired tombstones
+                bool expired = (key_idx % 4) == 0;
+                mutations.push_back(make_mutation(!expired));
+            }
+            auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations));
+            sstables::test(sst).set_run_identifier(sstables::run_id::create_random_id()); // using fixed run ids do not help here
+            column_family_test(cf).add_sstable(sst).get();
+            input_sstables.push_back(std::move(sst));
+        }
+
+        // Track GC sstables and their release order
+        size_t gc_release_count = 0;
+        auto replacer = [&](compaction::compaction_completion_desc desc) {
+            if (desc.new_sstables.empty()) {
+                for (const auto& old_sst : desc.old_sstables) {
+                    if (old_sst->get_origin() == "garbage_collection") {
+                        gc_release_count++;
+                    }
+                }
+            }
+
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), desc.new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, desc.new_sstables);
+        };
+
+        auto desc = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);
+        desc.enable_garbage_collection(cf->get_sstable_set());
+        auto result = compact_sstables(env, std::move(desc), cf, env.make_sst_factory(schema), replacer).get();
+
+        // Verify that GC sstables were released during compaction
+        BOOST_CHECK_GT(gc_release_count, 0);
+    });
+}
