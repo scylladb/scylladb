@@ -156,7 +156,7 @@ class Worker:
                     applied = bool(res and res[0].applied)
                     if not applied:
                         logger.error(
-                            "LWT_NOT_APPLIED pk=%r worker=s%d new=%r guard=%r prev=%r ts_ms=%d",
+                            "LWT_NOT_APPLIED pk=%r worker=s%d new=%r guard=%r prev=%r",
                             pk,
                             self.worker_id,
                             new_val,
