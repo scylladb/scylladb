@@ -441,7 +441,7 @@ void view_building_coordinator::attach_to_started_tasks(const locator::tablet_re
 future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks) {
     std::vector<utils::UUID> remote_results;
     try {
-        remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, tasks);
+        remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, replica.shard, tasks);
     } catch (...) {
         vbc_logger.warn("Work on tasks {} on replica {}, failed with error: {}", tasks, replica, std::current_exception());
         _vb_sm.event.broadcast();

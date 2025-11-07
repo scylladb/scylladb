@@ -18,4 +18,4 @@ class update_backlog {
 }
 }
 
-verb [[cancellable]] work_on_view_building_tasks(std::vector<utils::UUID> tasks_ids) -> std::vector<utils::UUID>
+verb [[cancellable]] work_on_view_building_tasks(shard_id shard, std::vector<utils::UUID> tasks_ids) -> std::vector<utils::UUID>
