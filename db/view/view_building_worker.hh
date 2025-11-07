@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "raft/raft.hh"
 #include "seastar/core/gate.hh"
 #include "db/view/view_building_state.hh"
 #include "sstables/shared_sstable.hh"
@@ -31,7 +32,7 @@ class messaging_service;
 }
 
 namespace service {
-class raft_group0_client;
+class raft_group0;
 }
 
 namespace db {
@@ -119,7 +120,7 @@ private:
     replica::database& _db;
     db::system_keyspace& _sys_ks;
     service::migration_notifier& _mnotifier;
-    service::raft_group0_client& _group0_client;
+    service::raft_group0& _group0;
     view_update_generator& _vug;
     netw::messaging_service& _messaging;
     view_building_state_machine& _vb_state_machine;
@@ -138,7 +139,7 @@ private:
 
 public:
     view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier,
-            service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms,
+            service::raft_group0& group0, view_update_generator& vug, netw::messaging_service& ms,
             view_building_state_machine& vbsm);
     future<> init();
 
@@ -157,7 +158,7 @@ public:
     void cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid);
 
 private:
-    future<view_building_state> get_latest_view_building_state();
+    future<view_building_state> get_latest_view_building_state(raft::term_t term);
     future<> check_for_aborted_tasks();
 
     future<> run_view_building_state_observer();
@@ -175,7 +176,7 @@ private:
 
     void init_messaging_service();
     future<> uninit_messaging_service();
-    future<std::vector<utils::UUID>> work_on_tasks(std::vector<utils::UUID> ids);
+    future<std::vector<utils::UUID>> work_on_tasks(raft::term_t term, std::vector<utils::UUID> ids);
 };
 
 }
