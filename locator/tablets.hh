@@ -221,6 +221,7 @@ struct tablet_task_info {
     bool selected_by_filters(const tablet_replica& replica, const topology& topo) const;
     static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {}, tablet_repair_incremental_mode incremental = default_tablet_repair_incremental_mode);
     static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {}, tablet_repair_incremental_mode incremental = default_tablet_repair_incremental_mode);
+    static std::optional<tablet_task_info> merge_repair_tasks(const locator::tablet_task_info& t1, const locator::tablet_task_info& t2);
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
     static tablet_task_info make_split_request();

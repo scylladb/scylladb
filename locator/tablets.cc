@@ -195,7 +195,8 @@ tablet_info::tablet_info(tablet_replica_set replicas)
 {}
 
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
-    if (a.repair_task_info.is_valid() || b.repair_task_info.is_valid()) {
+    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info, b.repair_task_info);
+    if (!repair_task_info) {
         return {};
     }
 
@@ -209,7 +210,7 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
-    auto info = tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info, sstables_repaired_at);
+    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info, a.migration_task_info, sstables_repaired_at);
     return info;
 }
 
@@ -1613,6 +1614,39 @@ locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(st
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter, mode};
+}
+
+std::optional<locator::tablet_task_info> locator::tablet_task_info::merge_repair_tasks(const locator::tablet_task_info& t1, const locator::tablet_task_info& t2) {
+    if (t1.is_valid() && t2.is_valid()) {
+        // In most cases, all tablets are requested to be repaired by a single
+        // API request, so they share the same task_id, request_type and other
+        // parameters. If both tablets have a valid repair_task_info, we could
+        // merge them most of the time.
+        if (t1.request_type == t2.request_type &&
+            t1.tablet_task_id == t2.tablet_task_id &&
+            t1.repair_incremental_mode == t2.repair_incremental_mode &&
+            t1.repair_dcs_filter == t2.repair_dcs_filter &&
+            t1.repair_hosts_filter == t2.repair_hosts_filter) {
+            // Allow repair_task_info merge, use combination of t1 and t2;
+            tablet_task_info t = t1;
+            t.request_time = std::min(t1.request_time, t2.request_time);
+            t.sched_nr = t1.sched_nr + t2.sched_nr;
+            t.sched_time = std::max(t1.sched_time, t2.sched_time);
+            return t;
+        } else {
+            // Do not allow repair_task_info merge
+            return {};
+        }
+    } else if (!t1.is_valid() && !t2.is_valid()) {
+        // Allow repair_task_info merge, none of them are valid, use either is ok, use t1.
+        return t1;
+    } else if (t1.is_valid()) {
+        // Allow repair_task_info merge, only t1 is valid, use t1
+        return t1;
+    } else {
+        // Allow repair_task_info merge, only t2 is valid, usb t2.
+        return t2;
+    }
 }
 
 sstring locator::tablet_task_info::serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter) {
