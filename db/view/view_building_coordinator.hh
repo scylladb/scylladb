@@ -55,6 +55,8 @@ class view_building_coordinator : public service::endpoint_lifecycle_subscriber 
     abort_source& _as;
 
     std::unordered_map<locator::tablet_replica, shared_future<std::optional<std::vector<utils::UUID>>>> _remote_work;
+    shared_mutex _mutex; // guards `_finished_tasks` field
+    std::unordered_map<locator::tablet_replica, std::unordered_set<utils::UUID>> _finished_tasks;
 
 public:
     view_building_coordinator(replica::database& db, raft::server& raft, service::raft_group0& group0,
@@ -84,9 +86,11 @@ private:
     future<> commit_mutations(service::group0_guard guard, utils::chunked_vector<mutation> mutations, std::string_view description);
     void handle_coordinator_error(std::exception_ptr eptr);
 
+    future<> finished_task_gc_fiber();
+    future<> clean_finished_tasks();
+
     future<std::optional<service::group0_guard>> update_state(service::group0_guard guard);
-    // Returns if any new tasks were started
-    future<bool> work_on_view_building(service::group0_guard guard);
+    future<> work_on_view_building(service::group0_guard guard);
 
     future<> mark_view_build_status_started(const service::group0_guard& guard, table_id view_id, utils::chunked_vector<mutation>& out);
     future<> mark_all_remaining_view_build_statuses_started(const service::group0_guard& guard, table_id base_id, utils::chunked_vector<mutation>& out);
@@ -95,10 +99,8 @@ private:
     std::set<locator::tablet_replica> get_replicas_with_tasks();
     std::vector<utils::UUID> select_tasks_for_replica(locator::tablet_replica replica);
 
-    future<utils::chunked_vector<mutation>> start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks);
-    void attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks);
+    void start_remote_worker(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks);
     future<std::optional<std::vector<utils::UUID>>> work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks);
-    future<utils::chunked_vector<mutation>> update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, std::vector<utils::UUID> results);
 };
 
 void abort_view_building_tasks(const db::view::view_building_state_machine& vb_sm,
