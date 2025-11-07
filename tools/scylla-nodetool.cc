@@ -152,11 +152,39 @@ struct request_body {
     sstring content;
 };
 
+struct api_request {
+    sstring type;
+    sstring path;
+    http::request::query_parameters_type params;
+    std::optional<request_body> body;
+
+    http::reply::status_type status = http::reply::status_type::ok;
+    sstring response;
+};
+
+} // anonymous namespace
+
+template <> struct fmt::formatter<api_request> : fmt::formatter<string_view> {
+    auto format(const api_request& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{} {} params: {}, {} -> {} {}",
+                r.type,
+                r.path,
+                r.params,
+                r.body ? fmt::format("body({}): {}", r.body->content_type, r.body->content) : "no body",
+                r.status,
+                r.response);
+    }
+};
+
+namespace {
+
 class scylla_rest_client {
     sstring _host;
     uint16_t _port;
     sstring _host_name;
     http::experimental::client _api_client;
+
+    std::vector<api_request> _request_history;
 
     rjson::value do_request(sstring type, sstring path,
                             std::unordered_map<sstring, sstring> params,
@@ -180,33 +208,42 @@ class scylla_rest_client {
         }
         nlog.trace("Making {} request to {} with parameters {}", type, url, params);
 
-
-        http::reply::status_type status = http::reply::status_type::ok;
-        sstring res;
+        api_request request{
+            .type = type,
+            .path = path,
+            .params = params,
+            .body = body,
+        };
 
         _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply& r, input_stream<char> body) -> future<> {
-            status = r._status;
-            res = co_await util::read_entire_stream_contiguous(body);
+            request.status = r._status;
+            request.response = co_await util::read_entire_stream_contiguous(body);
         })).get();
 
-        if (status != http::reply::status_type::ok) {
+        if (request.status != http::reply::status_type::ok) {
             sstring message;
             try {
-                message = sstring(rjson::to_string_view(rjson::parse(res)["message"]));
+                message = sstring(rjson::to_string_view(rjson::parse(request.response)["message"]));
             } catch (...) {
-                message = res;
+                message = request.response;
             }
-            throw api_request_failed(status, fmt::format("error executing {} request to {} with parameters {}: remote replied with status code {}:\n{}",
-                    type, url, params, status, message));
+            throw api_request_failed(request.status, fmt::format("error executing {} request to {} with parameters {}: remote replied with status code {}:\n{}",
+                    type, url, params, request.status, message));
         }
 
-        if (res.empty()) {
+        rjson::value result;
+
+        if (request.response.empty()) {
             nlog.trace("Got empty response");
-            return rjson::null_value();
+            result = rjson::null_value();
         } else {
-            nlog.trace("Got response:\n{}", res);
-            return rjson::parse(res);
+            nlog.trace("Got response:\n{}", request.response);
+            result = rjson::parse(request.response);
         }
+
+        _request_history.push_back(std::move(request));
+
+        return result;
     }
 
 public:
@@ -220,6 +257,8 @@ public:
     ~scylla_rest_client() {
         _api_client.close().get();
     }
+
+    const std::vector<api_request>& request_history() const noexcept { return _request_history; }
 
     rjson::value post(sstring path, std::unordered_map<sstring, sstring> params = {}, std::optional<request_body> body = {}) {
         return do_request("POST", std::move(path), std::move(params), std::move(body));
@@ -5192,6 +5231,7 @@ For more information, see: {})";
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(replacement_argv.size(), replacement_argv.data(), [&app] (const operation& operation, const bpo::variables_map& app_config) {
+        std::optional<scylla_rest_client> client;
         try {
             // Help operation is special (and weird), add special path for it
             // instead of making all other commands:
@@ -5206,8 +5246,8 @@ For more information, see: {})";
                 } else {
                     port = app_config["port"].as<uint16_t>();
                 }
-                scylla_rest_client client(app_config["host"].as<sstring>(), port);
-                get_operation_function(operation)(client, app_config);
+                client.emplace(app_config["host"].as<sstring>(), port);
+                get_operation_function(operation)(*client, app_config);
             }
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
@@ -5220,6 +5260,9 @@ For more information, see: {})";
             return 4;
         } catch (operation_failed_with_status& e) {
             return e.exit_status;
+        } catch (rjson::error& e) {
+            fmt::print(std::cerr, "error running operation: failed assert on JSON data: {}\nAPI requests: {}\n", e.what(), fmt::join(client->request_history(), "\n    "));
+            return 2;
         } catch (...) {
             fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
             return 2;
