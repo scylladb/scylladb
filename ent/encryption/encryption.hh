@@ -194,7 +194,7 @@ public:
     virtual future<> start() = 0;
     virtual future<> stop() = 0;
 
-    using replicated_keys_state_change_callback = std::function<void(db::system_keyspace::replicated_key_provider_version_t)>;
+    using replicated_keys_state_change_callback = std::function<future<>(db::system_keyspace::replicated_key_provider_version_t)>;
     virtual void register_replicated_keys_state_listener(replicated_keys_state_change_callback callback) = 0;
     virtual future<> notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t version) = 0;
 

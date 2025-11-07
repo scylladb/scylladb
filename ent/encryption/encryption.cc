@@ -498,11 +498,11 @@ public:
     }
 
     future<> notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t version) override {
-        return smp::invoke_on_all([this, version] {
+        return smp::invoke_on_all([this, version]() -> future<> {
             auto& listeners = _per_thread_replicated_keys_listeners[this_shard_id()];
             for (const auto& listener : listeners) {
                 logg.debug("Notifying replicated key state change listener {}", listener.target_type().name());
-                listener(version);
+                co_await listener(version);
             }
         });
     }

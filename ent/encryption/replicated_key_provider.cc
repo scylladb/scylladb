@@ -90,8 +90,9 @@ public:
         , _system_key(std::move(system_key))
         , _local_provider(std::move(local_provider))
         , _original_options(opts)
+        , _upgrade_phaser("replicated_key_provider::upgrade_phaser")
     {
-        _ctxt.register_replicated_keys_state_listener([this](db::system_keyspace::replicated_key_provider_version_t version) {
+        _ctxt.register_replicated_keys_state_listener([this](db::system_keyspace::replicated_key_provider_version_t version) -> future<> {
             switch (version) {
             case db::system_keyspace::replicated_key_provider_version_t::v1:
                 if (!_keys_on.has_value()) {
@@ -110,8 +111,12 @@ public:
                 }
                 if (*_keys_on == keys_location::sys_repl_keys_ks) {
                     log.info("Replicated Key Provider upgrading to version v1_5");
+                    // Start writing to both tables.
                     _keys_on = keys_location::both;
-                    break;
+                    // Drain all write operations to the old table.
+                    // Ensures that the topology coordinator will start the data migration
+                    // after all writes to the old table have finished.
+                    return _upgrade_phaser.advance_and_await();
                 }
                 on_internal_error(log, seastar::format("Cannot downgrade Replicated Key Provider to version v1_5 (current state: {})", static_cast<int>(*_keys_on)));
             case db::system_keyspace::replicated_key_provider_version_t::v2:
@@ -128,6 +133,7 @@ public:
                 }
                 on_internal_error(log, "Cannot upgrade Replicated Key Provider from v1 to v2 directly.");
             }
+            return make_ready_future<>();
         });
     }
 
@@ -201,6 +207,7 @@ private:
 
     enum class keys_location { sys_repl_keys_ks, group0, both };
     std::optional<keys_location> _keys_on;
+    utils::phased_barrier _upgrade_phaser;
 
     // Async/Lazy initialization of `_keys_on` based on the current `replicated_key_provider_version`.
     // Returns the value of the cached optional if engaged, otherwise queries
@@ -383,6 +390,7 @@ future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key_impl(const k
 
 future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_info& info, opt_bytes opt_id, std::optional<group0_ctx> g0_ctx) {
     auto keys_on = co_await get_keys_location();
+    auto p = _upgrade_phaser.start();
 
     if (!_initialized) {
         co_await maybe_initialize_tables();
