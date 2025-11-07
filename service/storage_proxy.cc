@@ -1599,7 +1599,7 @@ protected:
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
     db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
-    int _destroy_promise_index = -1;
+    utils::small_vector<gate::holder, 2> _holders;
 
 protected:
     virtual bool waited_for(locator::host_id from) = 0;
@@ -1631,6 +1631,11 @@ public:
         if (cancellable) {
             register_cancellable();
         }
+
+        attach_to(_proxy->_write_handlers_gate);
+    }
+    void attach_to(gate& g) {
+        _holders.push_back(g.hold());
     }
     virtual ~abstract_write_response_handler() {
         --_stats.writes;
@@ -1660,22 +1665,6 @@ public:
         }
 
         update_cancellable_live_iterators();
-
-        if (const auto index = _destroy_promise_index; index >= 0) {
-            auto& promises = _proxy->_write_handler_destroy_promises;
-            auto& p = promises[index];
-            p.on_destroy();
-            std::swap(p, promises.back());
-            p.handler()._destroy_promise_index = index;
-            promises.pop_back();
-        }
-    }
-    void ensure_destroy_promise() {
-        if (_destroy_promise_index < 0) {
-            auto& promises = _proxy->_write_handler_destroy_promises;
-            _destroy_promise_index = promises.size();
-            promises.emplace_back(*this);
-        }
     }
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
@@ -2691,29 +2680,7 @@ void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) 
     remove_response_handler_entry(std::move(entry));
 }
 
-storage_proxy::write_handler_destroy_promise::write_handler_destroy_promise(abstract_write_response_handler& handler)
-    : _handler(&handler)
-    , _promise(std::nullopt)
-{
-}
-
-future<> storage_proxy::write_handler_destroy_promise::get_future() {
-    if (!_promise) {
-        _promise.emplace();
-    }
-    co_await _promise->get_shared_future();
-}
-
-void storage_proxy::write_handler_destroy_promise::on_destroy() {
-    if (_promise) {
-        _promise->set_value();
-    }
-}
-
 void storage_proxy::remove_response_handler_entry(response_handlers_map::iterator entry) {
-    if (auto& handler = *entry->second; handler.use_count() > 1) {
-        handler.ensure_destroy_promise();
-    }
     entry->second->on_released();
     _response_handlers.erase(std::move(entry));
 }
@@ -7183,7 +7150,7 @@ void storage_proxy::on_released(const locator::host_id& hid) {
 }
 
 future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
-    std::vector<future<>> futures;
+    gate g;
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
         // timeout_cb() may destroy the current handler. Since the list uses
@@ -7193,13 +7160,9 @@ future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const ab
         const auto next = std::next(it);
 
         if (filter_fun(*it)) {
-            auto handler = it->shared_from_this();
+            it->attach_to(g);
             if (_response_handlers.contains(it->id())) {
                 it->timeout_cb();
-            }
-            if (it->use_count() > 1) {
-                it->ensure_destroy_promise();
-                futures.push_back(_write_handler_destroy_promises[it->_destroy_promise_index].get_future());
             }
         }
         it = next;
@@ -7212,10 +7175,10 @@ future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const ab
             // iterator_guard handles safe iterator updates while allowing prompt
             // handler destruction and client response.
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
-            co_await maybe_yield();
+            co_await coroutine::maybe_yield();
         }
     }
-    co_await when_all_succeed(std::move(futures));
+    co_await g.close();
 }
 
 void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id id) {
@@ -7256,15 +7219,11 @@ future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describ
 }
 
 future<> storage_proxy::cancel_all_write_response_handlers() {
+    auto f = _write_handlers_gate.close();
     while (!_response_handlers.empty()) {
         _response_handlers.begin()->second->timeout_cb();
-
-        if (!_response_handlers.empty()) {
-            co_await maybe_yield();
-        }
+        co_await coroutine::maybe_yield();
     }
-    while (!_write_handler_destroy_promises.empty()) {
-        co_await _write_handler_destroy_promises.front().get_future();
-    }
+    co_await std::move(f);
 }
 }
