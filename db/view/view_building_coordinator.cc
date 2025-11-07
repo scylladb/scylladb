@@ -190,7 +190,7 @@ future<> view_building_coordinator::clean_finished_tasks() {
             //       we can look if we already finished it (check if it's in `_finished_tasks`).
             //       If yes, we can just remove it instead of aborting it.
             auto task_opt = _vb_sm.building_state.get_task(*_vb_sm.building_state.currently_processed_base_table, replica, task_id);
-            if (task_opt && task_opt->get().state != view_building_task::task_state::aborted) {
+            if (task_opt && !task_opt->get().aborted) {
                 builder.del_task(task_id);
                 vbc_logger.debug("Removing finished task with ID: {}", task_id);
             }
@@ -417,7 +417,7 @@ std::vector<utils::UUID> view_building_coordinator::select_tasks_for_replica(loc
     // Select only building tasks and return theirs ids
     auto filter_building_tasks = [] (const std::vector<view_building_task>& tasks) -> std::vector<utils::UUID> {
         return tasks | std::views::filter([] (const view_building_task& t) {
-            return t.type == view_building_task::task_type::build_range && t.state == view_building_task::task_state::idle;
+            return t.type == view_building_task::task_type::build_range && !t.aborted;
         }) | std::views::transform([] (const view_building_task& t) {
             return t.id;
         }) | std::ranges::to<std::vector>();
@@ -465,7 +465,7 @@ std::vector<utils::UUID> view_building_coordinator::select_tasks_for_replica(loc
             return building_tasks;
         } else {
             return tasks | std::views::filter([] (const view_building_task& t) {
-                return t.state == view_building_task::task_state::idle;
+                return !t.aborted;
             }) | std::views::transform([] (const view_building_task& t) {
                 return t.id;
             }) | std::ranges::to<std::vector>();
@@ -539,7 +539,7 @@ void view_building_coordinator::generate_tablet_migration_updates(utils::chunked
     auto create_task_copy_on_pending_replica = [&] (const view_building_task& task) {
         auto new_id = builder.new_id();
         builder.set_type(new_id, task.type)
-                .set_state(new_id, view_building_task::task_state::idle)
+                .set_aborted(new_id, false)
                 .set_base_id(new_id, task.base_id)
                 .set_last_token(new_id, task.last_token)
                 .set_replica(new_id, *trinfo.pending_replica);
@@ -607,7 +607,7 @@ void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_ve
     auto create_task_copy = [&] (const view_building_task& task, dht::token last_token) -> utils::UUID {
         auto new_id = builder.new_id();
         builder.set_type(new_id, task.type)
-                .set_state(new_id, view_building_task::task_state::idle)
+                .set_aborted(new_id, false)
                 .set_base_id(new_id, task.base_id)
                 .set_last_token(new_id, last_token)
                 .set_replica(new_id, task.replica);
@@ -676,7 +676,7 @@ void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_muta
     auto abort_task_map = [&] (const task_map& task_map) {
         for (auto& [id, _]: task_map) {
             vbc_logger.debug("Aborting task {}", id);
-            builder.set_state(id, view_building_task::task_state::aborted);
+            builder.set_aborted(id, true);
         }
     };
 
@@ -706,7 +706,7 @@ void abort_view_building_tasks(const view_building_state_machine& vb_sm,
         for (auto& [id, task]: task_map) {
             if (task.last_token == last_token) {
                 vbc_logger.debug("Aborting task {}", id);
-                builder.set_state(id, view_building_task::task_state::aborted);
+                builder.set_aborted(id, true);
             }
         }
     };
@@ -722,10 +722,10 @@ void abort_view_building_tasks(const view_building_state_machine& vb_sm,
 
 static void rollback_task_map(view_building_task_mutation_builder& builder, const task_map& task_map) {
     for (auto& [id, task]: task_map) {
-        if (task.state == view_building_task::task_state::aborted) {
+        if (task.aborted) {
             auto new_id = builder.new_id();
             builder.set_type(new_id, task.type)
-                .set_state(new_id, view_building_task::task_state::idle)
+                .set_aborted(new_id, false)
                 .set_base_id(new_id, task.base_id)
                 .set_last_token(new_id, task.last_token)
                 .set_replica(new_id, task.replica);

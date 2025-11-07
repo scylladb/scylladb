@@ -39,28 +39,17 @@ struct view_building_task {
         process_staging,
     };
 
-    // When a task is created, it starts with `IDLE` state.
-    // Then, the view building coordinator will decide to do the task and it will
-    // set the state to `STARTED`.
-    // When a task is finished the entry is removed.
-    //
-    // If a task is in progress when a tablet operation (migration/resize) starts,
-    // the task's state is set to `ABORTED`.
-    enum class task_state {
-        idle,
-        started,
-        aborted,
-    };
+
     utils::UUID id;
     task_type type;
-    task_state state;
+    bool aborted;
 
     table_id base_id;
     std::optional<table_id> view_id; // nullopt when task_type is `process_staging`
     locator::tablet_replica replica;
     dht::token last_token;
 
-    view_building_task(utils::UUID id, task_type type, task_state state,
+    view_building_task(utils::UUID id, task_type type, bool aborted,
             table_id base_id, std::optional<table_id> view_id,
             locator::tablet_replica replica, dht::token last_token);
 };
@@ -92,7 +81,6 @@ struct view_building_state {
     std::vector<std::reference_wrapper<const view_building_task>> get_tasks_for_host(table_id base_id, locator::host_id host) const;
     std::map<dht::token, std::vector<view_building_task>> collect_tasks_by_last_token(table_id base_table_id) const;
     std::map<dht::token, std::vector<view_building_task>> collect_tasks_by_last_token(table_id base_table_id, const locator::tablet_replica& replica) const;
-    std::vector<utils::UUID> get_started_tasks(table_id base_table_id, locator::tablet_replica replica) const;
 };
 
 // Represents global state of tablet-based views.
@@ -115,8 +103,6 @@ struct view_building_state_machine {
 
 view_building_task::task_type task_type_from_string(std::string_view str);
 seastar::sstring task_type_to_sstring(view_building_task::task_type type);
-view_building_task::task_state task_state_from_string(std::string_view str);
-seastar::sstring task_state_to_sstring(view_building_task::task_state state);
 
 } // namespace view_building
 
@@ -128,17 +114,11 @@ template <> struct fmt::formatter<db::view::view_building_task::task_type> : fmt
     }
 };
 
-template <> struct fmt::formatter<db::view::view_building_task::task_state> : fmt::formatter<string_view> {
-    auto format(db::view::view_building_task::task_state state, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", db::view::task_state_to_sstring(state));
-    }
-};
-
 template <> struct fmt::formatter<db::view::view_building_task> : fmt::formatter<string_view> {
     auto format(db::view::view_building_task task, fmt::format_context& ctx) const {
         auto view_id = task.view_id ? fmt::to_string(*task.view_id) : "nullopt";
-        return fmt::format_to(ctx.out(), "view_building_task{{type: {}, state: {}, base_id: {}, view_id: {}, last_token: {}}}",
-                task.type, task.state, task.base_id, view_id, task.last_token);
+        return fmt::format_to(ctx.out(), "view_building_task{{type: {}, aborted: {}, base_id: {}, view_id: {}, last_token: {}}}",
+                task.type, task.aborted, task.base_id, view_id, task.last_token);
     }
 };
 

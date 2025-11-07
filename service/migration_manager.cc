@@ -934,7 +934,7 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
         for (auto& replica: tablet_info.replicas) {
             auto id = utils::UUID_gen::get_time_UUID();
             view_building_task task {
-                id, view_building_task::task_type::build_range, view_building_task::task_state::idle,
+                id, view_building_task::task_type::build_range, false,
                 base_id, view->id(), replica, last_token
             };
 
