@@ -145,6 +145,7 @@ future<> view_building_worker::drain() {
     if (!_as.abort_requested()) {
         _as.request_abort();
     }
+    _state._mutex.broken();
     _staging_sstables_mutex.broken();
     _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
@@ -154,8 +155,7 @@ future<> view_building_worker::drain() {
         co_await std::move(state_observer);
         co_await _mnotifier.unregister_listener(this);
     }
-    co_await _state.clear_state();
-    _state.state_updated_cv.broken();
+    co_await _state.clear();
     co_await uninit_messaging_service();
 }
 
@@ -340,22 +340,16 @@ future<> view_building_worker::run_view_building_state_observer() {
 
     while (!_as.abort_requested()) {
         bool sleep = false;
-        _state.some_batch_finished = false;
         try {
             vbw_logger.trace("view_building_state_observer() iteration");
             auto read_apply_mutex_holder = co_await _group0_client.hold_read_apply_mutex(_as);
 
             co_await update_built_views();
-            co_await update_building_state();
+            co_await check_for_aborted_tasks();
             _as.check();
 
             read_apply_mutex_holder.return_all();
-
-            // A batch could finished its work while the worker was
-            // updating the state. In that case we should do another iteration.
-            if (!_state.some_batch_finished) {
-                co_await _vb_state_machine.event.wait();
-            }
+            co_await _vb_state_machine.event.wait();
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
         } catch (...) {
@@ -411,21 +405,34 @@ future<> view_building_worker::update_built_views() {
     }
 }
 
-future<> view_building_worker::update_building_state() {
-    co_await _state.update(*this);
-    co_await _state.finish_completed_tasks();
-    _state.state_updated_cv.broadcast();
-}
+// Must be executed on shard0
+future<> view_building_worker::check_for_aborted_tasks() {
+    return container().invoke_on_all([building_state = _vb_state_machine.building_state] (view_building_worker& vbw) -> future<> {
+        auto lock = co_await get_units(vbw._state._mutex, 1, vbw._as);
+        co_await vbw._state.update_processing_base_table(vbw._db, building_state, vbw._as);
+        if (!vbw._state._batch) {
+            co_return;
+        }
 
-bool view_building_worker::is_shard_free(shard_id shard) {
-    return !std::ranges::any_of(_state.tasks_map, [&shard] (auto& task_entry) {
-        return task_entry.second->replica.shard == shard && task_entry.second->state == view_building_worker::batch_state::in_progress;
+        auto my_host_id = vbw._db.get_token_metadata().get_topology().my_host_id();
+        auto my_replica = locator::tablet_replica{my_host_id, this_shard_id()};
+        auto tasks_map = vbw._state._batch->tasks; // Potentially, we'll remove elements from the map, so we need a copy to iterate over it
+        for (auto& [id, t]: tasks_map) {
+            auto task_opt = building_state.get_task(t.base_id, my_replica, id);
+            if (!task_opt || task_opt->get().state == view_building_task::task_state::aborted) {
+                co_await vbw._state._batch->abort_task(id);
+            }
+        }
+
+        if (vbw._state._batch->tasks.empty()) {
+            co_await vbw._state.clean_up_after_batch();
+        }
     });
 }
 
 void view_building_worker::init_messaging_service() {
-    ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (std::vector<utils::UUID> ids) -> future<std::vector<utils::UUID>> {
-        return container().invoke_on(0, [ids = std::move(ids)] (view_building_worker& vbw) mutable -> future<std::vector<utils::UUID>> {
+    ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (shard_id shard, std::vector<utils::UUID> ids) -> future<std::vector<utils::UUID>> {
+        return container().invoke_on(shard, [ids = std::move(ids)] (auto& vbw) mutable -> future<std::vector<utils::UUID>> {
             return vbw.work_on_tasks(std::move(ids));
         });
     });
@@ -435,230 +442,53 @@ future<> view_building_worker::uninit_messaging_service() {
     return ser::view_rpc_verbs::unregister(&_messaging);
 }
 
-future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(std::vector<utils::UUID> ids) {
-    vbw_logger.debug("Got request for results of tasks: {}", ids);
-    auto guard = co_await _group0_client.start_operation(_as, service::raft_timeout{});
-    auto processing_base_table = _state.processing_base_table;
-
-    auto are_tasks_finished = [&] () {
-        return std::ranges::all_of(ids, [this] (const utils::UUID& id) {
-            return _state.finished_tasks.contains(id) || _state.aborted_tasks.contains(id);
-        });
-    };
-
-    auto get_results = [&] () -> std::vector<utils::UUID> {
-        std::vector<utils::UUID> results;
-        for (const auto& id: ids) {
-            if (_state.finished_tasks.contains(id)) {
-                results.emplace_back(id);
-            }
-        }
-        return results;
-    };
-
-    if (are_tasks_finished()) {
-        // If the batch is already finished, we can return the results immediately.
-        vbw_logger.debug("Batch with tasks {} is already finished, returning results", ids);
-        co_return get_results();
-    }
-
-    // All of the tasks should be executed in the same batch
-    // (their statuses are set to started in the same group0 operation).
-    // If any ID is not present in the `tasks_map`, it means that it was aborted and we should fail this RPC call,
-    // so the coordinator can retry without aborted IDs.
-    // That's why we can identify the batch by random (.front()) ID from the `ids` vector.
-    auto id = ids.front();
-    while (!_state.tasks_map.contains(id) && processing_base_table == _state.processing_base_table) {
-        vbw_logger.warn("Batch with task {} is not found in tasks map, waiting until worker updates its state", id);
-        service::release_guard(std::move(guard));
-        co_await _state.state_updated_cv.wait();
-        guard = co_await _group0_client.start_operation(_as, service::raft_timeout{});
-    }
-
-    if (processing_base_table != _state.processing_base_table) {
-        // If the processing base table was changed, we should fail this RPC call because the tasks were aborted.
-        throw std::runtime_error(fmt::format("Processing base table was changed to {} ", _state.processing_base_table));
-    }
-
-    // Validate that any of the IDs wasn't aborted.
-    for (const auto& tid: ids) {
-        if (!_state.tasks_map[id]->tasks.contains(tid)) {
-            vbw_logger.warn("Task {} is not found in the batch", tid);
-            throw std::runtime_error(fmt::format("Task {} is not found in the batch", tid));
-        }
-    }
-
-    if (_state.tasks_map[id]->state == view_building_worker::batch_state::idle) {
-        vbw_logger.debug("Starting batch with tasks {}", _state.tasks_map[id]->tasks);
-        if (!is_shard_free(_state.tasks_map[id]->replica.shard)) {
-            throw std::runtime_error(fmt::format("Tried to start view building tasks ({}) on shard {} but the shard is busy", _state.tasks_map[id]->tasks, _state.tasks_map[id]->replica.shard, _state.tasks_map[id]->tasks));
-        }
-        _state.tasks_map[id]->start();
-    }
-
-    service::release_guard(std::move(guard));
-    while (!_as.abort_requested()) {
-        auto read_apply_mutex_holder = co_await _group0_client.hold_read_apply_mutex(_as);
-
-        if (are_tasks_finished()) {
-            co_return get_results();
-        }
-
-        // Check if the batch is still alive
-        if (!_state.tasks_map.contains(id)) {
-            throw std::runtime_error(fmt::format("Batch with task {} is not found in tasks map anymore.", id));
-        }
-
-        read_apply_mutex_holder.return_all();
-        co_await _state.tasks_map[id]->batch_done_cv.wait();
-    }
-    throw std::runtime_error("View building worker was aborted");
-}
-
-// Validates if the task can be executed in a batch on the same shard.
-static bool validate_can_be_one_batch(const view_building_task& t1, const view_building_task& t2) {
-    return t1.type == t2.type && t1.base_id == t2.base_id && t1.replica == t2.replica && t1.last_token == t2.last_token;
-}
-
 static std::unordered_set<table_id> get_ids_of_all_views(replica::database& db, table_id table_id) {
     return db.find_column_family(table_id).views() | std::views::transform([] (view_ptr vptr) {
         return vptr->id();
     }) | std::ranges::to<std::unordered_set>();;
 }
 
-future<> view_building_worker::local_state::flush_table(view_building_worker& vbw, table_id table_id) {
-    // `table_id` should point to currently processing base table but
-    // `view_building_worker::local_state::processing_base_table` may not be set to it yet, 
-    // so we need to pass it directly
-    co_await vbw.container().invoke_on_all([table_id] (view_building_worker& local_vbw) -> future<> {
-        auto base_cf = local_vbw._db.find_column_family(table_id).shared_from_this();
-        co_await when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams());
-        co_await flush_base(base_cf, local_vbw._as);
-    });
-
-    flushed_views = get_ids_of_all_views(vbw._db, table_id);
-}
-
-future<> view_building_worker::local_state::update(view_building_worker& vbw) {
-    const auto& vb_state = vbw._vb_state_machine.building_state;
-
-    // Check if the base table to process was changed.
-    // If so, we clear the state, aborting tasks for previous base table and starting new ones for the new base table.
-    if (processing_base_table != vb_state.currently_processed_base_table) {
-        co_await clear_state();
-
-        if (vb_state.currently_processed_base_table) {
-            // When we start to process new base table, we need to flush its current data, so we can build the view.
-            co_await flush_table(vbw, *vb_state.currently_processed_base_table);
+// If `state::processing_base_table` is diffrent that the `view_building_state::currently_processed_base_table`,
+// clear the state, save and flush new base table
+future<> view_building_worker::state::update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as) {
+    if (processing_base_table != building_state.currently_processed_base_table) {
+        co_await clear();
+        if (building_state.currently_processed_base_table) {
+            co_await flush_base_table(db, *building_state.currently_processed_base_table, as);
         }
-
-        processing_base_table = vb_state.currently_processed_base_table;
-        vbw_logger.info("Processing base table was changed to: {}", processing_base_table);
-    }
-
-    if (!processing_base_table) {
-        vbw_logger.debug("No base table is selected to be processed.");
-        co_return;
-    }
-
-    std::vector<table_id> new_views;
-    auto all_view_ids = get_ids_of_all_views(vbw._db, *processing_base_table);
-    std::ranges::set_difference(all_view_ids, flushed_views, std::back_inserter(new_views));
-    if (!new_views.empty()) {
-        // Flush base table again in any new view was created, so the view building tasks will see up-to-date sstables.
-        // Otherwise, we may lose mutations created after previous flush but before the new view was created.
-        co_await flush_table(vbw, *processing_base_table);
-    }
-
-    auto erm = vbw._db.find_column_family(*processing_base_table).get_effective_replication_map();
-    auto my_host_id = erm->get_topology().my_host_id();
-    auto current_tasks_for_this_host = vb_state.get_tasks_for_host(*processing_base_table, my_host_id);
-
-    // scan view building state, collect alive and new (in STARTED state but not started by this worker) tasks
-    std::unordered_map<shard_id, std::vector<view_building_task>> new_tasks;
-    std::unordered_set<utils::UUID> alive_tasks; // save information about alive tasks to cleanup done/aborted ones
-    for (auto& task_ref: current_tasks_for_this_host) {
-        auto& task = task_ref.get();
-        auto id = task.id;
-
-        if (task.state != view_building_task::task_state::aborted) {
-            alive_tasks.insert(id);
-        }
-
-        if (tasks_map.contains(id) || finished_tasks.contains(id)) {
-            continue;
-        }
-        else if (task.state == view_building_task::task_state::started) {
-            auto shard = task.replica.shard;
-            if (new_tasks.contains(shard) && !validate_can_be_one_batch(new_tasks[shard].front(), task)) {
-                // Currently we allow only one batch per shard at a time
-                on_internal_error(vbw_logger, fmt::format("Got not-compatible tasks for the same shard. Task: {}, other: {}", new_tasks[shard].front(), task));
-            }
-            new_tasks[shard].push_back(task);
-        }
-        co_await coroutine::maybe_yield();
-    }
-
-    auto tasks_map_copy = tasks_map;
-
-    // Clear aborted tasks from tasks_map
-    for (auto it = tasks_map_copy.begin(); it != tasks_map_copy.end();) {
-        if (!alive_tasks.contains(it->first)) {
-            vbw_logger.debug("Aborting task {}", it->first);
-            aborted_tasks.insert(it->first);
-            co_await it->second->abort_task(it->first);
-            it = tasks_map_copy.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // Create batches for new tasks
-    for (const auto& [shard, shard_tasks]: new_tasks) {
-        auto tasks = shard_tasks | std::views::transform([] (const view_building_task& t) {
-            return std::make_pair(t.id, t);
-        }) | std::ranges::to<std::unordered_map>();
-        auto batch = seastar::make_shared<view_building_worker::batch>(vbw.container(), tasks, shard_tasks.front().base_id, shard_tasks.front().replica);
-
-        for (auto& [id, _]: tasks) {
-            tasks_map_copy.insert({id, batch});
-        }
-        co_await coroutine::maybe_yield();
-    }
-
-    tasks_map = std::move(tasks_map_copy);
-}
-
-future<> view_building_worker::local_state::finish_completed_tasks() {
-    for (auto it = tasks_map.begin(); it != tasks_map.end();) {
-        if (it->second->state == view_building_worker::batch_state::idle) {
-            ++it;
-        } else if (it->second->state == view_building_worker::batch_state::in_progress) {
-            vbw_logger.debug("Task {} is still in progress", it->first);
-            ++it;
-        } else {
-            co_await it->second->work.get_future();
-            finished_tasks.insert(it->first);
-            vbw_logger.info("Task {} was completed", it->first);
-            it->second->batch_done_cv.broadcast();
-            it = tasks_map.erase(it);
-        }
+        processing_base_table = building_state.currently_processed_base_table;
     }
 }
 
-future<> view_building_worker::local_state::clear_state() {
-    for (auto& [_, batch]: tasks_map) {
-        co_await batch->abort();
+// If `_batch` ptr points to valid object, co_await its `work` future, save completed tasks and delete the object
+future<> view_building_worker::state::clean_up_after_batch() {
+    if (_batch) {
+        co_await std::move(_batch->work);
+        for (auto& [id, _]: _batch->tasks) {
+            completed_tasks.insert(id);
+        }
+        _batch = nullptr;
     }
+}
 
+// Flush base table, set is as currently processing base table and save which views exist at the time of flush
+future<> view_building_worker::state::flush_base_table(replica::database& db, table_id base_table_id, abort_source& as) {
+    auto cf = db.find_column_family(base_table_id).shared_from_this();
+    co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
+    co_await flush_base(cf, as);
+    processing_base_table = base_table_id;
+    flushed_views = get_ids_of_all_views(db, base_table_id);
+}
+
+future<> view_building_worker::state::clear() {
+    if (_batch) {
+        _batch->as.request_abort();
+        co_await std::move(_batch->work);
+        _batch = nullptr;
+    }
     processing_base_table.reset();
+    completed_tasks.clear();
     flushed_views.clear();
-    tasks_map.clear();
-    finished_tasks.clear();
-    aborted_tasks.clear();
-    state_updated_cv.broadcast();
-    some_batch_finished = false;
-    vbw_logger.debug("View building worker state was cleared.");
 }
 
 view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
@@ -668,17 +498,12 @@ view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unor
     , _vbw(vbw) {}
 
 void view_building_worker::batch::start() {
-    if (this_shard_id() != 0) {
-        on_internal_error(vbw_logger, "view_building_worker::batch should be started on shard0");
+    if (this_shard_id() != replica.shard) {
+        on_internal_error(vbw_logger, "view_building_worker::batch should be started on replica shard");
     }
 
-    state = batch_state::in_progress;
-    work = smp::submit_to(replica.shard, [this] () -> future<> {
-        return do_work();
-    }).finally([this] () {
-        state = batch_state::finished;
-        _vbw.local()._state.some_batch_finished = true;
-        _vbw.local()._vb_state_machine.event.broadcast();
+    work = do_work().finally([this] {
+        promise.set_value();
     });
 }
 
@@ -693,10 +518,6 @@ future<> view_building_worker::batch::abort() {
     co_await smp::submit_to(replica.shard, [this] () {
         as.request_abort();
     });
-
-    if (work.valid()) {
-        co_await work.get_future();
-    }
 }
 
 future<> view_building_worker::batch::do_work() {
@@ -889,6 +710,116 @@ void view_building_worker::cleanup_staging_sstables(locator::effective_replicati
     });
     _staging_sstables[table_id].erase(first, last);
 }
+
+future<view_building_state> view_building_worker::get_latest_view_building_state() {
+    return smp::submit_to(0, [&sharded_vbw = container()] {
+        auto& vbw = sharded_vbw.local();
+        auto guard = vbw._group0_client.start_operation(vbw._as);
+        return vbw._vb_state_machine.building_state;
+    });
+}
+
+future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(std::vector<utils::UUID> ids) {
+    auto collect_completed_tasks = [&] {
+        std::vector<utils::UUID> completed;
+        for (auto& id: ids) {
+            if (_state.completed_tasks.contains(id)) {
+                completed.push_back(id);
+            }
+        }
+        return completed;
+    };
+
+    auto lock = co_await get_units(_state._mutex, 1, _as);
+    // Firstly check if there is any batch that is finished but wasn't cleaned up.
+    if (_state._batch && _state._batch->promise.available()) {
+        co_await _state.clean_up_after_batch();
+    }
+
+    // Check if tasks were already completed.
+    // If only part of the tasks were finished, return the subset and don't execute the remaining tasks.
+    std::vector<utils::UUID> completed = collect_completed_tasks();
+    if (!completed.empty()) {
+        co_return completed;
+    }
+    lock.return_all();
+
+    auto building_state = co_await get_latest_view_building_state();
+
+    lock = co_await get_units(_state._mutex, 1, _as);
+    co_await _state.update_processing_base_table(_db, building_state, _as);
+    // If there is no running batch, create it.
+    if (!_state._batch) {
+        if (!_state.processing_base_table) {
+            throw std::runtime_error("view_building_worker::state::processing_base_table needs to be set to work on view building");
+        }
+
+        auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+        auto my_replica = locator::tablet_replica{my_host_id, this_shard_id()};
+        std::unordered_map<utils::UUID, view_building_task> tasks;
+        for (auto& id: ids) {
+            auto task_opt = building_state.get_task(*_state.processing_base_table, my_replica, id);
+            if (!task_opt) {
+                throw std::runtime_error(fmt::format("Task {} was not found for base table {} on replica {}", id, *building_state.currently_processed_base_table, my_replica));
+            }
+            tasks.insert({id, *task_opt});
+        }
+#ifdef SEASTAR_DEBUG
+        auto& some_task = tasks.begin()->second;
+        for (auto& [_, t]: tasks) {
+            SCYLLA_ASSERT(t.base_id == some_task.base_id);
+            SCYLLA_ASSERT(t.last_token == some_task.last_token);
+            SCYLLA_ASSERT(t.replica == some_task.replica);
+            SCYLLA_ASSERT(t.type == some_task.type);
+            SCYLLA_ASSERT(t.replica.shard == this_shard_id());
+        }
+#endif
+
+        // If any view was added after we did the initial flush, we need to do it again
+        if (std::ranges::any_of(tasks | std::views::values, [&] (const view_building_task& t) {
+            return t.view_id && !_state.flushed_views.contains(*t.view_id);
+        })) {
+            co_await _state.flush_base_table(_db, *_state.processing_base_table, _as);
+        }
+
+        // Create and start the batch
+        _state._batch = std::make_unique<batch>(container(), std::move(tasks), *building_state.currently_processed_base_table, my_replica);
+        _state._batch->start();
+    }
+
+    if (std::ranges::all_of(ids, [&] (auto& id) { return !_state._batch->tasks.contains(id); })) {
+        throw std::runtime_error(fmt::format(
+                "None of the tasks requested to work on is executed in current view building batch. Batch executes: {}, the RPC requested: {}",
+                _state._batch->tasks | std::views::keys, ids));
+    }
+    auto batch_future = _state._batch->promise.get_shared_future();
+    lock.return_all();
+
+    co_await std::move(batch_future);
+
+    lock = co_await get_units(_state._mutex, 1, _as);
+    co_await _state.clean_up_after_batch();
+    co_return collect_completed_tasks();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }
 

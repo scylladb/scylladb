@@ -451,7 +451,7 @@ future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_
     bool rpc_failed = false;
 
     try {
-        remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, tasks);
+        remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, replica.shard, tasks);
     } catch (...) {
         vbc_logger.log(log_level::warn, rate_limit, "Work on tasks {} on replica {}, failed with error: {}",
                 tasks, replica, std::current_exception());
