@@ -84,6 +84,7 @@ sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
 
 ///
 /// Async version of `hash_with_salt` that returns a future.
+/// If possible, hashing uses `coroutine::maybe_yield` to prevent reactor stalls.
 ///
 /// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
 ///
