@@ -20,6 +20,7 @@
 
 #include "crypt_sha512.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 /* public domain sha512 implementation based on fips180-3 */
 /* >=2^64 bits messages are not supported (about 2000 peta bytes) */
@@ -320,6 +321,7 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 		else
 			hashmd(&ctx, klen, kmd);
 		sha512_sum(&ctx, md);
+		co_await seastar::coroutine::maybe_yield();
 	}
 
 	/* output is $6$rounds=n$salt$hash */
