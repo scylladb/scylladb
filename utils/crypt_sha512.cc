@@ -27,6 +27,7 @@
 
 #include "crypt_sha512.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 struct sha512 {
 	uint64_t len;     /* processed message length */
@@ -324,6 +325,7 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 		else
 			hashmd(&ctx, klen, kmd);
 		sha512_sum(&ctx, md);
+		co_await seastar::coroutine::maybe_yield();
 	}
 
 	/* output is $6$rounds=n$salt$hash */

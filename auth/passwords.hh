@@ -84,6 +84,7 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt);
 
 ///
 /// Async version of `hash_with_salt` that returns a future.
+/// If possible, hashing uses `coroutine::maybe_yield` to prevent reactor stalls.
 ///
 /// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
 ///
