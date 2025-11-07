@@ -623,33 +623,34 @@ future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name 
     }
 }
 
+future<std::set<sstring>> collect_files(fs::path path) {
+    std::set<sstring> ret;
+    directory_lister lister(path, lister::dir_entry_types::of<directory_entry_type::regular>());
+    while (auto de = co_await lister.get()) {
+        ret.insert(de->name);
+    }
+    co_return ret;
+}
+
 static future<> snapshot_works(const std::string& table_name) {
     return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
         take_snapshot(e, "ks", table_name).get();
-
-        std::set<sstring> expected = {
-            "manifest.json",
-            "schema.cql"
-        };
 
         auto& cf = e.local_db().find_column_family("ks", table_name);
         auto table_directory = table_dir(cf);
         auto snapshot_dir = table_directory / sstables::snapshots_dir / "test";
 
-        lister::scan_dir(table_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
-            expected.insert(de.name);
-            return make_ready_future<>();
-        }).get();
+        auto in_table_dir = collect_files(table_directory).get();
         // snapshot triggered a flush and wrote the data down.
-        BOOST_REQUIRE_GE(expected.size(), 11);
+        BOOST_REQUIRE_GE(in_table_dir.size(), 9);
 
+        auto in_snapshot_dir = collect_files(snapshot_dir).get();
+
+        in_table_dir.insert("manifest.json");
+        in_table_dir.insert("schema.cql");
         // all files were copied and manifest was generated
-        lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
-            expected.erase(de.name);
-            return make_ready_future<>();
-        }).get();
+        BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
-        BOOST_REQUIRE_EQUAL(expected.size(), 0);
         return make_ready_future<>();
     }, true);
 }
@@ -670,26 +671,13 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
 
-        std::set<sstring> expected = {
-            "manifest.json",
-        };
-
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
-            expected.insert(de.name);
-            return make_ready_future<>();
-        }).get();
+
+        auto in_table_dir = collect_files(table_dir(cf)).get();
         // Snapshot did not trigger a flush.
-        // Only "manifest.json" is expected.
-        BOOST_REQUIRE_EQUAL(expected.size(), 1);
-
-        // all files were copied and manifest was generated
-        lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
-            expected.erase(de.name);
-            return make_ready_future<>();
-        }).get();
-
-        BOOST_REQUIRE_EQUAL(expected.size(), 0);
+        BOOST_REQUIRE(in_table_dir.empty());
+        auto in_snapshot_dir = collect_files(table_dir(cf) / sstables::snapshots_dir / "test").get();
+        BOOST_REQUIRE_EQUAL(in_snapshot_dir, std::set<sstring>({"manifest.json", "schema.cql"}));
         return make_ready_future<>();
     });
 }
@@ -706,10 +694,10 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
         BOOST_REQUIRE_EQUAL(sd.live, 0);
         BOOST_REQUIRE_GT(sd.total, 0);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
@@ -776,11 +764,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         take_snapshot(e).get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
-        unsigned count = 0;
-        lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
-            count++;
-            return make_ready_future<>();
-        }).get();
+        unsigned count = collect_files(table_dir(cf) / sstables::snapshots_dir / "test").get().size();
         BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
 
         e.local_db().clear_snapshot("test", {"ks"}, "").get();
@@ -811,12 +795,8 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         }
 
         for (auto i = 0; i < num_snapshots; i++) {
-            unsigned count = 0;
             testlog.debug("Verifying {}", snapshots_dir / snapshot_name(i));
-            lister::scan_dir(snapshots_dir / snapshot_name(i), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
-                count++;
-                return make_ready_future<>();
-            }).get();
+            unsigned count = collect_files(snapshots_dir / snapshot_name(i)).get().size();
             BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
         }
 
@@ -899,10 +879,10 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         BOOST_REQUIRE_EQUAL(sc_sd.details.live, sd.live);
         BOOST_REQUIRE_EQUAL(sc_sd.details.total, sd.total);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
@@ -941,10 +921,10 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
         auto sc_live_size = sc.local().true_snapshots_size().get();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd.live);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
@@ -1485,18 +1465,9 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
 
         auto& cf = db.local().find_column_family("ks", "cf");
 
+        auto in_snap_dir = co_await collect_files(table_dir(cf) / sstables::snapshots_dir / "test");
         // all files were copied and manifest was generated
-        co_await lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
-            testlog.debug("Found in snapshots: {}", de.name);
-            expected.erase(de.name);
-            return make_ready_future<>();
-        });
-
-        if (!expected.empty()) {
-            testlog.error("Not in snapshots: {}", expected);
-        }
-
-        BOOST_REQUIRE(expected.empty());
+        BOOST_REQUIRE(std::includes(in_snap_dir.begin(), in_snap_dir.end(), expected.begin(), expected.end()));
     });
 }
 
