@@ -37,17 +37,15 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR, TESTPY_PREPARED_ENVIRONMENT
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     Test,
     TestSuite,
-    init_testsuite_globals,
     output_is_a_tty,
     palette,
-    prepare_dirs,
-    start_3rd_party_services,
+    prepare_environment, init_testsuite_globals,
 )
 from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
@@ -55,7 +53,18 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search']
+PYTEST_RUNNER_DIRECTORIES = [
+    TEST_DIR / 'boost',
+    TEST_DIR / 'ldap',
+    TEST_DIR / 'raft',
+    TEST_DIR / 'unit',
+    TEST_DIR / 'vector_search',
+    TEST_DIR / 'alternator',
+    TEST_DIR / 'broadcast_tables',
+    TEST_DIR / 'cql',
+    TEST_DIR / 'cqlpy',
+    TEST_DIR / 'rest_api',
+]
 
 launch_time = time.monotonic()
 
@@ -277,7 +286,6 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
 
     if args.extra_scylla_cmdline_options:
         args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
@@ -286,11 +294,11 @@ def parse_cmd_line() -> argparse.Namespace:
 
 
 async def find_tests(options: argparse.Namespace) -> None:
-
-    for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
+    for f in TEST_DIR.glob("*"):
+        config = pathlib.Path(f) / SUITE_CONFIG_FILENAME
+        if config.is_file():
             for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
+                suite = TestSuite.opt_create(config=config, options=options, mode=mode)
                 await suite.add_test_list()
 
 
@@ -315,18 +323,19 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
-        "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
         *[f'--mode={mode}' for mode in options.modes],
     ]
     if options.list_tests:
-        args.extend(['--collect-only', '--quiet'])
+        args.extend(['--collect-only', '--quiet', '--no-header'])
     else:
         args.extend([
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
+            '--dist=loadscope',
+            '--test-py-init',
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
@@ -427,7 +436,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     deadline = time.perf_counter() + options.session_timeout
     try:
-        await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
         result = run_pytest(options)
         total_tests += result[0]
         failed_tests.extend(result[1])
@@ -504,16 +512,23 @@ async def main() -> int:
 
     options = parse_cmd_line()
 
-    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-
-    init_testsuite_globals()
-
     await find_tests(options)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
         run_pytest(options)
         return 0
+
+    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
+    init_testsuite_globals()
+    await prepare_environment(
+        tempdir_base=pathlib.Path(options.tmpdir),
+        modes=options.modes,
+        gather_metrics=options.gather_metrics,
+        save_log_on_success=options.save_log_on_success,
+        toxiproxy_byte_limit=options.byte_limit,
+    )
+    os.environ[TESTPY_PREPARED_ENVIRONMENT] = '1'
 
     if options.manual_execution and TestSuite.test_count() > 1:
         print('--manual-execution only supports running a single test, but multiple selected: {}'.format(

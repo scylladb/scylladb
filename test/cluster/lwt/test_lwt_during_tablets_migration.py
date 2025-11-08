@@ -9,7 +9,6 @@ import logging
 import random
 
 import pytest
-from test.cluster.conftest import skip_mode
 from test.cluster.lwt.lwt_common import (
     BaseLWTTester,
     get_token_for_pk,
@@ -98,8 +97,8 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
-@skip_mode("debug", "debug mode is too slow for this test")
+@pytest.mark.skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode("debug", "debug mode is too slow for this test")
 async def test_multi_column_lwt_during_migration(manager: ManagerClient):
     """
     Test scenario:

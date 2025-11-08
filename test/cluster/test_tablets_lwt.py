@@ -15,7 +15,6 @@ from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -108,7 +107,7 @@ async def test_lwt(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_during_migration(manager: ManagerClient):
     # Scenario:
     # 1. A cluster with three nodes, a table with one tablet and RF=2
@@ -209,7 +208,7 @@ async def test_lwt_during_migration(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient):
     # Scenario:
     # 1. Cells c1 and c2 of some partition are not set.
@@ -301,7 +300,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
     config = {
         'error_injections_at_startup': [
@@ -332,7 +331,7 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
     # Scenario:
     # 1. A cluster with 3 nodes, rf=3.
@@ -417,7 +416,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
     # The test checks that the node doesn't crash when the base table is recreated
     # during LWT execution. A no_such_column_family exception is thrown, and the LWT
@@ -463,8 +462,8 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClient, build_mode):
     timeout = 10000 if build_mode == 'debug' else 1000
     config = {
@@ -683,8 +682,8 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'dev is enought: the test checks non-critical functionality')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('debug', 'dev is enought: the test checks non-critical functionality')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ManagerClient):
     # LWT can sometimes return WriteTimeout when it is uncertain whether the transaction
     # was applied. In this case, the user should retry the transaction.
@@ -744,8 +743,8 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Manag
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'dev is enought')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('debug', 'dev is enought')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_no_uncertainty_for_reads(manager: ManagerClient):
     # This test verifies that LWT reads do not produce 'uncertainty' timeouts.
     #
@@ -834,7 +833,7 @@ async def test_lwts_for_special_tables(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_shutdown(manager: ManagerClient):
     """
     This is a regression test for #26355:
@@ -915,8 +914,8 @@ async def test_lwt_shutdown(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'dev is enough')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('debug', 'dev is enough')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
     """
     This is a regression test for #26437:

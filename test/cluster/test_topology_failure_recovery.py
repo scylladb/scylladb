@@ -6,7 +6,6 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 import pytest
 import logging
@@ -51,7 +50,7 @@ async def remove_error_on(manager: ManagerClient, error_name: str, servers: list
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
@@ -79,7 +78,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.prepare_3_nodes_cluster
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_topology_streaming_failure(request, manager: ManagerClient):
     """Fail streaming while doing a topology operation"""
     init_random_seed()

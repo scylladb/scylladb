@@ -14,7 +14,6 @@ import uuid
 from cassandra.cluster import ConsistencyLevel, EXEC_PROFILE_DEFAULT
 from typing import Callable
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace, new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count
@@ -152,7 +151,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)

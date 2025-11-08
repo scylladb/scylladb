@@ -18,7 +18,6 @@ from cassandra.pool import Host  # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 
@@ -310,7 +309,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace:debug_error_injection=trace"]

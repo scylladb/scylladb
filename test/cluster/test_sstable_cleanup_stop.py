@@ -6,7 +6,6 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import check_token_ring_and_group0_consistency, new_test_keyspace
 
 import pytest
@@ -16,7 +15,7 @@ import time
 
 logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_cleanup_stop(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
