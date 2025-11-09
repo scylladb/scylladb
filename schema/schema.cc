@@ -70,7 +70,7 @@ speculative_retry::from_sstring(sstring str) {
         try {
             return boost::lexical_cast<double>(str.substr(0, str.size() - t.size()));
         } catch (boost::bad_lexical_cast& e) {
-            throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
+            throw exceptions::configuration_exception(format("cannot convert {} to speculative_retry\n", str));
         }
     };
 
@@ -91,7 +91,7 @@ speculative_retry::from_sstring(sstring str) {
                 format("Invalid value {} for PERCENTILE option 'speculative_retry': must be between [0.0 and 100.0]", str));
         }
     } else {
-        throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
+        throw exceptions::configuration_exception(format("cannot convert {} to speculative_retry\n", str));
     }
     return speculative_retry(t, v);
 }
