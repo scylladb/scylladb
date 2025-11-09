@@ -83,9 +83,17 @@ class ManagerClient:
     async def stop(self):
         """Close driver"""
         self.driver_close()
-        # TODO: good candidate for safe_gather  https://github.com/scylladb/scylladb/pull/17781
-        #  to make sure that all connections is closed
-        await asyncio.gather(*[client.shutdown() for client in self.client_for_asyncio_loop.values()])
+        # remove non-running event loops from the dict
+        for loop in list(self.client_for_asyncio_loop.keys()):
+            if not loop.is_running():
+                del self.client_for_asyncio_loop[loop]
+        # Only shutdown the client for the current event loop
+        _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        if _client:
+            await _client.shutdown()
+            del self.client_for_asyncio_loop[asyncio.get_running_loop()]
+        # Check no clients are left
+        assert len(self.client_for_asyncio_loop.keys()) == 0 , f"Some clients were not closed: {self.client_for_asyncio_loop}"
 
     async def driver_connect(self, server: Optional[ServerInfo] = None, auth_provider: Optional[AuthProvider] = None) -> None:
         """Connect to cluster"""
