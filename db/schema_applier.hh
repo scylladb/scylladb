@@ -228,9 +228,9 @@ private:
     future<> merge_functions();
     future<> merge_aggregates();
 
-    void commit_tables_and_views();
+    future<> commit_tables_and_views();
     future<> finalize_tables_and_views();
-    void commit_on_shard(replica::database& db);
+    future<> commit_on_shard(replica::database& db);
 };
 
 }

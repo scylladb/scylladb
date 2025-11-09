@@ -939,7 +939,7 @@ future<> schema_applier::update() {
     co_await merge_aggregates();
 }
 
-void schema_applier::commit_tables_and_views() {
+future<> schema_applier::commit_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& db = sharded_db.local();
     auto& diff = _affected_tables_and_views;
@@ -957,12 +957,12 @@ void schema_applier::commit_tables_and_views() {
 
     for (auto& schema : tables.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        co_await db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        co_await db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
@@ -972,7 +972,7 @@ void schema_applier::commit_tables_and_views() {
     }
 }
 
-void schema_applier::commit_on_shard(replica::database& db) {
+future<> schema_applier::commit_on_shard(replica::database& db) {
     // commit keyspace operations
     for (auto& ks_per_shard : _affected_keyspaces.created) {
         auto ks = ks_per_shard[this_shard_id()].release();
@@ -993,7 +993,7 @@ void schema_applier::commit_on_shard(replica::database& db) {
         db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
     }
 
-    commit_tables_and_views();
+    co_await commit_tables_and_views();
 
     if (_tablet_hint) {
         _ss.local().commit_token_metadata_change(_token_metadata_change);
@@ -1029,9 +1029,9 @@ future<> schema_applier::commit() {
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
-    commit_on_shard(sharded_db.local());
+    co_await commit_on_shard(sharded_db.local());
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
-        commit_on_shard(db);
+        return commit_on_shard(db);
     });
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;

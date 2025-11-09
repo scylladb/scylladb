@@ -46,6 +46,7 @@
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
 #include "sstables/trie/bti_index.hh"
+#include "compaction/compaction_fwd.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -116,6 +117,7 @@ struct sstable_writer_config {
     size_t summary_byte_cost;
     sstring origin;
     bool correct_pi_block_width = true;
+    replica::owned_ranges_ptr owned_ranges = nullptr;
 
 private:
     explicit sstable_writer_config() {}

@@ -180,6 +180,8 @@ public:
         return _storage->is_known_endpoint(std::move(endpoint));
     }
 
+    // Consider calling the table's configure_writer() instead
+    // as it sets cfg.owned_ranges appropriately.
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
