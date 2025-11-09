@@ -317,6 +317,8 @@ def run_scylla_cmd(pid, dir):
         '--experimental-features=views-with-tablets',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
+        # Views with tablets refuse to work if this option is not on :-(
+        '--rf-rack-valid-keyspaces=1',
         # Set up authentication in order to allow testing this module
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
@@ -395,6 +397,7 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.append('--force-schema-commit-log=true')
     if major < [2025,1]:
         cmd.remove('--tablets-initial-scale-factor=1')
+        cmd.remove('--rf-rack-valid-keyspaces=1')
     if major < [2025,2]:
         cmd.remove('--group0-raft-op-timeout-in-ms=300000')
     return (cmd, env)
