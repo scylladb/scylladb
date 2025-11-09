@@ -54,6 +54,10 @@ class gossiper;
 
 class schema_builder;
 
+struct put_item_lwt_args {
+    rjson::value full_request = rjson::empty_object();
+};
+
 namespace alternator {
 
 class rmw_operation;
@@ -183,6 +187,7 @@ public:
     future<request_return_type> delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
+    future<request_return_type> execute_parsed_put_item(service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, put_item_lwt_args args);
     future<request_return_type> get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);

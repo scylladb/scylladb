@@ -2846,22 +2846,26 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 
     auto cas_shard = op->shard_for_execute(needs_read_before_write);
 
-    if (cas_shard && !cas_shard->this_shard()) {
-        _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
-        _stats.shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
-                (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
-                                     (service::client_state& client_state) mutable {
-                //FIXME: Instead of passing empty_service_permit() to the background operation,
-                // the current permit's lifetime should be prolonged, so that it's destructed
-                // only after all background operations are finished as well.
-                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
-            });
-        });
-    }
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    if (cas_shard && !cas_shard->this_shard()) {
+        _stats.api_operations.put_item--;
+        _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
+        
+        put_item_lwt_args args;
+        args.full_request = rjson::copy(op->request());
+        
+        co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
+            [args = std::move(args), cs = client_state.move_to_other_shard(), 
+             gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
+            (executor& e) mutable {
+                return do_with(cs.get(), [&e, args = std::move(args), 
+                                          trace_state = tracing::trace_state_ptr(gt)]
+                              (service::client_state& client_state) mutable {
+                    return e.execute_parsed_put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(args));
+                });
+            });
+    }
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -2870,6 +2874,44 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    co_return res;
+}
+
+future<executor::request_return_type> executor::execute_parsed_put_item(
+    client_state& client_state, 
+    tracing::trace_state_ptr trace_state, 
+    service_permit permit, 
+    put_item_lwt_args args) {
+    
+    _stats.api_operations.put_item++;
+    auto start_time = std::chrono::steady_clock::now();
+    
+    auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, 
+                                              std::move(args.full_request));
+    
+    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
+    const bool needs_read_before_write = op->needs_read_before_write();
+    
+    co_await verify_permission(_enforce_authorization, _warn_authorization, 
+                               client_state, op->schema(), auth::permission::MODIFY, _stats);
+    
+    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.put_item++;
+    uint64_t wcu_total = 0;
+    
+    auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    
+    per_table_stats->operation_sizes.put_item_op_size_kb.add(
+        bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
+    per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
+    _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
+    per_table_stats->api_operations.put_item_latency.mark(
+        std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.put_item_latency.mark(
+        std::chrono::steady_clock::now() - start_time);
+    
     co_return res;
 }
 
