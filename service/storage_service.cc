@@ -6813,6 +6813,8 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
     }
 
+    res["num_tablets"] = std::to_string(tokens.size());
+
     if (!await_completion) {
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start);
         slogger.info("Issued tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} duration={}",
