@@ -157,12 +157,12 @@ public:
                     auto& buf = bufs.back();
                     if (buf.size() > rem) {
                         auto keep = buf.size() - rem;
-                        _buffers.emplace_back(buf.share(keep, rem));
+                        _buffers.emplace(_buffers.begin(), buf.share(keep, rem));
                         buf.trim(keep);
                         break;
                     } else {
                         rem -= buf.size();
-                        _buffers.emplace_back(std::move(buf));
+                        _buffers.emplace(_buffers.begin(), std::move(buf));
                         bufs.pop_back();
                     }
                 }
