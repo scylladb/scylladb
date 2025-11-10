@@ -678,15 +678,25 @@ CREATE TABLE system.topology (
     rebuild_option text,
     release_version text,
     replaced_id uuid,
-    ignore_nodes set<uuid>,
+    ignore_nodes set<uuid> static,
     shard_count int,
     tokens set<text>,
+    tokens_string text,
     topology_request text,
     transition_state text static,
+    cleanup_status text,
+    supported_features set<uuid>,
+    request_id timeuuid,
+    version bigint static,
+    fence_version bigint static,
     committed_cdc_generations set<tuple<timestamp, timeuuid>> static,
     unpublished_cdc_generations set<tuple<timestamp, timeuuid>> static,
     global_topology_request text static,
     global_topology_request_id timeuuid static,
+    enabled_features set<text> static,
+    session uuid static,
+    tablet_balancing_enabled boolean static,
+    upgrade_state text static,
     new_cdc_generation_data_uuid timeuuid static,
     new_keyspace_rf_change_ks_name text static,
     new_keyspace_rf_change_data frozen<map<text, text>> static,
@@ -709,12 +719,17 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `topology_request`   -  if set contains one of the supported node-specific topology requests
 - `tokens`             -  if set contains a list of tokens that belongs to the node
 - `replaced_id`        -  if the node replacing or replaced another node here will be the id of that node
-- `ignore_nodes`       -  if set contains a list of ids of nodes ignored during the remove or replace operation
 - `rebuild_option`     -  if the node is being rebuild contains datacenter name that is used as a rebuild source
 - `num_tokens`         -  the requested number of tokens when the node bootstraps
+- `tokens_string`      -  if set contains the `initial_token` value of the bootstrapping node
+- `cleanup_status`     -  contains the cleanup status of the node (clean, needed, or running)
+- `supported_features` -  if set contains the list of cluster features supported by the node
+- `request_id`         -  the ID of the current request for the node or the last one if there is no current request
 
 There are also a few static columns for cluster-global properties:
 
+- `ignore_nodes` - if set, contains a list of node IDs to be ignored during remove or replace topology operations
+                   and tablet-related operations such as migration, split, and merge.
 - `transition_state` - the transitioning state of the cluster (as described earlier), may be null
 - `committed_cdc_generations` - the IDs of the committed CDC generations
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
@@ -725,7 +740,12 @@ There are also a few static columns for cluster-global properties:
 - `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
 - `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
 - `global_requests` - contains a list of ids of pending global requests, the information about requests (type and parameters)
-                      can be obtained from topology_requests table by using request's id as a look up key.
+                      can be obtained from topology_requests table by using request's id as a look up key
+- `version` - the current topology version
+- `fence_version` - the current fence version
+- `enabled_features` - the list of cluster features enabled by the cluster
+- `session` - if set contains the ID of the current session
+- `tablet_balancing_enabled` - if false, the tablet balancing has been disabled
 
 # Join procedure
 
