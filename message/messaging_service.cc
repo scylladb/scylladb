@@ -9,6 +9,7 @@
 #include "gms/generation-number.hh"
 #include "gms/inet_address.hh"
 #include <seastar/core/shard_id.hh>
+#include "message/msg_addr.hh"
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
@@ -520,7 +521,10 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
             auto peer_host_id = locator::host_id(*host_id);
             if (is_host_banned(peer_host_id)) {
                 ci.server.abort_connection(ci.conn_id);
-                return make_ready_future<rpc::no_wait_type>(rpc::no_wait);
+                return ser::join_node_rpc_verbs::send_notify_banned(this, msg_addr{broadcast_address}, raft::server_id{*host_id}).then_wrapped([] (future<> f) {
+                    f.ignore_ready_future();
+                    return rpc::no_wait;
+                });
             }
             ci.attach_auxiliary("host_id", peer_host_id);
             ci.attach_auxiliary("baddr", broadcast_address);
@@ -681,6 +685,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_ADD_ENTRY:
     case messaging_verb::RAFT_MODIFY_CONFIG:
     case messaging_verb::RAFT_PULL_SNAPSHOT:
+    case messaging_verb::NOTIFY_BANNED:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
