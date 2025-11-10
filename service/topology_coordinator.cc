@@ -1190,6 +1190,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
+        // Record the repair task update muations
+        utils::chunked_vector<canonical_mutation> repair_task_updates;
         service::session_id session_id;
     };
 
@@ -1717,6 +1719,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             }
                             dst = dst_opt.value().host;
                         }
+                        // Update repair task
+                        db::system_keyspace::repair_task_entry entry{
+                            .task_uuid   = tasks::task_id(tinfo.repair_task_info.tablet_task_id.uuid()),
+                            .operation   = db::system_keyspace::repair_task_operation::finished,
+                            .first_token = dht::token::to_int64(tmap.get_first_token(gid.tablet)),
+                            .last_token  = dht::token::to_int64(tmap.get_last_token(gid.tablet)),
+                            .table_uuid  = gid.table,
+                        };
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
@@ -1725,6 +1735,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
+                        if (_feature_service.tablet_repair_tasks_table) {
+                            entry.timestamp = db_clock::now();
+                            tablet_state.repair_task_updates = co_await _sys_ks.get_update_repair_task_mutations(entry, api::new_timestamp());
+                        }
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
                                 dst, tablet, duration, res.repair_time);
                     })) {
@@ -1743,6 +1757,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
                                         .del_repair_task_info(last_token, _feature_service)
                                         .del_session(last_token);
+                        for (auto& m : tablet_state.repair_task_updates) {
+                            updates.push_back(std::move(m));
+                        }
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
                             auto sched_time = tinfo.repair_task_info.sched_time;
