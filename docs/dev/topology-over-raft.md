@@ -878,20 +878,87 @@ topology coordinator fiber and coordinates the remaining steps:
 
 If a disaster happens and a majority of nodes are lost, changes to the group 0
 state are no longer possible and a manual recovery procedure needs to be performed.
-Our current procedure starts by switching all nodes to a special "recovery" mode
-in which nodes do not use raft at all. In this mode, dead nodes are supposed
-to be removed from the cluster via `nodetool removenode`. After all dead nodes
-are removed, state related to group 0 is deleted and nodes are restarted in
-regular mode, allowing the cluster to re-form group 0.
 
-Topology on raft fits into this procedure in the following way:
+## The procedure
 
-- When nodes are restarted in recovery mode, they revert to gossiper-based
-  operations. This allows to perform `nodetool removenode` without having
-  a majority of nodes. In this mode, `system.topology` is *not* updated, so
-  it becomes outdated at the end.
-- Before disabling recovery mode on the nodes, the `system.topology` table
-  needs to be truncated on all nodes. This will cause nodes to revert to
-  legacy topology operations after exiting recovery mode.
-- After re-forming group 0, the cluster needs to be upgraded again to raft
-  topology by the administrator.
+Our current procedure starts by removing the persistent group 0 ID and the group 0
+discovery state on all live nodes. This process ensures that live nodes will try to
+join a new group 0 during the next restart.
+
+The issue is that one of the live nodes has to create the new group 0, and not every
+node is a safe choice. It turns out that we can choose only nodes with the latest
+`commit_index` (see this [section](#choosing-the-recovery-leader) for a detailed
+explanation). We call the chosen node the *recovery leader*.
+
+Once the recovery leader is chosen, all live nodes can join the new group 0 during
+a rolling restart. Nodes learn about the recovery leader through the
+`recovery_leader` config option. Also, the recovery leader must be restarted first
+to create the new group 0 before other nodes try to join it.
+
+After successfully restarting all live nodes, dead nodes can be removed via
+`nodetool removenode` or by replacing them.
+
+Finally, the persisted internal state of the old group 0 can be cleaned up.
+
+## Topology coordinator during recovery
+
+After joining the new group 0 during the procedure, live nodes don't execute any
+"special recovery code" related to topology.
+
+In particular, the recovery leader normally starts the topology coordinator fiber.
+This fiber is designed to ensure that a started topology operation never hangs
+(it succeeds or is rolled back) regardless of the conditions. So, if the majority
+has been lost in the middle of some work done by the topology coordinator, the new
+topology coordinator (run on the recovery leader) will finish this work. It will
+usually fail and be rolled back, e.g., due to `global_token_metadata_barrier`
+failing after a global topology command sent to a dead normal node fails.
+
+Note that this behavior is necessary to ensure that the new topology coordinator
+will eventually be able to start handling the topology requests to remove/replace
+dead nodes. Those requests will succeed thanks to the `ignore_dead_nodes` and
+`ignore_dead_nodes_for_replace` options.
+
+## Gossip during recovery
+
+A node always includes its group 0 ID in `gossip_digest_syn`, and the receiving node
+rejects the message if the ID is different from its local ID. However, nodes can
+temporarily belong to two different group 0's during the recovery procedure. To keep
+the gossip working, we've decided to additionally include the local `recovery_leader`
+value in `gossip_digest_syn`. Nodes ignore group 0 ID mismatch if the sender or the
+receiver has a non-empty `recovery_leader` (usually both have it).
+
+## Choosing the recovery leader
+
+The group 0 state persisted on the recovery leader becomes the initial state of
+other nodes that join the new group 0 (which happens through the Raft snapshot
+transfer). After all, the Raft state machine must be consistent at the beginning.
+
+When a disaster happens, live nodes can have different commit indexes, and the nodes
+that are behind have no way of catching up without majority. Imagine there are two
+live nodes - node A and node B, node A has `commit_index`=10, and node B has
+`commit_index`=11. Also, assume that the log entry with index 11 is a schema change
+that adds a new column to a table. Node B could have already handled some replica
+writes to the new column. If node A became the recovery leader and node B joined the
+new group 0, node B would receive a snapshot that regresses its schema version. Node
+B could end up in an inconsistent state with data in a column that doesn't exist
+according to group 0. Hence, node B must be the recovery leader.
+
+## Loss of committed entries
+
+It can happen that a group 0 entry has been committed by a majority consisting of
+only dead nodes. Then, no matter what recovery leader we choose, it won't have this
+entry. This is fine, assuming that the following group 0 causality property holds on
+all live nodes: any persisted effect on the node’s state is written only after
+the group 0 state it depends on has already been persisted.
+
+For example, the above property holds for schema changes and writes because
+a replica persists a write only after applying the group 0 entry with the latest
+schema, which is ensured by a read barrier.
+
+It's critical for recovery safety to ensure that no subsystem breaks group 0 causality.
+Fortunately, this property is natural and not very limiting.
+
+Losing a committed entry can be observed by external systems. For example, the latest
+schema version in the cluster can go back in time from the driver's perspective. This
+is outside the scope of the recovery procedure, though, and it shouldn't cause
+problems in practice.
