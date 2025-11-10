@@ -32,6 +32,7 @@
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
 #include "utils.hh"
+#include "utils/exponential_backoff_retry.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
@@ -231,7 +232,9 @@ private:
     using result_type = httpclient::result_type;
 
     future<result_type> post(aws_query);
+
     future<rjson::value> post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query);
+    future<rjson::value> do_post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query);
 
     future<key_and_id_type> create_key(const attr_cache_key&);
     future<bytes> find_key(const id_cache_key&);
@@ -368,6 +371,27 @@ struct encryption::kms_host::impl::aws_query {
 };
 
 future<rjson::value> encryption::kms_host::impl::post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
+    static constexpr auto max_retries = 10;
+
+    exponential_backoff_retry exr(10ms, 10000ms);
+
+    for (int retry = 0; ; ++retry) {
+        try {
+            co_return co_await do_post(target, aws_assume_role_arn, query);
+        } catch (kms_error& e) {
+            // Special case 503. This can be both actual service or ec2 metadata.
+            // In either case, do local backoff-retry here.
+            // https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html#instance-metadata-returns
+            if (e.result() != httpclient::reply_status::service_unavailable || retry >= max_retries) {
+                throw;
+            }
+        }
+
+        co_await exr.retry();
+    }
+}
+
+future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
     static auto query_ec2_meta = [](std::string_view target, std::string token = {}) -> future<std::tuple<httpclient::result_type, std::string>> {
         static auto get_env_def = [](std::string_view var, std::string_view def) {
             auto val = std::getenv(var.data());
