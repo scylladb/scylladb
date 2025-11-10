@@ -189,3 +189,18 @@ The command displays a table with: option name, effective service level the valu
         workload_type |                     sl2 |       batch
               timeout |                     sl1 |          2s
 ```
+
+## Implementation
+### Integration with auth
+
+Service levels ultimately depend on the state of `auth`. Since `auth::service` is initialized long after
+`service_level_controller`, we register it separately once it's started, and unregister it right before
+it's stopped. For that, we wrap it in a struct called `auth_integration` that manages access to it.
+That ensures that `service_level_controller` will not try to reference it beyond its lifetime.
+
+It's important to note that there may still be attempts to fetch an effective service level for a role
+or indirectly access `auth::service` in some other way when `auth_integration` is absent. One important
+situation to have in mind is when the user connects to Scylla via the maintenance socket. It's possible
+early on, way before Scylla is fully initialized. Since we don't have access to `auth` yet, we need to
+ensure that the semantics of the operations performed on `service_level_controller` still make sense
+in that context.
