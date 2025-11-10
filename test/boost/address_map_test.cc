@@ -29,20 +29,6 @@ using namespace seastar::testing;
 
 using server_id = locator::host_id;
 
-// Can be used to wait for delivery of messages that were sent to other shards.
-future<> ping_shards() {
-    if (smp::count == 1) {
-        co_return co_await seastar::yield();
-    }
-
-    // Submit an empty message to other shards 100 times to account for task reordering in debug mode.
-    for (int i = 0; i < 100; ++i) {
-        co_await parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
-            return smp::submit_to(s, [](){});
-        });
-    }
-}
-
 SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
     server_id id1{utils::UUID(0, 1)};
     server_id id2{utils::UUID(0, 2)};
@@ -293,7 +279,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
         // flag, ensure it doesn't expire on the other shard
         m.add_or_update_entry(id1, addr1);
         m.set_nonexpiring(id1);
-        ping_shards().get();
+        m.barrier().get();
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
@@ -303,18 +289,18 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
         // Set it to expiring, ensure it expires on both shards
         m.set_expiring(id1);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
-        ping_shards().get();
+        m.barrier().get();
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(!m.find(id1));
+            return smp::submit_to(0, []{}); // Ensure shard 0 notices timer is expired.
         }).get();
-        ping_shards().get(); // so this shard notices the clock advance
         BOOST_CHECK(!m.find(id1));
 
         // Expiring entries are replicated
         m.add_or_update_entry(id1, addr1);
-        ping_shards().get();
+        m.barrier().get();
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1));
         }).get();
@@ -340,7 +326,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
             m.opt_add_entry(id2, addr2);
         }).get();
         m.set_nonexpiring(id2);
-        ping_shards().get();
+        m.barrier().get();
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             manual_clock::advance(expiration_time);
             BOOST_CHECK(m.find(id2) && *m.find(id2) == addr2);
@@ -389,7 +375,12 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication_efficiency) {
         }
         m.add_or_update_entry(id2, addr2);
 
-        ping_shards().get();
+        // One round trip should be enough for the replicator to execute the updates,
+        // but there could be reordering in the smp queue, and in the task queue on the destination.
+        // So three times to be safe.
+        for (auto i = 0; i < 3; ++i) {
+            smp::submit_to(1, [] {}).get();
+        }
 
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
@@ -420,7 +411,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_expiry_change_keeps_addr_mapping) {
         m.set_nonexpiring(id1);
 
         manual_clock::advance(expiration_time);
-        ping_shards().get();
+        m.barrier().get();
 
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
@@ -441,7 +432,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_exception_safety) {
                 m.add_or_update_entry(id1, addr1);
             } catch (...) {
                 BOOST_CHECK(!m.find(id1));
-                ping_shards().get();
+                m.barrier().get();
                 m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
                     BOOST_CHECK(!m.find(id1));
                 }).get();
@@ -450,7 +441,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_exception_safety) {
         });
 
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
-        ping_shards().get();
+        m.barrier().get();
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
         }).get();
