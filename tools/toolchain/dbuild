@@ -261,7 +261,8 @@ docker_common_args+=(
 )
 cleanup() {
     rm -rf "$tmpdir"
-    if [ -v TMP_PASSWD ]; then
+    # don't use `test -v` for MacOS compatibility
+    if [ "${TMP_PASSWD+var_is_set}" = "var_is_set" ]; then
         rm -f "$TMP_PASSWD"
     fi
     rm -f "${tmpfiles[@]}"
