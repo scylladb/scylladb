@@ -245,7 +245,7 @@ public:
 utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
     : _endpoint(url.host)
     , _credentials(std::move(c))
-    , _unlimited(std::numeric_limits<size_t>::max())
+    , _unlimited(std::numeric_limits<ssize_t>::max())
     , _limits(memory ? *memory : _unlimited)
     , _client(std::make_unique<utils::http::dns_connection_factory>(url.host, url.port, url.is_https(), gcp_storage, certs), 100, seastar::http::experimental::client::retry_requests::yes)
 {}

@@ -63,9 +63,9 @@ bytes calculate_sha256(const bytes&, size_t off = 0, size_t n = bytes::npos);
 bytes calculate_sha256(bytes_view);
 bytes hmac_sha256(bytes_view msg, bytes_view key);
 
-future<temporary_buffer<char>> read_text_file_fully(const sstring&);
-future<> write_text_file_fully(const sstring&, temporary_buffer<char>);
-future<> write_text_file_fully(const sstring&, const sstring&);
+future<temporary_buffer<char>> read_text_file_fully(const std::string&);
+future<> write_text_file_fully(const std::string&, temporary_buffer<char>);
+future<> write_text_file_fully(const std::string&, const std::string&);
 
 std::optional<std::chrono::milliseconds> parse_expiry(std::optional<std::string>);
 

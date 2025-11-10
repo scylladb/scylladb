@@ -21,6 +21,7 @@
 #include <seastar/http/request.hh>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/test_fixture.hh>
 
 #include <fmt/ranges.h>
 
@@ -36,6 +37,8 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/proc_utils.hh"
+#include "test/lib/aws_kms_fixture.hh"
+#include "test/lib/azure_kms_fixture.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/commitlog/commitlog.hh"
@@ -44,6 +47,7 @@
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"
+#include "utils/http.hh"
 #include "utils/azure/identity/exceptions.hh"
 #include "utils/azure/identity/managed_identity_credentials.hh"
 #include "utils/azure/identity/service_principal_credentials.hh"
@@ -186,6 +190,280 @@ static future<> test_provider(const std::string& options, const tmpdir& tmp, con
         .explicit_provider = explicit_provider
     };
     co_await test_provider(args);
+}
+
+
+static auto make_commitlog_config(const test_provider_args& args, const std::unordered_map<std::string, std::string>& scopts) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({args.tmp.path().string()});
+    cfg->commitlog_sync("batch"); // just to make sure files are written
+
+    // Currently the test fails with consistent_cluster_management = true. See #2995.
+    cfg->consistent_cluster_management(false);
+
+    boost::program_options::options_description desc;
+    boost::program_options::options_description_easy_init init(&desc);
+    configurable::append_all(*cfg, init);
+
+    std::ostringstream ss;
+    ss  << "system_info_encryption:" << std::endl
+        << "    enabled: true" << std::endl
+        << "    cipher_algorithm: AES/CBC/PKCS5Padding" << std::endl
+        << "    secret_key_strength: 128" << std::endl
+        ;
+
+    for (auto& [k, v] : scopts) {
+        ss << "    " << k << ": " << v << std::endl;
+    }
+    auto str = ss.str();
+    cfg->read_from_yaml(str);
+
+    if (!args.extra_yaml.empty()) {
+        cfg->read_from_yaml(args.extra_yaml);
+    }
+
+    return std::make_tuple(cfg, ext);
+}
+
+static future<> test_encrypted_commitlog(const test_provider_args& args, std::unordered_map<std::string, std::string> scopts = {}) {
+    fs::path clback = args.tmp.path() / "commitlog_back";
+
+    std::string pk = "apa";
+    std::string v = "ko";
+
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            do_create_and_insert(env, args, pk, v);
+            fs::copy(fs::path(cfg->commitlog_directory()), clback);
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+
+    }
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            // Fake commitlog replay using the files copied.
+            std::vector<sstring> paths;
+            for (auto const& dir_entry : fs::directory_iterator{clback})  {
+                auto p = dir_entry.path();
+                try {
+                    db::commitlog::descriptor d(p);
+                    paths.emplace_back(std::move(p));
+                } catch (...) {
+                }
+            }
+
+            BOOST_REQUIRE(!paths.empty()); 
+
+            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get();
+            rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+
+            // not really checking anything, but make sure we did not break anything.
+            for (auto i = 0u; i < args.n_tables; ++i) {
+                require_rows(env, fmt::format("select * from ks.t{}", i), {{utf8_type->decompose(pk), utf8_type->decompose(v)}});
+            }
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+static future<> test_encrypted_commitlog(const tmpdir& tmp, std::unordered_map<std::string, std::string> scopts = {}, const std::string& extra_yaml = {}, unsigned n_tables = 1) {
+    test_provider_args args{
+        .tmp = tmp,
+        .extra_yaml = extra_yaml,
+        .n_tables = n_tables, 
+    };
+
+    co_await test_encrypted_commitlog(args, std::move(scopts));
+}
+
+using scopts_map = std::unordered_map<std::string, std::string>;
+
+static future<> test_broken_encrypted_commitlog(const test_provider_args& args, scopts_map scopts = {}) {
+    std::string pk = "apa";
+    std::string v = "ko";
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            do_create_and_insert(env, args, pk, v);
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+class fake_proxy {
+    seastar::server_socket _socket;
+    socket_address _address;
+    bool _go_on = true;
+    bool _do_proxy = true;
+    future<> _f;
+
+    future<> run(std::string dst_addr) {
+        uint16_t port = 443u;
+        auto i = dst_addr.find_last_of(':');
+        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
+            port = std::stoul(dst_addr.substr(i + 1));
+            dst_addr = dst_addr.substr(0, i);
+        }
+
+        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
+        std::vector<future<>> work;
+
+        while (_go_on) {
+            try {
+                auto client = co_await _socket.accept();
+                auto dst = co_await seastar::connect(socket_address(addr, port));
+
+                testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
+
+                auto f = [&]() -> future<> {
+                    auto& s = client.connection;
+                    auto& ldst = dst;
+                    auto addr = client.remote_address;
+
+                    auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) noexcept -> future<> {
+                        try {
+                            auto sin = src.input();
+                            auto dout = output_stream<char>(dst.output().detach(), 1024);
+                            // note: have to have differing conditions for proxying
+                            // and shutdown, and need to check inside look, because
+                            // kmip connector caches connection -> not new socket.
+                            std::exception_ptr p;
+                            try {
+                                while (_go_on && _do_proxy && !sin.eof()) {
+                                    auto buf = co_await sin.read();
+                                    auto n = buf.size();
+                                    testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    if (_do_proxy) {
+                                        co_await dout.write(std::move(buf));
+                                        co_await dout.flush();
+                                        testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    }
+                                }
+                            } catch (...) {
+                                p = std::current_exception();
+                            }
+                            co_await dout.flush();
+                            co_await dout.close();
+                            co_await sin.close();
+                            if (p) {
+                                std::rethrow_exception(p);
+                            }
+                        } catch (...) {
+                            testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
+                        }
+                    };
+                    co_await when_all(do_io(s, ldst), do_io(ldst, s));
+                }();
+
+                work.emplace_back(std::move(f));
+            } catch (...) {
+                testlog.warn("Exception running proxy {}: {}", _address, std::current_exception());
+            }
+        }
+
+        for (auto&& f : work) {
+            try {
+                co_await std::move(f);
+            } catch (...) {
+            }
+        }
+    }
+public:
+    fake_proxy(std::string dst)
+        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
+        , _address(_socket.local_address())
+        , _f(run(std::move(dst)))
+    {}
+
+    const socket_address& address() const {
+        return _address;
+    }
+    void enable(bool b) {
+        _do_proxy = b;
+        testlog.info("Set proxy {} enabled = {}", _address, b);
+    }
+    future<> stop() {
+        if (std::exchange(_go_on, false)) {
+            testlog.info("Stopping proxy {}", _address);
+            _socket.abort_accept();
+            co_await std::move(_f);
+        }
+    }
+};
+
+/**
+ * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
+ * exception, i.e. an eventual write error.
+ */
+static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
+    fake_proxy proxy(host);
+    std::exception_ptr p;
+    try {
+        auto [scopts, yaml] = make_opts(proxy);
+
+        test_provider_args args{
+            .tmp = tmp,
+            .extra_yaml = yaml,
+            .n_tables = 10, 
+            .before_create_table = [&](auto& env) {
+                // turn off proxy. all key resolution after this should fail
+                proxy.enable(false);
+                // wait for key cache expiry.
+                seastar::sleep(10ms).get();
+                // ensure commitlog will create a new segment on write -> eventual write failure
+                env.db().invoke_on_all([](replica::database& db) {
+                    return db.commitlog()->force_new_active_segment();
+                }).get();
+            },
+            .on_insert_exception = [&](auto&&) {
+                // once we get the exception we have to enable key resolution again, 
+                // otherwise we can't shut down cql test env.
+                proxy.enable(true);
+            },
+            .timeout = timeout_config{
+                // set really low write timeouts so we get a failure (timeout)
+                // when we fail to write to commitlog
+                100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
+            },
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_broken_encrypted_commitlog(args, scopts);
+            , exceptions::mutation_write_timeout_exception
+        );
+    } catch (...) {
+        p = std::current_exception();
+    }
+
+    co_await proxy.stop();
+
+    if (p) {
+        std::rethrow_exception(p);
+    }
 }
 
 SEASTAR_TEST_CASE(test_local_file_provider) {
@@ -472,111 +750,6 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
     });
 }
 
-#endif // HAVE_KMIP
-
-class fake_proxy {
-    seastar::server_socket _socket;
-    socket_address _address;
-    bool _go_on = true;
-    bool _do_proxy = true;
-    future<> _f;
-
-    future<> run(std::string dst_addr) {
-        uint16_t port = 443u;
-        auto i = dst_addr.find_last_of(':');
-        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
-            port = std::stoul(dst_addr.substr(i + 1));
-            dst_addr = dst_addr.substr(0, i);
-        }
-
-        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
-        std::vector<future<>> work;
-
-        while (_go_on) {
-            try {
-                auto client = co_await _socket.accept();
-                auto dst = co_await seastar::connect(socket_address(addr, port));
-
-                testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
-
-                auto f = [&]() -> future<> {
-                    auto& s = client.connection;
-                    auto& ldst = dst;
-                    auto addr = client.remote_address;
-
-                    auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) noexcept -> future<> {
-                        try {
-                            auto sin = src.input();
-                            auto dout = output_stream<char>(dst.output().detach(), 1024);
-                            // note: have to have differing conditions for proxying
-                            // and shutdown, and need to check inside look, because
-                            // kmip connector caches connection -> not new socket.
-                            std::exception_ptr p;
-                            try {
-                                while (_go_on && _do_proxy && !sin.eof()) {
-                                    auto buf = co_await sin.read();
-                                    auto n = buf.size();
-                                    testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
-                                    if (_do_proxy) {
-                                        co_await dout.write(std::move(buf));
-                                        co_await dout.flush();
-                                        testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
-                                    }
-                                }
-                            } catch (...) {
-                                p = std::current_exception();
-                            }
-                            co_await dout.flush();
-                            co_await dout.close();
-                            co_await sin.close();
-                            if (p) {
-                                std::rethrow_exception(p);
-                            }
-                        } catch (...) {
-                            testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
-                        }
-                    };
-                    co_await when_all(do_io(s, ldst), do_io(ldst, s));
-                }();
-
-                work.emplace_back(std::move(f));
-            } catch (...) {
-                testlog.warn("Exception running proxy {}: {}", _address, std::current_exception());
-            }
-        }
-
-        for (auto&& f : work) {
-            try {
-                co_await std::move(f);
-            } catch (...) {
-            }
-        }
-    }
-public:
-    fake_proxy(std::string dst)
-        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
-        , _address(_socket.local_address())
-        , _f(run(std::move(dst)))
-    {}
-
-    const socket_address& address() const {
-        return _address;
-    }
-    void enable(bool b) {
-        _do_proxy = b;
-        testlog.info("Set proxy {} enabled = {}", _address, b);
-    }
-    future<> stop() {
-        if (std::exchange(_go_on, false)) {
-            testlog.info("Stopping proxy {}", _address);
-            _socket.abort_accept();
-            co_await std::move(_f);
-        }
-    }
-};
-
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
     /**
      * Tests for #3251. KMIP connector ends up in endless loop if using more than one
@@ -618,271 +791,6 @@ SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("
     });
 }
 
-#endif // HAVE_KMIP
-
-/*
-Simple test of KMS provider. Still has some caveats:
-
-    1.) Uses aws CLI credentials for auth. I.e. you need to have a valid
-        ~/.aws/credentials for the user running the test.
-    2.) I can't figure out a good way to set up a key "everyone" can access. So user needs
-        to have read/encrypt access to the key alias (default "alias/kms_encryption_test")
-        in the scylla AWS account.
-
-    A "better" solution might be to create dummmy user only for KMS testing with only access
-    to a single key, and no other priviledges. But that seems dangerous as well.
-
-    For this reason, this test is parameterized with env vars:
-    * ENABLE_KMS_TEST - set to non-zero (1/true) to run
-    * KMS_KEY_ALIAS - default "alias/kms_encryption_test" - set to key alias you have access to.
-    * KMS_AWS_REGION - default us-east-1 - set to whatever region your key is in.
-
-    NOTE: When run via test.py, the minio server used there will, unless already set,
-    put AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY into the inherited process env, with
-    values purely fictional, and only usable by itself. This _will_ screw up credentials
-    resolution in the KMS connector, and will lead to errors not intended.
-
-    In CI, we provide the vars from jenkins, with working values, and the minio
-    respects this.
-
-    As a workaround, try setting the vars yourself to something that actually works (i.e. 
-    values from your .awscredentials). Or complain until we find a way to make the minio
-    server optional for tests.
-
-*/
-static future<> kms_test_helper(std::function<future<>(const tmpdir&, std::string_view, std::string_view, std::string_view)> f) {
-    auto kms_key_alias = get_var_or_default("KMS_KEY_ALIAS", "alias/kms_encryption_test");
-    auto kms_aws_region = get_var_or_default("KMS_AWS_REGION", "us-east-1");
-    auto kms_aws_profile = get_var_or_default("KMS_AWS_PROFILE", "default");
-
-    tmpdir tmp;
-
-    co_await f(tmp, kms_key_alias, kms_aws_region, kms_aws_profile);
-}
-
-SEASTAR_TEST_CASE(test_kms_provider, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    master_key: {0}
-                    aws_region: {1}
-                    aws_profile: {2}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
-        );
-
-        co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    });
-}
-
-SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    aws_region: {1}
-                    aws_profile: {2}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
-        );
-
-        // should fail
-        try {
-            try {
-                co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', "
-                                       "'secret_key_strength': 128",
-                        tmp, yaml);
-            } catch (std::nested_exception& ex) {
-                std::rethrow_if_nested(ex);
-            }
-            BOOST_FAIL("Required an exception to be re-thrown");
-        } catch (encryption::configuration_error&) {
-            // EXPECTED
-        } catch (...) {
-            BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
-        }
-
-        // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
-            , tmp, yaml
-            );
-    });
-}
-
-
-SEASTAR_TEST_CASE(test_user_info_encryption) {
-    tmpdir tmp;
-    auto keyfile = tmp.path() / "secret_key";
-
-    auto yaml = fmt::format(R"foo(
-        user_info_encryption:
-            enabled: True
-            key_provider: LocalFileSystemKeyProviderFactory
-            secret_key_file: {}
-            cipher_algorithm: AES/CBC/PKCS5Padding
-            secret_key_strength: 128
-        )foo"
-    , keyfile.string());
-
-    co_await test_provider({}, tmp, yaml, 4, 1, "LocalFileSystemKeyProviderFactory" /* verify encrypted even though no kp in options*/);
-}
-
-SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    master_key: {0}
-                    aws_region: {1}
-                    aws_profile: {2}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
-        );
-
-        try {
-            co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'', 'secret_key_strength': 128", tmp, yaml);
-            BOOST_FAIL("should not reach");
-        } catch (exceptions::configuration_exception&) {
-            // ok
-        }
-    });
-}
-
-static auto make_commitlog_config(const test_provider_args& args, const std::unordered_map<std::string, std::string>& scopts) {
-    auto ext = std::make_shared<db::extensions>();
-    auto cfg = seastar::make_shared<db::config>(ext);
-    cfg->data_file_directories({args.tmp.path().string()});
-    cfg->commitlog_sync("batch"); // just to make sure files are written
-
-    // Currently the test fails with consistent_cluster_management = true. See #2995.
-    cfg->consistent_cluster_management(false);
-
-    boost::program_options::options_description desc;
-    boost::program_options::options_description_easy_init init(&desc);
-    configurable::append_all(*cfg, init);
-
-    std::ostringstream ss;
-    ss  << "system_info_encryption:" << std::endl
-        << "    enabled: true" << std::endl
-        << "    cipher_algorithm: AES/CBC/PKCS5Padding" << std::endl
-        << "    secret_key_strength: 128" << std::endl
-        ;
-
-    for (auto& [k, v] : scopts) {
-        ss << "    " << k << ": " << v << std::endl;
-    }
-    auto str = ss.str();
-    cfg->read_from_yaml(str);
-
-    if (!args.extra_yaml.empty()) {
-        cfg->read_from_yaml(args.extra_yaml);
-    }
-
-    return std::make_tuple(cfg, ext);
-}
-
-static future<> test_encrypted_commitlog(const test_provider_args& args, std::unordered_map<std::string, std::string> scopts = {}) {
-    fs::path clback = args.tmp.path() / "commitlog_back";
-
-    std::string pk = "apa";
-    std::string v = "ko";
-
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            do_create_and_insert(env, args, pk, v);
-            fs::copy(fs::path(cfg->commitlog_directory()), clback);
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-
-    }
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            // Fake commitlog replay using the files copied.
-            std::vector<sstring> paths;
-            for (auto const& dir_entry : fs::directory_iterator{clback})  {
-                auto p = dir_entry.path();
-                try {
-                    db::commitlog::descriptor d(p);
-                    paths.emplace_back(std::move(p));
-                } catch (...) {
-                }
-            }
-
-            BOOST_REQUIRE(!paths.empty()); 
-
-            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get();
-            rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
-
-            // not really checking anything, but make sure we did not break anything.
-            for (auto i = 0u; i < args.n_tables; ++i) {
-                require_rows(env, fmt::format("select * from ks.t{}", i), {{utf8_type->decompose(pk), utf8_type->decompose(v)}});
-            }
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-    }
-}
-
-static future<> test_encrypted_commitlog(const tmpdir& tmp, std::unordered_map<std::string, std::string> scopts = {}, const std::string& extra_yaml = {}, unsigned n_tables = 1) {
-    test_provider_args args{
-        .tmp = tmp,
-        .extra_yaml = extra_yaml,
-        .n_tables = n_tables, 
-    };
-
-    co_await test_encrypted_commitlog(args, std::move(scopts));
-}
-
-SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    master_key: {0}
-                    aws_region: {1}
-                    aws_profile: {2}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
-        );
-
-        co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }, yaml);
-    });
-}
-
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
         auto yaml = fmt::format(R"foo(
@@ -900,7 +808,289 @@ SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_r
     });
 }
 
+SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
+            auto yaml = fmt::format(R"foo(
+                kmip_hosts:
+                    kmip_test:
+                        hosts: {0}
+                        certificate: {1}
+                        keyfile: {2}
+                        truststore: {3}
+                        priority_string: {4}
+                        key_cache_expiry: 1ms
+                        )foo"
+                , proxy.address(), info.cert, info.key, info.ca, info.prio
+            );
+            return std::make_tuple(scopts_map({ { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }), yaml);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_kmip_provider_broken_config_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After tables are created, and data inserted, remove EAR config
+        // for the restart. This should cause us to fail creating the 
+        // tables from schema tables, since the extension will throw.
+        args.after_insert = [&](cql_test_env&) {
+            past_create = true;
+            args.extra_yaml = {};
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+        bool past_second_start = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After data is inserted, flush all shards and alter the table
+        // to no longer use EAR, then remove EAR config. This will result
+        // in a schema that loads fine, but accessing the sstables will
+        // throw.
+        args.after_insert = [&](cql_test_env& env) {
+            try {
+                env.db().invoke_on_all([](replica::database& db) {
+                    auto& cf = db.find_column_family("ks", "t0");
+                    return cf.flush();
+                }).get();
+                env.execute_cql(fmt::format("alter table ks.t0 WITH scylla_encryption_options={{'key_provider': 'none'}}")).get();
+            } catch (...) {
+                testlog.error("Unexpected exception {}", std::current_exception());
+                throw;
+            }
+            past_create = true;
+            args.extra_yaml = {};
+            args.options = {};
+        };
+        // If we get here, startup of second run was successful.
+        args.before_verify = [&](cql_test_env& env) {
+            past_second_start = true;
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+        // We'd really want to be past this here, since "only" the sstables
+        // on disk should mention unresolvable EAR stuff here. But scylla will
+        // scan sstables on startup, and thus fail already there.
+        // TODO: move and upload sstables?
+        BOOST_REQUIRE(!past_second_start);
+    });
+}
+
 #endif // HAVE_KMIP
+
+std::string make_aws_host(std::string_view aws_region, std::string_view service);
+
+BOOST_AUTO_TEST_SUITE(aws_kms, *seastar::testing::async_fixture<aws_kms_fixture>())
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_master_key_in_cf, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    // should fail
+    try {
+        try {
+            co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', "
+                                   "'secret_key_strength': 128",
+                    tmp, yaml);
+        } catch (std::nested_exception& ex) {
+            std::rethrow_if_nested(ex);
+        }
+        BOOST_FAIL("Required an exception to be re-thrown");
+    } catch (encryption::configuration_error&) {
+        // EXPECTED
+    } catch (...) {
+        BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
+    }
+
+    // should be ok
+    co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
+        , tmp, yaml
+        );
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_broken_algo, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    try {
+        co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'', 'secret_key_strength': 128", tmp, yaml);
+        BOOST_FAIL("should not reach");
+    } catch (exceptions::configuration_exception&) {
+        // ok
+    }
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }, yaml);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    std::string host, scheme;
+
+    if (endpoint.empty()) { 
+        host = make_aws_host(kms_aws_region, "kms");
+        scheme = "https://";
+    } else {
+        auto info = utils::http::parse_simple_url(endpoint);
+        host = info.host + ":" + std::to_string(info.port);
+        scheme = info.scheme;
+    }
+
+    co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
+        auto yaml = fmt::format(R"foo(
+            kms_hosts:
+                kms_test:
+                    master_key: {0}
+                    aws_region: {1}
+                    aws_profile: {2}
+                    endpoint: {3}://{4}
+                    key_cache_expiry: 1ms
+                    )foo"
+            , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
+        );
+        return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
+    });
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+SEASTAR_TEST_CASE(test_user_info_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+
+    auto yaml = fmt::format(R"foo(
+        user_info_encryption:
+            enabled: True
+            key_provider: LocalFileSystemKeyProviderFactory
+            secret_key_file: {}
+            cipher_algorithm: AES/CBC/PKCS5Padding
+            secret_key_strength: 128
+        )foo"
+    , keyfile.string());
+
+    co_await test_provider({}, tmp, yaml, 4, 1, "LocalFileSystemKeyProviderFactory" /* verify encrypted even though no kp in options*/);
+}
 
 SEASTAR_TEST_CASE(test_user_info_encryption_dont_allow_per_table_encryption) {
     tmpdir tmp;
@@ -1080,231 +1270,6 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_deco
     });
 }
 
-std::string make_aws_host(std::string_view aws_region, std::string_view service);
-
-using scopts_map = std::unordered_map<std::string, std::string>;
-
-static future<> test_broken_encrypted_commitlog(const test_provider_args& args, scopts_map scopts = {}) {
-    std::string pk = "apa";
-    std::string v = "ko";
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            do_create_and_insert(env, args, pk, v);
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-    }
-}
-
-/**
- * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
- * exception, i.e. an eventual write error.
- */
-static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
-    fake_proxy proxy(host);
-    std::exception_ptr p;
-    try {
-        auto [scopts, yaml] = make_opts(proxy);
-
-        test_provider_args args{
-            .tmp = tmp,
-            .extra_yaml = yaml,
-            .n_tables = 10, 
-            .before_create_table = [&](auto& env) {
-                // turn off proxy. all key resolution after this should fail
-                proxy.enable(false);
-                // wait for key cache expiry.
-                seastar::sleep(10ms).get();
-                // ensure commitlog will create a new segment on write -> eventual write failure
-                env.db().invoke_on_all([](replica::database& db) {
-                    return db.commitlog()->force_new_active_segment();
-                }).get();
-            },
-            .on_insert_exception = [&](auto&&) {
-                // once we get the exception we have to enable key resolution again, 
-                // otherwise we can't shut down cql test env.
-                proxy.enable(true);
-            },
-            .timeout = timeout_config{
-                // set really low write timeouts so we get a failure (timeout)
-                // when we fail to write to commitlog
-                100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
-            },
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_broken_encrypted_commitlog(args, scopts);
-            , exceptions::mutation_write_timeout_exception
-        );
-    } catch (...) {
-        p = std::current_exception();
-    }
-
-    co_await proxy.stop();
-
-    if (p) {
-        std::rethrow_exception(p);
-    }
-}
-
-SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        auto host = make_aws_host(kms_aws_region, "kms");
-
-        co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                kms_hosts:
-                    kms_test:
-                        master_key: {0}
-                        aws_region: {1}
-                        aws_profile: {2}
-                        endpoint: https://{3}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
-        });
-    });
-}
-
-#ifdef HAVE_KMIP
-
-SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                kmip_hosts:
-                    kmip_test:
-                        hosts: {0}
-                        certificate: {1}
-                        keyfile: {2}
-                        truststore: {3}
-                        priority_string: {4}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , proxy.address(), info.cert, info.key, info.ca, info.prio
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }), yaml);
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_kmip_provider_broken_config_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            kmip_hosts:
-                kmip_test:
-                    hosts: {0}
-                    certificate: {1}
-                    keyfile: {2}
-                    truststore: {3}
-                    priority_string: {4}
-                    )foo"
-            , info.host, info.cert, info.key, info.ca, info.prio
-        );
-
-        bool past_create = false;
-
-        test_provider_args args{
-            .tmp = tmp,
-            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
-            .extra_yaml = yaml,
-            .n_tables = 1, 
-            .n_restarts = 1, 
-            .explicit_provider = {},
-        };
-
-        // After tables are created, and data inserted, remove EAR config
-        // for the restart. This should cause us to fail creating the 
-        // tables from schema tables, since the extension will throw.
-        args.after_insert = [&](cql_test_env&) {
-            past_create = true;
-            args.extra_yaml = {};
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_provider(args);
-            , std::exception
-        );
-
-        BOOST_REQUIRE(past_create);
-    });
-}
-
-
-SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            kmip_hosts:
-                kmip_test:
-                    hosts: {0}
-                    certificate: {1}
-                    keyfile: {2}
-                    truststore: {3}
-                    priority_string: {4}
-                    )foo"
-            , info.host, info.cert, info.key, info.ca, info.prio
-        );
-
-        bool past_create = false;
-        bool past_second_start = false;
-
-        test_provider_args args{
-            .tmp = tmp,
-            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
-            .extra_yaml = yaml,
-            .n_tables = 1, 
-            .n_restarts = 1, 
-            .explicit_provider = {},
-        };
-
-        // After data is inserted, flush all shards and alter the table
-        // to no longer use EAR, then remove EAR config. This will result
-        // in a schema that loads fine, but accessing the sstables will
-        // throw.
-        args.after_insert = [&](cql_test_env& env) {
-            try {
-                env.db().invoke_on_all([](replica::database& db) {
-                    auto& cf = db.find_column_family("ks", "t0");
-                    return cf.flush();
-                }).get();
-                env.execute_cql(fmt::format("alter table ks.t0 WITH scylla_encryption_options={{'key_provider': 'none'}}")).get();
-            } catch (...) {
-                testlog.error("Unexpected exception {}", std::current_exception());
-                throw;
-            }
-            past_create = true;
-            args.extra_yaml = {};
-            args.options = {};
-        };
-        // If we get here, startup of second run was successful.
-        args.before_verify = [&](cql_test_env& env) {
-            past_second_start = true;
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_provider(args);
-            , std::exception
-        );
-
-        BOOST_REQUIRE(past_create);
-        // We'd really want to be past this here, since "only" the sstables
-        // on disk should mention unresolvable EAR stuff here. But scylla will
-        // scan sstables on startup, and thus fail already there.
-        // TODO: move and upload sstables?
-        BOOST_REQUIRE(!past_second_start);
-    });
-}
-#endif // HAVE_KMIP
-
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
 
@@ -1327,79 +1292,11 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
     * AZURE_KEY_NAME - set to <vault_name>/<keyname>
 */
 
-struct azure_test_env {
-    std::string key_name;
-    std::string tenant_id;
-    std::string user_1_client_id;
-    std::string user_1_client_secret;
-    std::string user_1_client_certificate;
-    std::string user_2_client_id;
-    std::string user_2_client_secret;
-    std::string user_2_client_certificate;
-    std::string authority_host;
-    std::string imds_endpoint;
-};
-
-static std::string get_mock_azure_addr() {
-    return tests::getenv_safe("MOCK_AZURE_VAULT_SERVER_HOST");
-}
-
-static unsigned long get_mock_azure_port() {
-    return std::stoul(tests::getenv_safe("MOCK_AZURE_VAULT_SERVER_PORT"));
-}
-
-static future<azure_test_env> get_mock_azure_env(const tmpdir& tmp) {
-    co_return azure_test_env {
-        .key_name = fmt::format("http://{}:{}/mock-key", get_mock_azure_addr(), get_mock_azure_port()),
-        .tenant_id = "00000000-1111-2222-3333-444444444444",
-        .user_1_client_id = "mock-client-id",
-        .user_1_client_secret = "mock-client-secret",
-        .user_1_client_certificate = "test/resource/certs/scylla.pem", // a cert file with valid format - the contents won't be checked by the mock server
-        .user_2_client_id = "mock-client-id-invalid",
-        .user_2_client_secret = "mock-client-secret-invalid",
-        .user_2_client_certificate = "/dev/null", // a cert file with invalid format
-        .authority_host = fmt::format("http://{}:{}", get_mock_azure_addr(), get_mock_azure_port()),
-        .imds_endpoint = fmt::format("http://{}:{}", get_mock_azure_addr(), get_mock_azure_port()),
-    };
-}
-
-static azure_test_env get_real_azure_env() {
-    return azure_test_env {
-        .key_name = get_var_or_default("AZURE_KEY_NAME", ""),
-        .tenant_id = get_var_or_default("AZURE_TENANT_ID", ""),
-        .user_1_client_id = get_var_or_default("AZURE_USER_1_CLIENT_ID", ""),
-        .user_1_client_secret = get_var_or_default("AZURE_USER_1_CLIENT_SECRET", ""),
-        .user_1_client_certificate = get_var_or_default("AZURE_USER_1_CLIENT_CERTIFICATE", ""),
-        .user_2_client_id = get_var_or_default("AZURE_USER_2_CLIENT_ID", ""),
-        .user_2_client_secret = get_var_or_default("AZURE_USER_2_CLIENT_SECRET", ""),
-        .user_2_client_certificate = get_var_or_default("AZURE_USER_2_CLIENT_CERTIFICATE", ""),
-        .authority_host = "''",
-        .imds_endpoint = "''",
-    };
-}
-
-static future<> azure_test_helper(std::function<future<>(const tmpdir&, const azure_test_env&)> f, bool real_server = false) {
-    tmpdir tmp;
-
-    auto env = real_server ? get_real_azure_env() : co_await get_mock_azure_env(tmp);
-
-    if (real_server) {
-        if (env.key_name.empty()) {
-            BOOST_ERROR("No 'AZURE_KEY_NAME' provided");
-        }
-        if (env.tenant_id.empty()) {
-            BOOST_ERROR("No 'AZURE_TENANT_ID' provided");
-        }
-        if (env.user_1_client_id.empty() || env.user_1_client_secret.empty() || env.user_1_client_certificate.empty()) {
-            BOOST_ERROR("Missing or incompete credentials for user 1: All three of 'AZURE_USER_1_CLIENT_ID', 'AZURE_USER_1_CLIENT_SECRET' and 'AZURE_USER_1_CLIENT_CERTIFICATE' must be provided");
-        }
-        if (env.user_2_client_id.empty() || env.user_2_client_secret.empty() || env.user_2_client_certificate.empty()) {
-            BOOST_ERROR("Missing or incompete credentials for user 2: All three of 'AZURE_USER_2_CLIENT_ID', 'AZURE_USER_2_CLIENT_SECRET' and 'AZURE_USER_2_CLIENT_CERTIFICATE' must be provided");
-        }
-    }
-
-    co_await f(tmp, env);
-}
+// TODO: this separation into two test runs, one mock, one maybe real is both 
+// good and bad. Good, we ensure CI test both, but bad because we run tests 
+// twice for maybe not great payout. Consider moving this to default fake, with
+// option for CI to run real.
+BOOST_AUTO_TEST_SUITE(azure_kms, *seastar::testing::async_fixture<azure_kms_fixture>(azure_mode::local))
 
 static auto check_azure_mock_test_decorator() {
     return check_run_test_decorator("ENABLE_AZURE_TEST", true);
@@ -1412,123 +1309,129 @@ static auto check_azure_real_test_decorator() {
     });
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_imds, *check_azure_mock_test_decorator()) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    imds_endpoint: {1}
-                    )foo"
-            , azure.key_name, azure.imds_endpoint
-        );
+template<azure_mode M>
+class mode_local_azure_kms_wrapper : public local_azure_kms_wrapper {
+public:
+    mode_local_azure_kms_wrapper()
+        : local_azure_kms_wrapper(M)
+    {}
+};
 
-        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    }, false);
+using real_azure = mode_local_azure_kms_wrapper<azure_mode::real>;
+using fake_azure = mode_local_azure_kms_wrapper<azure_mode::local>;
+
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_imds, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                imds_endpoint: {1}
+                )foo"
+        , key_name, imds_endpoint
+    );
+
+    co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
-static future<> do_test_azure_provider_with_secret(bool real_server) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_secret: {3}
-                    azure_authority_host: {5}
-                    )foo"
-            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
-        );
+static future<> do_test_azure_provider_with_secret(const azure_test_env& azure) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_secret: {3}
+                azure_authority_host: {5}
+                )foo"
+        , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+    );
 
-        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    }, real_server);
+    co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_secret, *check_azure_mock_test_decorator()) {
-    co_await do_test_azure_provider_with_secret(false);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_secret, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_secret(*this);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_secret_real, *check_azure_real_test_decorator()) {
-    co_await do_test_azure_provider_with_secret(true);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_secret_real, real_azure, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_secret(*this);
 }
 
-static future<> do_test_azure_provider_with_certificate(bool real_server) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_certificate_path: {4}
-                    azure_authority_host: {5}
-                    )foo"
-            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
-        );
+static future<> do_test_azure_provider_with_certificate(const azure_test_env& azure) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_certificate_path: {4}
+                azure_authority_host: {5}
+                )foo"
+        , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+    );
 
-        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    }, real_server);
+    co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_certificate, *check_azure_mock_test_decorator()) {
-    co_await do_test_azure_provider_with_certificate(false);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_certificate, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_certificate(*this);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_certificate_real, *check_azure_real_test_decorator()) {
-    co_await do_test_azure_provider_with_certificate(true);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_certificate_real, real_azure, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_certificate(*this);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_master_key_in_cf, *check_azure_mock_test_decorator()) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_secret: {3}
-                    azure_authority_host: {5}
-                    )foo"
-            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
-        );
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_master_key_in_cf, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_secret: {3}
+                azure_authority_host: {5}
+                )foo"
+        , key_name, tenant_id, user_1_client_id, user_1_client_secret, user_1_client_certificate, authority_host
+    );
 
-        // should fail
-        BOOST_REQUIRE_EXCEPTION(
-            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , exceptions::configuration_exception, [](const exceptions::configuration_exception& e) {
-                try {
-                    std::rethrow_if_nested(e);
-                } catch (const encryption::configuration_error& inner) {
-                    return sstring(inner.what()).find("No master key set") != sstring::npos;
-                } catch (...) {
-                    return false; // Unexpected nested exception type
-                }
-                return false; // No nested exception
+    // should fail
+    BOOST_REQUIRE_EXCEPTION(
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+        , exceptions::configuration_exception, [](const exceptions::configuration_exception& e) {
+            try {
+                std::rethrow_if_nested(e);
+            } catch (const encryption::configuration_error& inner) {
+                return sstring(inner.what()).find("No master key set") != sstring::npos;
+            } catch (...) {
+                return false; // Unexpected nested exception type
             }
-        );
+            return false; // No nested exception
+        }
+    );
 
-        // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
-            , tmp, yaml
-            );
-    }, false);
+    // should be ok
+    co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", key_name)
+        , tmp, yaml
+        );
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_no_host, *check_azure_mock_test_decorator()) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = R"foo(
-            azure_hosts:
-            )foo";
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_no_host, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto yaml = R"foo(
+        azure_hosts:
+        )foo";
 
-        // should fail
-        BOOST_REQUIRE_EXCEPTION(
-            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , std::invalid_argument
-            , [](const std::invalid_argument& e) {
-                return sstring(e.what()).find("No such host") != sstring::npos;
-            }
-        );
-    }, false);
+    // should fail
+    BOOST_REQUIRE_EXCEPTION(
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+        , std::invalid_argument
+        , [](const std::invalid_argument& e) {
+            return sstring(e.what()).find("No such host") != sstring::npos;
+        }
+    );
 }
 
 /**
@@ -1540,266 +1443,172 @@ SEASTAR_TEST_CASE(test_azure_provider_with_no_host, *check_azure_mock_test_decor
  * Note: Just in case we ever run these tests on Azure VMs, use a non-routable
  * IP address for the IMDS endpoint to ensure the connection will fail.
  */
-SEASTAR_TEST_CASE(test_azure_provider_with_incomplete_creds, *check_azure_mock_test_decorator()) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    imds_endpoint: http://192.0.2.1:80
-                    )foo"
-            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
-        );
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_incomplete_creds, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                imds_endpoint: http://127.0.0.255:1
+                )foo"
+        , key_name, tenant_id, user_1_client_id, user_1_client_secret, user_1_client_certificate
+    );
 
-        // should fail
-        BOOST_REQUIRE_EXCEPTION(
-            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , permission_error, [](const encryption::permission_error& e) {
-                try {
-                    std::rethrow_if_nested(e);
-                } catch (const azure::auth_error& inner) {
-                    return sstring(inner.what()).find("No credentials found in any source.") != sstring::npos;
-                } catch (...) {
-                    return false; // Unexpected nested exception type
-                }
-                return false; // No nested exception
+    // should fail
+    BOOST_REQUIRE_EXCEPTION(
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+        , permission_error, [](const encryption::permission_error& e) {
+            try {
+                std::rethrow_if_nested(e);
+            } catch (const azure::auth_error& inner) {
+                return sstring(inner.what()).find("No credentials found in any source.") != sstring::npos;
+            } catch (...) {
+                return false; // Unexpected nested exception type
             }
-        );
-    }, false);
+            return false; // No nested exception
+        }
+    );
 }
 
-static future<> do_test_azure_provider_with_invalid_key(bool real_server) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto vault = azure.key_name.substr(0, azure.key_name.find_last_of('/'));
-        auto master_key = fmt::format("{}/nonexistentkey", vault);
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_secret: {3}
-                    azure_authority_host: {5}
-                    )foo"
-            , master_key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
-        );
+static future<> do_test_azure_provider_with_invalid_key(const azure_test_env& azure) {
+    tmpdir tmp;
+    auto vault = azure.key_name.substr(0, azure.key_name.find_last_of('/'));
+    auto master_key = fmt::format("{}/nonexistentkey", vault);
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_secret: {3}
+                azure_authority_host: {5}
+                )foo"
+        , master_key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+    );
 
-        // should fail
-        BOOST_REQUIRE_EXCEPTION(
-            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , service_error, [](const service_error& e) {
-                try {
-                    std::rethrow_if_nested(e);
-                } catch (const encryption::vault_error& inner) {
-                    // Both error codes are valid depending on the scope of the role assignment:
-                    // - "Forbidden": key-scoped permissions
-                    // - "KeyNotFound": vault-scoped permissions
-                    return inner.code() == "Forbidden" || inner.code() == "KeyNotFound";
-                } catch (...) {
-                    return false; // Unexpected nested exception type
-                }
-                return false; // No nested exception
+    // should fail
+    BOOST_REQUIRE_EXCEPTION(
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+        , service_error, [](const service_error& e) {
+            try {
+                std::rethrow_if_nested(e);
+            } catch (const encryption::vault_error& inner) {
+                // Both error codes are valid depending on the scope of the role assignment:
+                // - "Forbidden": key-scoped permissions
+                // - "KeyNotFound": vault-scoped permissions
+                return inner.code() == "Forbidden" || inner.code() == "KeyNotFound";
+            } catch (...) {
+                return false; // Unexpected nested exception type
             }
-        );
-    }, real_server);
+            return false; // No nested exception
+        }
+    );
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_invalid_key, *check_azure_mock_test_decorator()) {
-    co_await do_test_azure_provider_with_invalid_key(false);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_invalid_key, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_key(*this);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_invalid_key_real, *check_azure_real_test_decorator()) {
-    co_await do_test_azure_provider_with_invalid_key(true);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_invalid_key_real, real_azure, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_key(*this);
 }
 
 /**
  * Verify that trying to access key materials with a user w/o permissions to wrap/unwrap using vault
  * fails.
  */
-static future<> do_test_azure_provider_with_invalid_user(bool real_server) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            azure_hosts:
-                azure_test:
-                    master_key: {0}
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_secret: {3}
-                    azure_authority_host: {5}
-                    )foo"
-            , azure.key_name, azure.tenant_id, azure.user_2_client_id, azure.user_2_client_secret, azure.user_2_client_certificate, azure.authority_host
-        );
+static future<> do_test_azure_provider_with_invalid_user(const azure_test_env& azure) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_secret: {3}
+                azure_authority_host: {5}
+                )foo"
+        , azure.key_name, azure.tenant_id, azure.user_2_client_id, azure.user_2_client_secret, azure.user_2_client_certificate, azure.authority_host
+    );
 
-        // should fail
-        BOOST_REQUIRE_EXCEPTION(
-            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , service_error, [](const service_error& e) {
-                try {
-                    std::rethrow_if_nested(e);
-                } catch (const encryption::vault_error& inner) {
-                    return inner.code() == "Forbidden";
-                } catch (...) {
-                    return false; // Unexpected nested exception type
-                }
-                return false; // No nested exception
+    // should fail
+    BOOST_REQUIRE_EXCEPTION(
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+        , service_error, [](const service_error& e) {
+            try {
+                std::rethrow_if_nested(e);
+            } catch (const encryption::vault_error& inner) {
+                return inner.code() == "Forbidden";
+            } catch (...) {
+                return false; // Unexpected nested exception type
             }
-        );
-    }, real_server);
+            return false; // No nested exception
+        }
+    );
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_invalid_user, *check_azure_mock_test_decorator()) {
-    co_await do_test_azure_provider_with_invalid_user(false);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_invalid_user, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_user(*this);
 }
 
-SEASTAR_TEST_CASE(test_azure_provider_with_invalid_user_real, *check_azure_real_test_decorator()) {
-    co_await do_test_azure_provider_with_invalid_user(true);
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_invalid_user_real, real_azure, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_user(*this);
 }
 
 /**
  * Verify that the secret has higher precedence that the certificate.
  * Use the wrong user's certificate to make sure it causes the test to fail.
  */
-static future<> do_test_azure_provider_with_both_secret_and_cert(bool real_server) {
-    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+static future<> do_test_azure_provider_with_both_secret_and_cert(const azure_test_env& azure) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                azure_tenant_id: {1}
+                azure_client_id: {2}
+                azure_client_secret: {3}
+                azure_client_certificate_path: {4}
+                azure_authority_host: {5}
+                )foo"
+        , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_2_client_certificate, azure.authority_host
+    );
+
+    // should be ok
+    co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
+        , tmp, yaml
+        );
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_both_secret_and_cert, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_both_secret_and_cert(*this);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_both_secret_and_cert_real, real_azure, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_both_secret_and_cert(*this);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_azure_network_error, fake_azure, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto info = utils::http::parse_simple_url(imds_endpoint);
+    auto host_endpoint = fmt::format("{}:{}", info.host, info.port);
+    auto key = key_name.substr(key_name.find_last_of('/') + 1);
+    co_await network_error_test_helper(tmp, host_endpoint, [&](const auto& proxy) {
         auto yaml = fmt::format(R"foo(
             azure_hosts:
                 azure_test:
-                    azure_tenant_id: {1}
-                    azure_client_id: {2}
-                    azure_client_secret: {3}
-                    azure_client_certificate_path: {4}
+                    master_key: http://{0}/{1}
+                    azure_tenant_id: {2}
+                    azure_client_id: {3}
+                    azure_client_secret: {4}
                     azure_authority_host: {5}
+                    key_cache_expiry: 1ms
                     )foo"
-            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_2_client_certificate, azure.authority_host
+            , proxy.address(), key, tenant_id, user_1_client_id, user_1_client_secret, authority_host
         );
-
-        // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
-            , tmp, yaml
-            );
-    }, real_server);
-}
-
-SEASTAR_TEST_CASE(test_azure_provider_with_both_secret_and_cert, *check_azure_mock_test_decorator()) {
-    co_await do_test_azure_provider_with_both_secret_and_cert(false);
-}
-
-SEASTAR_TEST_CASE(test_azure_provider_with_both_secret_and_cert_real, *check_azure_real_test_decorator()) {
-    co_await do_test_azure_provider_with_both_secret_and_cert(true);
-}
-
-SEASTAR_TEST_CASE(test_azure_network_error, *check_azure_mock_test_decorator()) {
-    co_await azure_test_helper([&](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
-        auto host_endpoint = fmt::format("{}:{}", get_mock_azure_addr(), get_mock_azure_port());
-        auto key = azure.key_name.substr(azure.key_name.find_last_of('/') + 1);
-        co_await network_error_test_helper(tmp, host_endpoint, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                azure_hosts:
-                    azure_test:
-                        master_key: http://{0}/{1}
-                        azure_tenant_id: {2}
-                        azure_client_id: {3}
-                        azure_client_secret: {4}
-                        azure_authority_host: {5}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , proxy.address(), key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.authority_host
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "AzureKeyProviderFactory" }, { "azure_host", "azure_test" } }), yaml);
-        });
-    }, false);
-}
-
-/*
- * Utility function to spawn a dedicated mock server instance for a particular test case.
- * Useful for tests that require error injection, where the server's global state needs to be configured accordingly.
- * Since test.py may run tests in parallel, using the global server instance is not safe for such tests.
- *
- * The code was based on `kmip_test_helper()`.
- */
-static future<> with_dedicated_azure_mock_server(const std::function<future<>(std::string host, unsigned int port)>& f) {
-    tmpdir tmp;
-
-    auto pyexec = tests::proc::find_file_in_path("python");
-
-    promise<std::pair<std::string, int>> authority_promise;
-    auto fut = authority_promise.get_future();
-
-    BOOST_TEST_MESSAGE("Starting dedicated Azure Vault mock server");
-
-    auto python = co_await tests::proc::process_fixture::create(pyexec,
-        { // args
-            pyexec.string(),
-            "test/pylib/start_azure_vault_mock.py",
-            "--log-level", "INFO",
-            "--host", get_var_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1"),
-            "--port", "0", // random port
-        },
-        // env
-        {},
-        // stdout handler
-        tests::proc::process_fixture::create_copy_handler(std::cout),
-        // stderr handler
-        [authority_promise = std::move(authority_promise), b = false](std::string_view line) mutable -> future<consumption_result<char>> {
-            static std::regex authority_ex(R"foo(Starting Azure Vault mock server on \('([\d\.]+)', (\d+)\))foo");
-
-            std::cerr << line << std::endl;
-            std::match_results<typename std::string_view::const_iterator> m;
-            if (!b && std::regex_search(line.begin(), line.end(), m, authority_ex)) {
-                authority_promise.set_value(std::make_pair(m[1].str(), std::stoi(m[2].str())));
-                BOOST_TEST_MESSAGE("Matched Azure Vault host and port: " + m[1].str() + ":" + m[2].str());
-                b = true;
-            }
-            co_return continue_consuming{};
-        }
-    );
-
-    std::exception_ptr ep;
-
-    try {
-        // arbitrary timeout of 20s for the server to make some output. Very generous.
-        auto [host, port] = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(fut));
-
-        // wait for port.
-        auto sleep_interval = 100ms;
-        auto timeout = 5s;
-        auto end_time = seastar::lowres_clock::now() + timeout;
-        bool connected = false;
-        while (seastar::lowres_clock::now() < end_time) {
-            BOOST_TEST_MESSAGE(fmt::format("Connecting to {}:{}", host, port));
-            try {
-                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await seastar::connect(socket_address(net::inet_address(host), uint16_t(port)));
-                BOOST_TEST_MESSAGE("Dedicated Azure Vault mock server up and available");
-                connected = true;
-                break;
-            } catch (...) {
-            }
-            co_await sleep(sleep_interval);
-        }
-
-        if (!connected) {
-            throw std::runtime_error(fmt::format("Timed out connecting to Azure Vault mock server at {}:{}", host, port));
-        }
-
-        co_await f(host, port);
-
-    } catch (timed_out_error&) {
-        ep = std::make_exception_ptr(std::runtime_error("Could not start dedicated Azure Vault mock server"));
-    } catch (...) {
-        ep = std::current_exception();
-    }
-
-    BOOST_TEST_MESSAGE("Stopping dedicated Azure Vault mock server");
-
-    python.terminate();
-    co_await python.wait();
-
-    if (ep) {
-        std::rethrow_exception(ep);
-    }
+        return std::make_tuple(scopts_map({ { "key_provider", "AzureKeyProviderFactory" }, { "azure_host", "azure_test" } }), yaml);
+    });
 }
 
 static future<> configure_azure_mock_server(const std::string& host, const unsigned int port, const std::string& service, const std::string& error_type, int repeat) {
@@ -1813,103 +1622,111 @@ static future<> configure_azure_mock_server(const std::string& host, const unsig
     co_await cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); });
 }
 
-SEASTAR_TEST_CASE(test_imds, *check_azure_mock_test_decorator()) {
-    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
-        // Create new credential object for each test case because it caches the token.
-        {
-            testlog.info("Testing IMDS success path");
-            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
-            co_await creds.get_access_token("https://vault.azure.net/.default");
-        }
+SEASTAR_FIXTURE_TEST_CASE(test_imds, fake_azure, *check_azure_mock_test_decorator()) {
+    auto info = utils::http::parse_simple_url(imds_endpoint);
+    auto host = info.host;
+    auto port = info.port;
 
-        {
-            testlog.info("Testing IMDS transient errors");
-            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
-            co_await configure_azure_mock_server(host, port, "imds", "InternalError", 1);
-            // expected to not throw
-            co_await creds.get_access_token("https://vault.azure.net/.default");
-        }
+    // Create new credential object for each test case because it caches the token.
+    {
+        testlog.info("Testing IMDS success path");
+        azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+        co_await creds.get_access_token("https://vault.azure.net/.default");
+    }
 
-        {
-            testlog.info("Testing IMDS non-transient errors");
-            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
-            co_await configure_azure_mock_server(host, port, "imds", "NoIdentity", 1);
-            BOOST_REQUIRE_THROW(
-                co_await creds.get_access_token("https://vault.azure.net/.default"),
-                azure::creds_auth_error
-            );
-        }
-    });
+    {
+        testlog.info("Testing IMDS transient errors");
+        azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+        co_await configure_azure_mock_server(host, port, "imds", "InternalError", 1);
+        // expected to not throw
+        co_await creds.get_access_token("https://vault.azure.net/.default");
+    }
+
+    {
+        testlog.info("Testing IMDS non-transient errors");
+        azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+        co_await configure_azure_mock_server(host, port, "imds", "NoIdentity", 1);
+        BOOST_REQUIRE_THROW(
+            co_await creds.get_access_token("https://vault.azure.net/.default"),
+            azure::creds_auth_error
+        );
+    }
 }
 
-SEASTAR_TEST_CASE(test_entra_sts, *check_azure_mock_test_decorator()) {
-    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
-        auto make_entra_creds = [&] {
-            return azure::service_principal_credentials {
-                "00000000-1111-2222-3333-444444444444",
-                "mock-client-id",
-                "mock-client-secret",
-                "",
-                fmt::format("http://{}:{}", host, port),
-             };
-        };
+SEASTAR_FIXTURE_TEST_CASE(test_entra_sts, fake_azure, *check_azure_mock_test_decorator()) {
+    auto info = utils::http::parse_simple_url(imds_endpoint);
+    auto host = info.host;
+    auto port = info.port;
 
-        // Create new credential object for each test case because it caches the token.
-        {
-            testlog.info("Testing Entra STS success path");
-            auto creds = make_entra_creds();
-            co_await creds.get_access_token("https://vault.azure.net/.default");
-        }
+    auto make_entra_creds = [&] {
+        return azure::service_principal_credentials {
+            "00000000-1111-2222-3333-444444444444",
+            "mock-client-id",
+            "mock-client-secret",
+            "",
+            fmt::format("http://{}:{}", host, port),
+         };
+    };
 
-        {
-            testlog.info("Testing Entra STS transient errors");
-            auto creds = make_entra_creds();
-            co_await configure_azure_mock_server(host, port, "entra", "TemporarilyUnavailable", 1);
-            // expected to not throw
-            co_await creds.get_access_token("https://vault.azure.net/.default");
-        }
+    // Create new credential object for each test case because it caches the token.
+    {
+        testlog.info("Testing Entra STS success path");
+        auto creds = make_entra_creds();
+        co_await creds.get_access_token("https://vault.azure.net/.default");
+    }
 
-        {
-            testlog.info("Testing Entra STS non-transient errors");
-            auto creds = make_entra_creds();
-            co_await configure_azure_mock_server(host, port, "entra", "InvalidSecret", 1);
-            BOOST_REQUIRE_THROW(
-                co_await creds.get_access_token("https://vault.azure.net/.default"),
-                azure::creds_auth_error
-            );
-        }
-    });
+    {
+        testlog.info("Testing Entra STS transient errors");
+        auto creds = make_entra_creds();
+        co_await configure_azure_mock_server(host, port, "entra", "TemporarilyUnavailable", 1);
+        // expected to not throw
+        co_await creds.get_access_token("https://vault.azure.net/.default");
+    }
+
+    {
+        testlog.info("Testing Entra STS non-transient errors");
+        auto creds = make_entra_creds();
+        co_await configure_azure_mock_server(host, port, "entra", "InvalidSecret", 1);
+        BOOST_REQUIRE_THROW(
+            co_await creds.get_access_token("https://vault.azure.net/.default"),
+            azure::creds_auth_error
+        );
+    }
 }
 
-SEASTAR_TEST_CASE(test_azure_host, *check_azure_mock_test_decorator()) {
-    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
-        key_info kinfo { .alg = "AES/CBC/PKCS5Padding", .len = 128};
-        azure_host::host_options options {
-            .imds_endpoint = fmt::format("http://{}:{}", host, port),
-            .master_key = fmt::format("http://{}:{}/test-key", host, port),
-        };
+SEASTAR_FIXTURE_TEST_CASE(test_azure_host, fake_azure, *check_azure_mock_test_decorator()) {
+    auto info = utils::http::parse_simple_url(imds_endpoint);
+    auto host = info.host;
+    auto port = info.port;
 
-        {
-            testlog.info("Testing Key Vault success path");
-            azure_host azhost {"azure_test", options};
-            co_await azhost.get_or_create_key(kinfo, nullptr);
-        }
+    key_info kinfo { .alg = "AES/CBC/PKCS5Padding", .len = 128};
+    azure_host::host_options options {
+        .imds_endpoint = fmt::format("http://{}:{}", host, port),
+        .master_key = fmt::format("http://{}:{}/test-key", host, port),
+    };
 
-        {
-            testlog.info("Testing Key Vault transient errors");
-            azure_host azhost {"azure_test", options};
-            co_await configure_azure_mock_server(host, port, "vault", "Throttled", 1);
-            co_await azhost.get_or_create_key(kinfo, nullptr);
-        }
+    {
+        testlog.info("Testing Key Vault success path");
+        azure_host azhost {"azure_test", options};
+        co_await azhost.get_or_create_key(kinfo, nullptr);
+    }
 
-        {
-            testlog.info("Testing Key Vault non-transient errors");
-            azure_host azhost {"azure_test", options};
-            co_await configure_azure_mock_server(host, port, "vault", "Forbidden", 1);
-            BOOST_REQUIRE_THROW(
-                co_await azhost.get_or_create_key(kinfo, nullptr),
-                encryption::service_error
-            );
-        }
-    });
+    {
+        testlog.info("Testing Key Vault transient errors");
+        azure_host azhost {"azure_test", options};
+        co_await configure_azure_mock_server(host, port, "vault", "Throttled", 1);
+        co_await azhost.get_or_create_key(kinfo, nullptr);
+    }
+
+    {
+        testlog.info("Testing Key Vault non-transient errors");
+        azure_host azhost {"azure_test", options};
+        co_await configure_azure_mock_server(host, port, "vault", "Forbidden", 1);
+        BOOST_REQUIRE_THROW(
+            co_await azhost.get_or_create_key(kinfo, nullptr),
+            encryption::service_error
+        );
+    }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -144,29 +144,59 @@ def get_boost_test_list_content(executable: pathlib.Path, combined: bool = False
         universal_newlines=True,
     )
 
-    test_tree = {}
-    current_suite = []
+    current_suite = {}
+    stack = []
+    root = current_suite
 
-    if combined:
-        test_indent = "    "
-    else:
-        test_indent = ""
-        test_tree[executable.name] = current_suite
-
+    # In either combined tests, or tests with suites, we have
+    # indentation signifying the suite group. These can even be
+    # nested, so build a tree of dicts.
+    indent = 0
+    last = ''
     for line in output.splitlines():
         name = line.strip().removesuffix("*")  # remove spaces around and trailing `*`
 
         if name.startswith("_"):
             # TODO: add support for test cases with dataprovider
             continue
+        n = next((i for i, c in enumerate(line) if c != ' '), len(line))
+        if n > indent:
+            # last was a test suite
+            stack.append((current_suite, indent))
+            current_suite = current_suite[last]
+        elif n < indent:
+            # end of a suite
+            while True:
+                current_suite, level = stack.pop()
+                if level == n:
+                    break
 
-        if line.startswith(test_indent):
-            current_suite.append(name)
-        else:
-            current_suite = test_tree[name] = []
+        indent = n
+        current_suite[name] = {}
+        last = name
+
+    # reduce a dict to a list of the test paths flattened
+    # to <suite>/<suite>/<case>
+    def flatten(tests: dict[str, dict]) -> list[str]:
+        res = []
+        for s, v in tests.items():
+            if v:
+                sub = flatten(v)
+                res = res + ["/".join([s, vv]) for vv in sub]
+            else:
+                res.append(s)
+        return res
+
+    test_tree = {}
+
+    if combined:
+        # if combined, we keep each top level suite
+        test_tree = { k: flatten(v) for k, v in root.items() }
+    else:
+        # else flatten suites to designators and store under exec
+        test_tree = { executable.name : flatten(root) }
 
     return test_tree
-
 
 def parse_boost_test_log_sink(log_xml: str) -> list[CppTestFailure]:
     """Parse the output of 'log' section produced by BoostTest.

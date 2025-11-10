@@ -165,7 +165,7 @@ bytes hmac_sha256(bytes_view msg, bytes_view key) {
     return res;
 }
 
-future<temporary_buffer<char>> read_text_file_fully(const sstring& filename) {
+future<temporary_buffer<char>> read_text_file_fully(const std::string& filename) {
     return open_file_dma(filename, open_flags::ro).then([](file f) {
         return f.size().then([f](size_t s) {
             return do_with(make_file_input_stream(f), [s](input_stream<char>& in) {
@@ -179,7 +179,7 @@ future<temporary_buffer<char>> read_text_file_fully(const sstring& filename) {
     });
 }
 
-future<> write_text_file_fully(const sstring& filename, temporary_buffer<char> buf) {
+future<> write_text_file_fully(const std::string& filename, temporary_buffer<char> buf) {
     return open_file_dma(filename, open_flags::wo|open_flags::create).then([buf = std::move(buf)](file f) mutable {
       return make_file_output_stream(f).then([buf = std::move(buf)] (output_stream<char> out) mutable {
         return do_with(std::move(out), [buf = std::move(buf)](output_stream<char>& out) mutable {
@@ -193,7 +193,7 @@ future<> write_text_file_fully(const sstring& filename, temporary_buffer<char> b
     });
 }
 
-future<> write_text_file_fully(const sstring& filename, const sstring& s) {
+future<> write_text_file_fully(const std::string& filename, const std::string& s) {
     return write_text_file_fully(filename, temporary_buffer<char>(s.data(), s.size()));
 }
 

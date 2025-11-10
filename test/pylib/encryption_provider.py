@@ -14,6 +14,7 @@ from functools import cached_property
 from test import TEST_DIR
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.kmip_wrapper import KMIPServerWrapper
+from test.pylib.azure_vault_server_mock import MockAzureVaultServer
 
 import boto3
 
@@ -24,6 +25,7 @@ class KeyProvider(Enum):
     replicated = "ReplicatedKeyProviderFactory"
     kmip = "KmipKeyProviderFactory"
     kms = "KmsKeyProviderFactory"
+    azure = "AzureKeyProviderFactory"
 
 class KeyProviderFactory:
     """Base class for provider factories"""
@@ -254,6 +256,47 @@ class KMSKeyProviderFactory(KeyProviderFactory):
     def require_restart(self):
         return True
 
+
+class AzureKeyProviderFactory(KeyProviderFactory):
+    """AzureKeyProviderFactory proxy"""
+    def __init__(self, tmpdir):
+        super(AzureKeyProviderFactory, self).__init__( KeyProvider.azure)
+        self.tmpdir = tmpdir
+        self.azure_host = "azure_test"
+        self.azure_server = None
+        self.host = None;
+        self.port = 0
+
+    def configuration_parameters(self) -> dict[str, str]:
+        """scylla.conf entries for provider"""
+        options = {
+            "master_key": f"http://{self.host}:{self.port}/mock-key",
+            "azure_tenant_id": "00000000-1111-2222-3333-444444444444",
+            "azure_client_id": "mock-client-id",
+            "azure_client_secret": "mock-client-secret",
+            "azure_authority_host": f"http://{self.host}:{self.port}"
+        }
+
+        return super().configuration_parameters() | { "azure_hosts": { self.azure_host: options } }
+
+    async def __aenter__(self):
+        self.azure_server = MockAzureVaultServer("127.0.0.1", 0, logging.getLogger('azure-vault-server'))
+        await self.azure_server.start()
+        self.host = self.azure_server.server_address[0]
+        self.port = self.azure_server.server_address[1]
+        return self
+
+    async def __aexit__(self, exception_type, exception_value, exception_traceback):
+        if self.azure_server is not None:
+            await self.azure_server.stop()
+            self.azure_server = None
+
+    def additional_cf_options(self):
+        return super().additional_cf_options() | {"azure_host": self.azure_host}
+
+    def require_restart(self):
+        return True
+
 def make_key_provider_factory(provider: KeyProvider, tmpdir):
     """Create key provider factory for enum"""
     res = None
@@ -265,7 +308,9 @@ def make_key_provider_factory(provider: KeyProvider, tmpdir):
         res = KmipKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.kms:
         res = KMSKeyProviderFactory(tmpdir)
+    elif provider == KeyProvider.azure:
+        res = AzureKeyProviderFactory(tmpdir)
     else:
         raise RuntimeError(f'Unknown key_provider: {provider}')
 
-    return res;
+    return res
