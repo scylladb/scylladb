@@ -481,16 +481,18 @@ struct disk_token_range {
     auto describe_type(sstable_version_types v, Describer f) { return f(left, right); }
 };
 
-// Scylla-specific sharding information.  This is a set of token
-// ranges that are spanned by this sstable.  When loading the
-// sstable, we can see which shards own data in the sstable by
-// checking each such range.
-struct sharding_metadata {
+struct token_ranges_type {
     disk_array<uint32_t, disk_token_range> token_ranges;
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(token_ranges); }
 };
+
+// Scylla-specific sharding information.  This is a set of token
+// ranges that are spanned by this sstable.  When loading the
+// sstable, we can see which shards own data in the sstable by
+// checking each such range.
+using sharding_metadata = token_ranges_type;
 
 // Scylla-specific list of features an sstable supports.
 enum sstable_feature : uint8_t {
@@ -547,6 +549,7 @@ enum class scylla_metadata_type : uint32_t {
     ExtTimestampStats = 9,
     SSTableIdentifier = 10,
     Schema = 11,
+    TokenRanges = 12,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -644,6 +647,7 @@ struct scylla_metadata {
     using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
     using sstable_identifier = sstable_identifier_type;
     using sstable_schema = sstable_schema_type;
+    using token_ranges = token_ranges_type;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -656,7 +660,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::TokenRanges, token_ranges>
             > data;
 
     sstable_enabled_features get_features() const {

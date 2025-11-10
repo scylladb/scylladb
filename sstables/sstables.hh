@@ -673,7 +673,8 @@ private:
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
-                               std::optional<scylla_metadata::ext_timestamp_stats> ts_stats);
+                               std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
+                               std::optional<scylla_metadata::token_ranges> token_ranges);
 
     future<> read_filter(sstable_open_config cfg = {});
 

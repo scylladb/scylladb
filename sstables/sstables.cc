@@ -2016,7 +2016,8 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
-        std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats) {
+        std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
+        std::optional<scylla_metadata::token_ranges> token_ranges) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
@@ -2089,6 +2090,10 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
+
+    if (token_ranges) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::TokenRanges>(std::move(*token_ranges));
+    }
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
