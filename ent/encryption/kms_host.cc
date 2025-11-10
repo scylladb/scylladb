@@ -45,13 +45,43 @@ using namespace std::string_literals;
 
 logger kms_log("kms");
 
+using httpclient = rest::httpclient;
+
+static std::string get_response_error(httpclient::reply_status res) {
+    switch (res) {
+    case httpclient::reply_status::unauthorized: case httpclient::reply_status::forbidden: return "AccessDenied";
+    case httpclient::reply_status::not_found: return "ResourceNotFound";
+    case httpclient::reply_status::too_many_requests: return "SlowDown";
+    case httpclient::reply_status::internal_server_error: return "InternalError";
+    case httpclient::reply_status::service_unavailable: return "ServiceUnavailable";
+    case httpclient::reply_status::request_timeout: case httpclient::reply_status::gateway_timeout:
+    case httpclient::reply_status::network_connect_timeout: case httpclient::reply_status::network_read_timeout:
+        return "RequestTimeout";
+    default:
+        return format("{}", res);
+    }
+};
+
 class kms_error : public std::exception {
+    httpclient::reply_status _res;
     std::string _type, _msg;
 public:
-    kms_error(std::string_view type, std::string_view msg)
-        : _type(type)
-        , _msg(fmt::format("{}: {}", type, msg))
+    kms_error(httpclient::reply_status res, std::string type, std::string_view msg)
+        : _res(res)
+        , _type(std::move(type))
+        , _msg(fmt::format("{}: {}", _type, msg))
     {}
+    kms_error(httpclient::reply_status res, std::string_view msg)
+        : _res(res)
+        , _type(get_response_error(res))
+        , _msg(fmt::format("{}: {}", _type, msg))
+    {}
+    kms_error(const httpclient::result_type& res, std::string_view msg)
+        : kms_error(res.result(), msg)
+    {}
+    httpclient::reply_status result() const {
+        return _res;
+    }
     const std::string& type() const {
         return _type;
     }
@@ -338,21 +368,6 @@ struct encryption::kms_host::impl::aws_query {
 };
 
 future<rjson::value> encryption::kms_host::impl::post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
-    static auto get_response_error = [](const result_type& res) -> std::string {
-        switch (res.result()) {
-        case httpclient::reply_status::unauthorized: case httpclient::reply_status::forbidden: return "AccessDenied";
-        case httpclient::reply_status::not_found: return "ResourceNotFound";
-        case httpclient::reply_status::too_many_requests: return "SlowDown";
-        case httpclient::reply_status::internal_server_error: return "InternalError";
-        case httpclient::reply_status::service_unavailable: return "ServiceUnavailable";
-        case httpclient::reply_status::request_timeout: case httpclient::reply_status::gateway_timeout:
-        case httpclient::reply_status::network_connect_timeout: case httpclient::reply_status::network_read_timeout:
-            return "RequestTimeout";
-        default:
-            return format("{}", res.result());
-        }
-    };
-
     static auto query_ec2_meta = [](std::string_view target, std::string token = {}) -> future<std::tuple<httpclient::result_type, std::string>> {
         static auto get_env_def = [](std::string_view var, std::string_view def) {
             auto val = std::getenv(var.data());
@@ -382,7 +397,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             }
             kms_log.trace("Result: status={}, response={}", res.result_int(), res);
             if (res.result() != httpclient::reply_status::ok) {
-                throw kms_error(get_response_error(res), "EC2 metadata query");
+                throw kms_error(res, "EC2 metadata query");
             }
             co_return res;
         };
@@ -394,12 +409,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             client.method(httpclient::method_type::PUT);
             client.target("/latest/api/token");
 
-
             auto res = co_await logged_send(client);
-
-            if (res.result() != httpclient::reply_status::ok) {
-                throw kms_error(get_response_error(res), "EC2 metadata token query");
-            }
 
             token = res.body();
             client.clear_headers();
@@ -541,7 +551,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             aws_secret_access_key = rjson::get<std::string>(body, "SecretAccessKey");
             session = rjson::get<std::string>(body, "Token");
         } catch (rjson::malformed_value&) {
-            std::throw_with_nested(kms_error("AccessDenied", fmt::format("Code={}, Message={}"
+            std::throw_with_nested(kms_error(httpclient::reply_status::forbidden, fmt::format("Code={}, Message={}"
                 , rjson::get_opt<std::string>(body, "Code")
                 , rjson::get_opt<std::string>(body, "Message")                
                 )));
@@ -573,7 +583,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         });
 
         if (res.result() != httpclient::reply_status::ok) {
-            throw kms_error(get_response_error(res), "AssumeRole");
+            throw kms_error(res, "AssumeRole");
         }
 
         rapidxml::xml_document<> doc;
@@ -586,7 +596,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             static auto get_xml_node = [](node_type* node, const char* what) {
                 auto res = node->first_node(what);
                 if (!res) {
-                    throw kms_error("XML parse error", what);
+                    throw malformed_response_error(fmt::format("XML parse error", what));
                 }
                 return res;
             };
@@ -603,7 +613,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             session = token->value();
 
         } catch (const rapidxml::parse_error& e) {
-            std::throw_with_nested(kms_error("XML parse error", "AssumeRole"));
+            std::throw_with_nested(malformed_response_error("XML parse error: AssumeRole"));
         }
     }
 
@@ -650,9 +660,11 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             o = rjson::get_opt<std::string>(body, type_header);
         }
         // this should never happen with aws, but...
-        auto type = o ? *o : get_response_error(res);
+        if (!o) {
+            throw kms_error(res, msg);
+        }
 
-        throw kms_error(type, msg);
+        throw kms_error(res.result(), *o, msg);
     }
 
     co_return body;    
