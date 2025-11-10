@@ -17,6 +17,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/lowres_clock.hh>
 
+#include "auth/authenticated_user.hh"
 #include "seastarx.hh"
 #include "auth/service.hh"
 #include "cql3/description.hh"
@@ -288,6 +289,17 @@ public:
     template <typename Func, typename Ret = std::invoke_result_t<Func>>
     requires std::invocable<Func>
     futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& usr, Func&& func) {
+        // Special case:
+        // -------------
+        // The maintenance socket can communicate with Scylla before `auth_integration`
+        // is registered, and we need to prepare for it.
+        // For the discussion, see: scylladb/scylladb#26816.
+        //
+        // TODO: Get rid of this.
+        if (!usr.has_value() || auth::is_anonymous(usr.value())) {
+            return with_scheduling_group(get_default_scheduling_group(), std::forward<Func>(func));
+        }
+
         SCYLLA_ASSERT(_auth_integration != nullptr);
         return _auth_integration->with_user_service_level(usr, std::forward<Func>(func));
     }
