@@ -444,7 +444,7 @@ future<> tablet_metadata::clear_gently() {
     co_await smp::invoke_on_all([&] -> future<> {
         for (auto& map_ptr : tablet_maps_per_shard[this_shard_id()]) {
             auto map = map_ptr.release();
-            co_await utils::clear_gently(map);
+            co_await utils::reset_gently(map);
         }
     });
 

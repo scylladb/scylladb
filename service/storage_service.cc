@@ -3308,7 +3308,7 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                 auto view_erms = std::move(change.pending_view_erms[this_shard_id()]);
 
                 co_await utils::clear_gently(erms);
-                co_await utils::clear_gently(tmptr);
+                co_await utils::reset_gently(tmptr);
                 co_await utils::clear_gently(table_erms);
                 co_await utils::clear_gently(view_erms);
             });
