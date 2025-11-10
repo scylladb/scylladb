@@ -64,23 +64,29 @@ static auto check_gcp_storage_test_enabled() {
     return tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true);
 }
 
-static future<> create_object_of_size(storage::client& c, std::string_view bucket, std::string_view name, size_t dest_size, std::vector<temporary_buffer<char>>* buffer_store = nullptr) {
+static future<> create_object_of_size(storage::client& c
+                                      , std::string_view bucket
+                                      , std::string_view name
+                                      , size_t dest_size
+                                      , std::vector<temporary_buffer<char>>* buffer_store = nullptr
+                                      , std::optional<size_t> specific_buffer_size = std::nullopt
+                                    ) 
+{
     auto sink = c.create_upload_sink(bucket, name);
-    seastar::output_stream<char> os(std::move(sink));
     size_t done = 0;
     while (done < dest_size) {
         auto rem = dest_size - done;
-        auto len = std::min(rem, tests::random::get_int(size_t(1), size_t(4*1024*1024)));
+        auto len = std::min(rem, specific_buffer_size.value_or(tests::random::get_int(size_t(1), size_t(4*1024*1024))));
         auto rnd = tests::random::get_bytes(len);
-        auto data = reinterpret_cast<char*>(rnd.data());
-        co_await os.write(data, len);
+        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
         if (buffer_store) {
-            buffer_store->emplace_back(data, len, make_object_deleter(std::move(rnd)));
+            buffer_store->emplace_back(buf.share());
         }
+        co_await sink.put(std::move(buf));
         done += len;
     }
-    co_await os.flush();
-    co_await os.close();
+    co_await sink.flush();
+    co_await sink.close();
 }
 
 static future<> compare_object_data(const local_gcs_wrapper& env, std::string_view object_name, std::vector<temporary_buffer<char>>&& bufs) {
@@ -107,14 +113,14 @@ static future<> compare_object_data(const local_gcs_wrapper& env, std::string_vi
     BOOST_REQUIRE_EQUAL(read, total);
 }
 
-static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest_size) {
+static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest_size, std::optional<size_t> specific_buffer_size = std::nullopt) {
     auto& c = env.client();
     auto uuid = fmt::format("{}", utils::UUID_gen::get_time_UUID());
     std::vector<temporary_buffer<char>> written;
 
     // ensure we remove the object
     env.objects_to_delete.emplace_back(uuid);
-    co_await create_object_of_size(c, env.bucket, uuid, dest_size, &written);
+    co_await create_object_of_size(c, env.bucket, uuid, dest_size, &written, specific_buffer_size);
     co_await compare_object_data(env, uuid, std::move(written));
 }
 
@@ -126,6 +132,14 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object, local_gcs_wrappe
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object_64kbuf, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await test_read_write_helper(*this, 618480, 64*1024);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object_64kbuf, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67, 64*1024);
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
