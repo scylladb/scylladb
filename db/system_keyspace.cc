@@ -137,6 +137,8 @@ namespace {
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
                 system_keyspace::VIEW_BUILDING_TASKS,
+                // repair tasks
+                system_keyspace::REPAIR_TASKS,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -456,6 +458,24 @@ schema_ptr system_keyspace::repair_history() {
             .with_column("keyspace_name", utf8_type, column_kind::static_column)
             .with_column("table_name", utf8_type, column_kind::static_column)
             .set_comment("Record repair history")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::repair_tasks() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, REPAIR_TASKS);
+        return schema_builder(NAME, REPAIR_TASKS, std::optional(id))
+            .with_column("task_uuid", uuid_type, column_kind::partition_key)
+            .with_column("operation", utf8_type, column_kind::clustering_key)
+            // First and last token for of the tablet
+            .with_column("first_token", long_type, column_kind::clustering_key)
+            .with_column("last_token", long_type, column_kind::clustering_key)
+            .with_column("timestamp", timestamp_type)
+            .with_column("table_uuid", uuid_type, column_kind::static_column)
+            .set_comment("Record tablet repair tasks")
             .with_hash_version()
             .build();
     }();
@@ -2311,6 +2331,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     corrupt_data(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
+                    repair_tasks(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
@@ -2547,6 +2568,32 @@ future<> system_keyspace::get_repair_history(::table_id table_id, repair_history
         ent.ks = row.get_as<sstring>("keyspace_name");
         ent.cf = row.get_as<sstring>("table_name");
         ent.ts = row.get_as<db_clock::time_point>("repair_time");
+        co_await f(std::move(ent));
+        co_return stop_iteration::no;
+    });
+}
+
+future<utils::chunked_vector<canonical_mutation>> system_keyspace::get_update_repair_task_mutations(const repair_task_entry& entry, api::timestamp_type ts) {
+    // Default to timeout the repair task entries in 10 days, this should be enough time for the management tools to query
+    constexpr int ttl = 10 * 24 * 3600;
+    sstring req = format("INSERT INTO system.{} (task_uuid, operation, first_token, last_token, timestamp, table_uuid) VALUES (?, ?, ?, ?, ?, ?) USING TTL {}", REPAIR_TASKS, ttl);
+    auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), ts,
+            {entry.task_uuid.uuid(), repair_task_operation_to_string(entry.operation),
+            entry.first_token, entry.last_token, entry.timestamp, entry.table_uuid.uuid()});
+    utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+    co_return cmuts;
+}
+
+future<> system_keyspace::get_repair_task(tasks::task_id task_uuid, repair_task_consumer f) {
+    sstring req = format("SELECT * from system.{} WHERE task_uuid = {}", REPAIR_TASKS, task_uuid);
+    co_await _qp.query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        repair_task_entry ent;
+        ent.task_uuid = tasks::task_id(row.get_as<utils::UUID>("task_uuid"));
+        ent.operation = repair_task_operation_from_string(row.get_as<sstring>("operation"));
+        ent.first_token = row.get_as<int64_t>("first_token");
+        ent.last_token = row.get_as<int64_t>("last_token");
+        ent.timestamp = row.get_as<db_clock::time_point>("timestamp");
+        ent.table_uuid = ::table_id(row.get_as<utils::UUID>("table_uuid"));
         co_await f(std::move(ent));
         co_return stop_iteration::no;
     });
@@ -3723,4 +3770,35 @@ future<> system_keyspace::apply_mutation(mutation m) {
     return _qp.proxy().mutate_locally(m, {}, db::commitlog::force_sync(m.schema()->static_props().wait_for_sync_to_commitlog), db::no_timeout);
 }
 
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<system_keyspace::repair_task_operation, sstring> repair_task_operation_to_name = {
+    {system_keyspace::repair_task_operation::requested, "requested"},
+    {system_keyspace::repair_task_operation::finished, "finished"},
+};
+
+static const std::unordered_map<sstring, system_keyspace::repair_task_operation> repair_task_operation_from_name = std::invoke([] {
+    std::unordered_map<sstring, system_keyspace::repair_task_operation> result;
+    for (auto&& [v, s] : repair_task_operation_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring system_keyspace::repair_task_operation_to_string(system_keyspace::repair_task_operation op) {
+    auto i = repair_task_operation_to_name.find(op);
+    if (i == repair_task_operation_to_name.end()) {
+        on_internal_error(slogger, format("Invalid repair task operation: {}", static_cast<int>(op)));
+    }
+    return i->second;
+}
+
+system_keyspace::repair_task_operation system_keyspace::repair_task_operation_from_string(const sstring& name) {
+    return repair_task_operation_from_name.at(name);
+}
+
 } // namespace db
+
+auto fmt::formatter<db::system_keyspace::repair_task_operation>::format(const db::system_keyspace::repair_task_operation& op, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", db::system_keyspace::repair_task_operation_to_string(op));
+}
