@@ -292,6 +292,10 @@ public:
     address_map_t();
     future<> stop();
 
+    // Resolves when all local updates replicate everywhere.
+    // Call on shard 0 only.
+    future<> barrier();
+
     // Find a mapping with a given id.
     //
     // If a mapping is expiring, the last access timestamp is updated automatically.
@@ -422,6 +426,14 @@ future<> address_map_t<Clock>::stop() {
     if (_replicator) {
         co_await _replicator->stop();
     }
+}
+
+template <typename Clock>
+future<> address_map_t<Clock>::barrier() {
+    if (this_shard_id() != 0) {
+        on_internal_error(rslog, "barrier() must be called on shard 0");
+    }
+    return _replicator->barrier();
 }
 
 template <typename Clock>
