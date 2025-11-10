@@ -110,7 +110,8 @@ stateDiagram-v2
 A node state may have additional parameters associated with it. For instance
 'replacing' state has host id of a node been replaced as a parameter.
 
-Additionally to specific node states, there entire topology can also be in a transitioning state:
+Additionally to specific node states, the entire topology can also be in one of the transitioning states listed below.
+Note that these are not all states, as there are other states specific to tablets described in the following sections.
 
 - `join_group0` - a join request from a bootstrapping/replacing node has been accepted. The node joins group 0 and,
     in the case of a bootstrapping node, receives bootstrap tokens.
@@ -118,8 +119,8 @@ Additionally to specific node states, there entire topology can also be in a tra
     and now we need to commit the generation - create a timestamp for it and tell every node
     to start using it for CDC log table writes.
 - `write_both_read_old` - one of the nodes is in a bootstrapping/decommissioning/removing/replacing state.
-    Writes are going to both new and old replicas (new replicas means calculated according to modified
-    token ring), reads are using old replicas.
+    Writes to vnodes-based tables are going to both new and old replicas (new replicas means calculated according
+    to modified token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 - `left_token_ring` - the decommissioning node left the token ring, but we still need to wait until other
     nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
