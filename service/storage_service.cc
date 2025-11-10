@@ -7811,6 +7811,21 @@ void storage_service::init_messaging_service() {
             return make_ready_future<join_node_query_result>(std::move(result));
         });
     });
+    ser::join_node_rpc_verbs::register_notify_banned(&_messaging.local(), [this] (const rpc::client_info& cinfo, raft::server_id dst_id) {
+        auto src_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return container().invoke_on(0, [src_id, dst_id] (auto& ss) -> future<rpc::no_wait_type> {
+            if (ss.my_host_id() != locator::host_id{dst_id.uuid()}) {
+                rtlogger.warn("received notify_banned from {} for {}, but my id is {}, ignoring", src_id, dst_id, ss.my_host_id());
+            } else if (ss._topology_state_machine._topology.tstate != topology::transition_state::left_token_ring &&
+                    !ss._topology_state_machine._topology.left_nodes.contains(dst_id) && !ss._group0_as.abort_requested()) {
+                // Ignore rpc if the node is already shutting down or during decommissioning because
+                // the node is expected to shut itself down after being banned.
+                rtlogger.info("received notification of being banned from the cluster from {}, terminating.", src_id);
+                _exit(0);
+            }
+            co_return rpc::no_wait_type{};
+        });
+    });
 }
 
 future<> storage_service::uninit_messaging_service() {
