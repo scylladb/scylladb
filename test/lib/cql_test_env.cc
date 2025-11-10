@@ -446,6 +446,10 @@ public:
         return execute_cql(query).discard_result();
     }
 
+    virtual sharded<vector_search::vector_store_client>& vector_store_client() override {
+        return _vector_store_client;
+    }
+
     static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
         return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();

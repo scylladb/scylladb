@@ -471,6 +471,7 @@ public:
 
     named_value<sstring> vector_store_primary_uri;
     named_value<sstring> vector_store_secondary_uri;
+    named_value<string_map> vector_store_encryption_options;
 
     named_value<bool> abort_on_ebadf;
 

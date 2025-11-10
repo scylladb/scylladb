@@ -15,6 +15,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/api.hh>
+#include <seastar/util/tmp_file.hh>
 #include <functional>
 #include <chrono>
 
@@ -76,13 +77,14 @@ inline seastar::future<> try_on_loopback_address(std::function<seastar::future<>
 
 constexpr auto const* LOCALHOST = "127.0.0.1";
 
-inline auto listen_on_port(std::unique_ptr<seastar::httpd::http_server> server, seastar::sstring host, uint16_t port)
+inline auto listen_on_port(std::unique_ptr<seastar::httpd::http_server> server, seastar::sstring host, uint16_t port,
+        seastar::httpd::http_server::server_credentials_ptr credentials)
         -> seastar::future<std::tuple<std::unique_ptr<seastar::httpd::http_server>, seastar::socket_address>> {
     auto inaddr = seastar::net::inet_address(host);
     auto const addr = seastar::socket_address(inaddr, port);
     seastar::listen_options opts;
     opts.set_fixed_cpu(seastar::this_shard_id());
-    co_await server->listen(addr, opts);
+    co_await server->listen(addr, opts, credentials);
     auto const& listeners = seastar::httpd::http_server_tester::listeners(*server);
     co_return std::make_tuple(std::move(server), listeners.at(0).local_address().port());
 }
@@ -95,9 +97,10 @@ inline auto make_http_server(std::function<void(seastar::httpd::routes& r)> set_
     return server;
 }
 
-inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::sstring host = LOCALHOST, uint16_t port = 0)
+inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::sstring host = LOCALHOST, uint16_t port = 0,
+        seastar::httpd::http_server::server_credentials_ptr credentials = nullptr)
         -> seastar::future<std::tuple<std::unique_ptr<seastar::httpd::http_server>, seastar::socket_address>> {
-    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port);
+    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port, credentials);
 }
 
 inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::server_socket socket)
@@ -130,6 +133,12 @@ inline auto create_test_table(cql_test_env& env, const seastar::sstring& ks, con
     )",
             ks, cf));
     co_return env.local_db().find_schema(ks, cf);
+}
+
+inline seastar::future<> remove(seastar::tmp_file& f) {
+    co_await f.close().finally([&f] {
+        return f.remove();
+    });
 }
 
 } // namespace test::vector_search
