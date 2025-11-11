@@ -136,18 +136,31 @@ def backport(repo, pr, version, commits, backport_base_branch):
 
 
 def with_github_keyword_prefix(repo, pr):
-    pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
-    match = re.findall(pattern, pr.body, re.IGNORECASE)
-    if not match:
-        print(f'No valid close reference for {pr.number}')
-        comment = f':warning:  @{pr.user.login} PR body does not contain a Fixes reference to an issue '
-        comment += ' and can not be backported\n\n'
-        comment += 'The following labels were removed:\n'
-        create_pr_comment_and_remove_label(pr, comment)
-        return False
-    else:
+    # GitHub issue pattern: #123, scylladb/scylladb#123, or full GitHub URLs
+    github_pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
+    
+    # JIRA issue pattern: PKG-92 or https://scylladb.atlassian.net/browse/PKG-92
+    jira_pattern = r"(?:fix(?:|es|ed))\s*:?\s*(?:(?:https://scylladb\.atlassian\.net/browse/)?([A-Z]+-\d+))"
+    
+    # Check PR body for GitHub issues
+    github_match = re.findall(github_pattern, pr.body, re.IGNORECASE)
+    # Check PR body for JIRA issues
+    jira_match = re.findall(jira_pattern, pr.body, re.IGNORECASE)
+    
+    match = github_match or jira_match
+
+    if match:
         return True
 
+    for commit in pr.get_commits():
+        github_match = re.findall(github_pattern, commit.commit.message, re.IGNORECASE)
+        jira_match = re.findall(jira_pattern, commit.commit.message, re.IGNORECASE)
+        if github_match or jira_match:
+            print(f'{pr.number} has a valid close reference in commit message {commit.sha}')
+            return True
+
+    print(f'No valid close reference for {pr.number}')
+    return False
 
 def main():
     args = parse_args()
