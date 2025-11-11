@@ -531,6 +531,30 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
+void compaction_controller::set_max_share(float max_share) {
+    if (max_share == 0.0f) {
+        // Reset control point to the default values
+        _control_points = default_control_points;
+        return;
+    } else if (max_share <= default_control_points.front().output) {
+        // Use static behavior when max_output is in the range (0, minimum defined output].
+        _control_points = {{0.0, max_share}, {normalization_factor, max_share}};
+        return;
+    }
+
+    _control_points.clear();
+    for (const auto& control_point : default_control_points) {
+        // Copy default control points until we reach the max output, or until
+        // we reach the normalization factor, which marks the end of the interpolation range.
+        if (control_point.output >= max_share || control_point.input == normalization_factor) {
+            break;
+        }
+        _control_points.push_back(control_point);
+    }
+    // Add a new control point with the new max output
+    _control_points.push_back({normalization_factor, max_share});
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");
