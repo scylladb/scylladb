@@ -481,7 +481,18 @@ public:
         return 0;
     }
 
-    std::vector<sstables::shared_sstable>& get_level(uint32_t level) {
+    const std::vector<sstables::shared_sstable>& get_level(uint32_t level) const
+        pre(level >= _generations.size()) 
+    {
+        if (level >= _generations.size()) {
+            throw std::runtime_error("Invalid level");
+        }
+        return _generations[level];
+    }
+
+    std::vector<sstables::shared_sstable>& get_level(uint32_t level) 
+        pre(level >= _generations.size()) 
+    {
         if (level >= _generations.size()) {
             throw std::runtime_error("Invalid level");
         }

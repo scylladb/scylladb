@@ -1,1 +1,1 @@
-docker.io/scylladb/scylla-toolchain:fedora-42-20250921
+docker.io/regevran/clang-latest:latest

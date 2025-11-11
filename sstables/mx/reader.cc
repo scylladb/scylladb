@@ -492,7 +492,9 @@ public:
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             sstables::bound_kind_m kind,
                                             tombstone end_tombstone,
-                                            tombstone start_tombstone) {
+                                            tombstone start_tombstone) 
+    pre( kind == bound_kind_m::incl_end_excl_start or
+         kind == bound_kind_m::excl_end_incl_start ) {
         auto ck = clustering_key_prefix::from_range(ecp | std::views::transform(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
         switch (kind) {
@@ -2202,7 +2204,8 @@ public:
         }
     }
 
-    data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) {
+    data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) 
+        pre (kind == bound_kind_m::incl_end_excl_start or kind == bound_kind_m::excl_end_incl_start) {
         sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
         switch (kind) {
         case bound_kind_m::incl_end_excl_start:

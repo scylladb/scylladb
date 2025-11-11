@@ -1,0 +1,5 @@
+FROM docker.io/scylladb/scylla-toolchain:fedora-42-20250910
+
+ADD ./tools/toolchain/install_clang_latest.sh /
+RUN /install_clang_latest.sh
+

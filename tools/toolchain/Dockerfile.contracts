@@ -1,0 +1,5 @@
+FROM docker.io/scylladb/scylla-toolchain:fedora-42-20250910
+
+ADD ./tools/toolchain/install_contract_clang.sh /
+RUN /install_contract_clang.sh
+
