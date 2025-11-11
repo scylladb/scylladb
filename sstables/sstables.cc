@@ -1836,6 +1836,33 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     sstlog.trace("{}: shards={}", get_filename(), _shards);
 }
 
+dht::token_range_vector sstable::load_token_ranges() const {
+    dht::token_range_vector res;
+
+    scylla_metadata::token_ranges* tr = _components->scylla_metadata
+            ? _components->scylla_metadata->data.get<scylla_metadata_type::TokenRanges, scylla_metadata::token_ranges>()
+            : nullptr;
+    if (tr) {
+        res.reserve(tr->token_ranges.elements.size());
+        for (const auto& r : tr->token_ranges.elements) {
+            res.emplace_back(dht::token_range::make(
+                dht::token_range::bound(dht::token::from_bytes(bytes_view(r.left.token)), !r.left.exclusive),
+                dht::token_range::bound(dht::token::from_bytes(bytes_view(r.right.token)), !r.right.exclusive)
+            ));
+        }
+    }
+    if (res.empty()) {
+        if (tr) {
+            on_internal_error_noexcept(sstlog, format("load_token_ranges sstable={}: empty token ranges in scylla metadata", generation()));
+        }
+        res.emplace_back(dht::token_range::make(
+            dht::token_range::bound(get_first_decorated_key().token(), true),
+            dht::token_range::bound(get_last_decorated_key().token(), true)
+        ));
+    }
+    return res;
+}
+
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     parse_assert(expected_partition_count >= 1);
 

@@ -2085,26 +2085,27 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
                    const dht::token_range_vector& sorted_owned_ranges) {
     // Finish early if the keyspace has no owned token ranges (in this data center)
     if (sorted_owned_ranges.empty()) {
+        cmlog.debug("needs_cleanup sstable {}: no owned token ranges", sst->generation());
         return true;
     }
 
-    auto first_token = sst->get_first_decorated_key().token();
-    auto last_token = sst->get_last_decorated_key().token();
-    dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
-
-    auto r = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), first_token,
-            [] (const interval<dht::token>& a, const dht::token& b) {
-        // check that range a is before token b.
-        return a.after(b, dht::token_comparator());
-    });
-
-    // return true iff sst partition range isn't fully contained in any of the owned ranges.
-    if (r != sorted_owned_ranges.end()) {
-        if (r->contains(sst_token_range, dht::token_comparator())) {
-            return false;
+    auto pos = sorted_owned_ranges.begin();
+    auto cmp = dht::token_comparator();
+    auto sst_token_ranges = sst->load_token_ranges();
+    for (const auto& sst_token_range : sst_token_ranges) {
+        while (!pos->overlaps(sst_token_range, cmp)) {
+            if (++pos == sorted_owned_ranges.end()) {
+                cmlog.debug("needs_cleanup sstable {}: sst_token_range={} does not overlap with owned_ranges=[{}]", sst->generation(), sst_token_range, fmt::join(sorted_owned_ranges, ","));
+                return true;
+            }
+        }
+        if (!pos->contains(sst_token_range, cmp)) {
+            cmlog.debug("needs_cleanup sstable {}: sst_token_range={} is not contained in owned_range={}", sst->generation(), sst_token_range, *pos);
+            return true;
         }
     }
-    return true;
+    cmlog.debug("needs_cleanup sstable {} does not need cleanup: sst_token_ranges=[{}] are contained in owned_ranges=[{}]", sst->generation(), fmt::join(sst_token_ranges, ","), fmt::join(sorted_owned_ranges, ","));
+    return false;
 }
 
 bool compaction_manager::update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {

@@ -5,9 +5,8 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
-from test.cluster.util import check_token_ring_and_group0_consistency, new_test_keyspace
+from test.cluster.util import new_test_keyspace
+from test.cluster.object_store.test_backup import take_snapshot
 
 import pytest
 import asyncio
@@ -16,12 +15,10 @@ import time
 
 logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
-async def test_cleanup_stop(manager: ManagerClient):
+async def test_cleanup_retry(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'compaction_manager=debug',
-        '--smp', '1',
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
@@ -33,6 +30,9 @@ async def test_cleanup_stop(manager: ManagerClient):
 
         keys = range(100)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks, "test")
+
         async def check(expected_keys):
             logger.info("Checking table")
             cql = manager.get_cql()
@@ -42,33 +42,25 @@ async def test_cleanup_stop(manager: ManagerClient):
                 assert r.c == r.pk
 
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
-
+        _, base_sstables = await take_snapshot(ks, servers[:1], manager, logger)
         await check(keys)
 
-        s0_log = await manager.server_open_log(servers[0].server_id)
-        s0_mark = await s0_log.mark()
+        await manager.api.cleanup_keyspace(servers[0].ip_addr, ks)
+        _, sstables_after_cleanup = await take_snapshot(ks, servers[:1], manager, logger)
+        await check(keys)
 
-        await inject_error_one_shot(manager.api, servers[0].ip_addr, "sstable_cleanup_wait")
+        assert set(sstables_after_cleanup) == set(base_sstables)
 
-        # add a node so that cleanup would be required
         servers.append(await manager.server_add(cmdline=cmdline))
 
-        cleanup_task = asyncio.create_task(manager.api.cleanup_keyspace(servers[0].ip_addr, ks))
-
-        await s0_log.wait_for('sstable_cleanup_wait: waiting', from_mark=s0_mark)
-
-        stop_cleanup = asyncio.create_task(manager.api.stop_compaction(servers[0].ip_addr, "CLEANUP"))
-        time.sleep(1)
-
-        await manager.api.message_injection(servers[0].ip_addr, "sstable_cleanup_wait")
-        await stop_cleanup
-        caught_exception = False
-        try:
-            await cleanup_task
-        except Exception as e:
-            caught_exception = True
-            logger.info(f"Exception: {e}")
-
+        await manager.api.cleanup_keyspace(servers[0].ip_addr, ks)
+        _, sstables_after_bootstrap = await take_snapshot(ks, servers[:1], manager, logger)
         await check(keys)
-        assert caught_exception == True
 
+        assert set(sstables_after_bootstrap) != set(base_sstables)
+
+        await manager.api.cleanup_keyspace(servers[0].ip_addr, ks)
+        _, sstables_after_cleanup_retry = await take_snapshot(ks, servers[:1], manager, logger)
+        await check(keys)
+
+        assert set(sstables_after_cleanup_retry) == set(sstables_after_bootstrap)

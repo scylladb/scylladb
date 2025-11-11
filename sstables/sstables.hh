@@ -256,6 +256,8 @@ public:
     // from disk to achieve that.
     future<> load_owner_shards(const dht::sharder& sharder);
 
+    dht::token_range_vector load_token_ranges() const;
+
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
     future<> destroy();
