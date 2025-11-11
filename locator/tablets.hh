@@ -490,6 +490,15 @@ struct load_stats {
     // corresponding to the post-resize tablet_map.
     // In case any pre-resize tablet replica is not found, the function returns nullptr
     lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
+
+    // Modifies the tablet sizes in load_stats by moving the size of a tablet from leaving to pending host.
+    // The function returns modified load_stats if the tablet size was successfully migrated.
+    // It returns nullptr if any of the following is true:
+    // - tablet was not found on the leaving host
+    // - tablet was found on the pending host
+    // - pending and leaving hosts are equal (in case of intranode migration)
+    // - pending host is not found in load_stats.tablet_stats
+    lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
 };
 
 using load_stats_v2 = load_stats;
