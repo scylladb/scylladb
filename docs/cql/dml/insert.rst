@@ -80,7 +80,7 @@ columns effects of both statements are preserved:
 
     INSERT INTO NerdMovies (movie, director, main_actor)
           VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion');
-    INSERT INTO NerdMovies (movie, director, main_actor, year)
+    INSERT INTO NerdMovies (movie, director, year)
           VALUES ('Serenity', 'Josseph Hill Whedon', 2005);
     SELECT * FROM NerdMovies WHERE movie = 'Serenity'
 
