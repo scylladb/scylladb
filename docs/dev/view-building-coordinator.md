@@ -21,13 +21,6 @@ There are 2 types of tasks:
 - `process_staging` - process (generate view updates and move to base directory) 
                       all staging sstables associated with the tablet replica of the base table
 
-State of alive task can be either:
-- IDLE
-- STARTED
-- ABORTED
-
-If the task doesn't exist in the state, this means it was finished or aborted.
-
 View building tasks are created when:
 - `build_range` tasks:
   - a view/index is created
@@ -38,12 +31,29 @@ View building tasks are created when:
 - `process_staging` tasks:
   - a staging sstable was registered to `view_building_worker`
 
-A task might be aborted in two ways: by deleting it or by setting its state to `ABORTED`.
-If a view/keyspace is dropped, then its tasks are aborted by deleting them as they are no longer needed.
-On the other hand, at the beginning of a tablet operation (migration/resize/RF change), relevant view building tasks are aborted using `ABORTED` state.
-This intermediate state is needed to create new tasks at the end of the operation or in case of failure and rollback (aborted tasks are also deleted then).
+### Lifetime of a task
 
-The view building coordinator starts a task only if its tablet is not in transition (`tablet_map.get_tablet_transition_info(tid) == nullptr`).
+The group0 state stores only tasks that haven't been completed yet or were aborted but haven't been cleaned up yet.
+
+When a task is created, it is stored in group0 state (`system.view_building_tasks`) to be processed in the future.
+Then at some point, the view building cooridnator will decide to process it by sending a [`work_on_view_building_tasks` RPC](#rpc) to a worker.
+Unless the task was aborted, the worker will eventually reply that the task was finished. After the coordinator gets the response from the worker,
+it temporarily saves list of ids of finished tasks and removes those tasks from group0 state (pernamently marking them as finished) in 200ms intervals. (*)
+This batching of removing finished tasks is done in order to reduce number of generated group0 operations.
+
+On the other hand, view buildind tasks can can also be aborted due to 2 main reasons:
+- a keyspace/view was dropped
+- tablet operations (see [tablet operations section](#tablet-operations))
+In the first case we simply delete relevant view building tasks as they are no longer needed.
+But if a task needs to be aborted due to tablet operation, we're firstly setting the `aborted` flag to true. We need to do this because we need the task informations
+to created a new adjusted tasks (if the operation succeeded) or rollback them (if the operation failed).
+Once a task is aborted by setting the flag, this cannot be revoked, so rolling back a task means creating its duplicate and removing the original task.
+
+(*) - Because there is a time gap between when the coordinator learns that a task is finished (from the RPC response) and when the task is marked as completed,
+      it is possible that the coordinator may lose this information (e.g. due to Raft leader change). But each view building worker keeps track of finished tasks locally,
+      so when a new coordinator will send an RPC with the same view building tasks, the worker will immediately response that those tasks were completed.
+      In the worst case, when both the coordinator and worker nodes are restarted, we can completely lose that information and will have to redo the work.
+      However, view building tasks are idempotent.
 
 View building task struct:
 ```c++
@@ -53,14 +63,9 @@ struct view_building_task {
         process_staging,
     };
 
-    enum class task_state {
-        idle,
-        started,
-        aborted
-    };
     utils::UUID id;
     task_type type;
-    task_state state;
+    bool aborted;
 
     table_id base_id;
     table_id view_id; // is default value when `type == task_type::process_staging`
@@ -73,13 +78,25 @@ State machine:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> IDLE
-    IDLE --> [*]: aborted due to drop view
-    IDLE --> STARTED: vbc chooses to work on the task
-    STARTED --> ABORTED: aborted due to tablet operation
-    STARTED --> [*]: done or aborted due to drop view
-    IDLE --> ABORTED: aborted due to tablet operation
-    ABORTED --> [*]
+    state "the task is alive" as NORMAL
+    state "aborted flag is set to true" as ABORTED
+
+    [*] --> NORMAL: task is created
+    NORMAL --> work_on_view_building_tasks: view building coordinator sends a RPC
+    work_on_view_building_tasks --> [*]: the coordinator gets response from the RPC call if the task wasn't aborted in the mean time
+    NORMAL --> [*]: aborted due to keyspace/view drop
+    NORMAL --> ABORTED: aborted due to tablet operation
+    ABORTED --> [*]: new adjusted task is created
+    ABORTED --> [*]: the task is rolled back with new ID
+
+    state work_on_view_building_tasks {
+      state "view building worker is executing the task" as EXECUTE
+      state "the worker saves information that the task was finished locally" as DONE
+
+      [*] --> EXECUTE
+      EXECUTE --> DONE
+      DONE --> [*]
+    }
 ```
 
 ## Schema 
@@ -90,7 +107,7 @@ CREATE TABLE system.view_building_tasks (
     key text,
     id timeuuid,
     type text,
-    state text,
+    aborted boolean,
     base_id uuid,
     view_id uuid,         -- NULL for "process_staging" tasks
     base_tablet_id bigint,
@@ -104,11 +121,6 @@ The view building coordinator stores currently processing base table in `system.
 under `view_building_processing_base` key. 
 The entry is managed by group0.
 
-The coordinator also updates view build statuses in `system.view_build_status_v2`.
-When it selects new base table to process, it marks build statuses for all base table's views on all hosts as `STARTED`.
-When there are no more task for the some view (for all hosts!) and there are no `process_staging` tasks for the base table,
-then the view is marked as `SUCCESS` on all hosts.
-
 Once the view is built, an entry in `system.built_views` is created. Before the view building coordinator,
 this table was node-local one. But now the table is partially managed by group0, 
 meaning that all entries from tablet-based keyspaces are managed by group0 and
@@ -117,14 +129,14 @@ entries from vnode-based keyspaces are still node local.
 ## View building worker
 
 The view building worker is node-local service responsible for executing view building tasks.
-It observers view building state machine and executed the tasks once they enter `STARTED` state.
+It handles [work on view building tasks RPC](#rpc) and responses the coordinator once the tasks are finished.
+The worker also observes the group0 state to notice when tasks are aborted (by deleting them or by setting the aborted flag).
 
 The worker groups multiple view building tasks into a batch and it can execute only one batch per shard
 (it's the coordinator responsibility to schedule only batch per tablet replica).
 
 Tasks can be in one batch only if they have the same:
 - type
-- state (obviously it has to be STARTED)
 - base_id
 - tablet replica
 - tablet id
@@ -132,24 +144,16 @@ Tasks can be in one batch only if they have the same:
 ### RPC
 
 The view building worker doesn't mark tasks as finished (it doesn't do group0 operation with one exception).
-Instead, it saves ids of finished and aborted tasks and it is the coordinator who asks the worker
+Instead, it saves ids of finished tasks and it is the coordinator who asks the worker
 what is the result of some tasks using following RPC call:
 
 ```c++
-struct task_result {
-    enum class command_status: uint8_t {
-        success,
-        abort,
-    };
-    service::view_build_coordinator::command_status status;
-};
-
-verb [[cancellable]] work_on_view_building_tasks(std::vector<utils::UUID> tasks_ids) -> std::vector<service::view_building::view_task_result>
+verb [[cancellable]] work_on_view_building_tasks(raft::term_t term, shard_id shard, std::vector<utils::UUID> tasks_ids) -> std::vector<utils::UUID>
 ```
 
 The worker registers handler for the RPC, which:
 - attaches to the tasks and waits for the result
-- returns result when the tasks are finished/aborted
+- returns result when the tasks are finished
 
 ## Tablet operations
 
