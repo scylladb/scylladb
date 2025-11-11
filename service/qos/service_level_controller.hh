@@ -153,7 +153,10 @@ public:
         /// Synchronous version of `find_effective_service_level` that only checks the cache.
         std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
+        /// Execute a function within the service level context of a user, get_user_scheduling_group - async version 
+        /// get_user_cached_scheduling_group - sync version (used for v2 servers).
         future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+        scheduling_group get_user_cached_scheduling_group(const std::optional<auth::authenticated_user>& usr);
 
         template <typename Func, typename Ret = std::invoke_result_t<Func>>
             requires std::invocable<Func>
@@ -327,6 +330,12 @@ public:
      * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
      */
     future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+    /**
+     * Get the scheduling group of a specific user for the service level cache
+     * @param user - the user for determining the service level
+     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
+     */
+    scheduling_group get_cached_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
     /**
      * @return the name of the currently active service level if such exists or an empty
      * optional if no active service level.
