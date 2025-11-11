@@ -3842,6 +3842,82 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
     }, cfg).get();
 }
 
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
+
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const uint64_t tablet_size = 42;
+    range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+    global_tablet_id gid{table, tid};
+
+    // Check tablet size is correctly migrated
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(new_load_stats);
+
+        // Check tablet size is on host2
+        auto tablet_size_opt = new_load_stats->get_tablet_size(host2, rb_tid);
+        BOOST_REQUIRE(tablet_size_opt);
+        BOOST_REQUIRE(*tablet_size_opt == tablet_size);
+
+        // Check tablet size is not on host1
+        tablet_size_opt = new_load_stats->get_tablet_size(host1, rb_tid);
+        BOOST_REQUIRE(!tablet_size_opt);
+
+        // Check the migration removed the entry for the table after removing the last tablet size
+        BOOST_REQUIRE(!new_load_stats->tablet_stats.at(host1).tablet_sizes.contains(table));
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is not found on leaving replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1] = {};
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is already on pending replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when leaving and pending replicas are equal
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when pending host is not found in load_stats
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
