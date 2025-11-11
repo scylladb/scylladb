@@ -67,9 +67,9 @@ Please refer to the :ref:`update parameters <update-parameters>` section for mor
 
 .. code-block:: none
 
-   movie    | director      | main_actor | year
-   ----------+---------------+------------+------
-   Serenity | Joseph Whedon |    Unknown | null
+   movie    | director      | main_actor
+   ----------+---------------+------------
+   Serenity | Joseph Whedon |    Unknown
 
 
 ``INSERT`` is not required to assign all columns, so if two
