@@ -130,13 +130,16 @@ public:
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
     static inline const std::vector<backlog_controller::control_point> default_control_points = {
             backlog_controller::control_point{0.0, 50}, {1.5, 100}, {normalization_factor, 1000}};
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::chrono::milliseconds interval, std::function<float()> current_backlog)
+    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, float max_shares,
+        std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), std::move(interval),
           default_control_points,
           std::move(current_backlog),
           static_shares
         )
-    {}
+    {
+        set_max_share(max_shares);
+    }
 
     // Updates the maximum output value for control points.
     void set_max_share(float max_share);
