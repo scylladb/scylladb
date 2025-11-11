@@ -412,31 +412,43 @@ def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_lim
 
 # Verify that even if no "Limit" is specified for a Scan, the size of a
 # single returned page is still limited. DynamoDB specifies it should be
-# limited to 1 MB. In Alternator the limit is close to 1 MB, but it turns
-# out (see issue #10327) that for small tables the page size can grow up
-# to 3 MB. The following test accepts this as ok. Note that for larger tables,
-# the page size goes back to being closer to 1 MB.
+# limited to 1 MB. In Alternator the limit is usually also close to 1 MB,
+# but it turns out (see issue #10327) that for small tables Scylla scans
+# multiple vnodes or tablets in parallel and the returned page size can
+# grow signficantly above 1MB, depending on implementation details and the
+# number of vnodes or tablets.
+# Since the primary goal of this test was just to check that the Scan doesn't
+# return the *entire* table, below we fill the data with enough data (KB=8000)
+# that not all of it is returned in a single page, even if we have up to
+# 16 vnodes or 8 tablets (per node).
+# Additionally, we have another parametrized version of this test, where
+# the table has just 1.5 MB of data, as we would like a Scan not to return
+# all 1.5 MB in one page, but because of issue #10327 it does, so the test
+# fails.
 #
 # This test is for Scan paging on a table with many small partitions. We have
 # a separate test for a Query over a single long partition with many rows -
 # test_query.py::test_query_reverse_longish (the test's name suggests it
 # checks reverse queries, but it also checks the unreversed unlimited query).
 # For single-partition scans, the page size is more exactly 1 MB.
-def test_scan_paging_missing_limit(dynamodb):
+#
+@pytest.mark.parametrize("KB", [
+    pytest.param(1500, marks=pytest.mark.xfail(
+        reason="Issue #10327: small tables don't respect paging limits")),
+    8000
+])
+def test_scan_paging_missing_limit(dynamodb, KB):
     with new_test_table(dynamodb,
             KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'N' }]) as table:
-        # Insert a 6 MB of data in multiple smaller partitions.
-        # Because of issue #10327 when the table is *small* Alternator may
-        # return significantly more than 1 MB - sometimes even 4 MB. This
-        # is why we need to use 6 MB of data here and 2 MB is not enough.
+        # Insert data in multiple smaller partitions.
         str = 'x' * 10240
-        N = 600
+        N = KB // 10
         with table.batch_writer() as batch:
             for i in range(N):
                 batch.put_item({'p': i, 's': str})
         n = len(table.scan(ConsistentRead=True)['Items'])
         # we don't know how big n should be (hopefully around 100)
         # but definitely not N.
-        assert n < N
+        assert n < N, f"The response was not paged, {n*len(str)/1024} kB of data returned in a single page"

@@ -22,8 +22,8 @@ from .util import new_test_table, random_string, full_query, unique_table_name, 
 # both values. Thanks to this, the tests will run for both vnodes and tables without the need to change
 # their argument list.
 @pytest.fixture(params=[
-    [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
-    [{'Key': 'experimental:initial_tablets', 'Value': '0'}],
+    [{'Key': 'system:initial_tablets', 'Value': 'none'}],
+    [{'Key': 'system:initial_tablets', 'Value': '0'}],
 ], ids=["using vnodes", "using tablets"], autouse=True)
 def tags_param(request):
     # Set TAGS in the global namespace of this module
@@ -660,7 +660,7 @@ def test_ttl_expiration_streams(dynamodb, dynamodbstreams, waits_for_expiration)
     # Alternator Streams currently doesn't work with tablets, so until
     # #23838 is solved, skip this test on tablets.
     for tag in TAGS:
-        if tag['Key'] == 'experimental:initial_tablets' and tag['Value'].isdigit():
+        if tag['Key'] == 'system:initial_tablets' and tag['Value'].isdigit():
             pytest.skip("Streams test skipped on tablets due to #23838")
 
     # In my experiments, a 30-minute (1800 seconds) is the typical

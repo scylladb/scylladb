@@ -697,11 +697,3 @@ def test_create_table_spurious_attribute_definitions(dynamodb):
             AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' },
                                   { 'AttributeName': 'c', 'AttributeType': 'S' }]) as table:
                 pass
-
-# Currently, because of incomplete LWT support, Alternator tables do not use
-# tablets by default - even if the tablets experimental feature is enabled.
-# This test enshrines this fact - that an Alternator table doesn't use tablets.
-# This is a temporary test: When we reverse this decision and tablets go back
-# to being used by default on Alternator tables, this test should be deleted.
-def test_alternator_doesnt_use_tablets(dynamodb, has_tablets):
-    assert not has_tablets

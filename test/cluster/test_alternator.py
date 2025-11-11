@@ -609,7 +609,7 @@ async def test_concurrent_createtable(manager: ManagerClient):
        concurrent CreateTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     # In boto3, "resources", the object returned by get_alternator(), are
     # not thread-safe. However, we will create 3 threads each will write to
     # a different alternators[i], so we're fine.
@@ -675,7 +675,7 @@ async def test_concurrent_deletetable(manager: ManagerClient):
        concurrent DeleteTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -724,7 +724,7 @@ async def test_concurrent_updatetable(manager: ManagerClient):
        concurrent UpdateTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -779,7 +779,7 @@ async def test_concurrent_modify_tags(manager: ManagerClient, op):
        The name of this test is named after db::modify_tags(), which all
        three of these operations use to implement the change to the table.
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -862,9 +862,9 @@ async def test_zero_token_node_load_balancer(manager, tablets):
        versions - tablets=True and tablets=False.
     """
     if tablets:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': '0'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': '0'}]
     else:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
     # the assignment of data (tablets or vnodes) to nodes isn't trivial,
     # which will allow us to check that non-trivial request forwarding works.
