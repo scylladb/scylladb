@@ -134,13 +134,13 @@ class ScyllaSetup:
     def arguments(self):
         args = []
         if self._memory is not None:
-            args += ["--memory %s" % self._memory]
+            args += ["--memory", self._memory]
 
         if self._reserveMemory is not None:
-            args += ["--reserve-memory %s" % self._reserveMemory]
+            args += ["--reserve-memory", self._reserveMemory]
 
         if self._smp is not None:
-            args += ["--smp %s" % self._smp]
+            args += ["--smp", self._smp]
 
         if self._overprovisioned == "1" or (self._overprovisioned is None and self._cpuset is None):
             args += ["--overprovisioned"]
@@ -160,52 +160,50 @@ class ScyllaSetup:
             else:
                 self._seeds = self._listenAddress
 
-        args += ["--listen-address %s" % self._listenAddress,
-                 "--rpc-address %s" % self._rpcAddress,
-                 "--seed-provider-parameters seeds=%s" % self._seeds]
+        args += ["--listen-address", self._listenAddress,
+                 "--rpc-address", self._rpcAddress,
+                 "--seed-provider-parameters", "seeds=%s" % self._seeds]
 
         if self._broadcastAddress is not None:
-            args += ["--broadcast-address %s" % self._broadcastAddress]
+            args += ["--broadcast-address", self._broadcastAddress]
         if self._broadcastRpcAddress is not None:
-            args += ["--broadcast-rpc-address %s" % self._broadcastRpcAddress]
+            args += ["--broadcast-rpc-address", self._broadcastRpcAddress]
 
         if self._apiAddress is not None:
-            args += ["--api-address %s" % self._apiAddress]
+            args += ["--api-address", self._apiAddress]
 
         if self._alternatorAddress is not None:
-            args += ["--alternator-address %s" % self._alternatorAddress]
+            args += ["--alternator-address", self._alternatorAddress]
 
         if self._alternatorPort is not None:
-            args += ["--alternator-port %s" % self._alternatorPort]
+            args += ["--alternator-port", self._alternatorPort]
 
         if self._alternatorHttpsPort is not None:
-            args += ["--alternator-https-port %s" % self._alternatorHttpsPort]
+            args += ["--alternator-https-port", self._alternatorHttpsPort]
 
         if self._alternatorWriteIsolation is not None:
-            args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]
+            args += ["--alternator-write-isolation", self._alternatorWriteIsolation]
 
         if self._authenticator is not None:
-            args += ["--authenticator %s" % self._authenticator]
+            args += ["--authenticator", self._authenticator]
 
         if self._authorizer is not None:
-            args += ["--authorizer %s" % self._authorizer]
+            args += ["--authorizer", self._authorizer]
 
         if self._experimental_features is not None:
             for feature in self._experimental_features:
-                args += [f"--experimental-features {feature}"]
+                args += [f"--experimental-features", feature]
 
         if self._clusterName is not None:
-            args += ["--cluster-name %s" % self._clusterName]
+            args += ["--cluster-name", self._clusterName]
 
         if self._endpointSnitch is not None:
-            args += ["--endpoint-snitch %s" % self._endpointSnitch]
+            args += ["--endpoint-snitch", self._endpointSnitch]
 
         if self._replaceNodeFirstBoot is not None:
-            args += ["--replace-node-first-boot %s" % self._replaceNodeFirstBoot]
+            args += ["--replace-node-first-boot", self._replaceNodeFirstBoot]
         elif self._replaceAddressFirstBoot is not None:
-            args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
+            args += ["--replace-address-first-boot", self._replaceAddressFirstBoot]
 
-        args += ["--blocked-reactor-notify-ms 999999999"]
-
-        with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
-            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))
+        args += ["--blocked-reactor-notify-ms", "999999999"]
+        return args
