@@ -23,4 +23,12 @@ Scylla cluster (clusters can be reused for tests within the same folder).
 To add a new folder, create a new directory, and then
 copy & edit its `suite.ini`.
 
+It's handy to prepare a virtual environment to run test in
 
+$ python -m venv ./env
+$ . ./env/bin/activate
+$ pip install -r test/requirements.txt
+$ ./test.py ${arguments}
+
+Once done, the `env` directory can be kept, and only steps 2 and 4 will
+be required to run tests in virtualenv again.
