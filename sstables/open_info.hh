@@ -81,6 +81,8 @@ struct sstable_open_config {
     // Mimics behavior when a SSTable is streamed to a given shard, where SSTable
     // writer considers the shard that created the SSTable as its owner.
     bool current_shard_as_sstable_owner = false;
+    // Do not move the sharding metadata to the sharder, keeping it in the scylla metadata..
+    bool keep_sharding_metadata = false;
 };
 
 }
