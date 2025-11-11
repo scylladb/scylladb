@@ -369,7 +369,11 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         auto sst = sst_man.make_sstable(schema, options, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
         try {
-            co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+            auto open_cfg = sstables::sstable_open_config{
+                .load_first_and_last_position_metadata = false,
+                .keep_sharding_metadata = true,
+            };
+            co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
@@ -1522,6 +1526,9 @@ const char* to_string(sstables::ext_timestamp_stats_type t) {
 class scylla_metadata_visitor {
     json_writer& _writer;
 
+    dht::token as_token(const sstables::disk_string<uint16_t>& ds) const {
+        return dht::token(dht::token::kind::key, bytes_view(ds));
+    }
 public:
     scylla_metadata_visitor(json_writer& writer) : _writer(writer) { }
 
@@ -1535,7 +1542,7 @@ public:
             _writer.Key("exclusive");
             _writer.Bool(e.left.exclusive);
             _writer.Key("token");
-            _writer.String(disk_string_to_string(e.left.token));
+            _writer.AsString(as_token(e.left.token));
             _writer.EndObject();
 
             _writer.Key("right");
@@ -1543,7 +1550,7 @@ public:
             _writer.Key("exclusive");
             _writer.Bool(e.right.exclusive);
             _writer.Key("token");
-            _writer.String(disk_string_to_string(e.right.token));
+            _writer.AsString(as_token(e.right.token));
             _writer.EndObject();
 
             _writer.EndObject();
