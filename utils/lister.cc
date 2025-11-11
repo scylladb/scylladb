@@ -104,20 +104,21 @@ future<std::optional<directory_entry>> directory_lister::get() {
     }
     std::exception_ptr ex;
     try {
-        while (auto de = co_await (*_gen)()) {
-            if (!de->type) {
-                de->type = co_await file_type((_dir / de->name).native(), follow_symlink::no);
-                if (!de->type) {
+        while (auto de_opt = co_await (*_gen)()) {
+            auto& de = de_opt->get();
+            if (!de.type) {
+                de.type = co_await file_type((_dir / de.name).native(), follow_symlink::no);
+                if (!de.type) {
                     continue;
                 }
             }
-            if (_type && !_type.contains(de->type.value())) {
+            if (_type && !_type.contains(de.type.value())) {
                 continue;
             }
-            if (!_do_show_hidden && de->name[0] == '.') {
+            if (!_do_show_hidden && de.name[0] == '.') {
                 continue;
             }
-            if (!_filter(_dir, *de)) {
+            if (!_filter(_dir, de)) {
                 continue;
             }
 
