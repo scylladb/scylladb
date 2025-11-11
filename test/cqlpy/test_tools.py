@@ -262,8 +262,14 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
     print(out)
 
     assert out
-    assert json.loads(out)
+    json_out = json.loads(out)
+    assert json_out
 
+    if what == "scylla-metadata":
+        assert "sstables" in json_out, f"Expected 'sstables' in json output: {json_out}"
+        for sst_name, sst_metadata in json_out["sstables"].items():
+            assert "sharding" in sst_metadata, f"Expected 'sharding' metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
+            assert sst_metadata["sharding"] != [], f"Expected non-empty sharding metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
 
 @pytest.mark.parametrize("table_factory", [
         simple_no_clustering_table,
