@@ -1344,7 +1344,7 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await update_info_for_opened_data(cfg);
     parse_assert(!_shards.empty(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
-    if (sm) {
+    if (sm && !cfg.keep_sharding_metadata) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
         co_await utils::clear_gently(sm->token_ranges.elements);
         sm->token_ranges.elements = {};
