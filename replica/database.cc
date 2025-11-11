@@ -532,6 +532,18 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
+void compaction_controller::set_max_shares(float max_shares) {
+    // second-last control point dictates the minimum max shares, since the config
+    // should only cap the output of the last control point (i.e. the max shares).
+    float minimum_max_shares = (_control_points.rbegin() + 1)->output;
+    if (max_shares < minimum_max_shares) {
+        dblog.warn("The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}",
+                   max_shares, minimum_max_shares);
+        max_shares = minimum_max_shares;
+    }
+    _control_points.back().output = max_shares;
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");
