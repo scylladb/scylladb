@@ -4300,8 +4300,22 @@ future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_
             .then(utils::result_into_future<result<>>);
 }
 
+<<<<<<< HEAD
 future<> storage_proxy::send_batchlog_replay_to_all_replicas(std::vector<mutation> mutations, clock_type::time_point timeout) {
     std::vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
+||||||| parent of 8545f7eedd (service/storage_proxy: s/batch_replay_throw/storage_proxy_fail_replay_batch/)
+future<> storage_proxy::send_batchlog_replay_to_all_replicas(utils::chunked_vector<mutation> mutations, clock_type::time_point timeout) {
+    if (utils::get_local_injector().is_enabled("batch_replay_throw")) {
+        throw std::runtime_error("Skipping batch replay due to batch_replay_throw injection");
+    }
+
+    utils::chunked_vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
+=======
+future<> storage_proxy::send_batchlog_replay_to_all_replicas(utils::chunked_vector<mutation> mutations, clock_type::time_point timeout) {
+    utils::get_local_injector().inject("storage_proxy_fail_replay_batch", [] { throw std::runtime_error("Error injection: failing to send batch"); });
+
+    utils::chunked_vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
+>>>>>>> 8545f7eedd (service/storage_proxy: s/batch_replay_throw/storage_proxy_fail_replay_batch/)
             return batchlog_replay_mutation(std::move(m));
         }) | std::ranges::to<std::vector<batchlog_replay_mutation>>();
 
