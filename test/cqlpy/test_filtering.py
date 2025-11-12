@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 #############################################################################
-# Tests for the SELECT requests with various filtering expressions.
+# Tests originally for the SELECT requests with various filtering expressions,
+# later extended with other CQL commands supporting WHERE's conditional expressions.
 # We have a separate test file test_allow_filtering.py, for tests that
 # focus on whether the string "ALLOW FILTERING" is needed or not needed
 # for a query. In the tests in this file we focus more on the correctness
@@ -486,3 +487,17 @@ def test_selecting_a_regular_column_does_not_poison_filtering_of_a_static_row(cq
         cql.execute(f"INSERT INTO {table} (a, s) VALUES (1, 2)")
         res = cql.execute(f"SELECT a, b, c, s FROM {table} WHERE s = 2 ALLOW FILTERING")
         assert list(res) == [(1, None, None, 2)]
+
+# Test that some other CQL commands support the same filtering as SELECT, i.e. one based on the WHERE clause.
+# Note we don't need to explicitly assert the results, as we know that WHERE clause works correctly from the tests above,
+# so we're just testing CQL interface: if these commands were not allowed, the test would fail executing invalid query.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
+def test_filtering_operations(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f"INSERT INTO {table} (p, c, s) VALUES (1, 2, 3)")
+
+        cql.execute(f"INSERT INTO {table} (p, c, s) VALUES (1, 1, 2) IF s != 1 AND s IS NOT NULL")
+        cql.execute(f"UPDATE {table} SET s = 1 WHERE p = 1 AND c = 1 IF s in (1, 2)")
+        cql.execute(f"DELETE FROM {table} WHERE p = 1 AND c = 1 IF s > 0 AND s < 5")
