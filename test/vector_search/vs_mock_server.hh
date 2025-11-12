@@ -24,12 +24,12 @@ namespace test::vector_search {
 
 class vs_mock_server {
 public:
-    struct ann_req {
+    struct request {
         seastar::sstring path;
         seastar::sstring body;
     };
 
-    struct ann_resp {
+    struct response {
         seastar::http::reply::status_type status;
         seastar::sstring body;
     };
@@ -38,7 +38,7 @@ public:
         : _port(port) {
     }
 
-    explicit vs_mock_server(ann_resp next_ann_response)
+    explicit vs_mock_server(response next_ann_response)
         : _next_ann_response(std::move(next_ann_response)) {
     }
 
@@ -70,12 +70,20 @@ public:
         return _port;
     }
 
-    const std::vector<ann_req>& requests() const {
+    const std::vector<request>& ann_requests() const {
         return _ann_requests;
     }
 
-    void next_ann_response(ann_resp response) {
+    const std::vector<request>& status_requests() const {
+        return _status_requests;
+    }
+
+    void next_ann_response(response response) {
         _next_ann_response = std::move(response);
+    }
+
+    void next_status_response(response response) {
+        _next_status_response = std::move(response);
     }
 
 private:
@@ -94,7 +102,7 @@ private:
 
     seastar::future<std::unique_ptr<seastar::http::reply>> handle_ann_request(
             std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
-        ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
+        request r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);
@@ -103,8 +111,9 @@ private:
 
     seastar::future<std::unique_ptr<seastar::http::reply>> handle_status_request(
             std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
-        rep->set_status(seastar::http::reply::status_type::ok);
-        rep->write_body("json", "SERVING");
+        _status_requests.push_back(request{.path = "/api/v1/status", .body = co_await seastar::util::read_entire_stream_contiguous(*req->content_stream)});
+        rep->set_status(_next_status_response.status);
+        rep->write_body("json", _next_status_response.body);
         co_return rep;
     }
 
@@ -128,8 +137,10 @@ private:
     uint16_t _port = 0;
     seastar::sstring _host;
     std::unique_ptr<seastar::httpd::http_server> _http_server;
-    std::vector<ann_req> _ann_requests;
-    ann_resp _next_ann_response{seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
+    std::vector<request> _ann_requests;
+    std::vector<request> _status_requests;
+    response _next_ann_response{seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
+    response _next_status_response{seastar::http::reply::status_type::ok, "SERVING"};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
 };
 

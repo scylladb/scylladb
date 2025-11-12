@@ -484,9 +484,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 // server responds with 404 - client should return service_error
                 server->next_ann_response({status_type::not_found, "idx2 not found"});
                 auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
-                BOOST_REQUIRE(!server->requests().empty());
-                BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
-                BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx2/ann");
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx2/ann");
                 BOOST_REQUIRE(!keys);
                 auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
                 BOOST_CHECK(err != nullptr);
@@ -495,9 +495,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!server->requests().empty());
-                BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
-                BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx/ann");
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx/ann");
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
@@ -616,8 +616,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
     // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
-    auto s1 = co_await make_vs_mock_server(vs_mock_server::ann_resp(status_type::not_found, "Not found"));
-    auto s2 = co_await make_vs_mock_server(vs_mock_server::ann_resp(status_type::service_unavailable, "Service unavailable"));
+    auto s1 = co_await make_vs_mock_server(vs_mock_server::response(status_type::not_found, "Not found"));
+    auto s2 = co_await make_vs_mock_server(vs_mock_server::response(status_type::service_unavailable, "Service unavailable"));
 
     constexpr auto is_s2_response = [](const auto& keys) -> bool {
         return !keys && std::holds_alternative<vector_store_client::service_error>(keys.error()) &&
@@ -704,7 +704,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return !s1->requests().empty() && !s2->requests().empty();
+                    co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
             cfg)
@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return !s1->requests().empty() && !s2->requests().empty();
+                    co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
             cfg)
