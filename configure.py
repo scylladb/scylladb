@@ -640,7 +640,8 @@ raft_tests = set([
 
 vector_search_tests = set([
     'test/vector_search/vector_store_client_test',
-    'test/vector_search/load_balancer_test'
+    'test/vector_search/load_balancer_test',
+    'test/vector_search/client_test'
 ])
 
 wasms = set([
@@ -1658,6 +1659,7 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
 
 deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
 
 wasm_deps = {}
 
