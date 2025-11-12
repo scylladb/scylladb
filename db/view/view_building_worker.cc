@@ -23,6 +23,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "schema/schema_fwd.hh"
+#include "view_info.hh"
 #include "idl/view.dist.hh"
 #include "sstables/sstables.hh"
 #include "utils/exponential_backoff_retry.hh"
@@ -429,6 +430,23 @@ void view_building_worker::init_messaging_service() {
     ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (std::vector<utils::UUID> ids) -> future<std::vector<view_task_result>> {
         return container().invoke_on(0, [ids = std::move(ids)] (view_building_worker& vbw) mutable -> future<std::vector<view_task_result>> {
             return vbw.work_on_tasks(std::move(ids));
+        });
+    });
+    ser::view_rpc_verbs::register_rebuild_materialized_view(&_messaging, [this] (rpc::opt_time_point t, query::rebuild_materialized_view_request req) -> future<query::rebuild_materialized_view_result> {
+        vbw_logger.debug("Received rebuild_materialized_view RPC for view_id={}, base_pranges={}, base_slice={}", req.view_id, req.base_pranges, req.base_slice);
+        auto timeout = t.value_or(seastar::rpc::rpc_clock_type::time_point::max());
+        return container().invoke_on_all([req, timeout] (view_building_worker& vbw) mutable -> future<> {
+            auto view_schema = vbw._db.find_schema(req.view_id);
+            auto base_cf = vbw._db.find_column_family(view_schema->view_info()->base_id()).shared_from_this();
+            co_await when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams());
+            co_await flush_base(base_cf, vbw._as);
+            co_await vbw.rebuild_ranges(req.view_id, req.base_pranges, req.base_slice, timeout);
+        }).then([] {
+            // No exceptions means success
+            return query::rebuild_materialized_view_result{.status = query::rebuild_materialized_view_result::command_status::success};
+        }).handle_exception([] (std::exception_ptr eptr) {
+            vbw_logger.warn("rebuild_materialized_view RPC failed with: {}", eptr);
+            return query::rebuild_materialized_view_result{.status = query::rebuild_materialized_view_result::command_status::fail};
         });
     });
 }
@@ -843,6 +861,56 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
 
         if (eptr) {
             std::rethrow_exception(eptr);
+        }
+    });
+}
+
+future<> view_building_worker::rebuild_ranges(table_id view_id, dht::partition_range_vector pranges, query::partition_slice slice, lowres_clock::time_point timeout) {
+    auto view = _db.find_schema(view_id);
+    auto base_id = view->view_info()->base_id();
+    return seastar::async([this, base_id, view_id, pranges = std::move(pranges), slice = std::move(slice), timeout = std::move(timeout)] () mutable {
+        abort_on_expiry aoe(timeout);
+        for (auto& prange: pranges) {
+            vbw_logger.debug("Rebuilding partition range {} and slice {} for view {}", prange, slice, view_id);
+            gc_clock::time_point now = gc_clock::now();
+            auto base_cf = _db.find_column_family(base_id).shared_from_this();
+            reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "rebuild_view", timeout, {});
+            auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
+                    base_cf->schema(),
+                    permit,
+                    prange,
+                    slice,
+                    nullptr,
+                    streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::no);
+            auto compaction_state = make_lw_shared<compact_for_query_state>(
+                    *reader.schema(),
+                    now,
+                    slice,
+                    query::max_rows,
+                    query::max_partitions,
+                    base_cf->get_compaction_manager().get_tombstone_gc_state());
+            auto consumer = compact_for_query<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
+                    _db,
+                    {view_id},
+                    base_cf,
+                    reader,
+                    permit,
+                    _vug.shared_from_this(),
+                    now,
+                    aoe.abort_source()));
+
+            std::exception_ptr eptr;
+            try {
+                reader.consume_in_thread(std::move(consumer));
+            } catch (...) {
+                eptr = std::current_exception();
+            }
+            reader.close().get();
+
+            if (eptr) {
+                std::rethrow_exception(eptr);
+            }
         }
     });
 }

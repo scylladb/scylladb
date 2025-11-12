@@ -800,6 +800,14 @@ public:
      */
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms);
 
+    /**
+     * Sends the rebuild materialized view request to all replicas
+     * @param request
+     * @param timeout
+     */
+    future<query::rebuild_materialized_view_result>
+    rebuild_materialized_view(query::rebuild_materialized_view_request request, std::chrono::milliseconds timeout_in_ms);
+
     /*
      * Executes data query on the whole cluster.
      *

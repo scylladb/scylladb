@@ -539,6 +539,23 @@ struct mapreduce_result {
 };
 
 std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::printer&);
+
+struct rebuild_materialized_view_request {
+    dht::partition_range_vector base_pranges;
+    query::partition_slice base_slice;
+
+    ::table_id view_id;
+};
+
+
+struct rebuild_materialized_view_result {
+    enum class command_status: uint8_t {
+        fail,
+        success
+    };
+    query::rebuild_materialized_view_result::command_status status;
+};
+
 }
 
 

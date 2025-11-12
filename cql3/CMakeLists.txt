@@ -75,6 +75,7 @@ target_sources(cql3
     statements/strongly_consistent_select_statement.cc
     statements/delete_statement.cc
     statements/prune_materialized_view_statement.cc
+    statements/rebuild_materialized_view_statement.cc
     statements/batch_statement.cc
     statements/select_statement.cc
     statements/use_statement.cc

@@ -20,6 +20,7 @@
 #include "sstables/shared_sstable.hh"
 #include "utils/UUID.hh"
 #include "service/migration_listener.hh"
+#include "query/query-request.hh"
 
 namespace replica {
 class database;
@@ -186,6 +187,8 @@ private:
 
     dht::token_range get_tablet_token_range(table_id table_id, dht::token last_token);
     future<> do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as);
+    future<> rebuild_ranges(table_id view_id, dht::partition_range_vector pranges, query::partition_slice slice, lowres_clock::time_point timeout);
+
     future<> do_process_staging(table_id base_id, dht::token last_token);
 
     future<> run_staging_sstables_registrator();
