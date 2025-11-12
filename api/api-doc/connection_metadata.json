@@ -1,0 +1,76 @@
+    , "/v2/connection-metadata":{
+        "get": {
+            "description":"List all connection metadata entries",
+            "operationId":"get_connection_metadata",
+            "tags":["connection"],
+            "produces":[
+                "application/json"
+            ],
+            "parameters":[],
+            "responses":{
+                "200":{
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/connection_metadata_entry" }
+                    }
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{"$ref":"#/definitions/ErrorModel"}
+                }
+            }
+        },
+        "post": {
+            "description":"Upsert one or more connection metadata entries",
+            "operationId":"set_connection_metadata",
+            "tags":["connection"],
+            "parameters":[
+                {
+                    "name":"body",
+                    "in":"body",
+                    "description":"Array of connection metadata entries to upsert",
+                    "required":true,
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/connection_metadata_entry" }
+                    }
+                }
+            ],
+            "responses":{
+                "200":{ "description": "OK" },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{ "$ref":"#/definitions/ErrorModel" }
+                }
+            }
+        },
+        "delete": {
+            "description":"Delete the connection metadata",
+            "operationId":"delete_connection_metadata",
+            "tags":["connection"],
+            "parameters":[
+                {
+                    "name":"body",
+                    "in":"body",
+                    "description":"Array of connection metadata keys to delete entries",
+                    "required":true,
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/connection_metadata_key" }
+                    }
+                }
+            ],
+            "responses":{
+                "200":{
+                    "description": "OK"
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{
+                        "$ref":"#/definitions/ErrorModel"
+                    }
+                }
+            }
+        }
+    }
+

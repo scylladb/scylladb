@@ -31,6 +31,7 @@ set(swagger_files
   api-doc/column_family.json
   api-doc/commitlog.json
   api-doc/compaction_manager.json
+  api-doc/connection_metadata.json
   api-doc/config.json
   api-doc/cql_server_test.json
   api-doc/endpoint_snitch_info.json
