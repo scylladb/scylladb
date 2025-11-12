@@ -2355,7 +2355,7 @@ uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
 }
 
-uint64_t sstable::bytes_on_disk() const {
+file_size_stats sstable::get_file_size_stats() const {
     if (!_metadata_size_on_disk) {
         on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
     }
@@ -2365,7 +2365,16 @@ uint64_t sstable::bytes_on_disk() const {
     if (!_index_file_size && !_partitions_file_size) {
         on_internal_error(sstlog, "On-disk size of sstable index was not set");
     }
-    return _metadata_size_on_disk + _data_file_size + _index_file_size + _partitions_file_size + _rows_file_size;
+    uint64_t size_without_data = _metadata_size_on_disk + _index_file_size + _partitions_file_size + _rows_file_size;
+
+    file_size_stats stats;
+    stats.on_disk = size_without_data + _data_file_size;
+    stats.before_compression = size_without_data + data_size();
+    return stats;
+}
+
+uint64_t sstable::bytes_on_disk() const {
+    return get_file_size_stats().on_disk;
 }
 
 uint64_t sstable::filter_size() const {

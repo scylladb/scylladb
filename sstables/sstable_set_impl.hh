@@ -59,7 +59,7 @@ public:
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
         dht::token_range token_range,
-        uint64_t bytes_on_disk);
+        file_size_stats bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
@@ -139,7 +139,7 @@ public:
     virtual bool insert(shared_sstable sst) override;
     virtual bool erase(shared_sstable sst) override;
     virtual size_t size() const noexcept override;
-    virtual uint64_t bytes_on_disk() const noexcept override;
+    virtual file_size_stats get_file_size_stats() const noexcept override;
     virtual sstable_set_impl::selector_and_schema_t make_incremental_selector() const override;
 
     virtual mutation_reader create_single_key_sstable_reader(

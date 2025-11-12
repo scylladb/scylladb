@@ -241,7 +241,7 @@ void test_main_thread(cql_test_env& env) {
 
     env.local_db().flush_all_memtables().get();
 
-    testlog.info("Live disk space used: {}", tab.get_stats().live_disk_space_used);
+    testlog.info("Live disk space used: {}", tab.get_stats().live_disk_space_used.on_disk);
     testlog.info("Live sstables: {}", tab.get_stats().live_sstable_count);
 
     testlog.info("Preparing dummy cache");

@@ -192,6 +192,11 @@ sstable_set::bytes_on_disk() const noexcept {
     return _impl->bytes_on_disk();
 }
 
+file_size_stats
+sstable_set::get_file_size_stats() const noexcept {
+    return _impl->get_file_size_stats();
+}
+
 sstable_set::~sstable_set() = default;
 
 sstable_set::incremental_selector::incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s)
@@ -323,7 +328,7 @@ static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unor
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, uint64_t bytes_on_disk)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, file_size_stats bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
@@ -334,7 +339,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::v
 }
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _token_range, _bytes_on_disk);
+    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _token_range, _file_size_stats);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
@@ -376,11 +381,11 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
         // sst is already in the set, no further handling is required
         return false;
     }
-    auto n = sst->bytes_on_disk();
-    add_bytes_on_disk(n);
+    auto size_stats = sst->get_file_size_stats();
+    add_file_size_stats(size_stats);
     auto undo_all_insert = defer([&] () {
         _all->erase(sst);
-        sub_bytes_on_disk(n);
+        sub_file_size_stats(size_stats);
     });
 
     auto maybe_insert_run_fragment = [this] (const shared_sstable& sst) mutable {
@@ -420,7 +425,7 @@ bool partitioned_sstable_set::erase(shared_sstable sst) {
     }
     auto ret = _all->erase(sst) != 0;
     if (ret) {
-        sub_bytes_on_disk(sst->bytes_on_disk());
+        sub_file_size_stats(sst->get_file_size_stats());
     }
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
@@ -557,7 +562,7 @@ bool time_series_sstable_set::insert(shared_sstable sst) {
     auto min_pos = sst->min_position();
     auto max_pos_reversed = sst->max_position().reversed();
     _sstables->emplace(std::move(min_pos), sst);
-    add_bytes_on_disk(sst->bytes_on_disk());
+    add_file_size_stats(sst->get_file_size_stats());
     _sstables_reversed->emplace(std::move(max_pos_reversed), std::move(sst));
   } catch (...) {
     erase(sst);
@@ -576,7 +581,7 @@ bool time_series_sstable_set::erase(shared_sstable sst) {
         found = it != last;
         if (found) {
             _sstables->erase(it);
-            sub_bytes_on_disk(sst->bytes_on_disk());
+            sub_file_size_stats(sst->get_file_size_stats());
         }
     }
 
@@ -1179,9 +1184,9 @@ compound_sstable_set::size() const noexcept {
     return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::size)), size_t(0), std::plus{});
 }
 
-uint64_t
-compound_sstable_set::bytes_on_disk() const noexcept {
-    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::bytes_on_disk)), uint64_t(0), std::plus{});
+file_size_stats
+compound_sstable_set::get_file_size_stats() const noexcept {
+    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::get_file_size_stats)), file_size_stats{}, std::plus{});
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {

@@ -5410,7 +5410,7 @@ future<> run_controller_test(compaction::compaction_strategy_type compaction_str
                     available_space -= std::min(available_space, uint64_t(tier_size));
                 }
 
-                auto table_size = t->get_stats().live_disk_space_used;
+                auto table_size = t->get_stats().live_disk_space_used.on_disk;
                 testlog.debug("T{}: {} tiers, with total size={}", t_idx, tiers, utils::pretty_printed_data_size(table_size));
                 tables.push_back(t);
                 tables_total_size += table_size;

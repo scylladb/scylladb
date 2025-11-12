@@ -224,7 +224,9 @@ public:
 
     size_t live_sstable_count() const noexcept;
     uint64_t live_disk_space_used() const noexcept;
+    sstables::file_size_stats live_disk_space_used_full_stats() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
+    sstables::file_size_stats total_disk_space_used_full_stats() const noexcept;
 
     // With static sharding, i.e. vnodes, there will be only one active view.
     compaction::compaction_group_view& as_view_for_static_sharding() const;

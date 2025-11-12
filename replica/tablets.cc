@@ -873,7 +873,7 @@ class tablet_sstable_set : public sstables::sstable_set_impl {
     // which provides faster lookup time.
     std::set<size_t> _sstable_set_ids;
     size_t _size = 0;
-    uint64_t _bytes_on_disk = 0;
+    sstables::file_size_stats _file_size_stats;
 
 public:
     tablet_sstable_set(const tablet_sstable_set& o)
@@ -882,7 +882,7 @@ public:
         , _sstable_sets(o._sstable_sets)
         , _sstable_set_ids(o._sstable_set_ids)
         , _size(o._size)
-        , _bytes_on_disk(o._bytes_on_disk)
+        , _file_size_stats(o._file_size_stats)
     {}
 
     tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap)
@@ -892,7 +892,7 @@ public:
         sgm.for_each_storage_group([this] (size_t id, storage_group& sg) {
             auto set = sg.make_sstable_set();
             _size += set->size();
-            _bytes_on_disk += set->bytes_on_disk();
+            _file_size_stats += set->get_file_size_stats();
             _sstable_sets[id] = std::move(set);
             _sstable_set_ids.insert(id);
         });
@@ -919,8 +919,8 @@ public:
     virtual size_t size() const noexcept override {
         return _size;
     }
-    virtual uint64_t bytes_on_disk() const noexcept override {
-        return _bytes_on_disk;
+    virtual sstables::file_size_stats get_file_size_stats() const noexcept override {
+        return _file_size_stats;
     }
     virtual selector_and_schema_t make_incremental_selector() const override;
 

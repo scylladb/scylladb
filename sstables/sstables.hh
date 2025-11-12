@@ -46,6 +46,7 @@
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
 #include "sstables/trie/bti_index.hh"
+#include "sstables/file_size_stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -397,6 +398,7 @@ public:
 
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk() const;
+    file_size_stats get_file_size_stats() const;
 
     const partition_key& get_first_partition_key() const;
     const partition_key& get_last_partition_key() const;
