@@ -2253,7 +2253,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
+future<> table::perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
                                            tasks::task_info info,
                                            do_flush do_flush) {
     auto* cg = try_get_compaction_group_with_static_sharding();

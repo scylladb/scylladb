@@ -16,6 +16,7 @@
 #include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "gc_clock.hh"
+#include "replica/database_fwd.hh"
 
 namespace compaction {
 
@@ -49,7 +50,7 @@ struct compaction_state {
 
     // Used only with vnodes, will not work with tablets. Can be removed once vnodes are gone.
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
-    compaction::owned_ranges_ptr owned_ranges_ptr;
+    replica::owned_ranges_ptr owned_ranges_ptr;
 
     gc_clock::time_point last_regular_compaction;
 

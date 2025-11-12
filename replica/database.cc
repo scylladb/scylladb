@@ -3771,4 +3771,8 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
     co_return result;
 }
 
+owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
+    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
+}
+
 } // namespace replica
