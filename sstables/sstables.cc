@@ -518,16 +518,14 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                      s.header.memory_size,
                      s.header.sampling_level,
                      s.header.size_at_full_sampling);
-    auto buf = co_await in.read_exactly(s.header.size * sizeof(pos_type));
-    auto len = s.header.size * sizeof(pos_type);
-    check_buf_size(buf, len);
-
     // Positions are encoded in little-endian.
-    auto b = buf.get();
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
-        s.positions.push_back(seastar::read_le<pos_type>(b));
-        b += sizeof(pos_type);
+        // random_access_reader::read_exactly internally maintains
+        // a 128K buffer, so it is okay to read one position at a time.
+        auto buf = co_await in.read_exactly(sizeof(pos_type));
+        check_buf_size(buf, sizeof(pos_type));
+        s.positions.push_back(seastar::read_le<pos_type>(buf.get()));
         co_await coroutine::maybe_yield();
     }
     // Since the keys in the index are not sized, we need to calculate
