@@ -50,6 +50,10 @@ public:
         return _endpoint;
     }
 
+    bool is_up() const {
+        return !is_checking_status_in_progress();
+    }
+
 private:
     seastar::future<response> request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
             std::optional<seastar::http::reply::status_type>&& expected, seastar::abort_source& as);
