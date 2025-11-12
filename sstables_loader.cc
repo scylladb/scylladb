@@ -457,7 +457,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
                     if (!metas.contains(node)) {
                         auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
                                 ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, node);
-                        bool abort_supported = _db.features().load_and_stream_abort_rpc_message;
+                        bool abort_supported = _ms.supports_load_and_stream_abort_rpc_message();
                         llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
                         metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source), abort_supported));
                         metas.at(node).receive();

@@ -483,6 +483,7 @@ public:
     unsigned add_statement_tenant(sstring tenant_name, scheduling_group sg);
 
     void init_feature_listeners();
+    bool supports_load_and_stream_abort_rpc_message() const noexcept;
 private:
     std::any _maintenance_tenant_enabled_listener;
 
