@@ -6,6 +6,7 @@ import pytest
 import sys
 import requests
 import time
+import uuid
 
 # Use the util.py library from ../cqlpy:
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
@@ -784,3 +785,113 @@ def test_drop_quarantined_sstables(cql, this_dc, rest_api):
                                    params={"keyspace": keyspace, "tables": f"{test_tables[0]},non_existent_table"})
                 assert resp.status_code == requests.codes.bad_request
                 assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]
+
+def test_connection_metadata(cql, this_dc, rest_api):
+    def make_entry(key_seed, data_seed):
+        connection_id = str(uuid.UUID(int=key_seed + 1))
+        host_id = str(uuid.UUID(int=(key_seed + 100)))
+        port = 8000 + (data_seed % 100)
+        tls_port = port + 1
+        alternator_port = port + 2
+        alternator_https_port = port + 3
+        address = f"addr{data_seed}.test"
+        rack = f"rack{data_seed%3}"
+        datacenter = f"dc{data_seed%2}"
+        return {
+            "connection_id": connection_id,
+            "host_id": host_id,
+            "address": address,
+            "port": port,
+            "tls_port": tls_port,
+            "alternator_port": alternator_port,
+            "alternator_https_port": alternator_https_port,
+            "rack": rack,
+            "datacenter": datacenter,
+        }
+
+    def to_tuple(e):
+        return (
+            e["connection_id"], e["host_id"], e["address"], e["port"], e["tls_port"],
+            e["alternator_port"], e["alternator_https_port"], e["rack"], e["datacenter"],
+        )
+    
+    def json_to_set(list):
+        s = set()
+        for e in list:
+            s.add(to_tuple(e))
+        return s
+
+    json_entries = [make_entry(i, i+1) for i in range(4)]
+    resp = rest_api.send("POST", "v2/connection-metadata", json_body=json_entries)
+    resp.raise_for_status()
+
+    def get_response_set():
+        metadata_response = cql.execute("SELECT * FROM system.connection_metadata;")
+        return set([(str(row.connection_id), str(row.host_id), row.address, row.port, row.tls_port, row.alternator_port, row.alternator_https_port, row.rack, row.datacenter )for row in metadata_response])
+
+    assert get_response_set() == json_to_set(json_entries)
+
+    # Test GET API
+    resp = rest_api.send("GET", "v2/connection-metadata")
+    resp.raise_for_status()
+    assert json_to_set(resp.json()) == json_to_set(json_entries)
+
+    # Upsert do nothing (send same first entry again via JSON body)
+    first_entry = json_entries[0]
+    resp = rest_api.send("POST", "v2/connection-metadata", json_body=[first_entry])
+    resp.raise_for_status()
+    assert get_response_set() == json_to_set(json_entries)
+
+
+    # Updating address and port fields
+    updated_first_entry = make_entry(0, 999)
+    json_entries[0] = updated_first_entry
+    resp = rest_api.send("POST", "v2/connection-metadata", json_body=[updated_first_entry])
+    resp.raise_for_status()
+    assert get_response_set() == json_to_set(json_entries)
+
+    # Delete all
+    for json_entry in json_entries:
+        resp = rest_api.send("DELETE", "v2/connection-metadata", json_body=[json_entry])
+        resp.raise_for_status()
+    assert get_response_set() == set()
+
+def test_connection_metadata_optional_ports(cql, this_dc, rest_api):
+    """Verify that omitting some port fields (e.g. alternator_https_port) succeeds and those fields are absent on GET."""
+    entry = {
+        "connection_id": "00000000-0000-0000-0000-000000000001",
+        "host_id": "00000000-0000-0000-0000-000000000002",
+        "address": "opt.test",
+        "port": 7001,
+        "rack": "rackA",
+        "datacenter": "dcA"
+    }
+    # Intentionally omit tls_port / alternator_port / alternator_https_port
+    resp = rest_api.send("POST", "v2/connection-metadata", json_body=[entry])
+    resp.raise_for_status()
+
+    # Fetch raw rows via CQL
+    rs = cql.execute(f"SELECT * FROM system.connection_metadata WHERE connection_id={entry['connection_id']} AND host_id={entry['host_id']};")
+    row = rs.one()
+    assert row is not None
+    assert row.port == entry["port"]
+    assert row.tls_port is None
+    assert row.alternator_port is None
+    assert row.alternator_https_port is None
+
+    # GET endpoint should not serialize missing ports
+    resp = rest_api.send("GET", "v2/connection-metadata")
+    resp.raise_for_status()
+    found = False
+    for obj in resp.json():
+        if obj["connection_id"] == entry["connection_id"] and obj["host_id"] == entry["host_id"]:
+            found = True
+            assert obj.get("port") == entry["port"]
+            assert "tls_port" not in obj
+            assert "alternator_port" not in obj
+            assert "alternator_https_port" not in obj
+            break
+    assert found, "Inserted entry not returned by GET"
+
+    resp = rest_api.send("DELETE", "v2/connection-metadata", json_body=[{"connection_id": entry["connection_id"], "host_id": entry["host_id"]}])
+    resp.raise_for_status()
