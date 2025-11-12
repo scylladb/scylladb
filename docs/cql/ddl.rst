@@ -290,14 +290,6 @@ Please use :ref:`Per-table tablet options <cql-per-table-tablet-options>` instea
 
 See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
 
-Keyspace storage options :label-caution:`Experimental`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-By default, SStables of a keyspace are stored locally.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
-See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
-
 .. _use-statement:        
         
 USE
