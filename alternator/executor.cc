@@ -5929,8 +5929,8 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-<<<<<<< HEAD
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
+            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -5940,25 +5940,6 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
 
-    // Even if the "tablets" experimental feature is available, we currently
-    // do not enable tablets by default on Alternator tables because LWT is
-    // not yet fully supported with tablets.
-    // The user can override the choice of whether or not to use tablets at
-    // table-creation time by supplying the following tag with a numeric value
-    // (setting the value to 0 means enabling tablets with automatic selection
-    // of the best number of tablets).
-||||||| parent of 376a2f2109 (alternator: Support `tablets_mode_for_new_keyspaces` config flag)
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
-    // Even if the "tablets" experimental feature is available, we currently
-    // do not enable tablets by default on Alternator tables because LWT is
-    // not yet fully supported with tablets.
-    // The user can override the choice of whether or not to use tablets at
-    // table-creation time by supplying the following tag with a numeric value
-    // (setting the value to 0 means enabling tablets with automatic selection
-    // of the best number of tablets).
-=======
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
-            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     // Whether to use tablets for the table (actually for the keyspace of the
     // table) is determined by tablets_mode (taken from the configuration
     // option "tablets_mode_for_new_keyspaces"), as well as the presence and
@@ -5967,7 +5948,6 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     // Setting the tag with a numeric value will enable a specific initial number
     // of tablets (setting the value to 0 means enabling tablets with
     // an automatic selection of the best number of tablets).
->>>>>>> 376a2f2109 (alternator: Support `tablets_mode_for_new_keyspaces` config flag)
     // Setting this tag to any non-numeric value (e.g., an empty string or the
     // word "none") will ask to disable tablets.
     // When vnodes are asked for by the tag value, but tablets are enforced by config,
@@ -5981,16 +5961,10 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
             // initial_tablets to a disengaged optional.
             try {
                 initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
-<<<<<<< HEAD
-            } catch(...) {
-||||||| parent of c03081eb12 (alternator: improve error in tablets_mode_for_new_keyspaces=enforced)
-            } catch (...) {
-=======
             } catch (...) {
                 if (tablets_mode == db::tablets_mode_t::mode::enforced) {
                     throw api_error::validation(format("Tag {} containing non-numerical value requests vnodes, but vnodes are forbidden by configuration option `tablets_mode_for_new_keyspaces: enforced`", INITIAL_TABLETS_TAG_KEY));
                 }
->>>>>>> c03081eb12 (alternator: improve error in tablets_mode_for_new_keyspaces=enforced)
                 initial_tablets = std::nullopt;
                 elogger.trace("Following {} tag containing non-numerical value, Alternator will attempt to create a keyspace {} with vnodes.", INITIAL_TABLETS_TAG_KEY, keyspace_name);
             }
