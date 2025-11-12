@@ -1,0 +1,74 @@
+    , "/v2/client-routes":{
+        "get": {
+            "description":"List all client route entries",
+            "operationId":"get_client_routes",
+            "tags":["client_routes"],
+            "produces":[
+                "application/json"
+            ],
+            "parameters":[],
+            "responses":{
+                "200":{
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/client_routes_entry" }
+                    }
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{"$ref":"#/definitions/ErrorModel"}
+                }
+            }
+        },
+        "post": {
+            "description":"Upsert one or more client route entries",
+            "operationId":"set_client_routes",
+            "tags":["client_routes"],
+            "parameters":[
+                {
+                    "name":"body",
+                    "in":"body",
+                    "required":true,
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/client_routes_entry" }
+                    }
+                }
+            ],
+            "responses":{
+                "200":{ "description": "OK" },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{ "$ref":"#/definitions/ErrorModel" }
+                }
+            }
+        },
+        "delete": {
+            "description":"Delete one or more client route entries",
+            "operationId":"delete_client_routes",
+            "tags":["client_routes"],
+            "parameters":[
+                {
+                    "name":"body",
+                    "in":"body",
+                    "required":true,
+                    "schema":{
+                        "type":"array",
+                        "items":{ "$ref":"#/definitions/client_routes_key" }
+                    }
+                }
+            ],
+            "responses":{
+                "200":{
+                    "description": "OK"
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{
+                        "$ref":"#/definitions/ErrorModel"
+                    }
+                }
+            }
+        }
+    }
+
