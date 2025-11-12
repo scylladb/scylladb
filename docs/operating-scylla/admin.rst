@@ -97,17 +97,16 @@ The :code:`scylla-server` file contains configuration related to starting up the
 
 .. _object-storage-configuration:
 
-Configuring Object Storage :label-caution:`Experimental`
---------------------------------------------------------------
+Configuring Object Storage
+----------------------------------
 
-Scylla has the ability to communicate directly with S3-compatible storage. This
-feature enables various functionalities, but requires proper configuration of
-storage endpoints.
+ScyllaDB can communicate directly with S3-compatible object storage. Before
+using features that rely on object storage, you must first enable and
+configure access to the storage endpoints.
 
-To enable S3-compatible storage features, you need to describe the endpoints
-where SSTable files can be stored. This is done using a YAML configuration file.
-
-The relevant ``scylla.yaml`` section should follow this format:
+Storage endpoints define where data can be stored and are specified in
+the ``scylla.yaml`` configuration file. The relevant section of ``scylla.yaml``
+should follow this format:
 
 .. code-block:: yaml
 
@@ -117,6 +116,18 @@ The relevant ``scylla.yaml`` section should follow this format:
        https: <true_or_false> # optional
        aws_region: <region_name> # optional, e.g. us-east-1
        iam_role_arn: <iam_role> # optional
+
+
+Example:
+
+.. code:: yaml
+
+   object_storage_endpoints:
+     - name: s3.us-east-1.amazonaws.com
+       port: 443
+       https: true
+       aws_region: us-east-1
+       iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 
 The ``aws_region`` option can also be specified using 
 the ``AWS_DEFAULT_REGION`` environment variable.
@@ -129,7 +140,7 @@ the following environment variables:
   - ``AWS_SECRET_ACCESS_KEY``
   - ``AWS_SESSION_TOKEN``
 
-The Scylla S3 client will first attempt to access credentials from environment variables.
+The ScyllaDB S3 client will first attempt to access credentials from environment variables.
 If it fails to obtain credentials, it will then try to retrieve them from the
 AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
 
@@ -138,64 +149,6 @@ AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
    - All AWS-related parameters must be either present or absent as a group.
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
-
-.. _aws-s3-configuration:
-
-Configuring AWS S3 access
-============================
-
-You can define endpoint details in the ``scylla.yaml`` file. For example:
-
-.. code:: yaml
-
-   object_storage_endpoints:
-     - name: s3.us-east-1.amazonaws.com
-       port: 443
-       https: true
-       aws_region: us-east-1
-
-Local/Development Environment
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-In a local or development environment, you usually need to set authentication
-tokens in environment variables to ensure the client works properly.
-For instance:
-
-.. code-block:: shell
-
-   export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
-   export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
-
-Additionally, you may include an `aws_session_token`, although this is not typically necessary for local or development environments:
-
-.. code-block:: shell
-  
-   export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
-   export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
-   export AWS_SESSION_TOKEN=EXAMPLE_TEMPORARY_SESSION_TOKEN
-
-Important Note
-^^^^^^^^^^^^^^^
-
-The examples above are intended for development or local environments.
-You should *never* use this approach in production. The Scylla S3 client
-will first attempt to access credentials from the file or environment
-variables. If it fails to obtain credentials, it will then try to
-retrieve them from the AWS Security Token Service (STS) or the EC2
-Instance Metadata Service.
-
-For the EC2 Instance Metadata Service to function correctly, no
-additional configuration is required. However, STS requires the IAM Role
-ARN to be defined in the ``scylla.yaml`` file, as shown below:
-
-.. code:: yaml
-
-   object_storage_endpoints:
-     - name: s3.us-east-1.amazonaws.com
-       port: 443
-       https: true
-       aws_region: us-east-1
-       iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 
 .. _admin-compression:
 
@@ -308,33 +261,6 @@ ScyllaDB uses experimental flags to expose non-production-ready features safely.
 
 In recent ScyllaDB versions, these features are controlled by the ``experimental_features`` list in scylla.yaml, allowing one to choose which experimental to enable.
 Use ``scylla --help`` to get the list of experimental features.
-
-.. _admin-keyspace-storage-options:
-
-Keyspace storage options
-------------------------
-
-..
-   This section must be moved to Data Definition> CREATE KEYSPACE
-   when support for object storage is GA.
-
-By default, SStables of a keyspace are stored in a local directory.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
-
-Support for object storage is experimental and must be explicitly
-enabled in the ``scylla.yaml`` configuration file by specifying
-the ``keyspace-storage-options`` option:
-
-.. code-block:: yaml
-
-   experimental_features:
-     - keyspace-storage-options
-
-
-Before creating keyspaces with object storage, you also need to
-:ref:`configure <object-storage-configuration>` the object storage
-credentials and endpoint.
 
 .. _admin-views-with-tablets:
 
