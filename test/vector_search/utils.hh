@@ -12,11 +12,54 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/api.hh>
 #include <functional>
+#include <chrono>
 
 namespace test::vector_search {
+
+constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
+
+class abort_source_timeout {
+    abort_source as;
+    timer<> t;
+
+public:
+    explicit abort_source_timeout(std::chrono::milliseconds timeout = STANDARD_WAIT)
+        : t(timer([&]() {
+            as.request_abort();
+        })) {
+        t.arm(timeout);
+    }
+
+    abort_source& get() {
+        return as;
+    }
+
+    abort_source& reset(std::chrono::milliseconds timeout = STANDARD_WAIT) {
+        t.cancel();
+        as = abort_source();
+        t.arm(timeout);
+        return as;
+    }
+};
+
+inline auto repeat_until(std::chrono::milliseconds timeout, std::function<seastar::future<bool>()> func) -> seastar::future<bool> {
+    auto begin = seastar::lowres_clock::now();
+    while (!co_await func()) {
+        if (seastar::lowres_clock::now() - begin > timeout) {
+            co_return false;
+        }
+        co_await seastar::yield();
+    }
+    co_return true;
+}
+
+inline auto repeat_until(std::function<seastar::future<bool>()> func) -> seastar::future<bool> {
+    return repeat_until(STANDARD_WAIT, std::move(func));
+}
 
 inline seastar::future<> try_on_loopback_address(std::function<seastar::future<>(seastar::sstring)> func) {
     constexpr size_t MAX_LOCALHOST_ADDR_TO_TRY = 127;

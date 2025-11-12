@@ -51,48 +51,6 @@ using milliseconds = std::chrono::milliseconds;
 using seconds = std::chrono::seconds;
 using status_type = http::reply::status_type;
 
-auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
-    auto begin = lowres_clock::now();
-    while (!co_await func()) {
-        if (lowres_clock::now() - begin > timeout) {
-            co_return false;
-        }
-        co_await seastar::yield();
-    }
-    co_return true;
-}
-
-constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
-
-auto repeat_until(std::function<future<bool>()> func) -> future<bool> {
-    return repeat_until(STANDARD_WAIT, std::move(func));
-}
-
-
-class abort_source_timeout {
-    abort_source as;
-    timer<> t;
-
-public:
-    explicit abort_source_timeout(milliseconds timeout = STANDARD_WAIT)
-        : t(timer([&]() {
-            as.request_abort();
-        })) {
-        t.arm(timeout);
-    }
-
-    abort_source& get() {
-        return as;
-    }
-
-    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
-        t.cancel();
-        as = abort_source();
-        t.arm(timeout);
-        return as;
-    }
-};
-
 auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);
 }
