@@ -182,7 +182,7 @@ private:
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
-    sharded<replica::database>& _db;
+    // sharded<replica::database>& _db;
     sstring _endpoint;
     sstring _bucket;
     sstring _prefix;
@@ -193,7 +193,7 @@ public:
     tablet_sstable_streamer(sstring endpoint, sstring bucket, sstring prefix, sstables::storage_manager& storage_manager, netw::messaging_service& ms, sharded<replica::database>& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
                             std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
         : sstable_streamer(ms, db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
-        , _db(db)
+        // , _db(db)
         , _endpoint(std::move(endpoint)), _bucket(std::move(bucket)), _prefix(std::move(prefix))
         , _scope(scope)
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id))
@@ -216,8 +216,8 @@ private:
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
             llog.debug("Directly downloading fully contained SSTables to local node from object storage.");
-            return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
-                auto dwnld_ssts = std::move(downloaded_ssts);
+            return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([](auto downloaded_ssts) -> future<> {
+                /*auto dwnld_ssts = std::move(downloaded_ssts);
                 llog.debug("Adding {} downloaded SSTables to the table {}", dwnld_ssts.size(), _table.schema()->cf_name());
                 for (auto& sst : dwnld_ssts) {
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
@@ -247,7 +247,8 @@ private:
                                                     co_return co_await table.add_sstable_and_update_cache(sst);
                                                 });
                     }
-                }
+                }*/
+                return make_ready_future();
             });
         }
         return stream_sstables(pr, std::move(sstables), std::move(progress));
