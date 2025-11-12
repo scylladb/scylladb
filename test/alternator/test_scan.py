@@ -32,6 +32,36 @@ def test_scan_basic(filled_test_table):
         assert len(items) == len(got_items)
         assert multiset(items) == multiset(got_items)
 
+# test_scan_basic() above and most other tests below use the table
+# "filled_test_table", whose schema has a partition key and a sort key.
+# We want to make sure that Scan also works correctly on a table without
+# a sort key, and in particular when paging is involved.
+def test_scan_without_sort_key(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'N' }]) as table:
+        items = [{'p': i, 's': str(i)} for i in range(23)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        for limit in [None,1,2,4,33]:
+            print(f'LIMIT {limit}')
+            pos = None
+            got_items = []
+            while True:
+                if limit:
+                    response = table.scan(Limit=limit, ConsistentRead=True, ExclusiveStartKey=pos) if pos else table.scan(Limit=limit, ConsistentRead=True)
+                    assert len(response['Items']) <= limit
+                else:
+                    response = table.scan(ExclusiveStartKey=pos, ConsistentRead=True) if pos else table.scan(ConsistentRead=True)
+                pos = response.get('LastEvaluatedKey', None)
+                got_items += response['Items']
+                if not pos:
+                    break
+            assert len(items) == len(got_items)
+            assert multiset(items) == multiset(got_items)
+
 def test_scan_nonexistent_table(dynamodb):
     client = dynamodb.meta.client
     with pytest.raises(ClientError, match="ResourceNotFoundException"):
@@ -452,3 +482,34 @@ def test_scan_paging_missing_limit(dynamodb, KB):
         # we don't know how big n should be (hopefully around 100)
         # but definitely not N.
         assert n < N, f"The response was not paged, {n*len(str)/1024} kB of data returned in a single page"
+
+# When a table has a partition key and sort key, both are required in
+# ExclusiveStartKey to specify where to start the scan. Although it
+# could perhaps(?) make some sense to leave out the value of the sort key
+# (perhaps default to starting right after the beginning of the given
+# partition?), this is not actually supported by DynamoDB, and we verify
+# this here.
+def test_scan_exclusivestartkey_missing_sortkey(filled_test_table):
+    test_table, items = filled_test_table
+    p = random_string()
+    # The error that DynamoDB reports if the sort key is missing in
+    # ExclusiveStartKey is "The provided starting key is invalid: The
+    # provided key element does not match the schema". In Alternator,
+    # the error is "Key column c not found".
+    with pytest.raises(ClientError, match='ValidationException.*[kK]ey'):
+        # missing 'c' in ExclusiveStartKey!
+        test_table.scan(ExclusiveStartKey={'p': p})
+
+# Check that ExclusiveStartKey cannot contain any spurious column names
+# beyond the actual primary key (here a partition key and sort key)
+# Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_scan_exclusivestartkey_spurious_column(filled_test_table):
+    test_table, items = filled_test_table
+    p = random_string()
+    # The error that DynamoDB reports if ExclusiveStartKey has spurious
+    # columns is: "The provided starting key is invalid: The provided key
+    # element does not match the schema".
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        # 'x' is not part of the key, so this should cause an error
+        test_table.scan(ExclusiveStartKey={'p': p, 'c': 'hi', 'x': 3})
