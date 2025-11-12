@@ -611,7 +611,8 @@ rest_set_client_routes(http_context& ctx, sharded<service::storage_service>& ss,
     }
 
     rapidjson::Document root;
-    root.Parse(req->content.c_str());
+    auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+    root.Parse(content.c_str());
     if (!root.IsArray()) {
         throw bad_param_exception("Body must be a JSON array");
     }
@@ -685,7 +686,8 @@ rest_delete_client_routes(http_context& ctx, sharded<service::storage_service>& 
     }
 
     rapidjson::Document root;
-    root.Parse(req->content.c_str());
+    auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+    root.Parse(content.c_str());
     if (!root.IsArray()) {
         throw bad_param_exception("Body must be a JSON array");
     }
