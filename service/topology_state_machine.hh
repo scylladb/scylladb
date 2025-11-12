@@ -195,6 +195,13 @@ struct topology {
     // The set of nodes that should be considered dead during topology operations
     std::unordered_set<raft::server_id> ignored_nodes;
 
+    // The set of nodes currently excluded from synchronization in the tablets management code.
+    // The barrier should not wait for these nodes.
+    // This set is effectively equal to: ignored_nodes + keys(left_nodes_rs).
+    // Tablet replicas may temporarily include left nodes (e.g. when a node is replaced),
+    // hence the need for this field.
+    std::unordered_set<raft::server_id> excluded_tablet_nodes;
+
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one
@@ -206,10 +213,6 @@ struct topology {
 
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
-
-    // Returns the set of nodes currently excluded from synchronization-with in the topology.
-    // Barrier should not wait for those nodes. Used for tablets migration only.
-    std::unordered_set<raft::server_id> get_excluded_nodes() const;
 
     std::optional<request_param> get_request_param(raft::server_id) const;
     static raft::server_id parse_replaced_node(const std::optional<request_param>&);

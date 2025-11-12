@@ -1165,7 +1165,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes());
+        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.excluded_tablet_nodes);
     }
 
     // Represents a two-state state machine which changes monotonically
@@ -1258,7 +1258,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     bool is_excluded(raft::server_id server_id) const {
-        return _topo_sm._topology.get_excluded_nodes().contains(server_id);
+        return _topo_sm._topology.excluded_tablet_nodes.contains(server_id);
     }
 
     void generate_migration_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
@@ -2025,11 +2025,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 // Collect the IDs of the hosts with replicas, but ignore excluded nodes
                 std::unordered_set<locator::host_id> replica_hosts;
-                const std::unordered_set<raft::server_id> excluded_nodes = _topo_sm._topology.get_excluded_nodes();
                 const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
                     for (const locator::tablet_replica& replica: tinfo.replicas) {
-                        if (!excluded_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                        if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
                             replica_hosts.insert(replica.host);
                         }
                     }
@@ -3197,7 +3196,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             bool failed = false;
             try {
                 rtlogger.info("vnodes cleanup {}: running global_token_metadata_barrier", cleanup_reason);
-                guard = co_await global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes(), &fenced);
+                guard = co_await global_token_metadata_barrier(std::move(guard), _topo_sm._topology.excluded_tablet_nodes, &fenced);
             } catch (term_changed_error&) {
                 throw;
             } catch (group0_concurrent_modification&) {

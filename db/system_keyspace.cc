@@ -3681,6 +3681,11 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         if (some_row.has("ignore_nodes")) {
             ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
         }
+
+        ret.excluded_tablet_nodes = ret.ignored_nodes;
+        for (const auto& [id, _]: ret.left_nodes_rs) {
+            ret.excluded_tablet_nodes.insert(id);
+        }
     }
 
     co_return ret;

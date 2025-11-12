@@ -645,7 +645,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, id_to_ip_map, nullptr));
         }
     }
-    for (auto id : t.get_excluded_nodes()) {
+    for (auto id : t.excluded_tablet_nodes) {
         locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
         if (n) {
             n->set_excluded(true);
@@ -653,7 +653,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     }
 
     auto nodes_to_release = t.left_nodes;
-    for (auto id: t.get_excluded_nodes()) {
+    for (auto id: t.excluded_tablet_nodes) {
         nodes_to_release.insert(id);
     }
     for (const auto& id: nodes_to_release) {
@@ -843,7 +843,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-    slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
+    slogger.debug("topology_state_load: excluded tablet nodes: {}", _topology_state_machine._topology.excluded_tablet_nodes);
 }
 
 future<> storage_service::topology_transition(state_change_hint hint) {
