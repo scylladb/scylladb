@@ -288,7 +288,9 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                     continue;
                 }
                 schema_ptr s = tbl->schema();
-                timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
+                if (s->tombstone_gc_options().mode() == tombstone_gc_mode::repair) {
+                    timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
+                }
                 fms.emplace_back(std::move(fm), std::move(s));
             }
 
