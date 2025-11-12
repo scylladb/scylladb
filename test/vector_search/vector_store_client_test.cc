@@ -614,14 +614,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
 SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
-    // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
-    auto s1 = co_await make_vs_mock_server(vs_mock_server::response(status_type::not_found, "Not found"));
-    auto s2 = co_await make_vs_mock_server(vs_mock_server::response(status_type::service_unavailable, "Service unavailable"));
-
-    constexpr auto is_s2_response = [](const auto& keys) -> bool {
-        return !keys && std::holds_alternative<vector_store_client::service_error>(keys.error()) &&
-               std::get<vector_store_client::service_error>(keys.error()).status == status_type::service_unavailable;
-    };
+    auto s1 = co_await make_vs_mock_server();
+    auto s2 = co_await make_vs_mock_server();
 
     auto cfg = cql_test_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
@@ -635,11 +629,14 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
                 vs.start_background_tasks();
 
+                // Change URI setting to point to s2
                 env.db_config().vector_store_primary_uri.set(format("http://good.authority.here:{}", s2->port()));
 
                 // Wait until requests are handled by s2
+                // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return s2->ann_requests().size() > 0;
                 }));
             },
             cfg)
