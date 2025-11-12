@@ -13,7 +13,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
-#include <seastar/core/when_all.hh>
 #include <seastar/core/do_with.hh>
 #include "utils/collection-concepts.hh"
 
@@ -308,11 +307,17 @@ template <typename... T>
 requires (std::is_rvalue_reference_v<T&&> && ...)
 future<> dispose_gently(T&&... o) noexcept {
     return do_with(std::move(o)..., [] (auto&... objs) mutable {
-        return when_all(clear_gently(objs)...).then_wrapped([] (auto&& f) {
-            // Ignore exceptions because there's nothing we can do about them here
-            // and the objects are destroyed anyway.
-            f.ignore_ready_future();
-        });
+        static auto clear_step = [] (auto& obj) {
+            return clear_gently(obj).then_wrapped([] (future<> f) {
+                // Ignore exceptions because there's nothing we can do about them here
+                // and the objects are destroyed anyway.
+                f.ignore_ready_future();
+            });
+        };
+        auto f = make_ready_future<>();
+        // Chain clearing of the objects to avoid excessive task creation
+        (..., (f = f.then([&objs] mutable { return clear_step(objs); })));
+        return f;
     });
 }
 
