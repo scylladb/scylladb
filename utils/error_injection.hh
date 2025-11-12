@@ -367,10 +367,12 @@ public:
     }
 
     void disable(const std::string_view& injection_name) {
+        errinj_logger.debug("Disabling injection \"{}\"", injection_name);
         _enabled.erase(injection_name);
     }
 
     void disable_all() {
+        errinj_logger.debug("Disabling all injections");
         _enabled.clear();
     }
 
