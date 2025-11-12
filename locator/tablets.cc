@@ -977,6 +977,28 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
     return reconciled_stats;
 }
 
+lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+
+    lw_shared_ptr<load_stats> result;
+
+    if (leaving != pending) {
+        range_based_tablet_id rb_tid {gid.table, trange};
+        if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid) && tablet_stats.contains(pending)) {
+            tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
+            result = make_lw_shared<locator::load_stats>(*this);
+            auto& new_leaving_ts = result->tablet_stats.at(leaving);
+            auto& new_pending_ts = result->tablet_stats.at(pending);
+            auto map_node = new_leaving_ts.tablet_sizes.at(gid.table).extract(trange);
+            new_pending_ts.tablet_sizes[gid.table].insert(std::move(map_node));
+            if (new_leaving_ts.tablet_sizes.at(gid.table).empty()) {
+                new_leaving_ts.tablet_sizes.erase(gid.table);
+            }
+        }
+    }
+
+    return result;
+}
+
 tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
     : _schema(std::move(schema))
     , _ranges(ranges)
