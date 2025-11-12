@@ -512,7 +512,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
 
         # Once the mutations are in the batchlog, waiting to be replayed, we can disable this.
         await disable_injection("storage_proxy_fail_remove_from_batchlog")
-        await enable_injection("batch_replay_throw")
+        await enable_injection("storage_proxy_fail_replay_batch")
         # Once the table is dropped, we can resume the replay. The bug can
         # be triggered from now on (if it's present).
         await disable_injection("skip_batch_replay")
@@ -528,7 +528,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
         await manager.api.keyspace_compaction(s1.ip_addr, ks)
         await manager.api.keyspace_compaction(s2.ip_addr, ks)
 
-        await disable_injection("batch_replay_throw")
+        await disable_injection("storage_proxy_fail_replay_batch")
 
         await s1_log.wait_for("Replaying batch", timeout=60, from_mark=s1_mark)
         await s1_log.wait_for("Finished replayAllFailedBatches", timeout=60, from_mark=s1_mark)
