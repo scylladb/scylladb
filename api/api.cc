@@ -67,9 +67,11 @@ future<> set_server_init(http_context& ctx) {
         rb02->set_api_doc(r);
         rb02->register_api_file(r, "swagger20_header");
         rb02->register_api_file(r, "metrics");
+        rb02->register_api_file(r, "client_routes");
         rb->register_function(r, "system",
                 "The system related API");
         rb02->add_definitions_file(r, "metrics");
+        rb02->add_definitions_file(r, "client_routes");
         set_system(ctx, r);
         rb->register_function(r, "error_injection",
             "The error injection API");
