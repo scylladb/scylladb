@@ -1165,7 +1165,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.excluded_tablet_nodes);
+        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
     }
 
     // Represents a two-state state machine which changes monotonically
@@ -3196,7 +3196,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             bool failed = false;
             try {
                 rtlogger.info("vnodes cleanup {}: running global_token_metadata_barrier", cleanup_reason);
-                guard = co_await global_token_metadata_barrier(std::move(guard), _topo_sm._topology.excluded_tablet_nodes, &fenced);
+                guard = co_await global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes, &fenced);
             } catch (term_changed_error&) {
                 throw;
             } catch (group0_concurrent_modification&) {

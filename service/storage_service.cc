@@ -653,9 +653,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     }
 
     auto nodes_to_release = t.left_nodes;
-    for (auto id: t.excluded_tablet_nodes) {
-        nodes_to_release.insert(id);
-    }
+    nodes_to_release.insert(t.ignored_nodes.begin(), t.ignored_nodes.end());
     for (const auto& id: nodes_to_release) {
         auto host_id = locator::host_id(id.uuid());
         if (!tmptr->get_topology().find_node(host_id)) {
