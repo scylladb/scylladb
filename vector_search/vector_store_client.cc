@@ -232,7 +232,7 @@ struct vector_store_client::impl {
     clients _clients;
 
 
-    impl(utils::config_file::named_value<sstring> cfg)
+    impl(utils::config_file::named_value<sstring> cfg, utils::config_file::named_value<uint32_t> read_request_timeout_in_ms)
         : uri_observer(cfg.observe([this](seastar::sstring uris_csv) {
             try {
                 handle_uris_changed(parse_uris(uris_csv));
@@ -249,9 +249,12 @@ struct vector_store_client::impl {
                       co_await handle_addresses_changed(addrs);
                   },
                   dns_refreshes)
-        , _clients(vslogger, [this]() {
-            dns.trigger_refresh();
-        }) {
+        , _clients(
+                  vslogger,
+                  [this]() {
+                      dns.trigger_refresh();
+                  },
+                  std::move(read_request_timeout_in_ms)) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -307,7 +310,7 @@ struct vector_store_client::impl {
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri)) {
+    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.read_request_timeout_in_ms)) {
 }
 
 vector_store_client::~vector_store_client() = default;

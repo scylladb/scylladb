@@ -65,14 +65,14 @@ future<client::request_error> map_err(std::exception_ptr& err) {
 }
 
 auto constexpr BACKOFF_RETRY_MIN_TIME = 100ms;
-auto constexpr BACKOFF_RETRY_MAX_TIME = 20s;
 
 } // namespace
 
-client::client(logging::logger& logger, endpoint_type endpoint_)
+client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms)
     : _endpoint(std::move(endpoint_))
     , _http_client(std::make_unique<client_connection_factory>(socket_address(endpoint_.ip, endpoint_.port)))
-    , _logger(logger) {
+    , _logger(logger)
+    , _request_timeout(std::move(request_timeout_in_ms)) {
 }
 
 seastar::future<client::request_result> client::request(
@@ -131,7 +131,7 @@ void client::handle_server_unavailable() {
 seastar::future<> client::run_checking_status() {
     struct stop_retry {};
     auto f = co_await coroutine::as_future(
-            exponential_backoff_retry::do_until_value(BACKOFF_RETRY_MIN_TIME, BACKOFF_RETRY_MAX_TIME, _as, [this] -> future<std::optional<stop_retry>> {
+            exponential_backoff_retry::do_until_value(BACKOFF_RETRY_MIN_TIME, backoff_retry_max(), _as, [this] -> future<std::optional<stop_retry>> {
                 auto success = co_await check_status();
                 if (success) {
                     co_return stop_retry{};
@@ -149,6 +149,11 @@ seastar::future<> client::run_checking_status() {
 
 bool client::is_checking_status_in_progress() const {
     return !_checking_status_future.available();
+}
+
+std::chrono::milliseconds client::backoff_retry_max() const {
+    std::chrono::milliseconds ret{_request_timeout.get()};
+    return ret * 2;
 }
 
 } // namespace vector_search
