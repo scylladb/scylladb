@@ -238,6 +238,11 @@ public:
 };
 
 class unavailable_server {
+    struct Connection {
+        lowres_clock::time_point timestamp;
+        connected_socket socket;
+    };
+
 public:
     explicit unavailable_server(uint16_t port)
         : _port(port) {
@@ -265,8 +270,8 @@ public:
         return _port;
     }
 
-    size_t connections() const {
-        return _connections.size();
+    const std::vector<Connection>& connections() const {
+        return _connections;
     }
 
     future<seastar::server_socket> take_socket() {
@@ -282,10 +287,10 @@ public:
     }
 
     future<> shutdown_all_and_clear() {
-        std::vector<seastar::accept_result> tmp;
+        std::vector<Connection> tmp;
         std::swap(tmp, _connections);
         for (auto& conn : tmp) {
-            co_await shutdown(conn.connection);
+            co_await shutdown(conn.socket);
         }
     }
 
@@ -304,9 +309,10 @@ private:
     future<> run() {
         while (_running) {
             try {
-                _connections.push_back(co_await _socket.accept());
+                auto result = co_await _socket.accept();
+                _connections.push_back(Connection{.timestamp = lowres_clock::now(), .socket = std::move(result.connection)});
                 if (_auto_shutdown) {
-                    co_await shutdown(_connections.back().connection);
+                    co_await shutdown(_connections.back().socket);
                 }
             } catch (...) {
                 break;
@@ -325,7 +331,7 @@ private:
     seastar::gate _gate;
     uint16_t _port;
     sstring _host;
-    std::vector<seastar::accept_result> _connections;
+    std::vector<Connection> _connections;
     bool _running = true;
     bool _auto_shutdown = true;
 };
@@ -895,7 +901,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return unavail_s->connections() > 1;
+                    co_return unavail_s->connections().size() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
@@ -959,7 +965,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return unavail_s->connections() > 1;
+                    co_return unavail_s->connections().size() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
@@ -1163,7 +1169,7 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
                 }
                 // Wait for all requests to establish a connection with the server.
                 co_await repeat_until([&unavail_s]() -> future<bool> {
-                    co_return unavail_s->connections() == NUM_OF_PARALLEL_REQUESTS;
+                    co_return unavail_s->connections().size() == NUM_OF_PARALLEL_REQUESTS;
                 });
                 // Shutdown all connections, causing all requests to fail.
                 // The number of connections will drop to zero.
@@ -1177,8 +1183,51 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
                 // while the first one is pending, ensuring that exactly one new connection is made.
                 // This makes the test assertion deterministic.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_return unavail_s->connections() == 1;
+                    co_return unavail_s->connections().size() == 1;
                 }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_s->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request_timeout_cfg) {
+    auto unavail_s = co_await make_unavailable_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
+                vs.start_background_tasks();
+
+                // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
+                cfg.db_config->read_request_timeout_in_ms.set(100);
+                // Trigger status checking by making ANN request to unavailable server.
+                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                co_await repeat_until([&unavail_s]() -> future<bool> {
+                    // Wait for 1 ANN request + 4 status check connections (5 total)
+                    co_return unavail_s->connections().size() > 4;
+                });
+
+                // Verify backoff timing between status check connections.
+                // Skip the first connection (ANN request) and analyze status check intervals.
+                auto duration_between_1st_and_2nd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(2).timestamp - unavail_s->connections().at(1).timestamp);
+                BOOST_CHECK_GE(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(100));
+                BOOST_CHECK_LT(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(200));
+                auto duration_between_2nd_and_3rd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(3).timestamp - unavail_s->connections().at(2).timestamp);
+                // Max backoff time reached at 200ms, so subsequent status checks use fixed 200ms intervals.
+                BOOST_CHECK_GE(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(200)); // 200ms = 100ms * 2
+                BOOST_CHECK_LT(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(400));
+                auto duration_between_3rd_and_4th_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(4).timestamp - unavail_s->connections().at(3).timestamp);
+                BOOST_CHECK_GE(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(200));
+                BOOST_CHECK_LT(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(400));
             },
             cfg)
             .finally(coroutine::lambda([&] -> future<> {
