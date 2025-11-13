@@ -380,7 +380,7 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
-future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
+future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
         std::unordered_set<locator::host_id> ignore_nodes) {
     auto& db = get_db().local();
@@ -421,7 +421,7 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
             if (!nodes_down.empty()) {
                 rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to nodes_down={}, continue to run repair",
                         uuid, nodes_down);
-                co_return std::make_tuple(hints_batchlog_flushed, flush_time);
+                co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
@@ -455,7 +455,7 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
     } else {
         rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
-    co_return std::make_tuple(hints_batchlog_flushed, flush_time);
+    co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
 }
 
 
@@ -1347,7 +1347,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         } else {
             participants = get_hosts_participating_in_repair(_gossiper, germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto [_, hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
@@ -2407,7 +2407,8 @@ future<> repair::tablet_repair_task_impl::run() {
 
         auto parent_shard = this_shard_id();
         std::vector<gc_clock::time_point> flush_times(smp::count);
-        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_info = sched_info, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
+        std::vector<bool> flush_failed(smp::count, false);
+        rs.container().invoke_on_all([&idx, &flush_times, &flush_failed, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_info = sched_info, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
             std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
@@ -2436,9 +2437,10 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto hosts = std::vector<sstring>();
                 std::unordered_set<locator::host_id> ignore_nodes;;
                 bool hints_batchlog_flushed = false;
+                bool needs_flush_before_repair = false;
                 gc_clock::time_point flush_time;
                 if (!skip_flush) {
-                    std::tie(hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 }
                 bool small_table_optimization = false;
 
@@ -2464,6 +2466,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto current = flush_times[this_shard_id()];
                 auto time = task->get_flush_time();
                 flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
+                flush_failed[this_shard_id()] = flush_failed[this_shard_id()] || (needs_flush_before_repair && !hints_batchlog_flushed);
             }
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));
@@ -2474,6 +2477,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 _flush_time = _flush_time == gc_clock::time_point() ? time : std::min(_flush_time, time);
             }
         }
+        _should_flush_and_flush_failed = std::ranges::any_of(flush_failed, [] (bool v) { return v; });
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
