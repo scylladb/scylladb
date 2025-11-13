@@ -88,7 +88,7 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
 
-    future<> load_and_stream(sstring ks_name, sstring cf_name,
+    future<> load_and_stream(sstring _endpoint, sstring _bucket, sstring _prefix, sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
             bool primary_replica_only, bool unlink_sstables, stream_scope scope,
             shared_ptr<stream_progress> progress);

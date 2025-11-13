@@ -3519,7 +3519,8 @@ sstable::sstable(schema_ptr schema,
     , _schema(std::move(schema))
     , _generation(generation)
     , _state(state)
-    , _storage(make_storage(manager, storage, _state))
+    , _storage_options(storage)
+    , _storage(make_storage(manager, _storage_options, _state))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
