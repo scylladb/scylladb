@@ -3597,7 +3597,7 @@ view_updating_consumer::view_updating_consumer(view_update_generator& gen, schem
     })
 { }
 
-delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration)
+delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration, size_t concurrency, promise<> done)
         : _proxy(proxy)
         , _state(state)
         , _timeout_duration(timeout_duration)
@@ -3605,7 +3605,33 @@ delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& pro
         , _view_table(_proxy.get_db().local().find_column_family(view))
         , _base_schema(_proxy.get_db().local().find_schema(_view->view_info()->base_id()))
         , _view_pk()
+        , _concurrency_semaphore(concurrency)
+        , _done(std::move(done))
 {}
+
+delete_ghost_rows_visitor::delete_ghost_rows_visitor(delete_ghost_rows_visitor&& other)
+        : _proxy(other._proxy)
+        , _state(other._state)
+        , _timeout_duration(std::move(other._timeout_duration))
+        , _view(std::move(other._view))
+        , _view_table(other._view_table)
+        , _base_schema(std::move(other._base_schema))
+        , _view_pk(std::move(other._view_pk))
+        , _concurrency_semaphore(std::move(other._concurrency_semaphore))
+        , _all_jobs(std::exchange(other._all_jobs, {}))
+        , _done(std::move(other._done))
+{}
+
+delete_ghost_rows_visitor::~delete_ghost_rows_visitor() noexcept {
+    if (_all_jobs) {
+        try {
+            _all_jobs->get();
+            _done.set_value();
+        } catch (...) {
+            _done.set_exception(std::current_exception());
+        }
+    }
+}
 
 void delete_ghost_rows_visitor::accept_new_partition(const partition_key& key, uint32_t row_count) {
     SCYLLA_ASSERT(thread::running_in_thread());
@@ -3614,7 +3640,15 @@ void delete_ghost_rows_visitor::accept_new_partition(const partition_key& key, u
 
 // Assumes running in seastar::thread
 void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const query::result_row_view& static_row, const query::result_row_view& row) {
-    auto view_exploded_pk = _view_pk->explode();
+    auto units = get_units(_concurrency_semaphore, 1).get();
+    _all_jobs = when_all_succeed(
+        std::move(_all_jobs).value(),
+        [&, units = std::move(units)] { return do_accept_new_row(_view_pk.value(), ck); }
+    ).discard_result();
+}
+
+future<> delete_ghost_rows_visitor::do_accept_new_row(partition_key pk, clustering_key ck) {
+    auto view_exploded_pk = pk.explode();
     auto view_exploded_ck = ck.explode();
     std::vector<bytes> base_exploded_pk(_base_schema->partition_key_size());
     std::vector<bytes> base_exploded_ck(_base_schema->clustering_key_size());
@@ -3649,17 +3683,17 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
             _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
-    auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get();
+    auto base_qr = co_await _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts);
     query::result& result = *base_qr.query_result;
-    auto delete_ghost_row = [&]() {
-        mutation m(_view, *_view_pk);
+    auto delete_ghost_row = [&]() -> future<> {
+        mutation m(_view, pk);
         auto& row = m.partition().clustered_row(*_view, ck);
         row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
         timeout = db::timeout_clock::now() + _timeout_duration;
-        _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no).get();
+        return _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no);
     };
     if (result.row_count().value_or(0) == 0) {
-        delete_ghost_row();
+        co_await delete_ghost_row();
     } else if (!view_key_cols_not_in_base_key.empty()) {
         if (result.row_count().value_or(0) != 1) {
             on_internal_error(vlogger, format("Got multiple base rows corresponding to a single view row when pruning {}.{}", _view->ks_name(), _view->cf_name()));
@@ -3669,7 +3703,7 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
         for (const auto& [col_def, col_val] : view_key_cols_not_in_base_key) {
             const data_value* base_val = base_row.get_data_value(col_def->name_as_text());
             if (!base_val || base_val->is_null() || col_val != base_val->serialize_nonnull()) {
-                delete_ghost_row();
+                co_await delete_ghost_row();
                 break;
             }
         }
