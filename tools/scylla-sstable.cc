@@ -335,11 +335,11 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     return {};
 }
 
-const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, const std::vector<sstring>& sstable_names) {
+const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm, const std::vector<sstring>& sstable_names) {
     std::vector<sstables::shared_sstable> sstables;
     sstables.resize(sstable_names.size());
 
-    parallel_for_each(sstable_names, [schema, &sst_man, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
+    parallel_for_each(sstable_names, [schema, &sst_man, &sstm, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
         const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
         auto sst_path = std::filesystem::path(sst_name);
 
@@ -362,9 +362,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         if (!is_fqn.empty()) {
             auto type = is_fqn.front();
-            auto endpoints = sst_man.db_config().object_storage_endpoints() 
-                | std::views::filter(std::bind_back(&osp::is_storage_of_type, type)) 
-                ;
+            auto endpoints = sstm.endpoints(type);
             if (endpoints.empty()) {
                 throw std::invalid_argument(fmt::format(
                     "Unable to open SSTable in {}: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
@@ -372,7 +370,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                     , type
                 ));
             }
-            auto endpoint = endpoints.front().key();
+            auto endpoint = endpoints.front();
             options = data_dictionary::make_object_storage_options(endpoint, sst_path);
         } else {
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
@@ -2801,7 +2799,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
             try {
-                sstables = load_sstables(schema, sst_man, sstable_names);
+                sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names);
             } catch (...) {
                 fmt::print(std::cerr, "error loading sstables: {}\n", std::current_exception());
                 return 1;

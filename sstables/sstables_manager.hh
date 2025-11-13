@@ -81,6 +81,7 @@ public:
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
+    std::vector<sstring> endpoints(sstring type = "") const noexcept;
 };
 
 class sstables_manager {

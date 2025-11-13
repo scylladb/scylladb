@@ -155,6 +155,12 @@ bool storage_manager::is_known_endpoint(sstring endpoint) const {
     return _object_storage_endpoints.contains(endpoint);
 }
 
+std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
+    return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
+        return type == "" || ep.second.cfg.is_storage_of_type(type);
+    }) | std::views::keys | std::ranges::to<std::vector>();
+}
+
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
         return sstm.container().invoke_on_all([&cfg](auto& sstm) -> future<> {
