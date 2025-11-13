@@ -394,7 +394,7 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
     const auto& db = proxy.get_db().local();
 
     if (_as.abort_requested()) {
-        return make_exception_future<>(abort_requested_exception());
+        throw abort_requested_exception{};
     }
 
     utils::chunked_vector<mutation> mutations;
@@ -407,10 +407,9 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
         }
     } catch (replica::no_such_column_family& e) {
         mlogger.error("Error while applying schema mutations from {}: {}", src, e);
-        return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
-                    std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
+        throw std::runtime_error(fmt::format("Error while applying schema mutations: {}", e));
     }
-    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _ss, _feat, std::move(mutations));
+    co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), _ss, _feat, std::move(mutations));
 }
 
 future<> migration_manager::reload_schema() {
