@@ -416,7 +416,7 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
 future<> migration_manager::reload_schema() {
     mlogger.info("Reloading schema");
     utils::chunked_vector<mutation> mutations;
-    return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, std::move(mutations), true);
+    co_await db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, std::move(mutations), true);
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const locator::host_id& endpoint) {
