@@ -1667,7 +1667,7 @@ schema_ptr system_keyspace::view_building_tasks() {
                 .with_column("key", utf8_type, column_kind::partition_key)
                 .with_column("id", timeuuid_type, column_kind::clustering_key)
                 .with_column("type", utf8_type)
-                .with_column("state", utf8_type)
+                .with_column("aborted", boolean_type)
                 .with_column("base_id", uuid_type)
                 .with_column("view_id", uuid_type)
                 .with_column("last_token", long_type)
@@ -3062,14 +3062,14 @@ future<mutation> system_keyspace::make_remove_view_build_status_on_host_mutation
 static constexpr auto VIEW_BUILDING_KEY = "view_building";
 
 future<db::view::building_tasks> system_keyspace::get_view_building_tasks() {
-    static const sstring query = format("SELECT id, type, state, base_id, view_id, last_token, host_id, shard FROM {}.{} WHERE key = '{}'", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
+    static const sstring query = format("SELECT id, type, aborted, base_id, view_id, last_token, host_id, shard FROM {}.{} WHERE key = '{}'", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
     using namespace db::view;
 
     building_tasks tasks;
     co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
         auto id = row.get_as<utils::UUID>("id");
         auto type = task_type_from_string(row.get_as<sstring>("type"));
-        auto state = task_state_from_string(row.get_as<sstring>("state"));
+        auto aborted = row.get_as<bool>("aborted");
         auto base_id = table_id(row.get_as<utils::UUID>("base_id"));
         auto view_id = row.get_opt<utils::UUID>("view_id").transform([] (const utils::UUID& uuid) { return table_id(uuid); });
         auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
@@ -3077,7 +3077,7 @@ future<db::view::building_tasks> system_keyspace::get_view_building_tasks() {
         auto shard = unsigned(row.get_as<int32_t>("shard"));
 
         locator::tablet_replica replica{host_id, shard};
-        view_building_task task{id, type, state, base_id, view_id, replica, last_token};
+        view_building_task task{id, type, aborted, base_id, view_id, replica, last_token};
 
         switch (type) {
         case db::view::view_building_task::task_type::build_range:
@@ -3096,7 +3096,7 @@ future<db::view::building_tasks> system_keyspace::get_view_building_tasks() {
 }
 
 future<mutation> system_keyspace::make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task) {
-    static const sstring stmt = format("INSERT INTO {}.{}(key, id, type, state, base_id, view_id, last_token, host_id, shard) VALUES ('{}', ?, ?, ?, ?, ?, ?, ?, ?)", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
+    static const sstring stmt = format("INSERT INTO {}.{}(key, id, type, aborted, base_id, view_id, last_token, host_id, shard) VALUES ('{}', ?, ?, ?, ?, ?, ?, ?, ?)", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
     using namespace db::view;
 
     data_value_or_unset view_id = unset_value{};
@@ -3107,21 +3107,9 @@ future<mutation> system_keyspace::make_view_building_task_mutation(api::timestam
         view_id = data_value(task.view_id->uuid());
     }
     auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {
-            task.id, task_type_to_sstring(task.type), task_state_to_sstring(task.state),
+            task.id, task_type_to_sstring(task.type), task.aborted,
             task.base_id.uuid(), view_id, dht::token::to_int64(task.last_token),
             task.replica.host.uuid(), int32_t(task.replica.shard)
-    });
-    if (muts.size() != 1) {
-        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
-    }
-    co_return std::move(muts[0]);
-}
-
-future<mutation> system_keyspace::make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, db::view::view_building_task::task_state state) {
-    static const sstring stmt = format("UPDATE {}.{} SET state = ? WHERE key = '{}' AND id = ?", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
-
-    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {
-            task_state_to_sstring(state), id
     });
     if (muts.size() != 1) {
         on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));

@@ -32,7 +32,7 @@ public:
     static utils::UUID new_id();
 
     view_building_task_mutation_builder& set_type(utils::UUID id, db::view::view_building_task::task_type type);
-    view_building_task_mutation_builder& set_state(utils::UUID id, db::view::view_building_task::task_state state);
+    view_building_task_mutation_builder& set_aborted(utils::UUID id, bool aborted);
     view_building_task_mutation_builder& set_base_id(utils::UUID id, table_id base_id);
     view_building_task_mutation_builder& set_view_id(utils::UUID id, table_id view_id);
     view_building_task_mutation_builder& set_last_token(utils::UUID id, dht::token last_token);
