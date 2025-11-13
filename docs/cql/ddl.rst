@@ -883,7 +883,8 @@ when replicas are slow or unresponsive.  The following are legal values (case-in
  ``XPERCENTILE``           90.5PERCENTILE   Coordinators record average per-table response times for all replicas.
                                             If a replica takes longer than ``X`` percent of this table's average
                                             response time, the coordinator queries an additional replica.
-                                            ``X`` must be between 0 and 100.
+                                            ``X`` must be between 0 and 100, including those values.
+                                            The value is rounded to the nearest 0.1 (1 decimal place).
  ``XP``                    90.5P            Synonym for ``XPERCENTILE``
  ``Yms``                   25ms             If a replica takes more than ``Y`` milliseconds to respond,
                                             the coordinator queries an additional replica.
