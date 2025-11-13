@@ -2160,3 +2160,206 @@ def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
         assert_index_query(test_table_gsi_2, 'hello', [item],
             KeyConditionExpression='x=:x AND z=:z',
             ExpressionAttributeValues={':x': x, ':z': p})
+
+# While in test_scan.py and test_query.py we have extensive tests that
+# paging works for Scan and Query, the paging on a GSI might in theory
+# be implemented differently - an in particular ExclusiveStartKey might
+# be represented differently - so we should check it explicitly too.
+# For simplicity, we'll test here just Query, not Scan.
+def test_gsi_query_paging(test_table_gsi_5):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'x': str(i%3)} for i in range(23)]
+    with test_table_gsi_5.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    for limit in [1, 2, 17, 100]:
+        # GSIs are eventually consistent, so we may need to retry our scan
+        # but usually, we won't.
+        timeout = time.time() + 10
+        while time.time() < timeout:
+            query_args = {
+                'ConsistentRead': False,
+                'IndexName': 'hello',
+                'KeyConditions': {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+                'Limit': limit
+            }
+            response = test_table_gsi_5.query(**query_args)
+            got_items = response['Items']
+            assert len(response['Items']) <= limit
+            while 'LastEvaluatedKey' in response:
+                response = test_table_gsi_5.query(ExclusiveStartKey=response['LastEvaluatedKey'], **query_args)
+                got_items.extend(response['Items'])
+                assert len(response['Items']) <= limit
+            if multiset(items) == multiset(got_items):
+                # Test (for this limit) done successfully
+                break
+            time.sleep(0.1)
+        assert multiset(items) == multiset(got_items)
+
+# The previous test (test_gsi_query_paging) showed that paging a Query
+# on a GSI works correctly. In particular it means that each page returned an
+# ExclusiveStartKey that was successfully used to read the next page.
+# Adding debugging printouts of ExclusiveStartKey, we noticed that it doesn't
+# just specify the key of the GSI that we are scanning - (p, x) - but actually
+# has (p, x, c). In other words the scan process needs all the base table key
+# columns, not just the GSI key columns, to know where it is in the scan
+# process. This is no surprise for Alternator, because in our implementation
+# (p, x, c) is actually the key we use for the materialized view - the
+# view's key can't be just (p, x).
+# Anyway, the point of the following test is to verify that we can indeed
+# pass (p, x, c) as ExclusiveStartKey and it will be able to jump to that
+# position - even if we're not in the middle of paging.
+# This test is analogous to test_query.py::test_query_exclusivestartkey
+# just for reading from a GSI instead of a base table.
+#
+# Note that another thing that this test demonstrates is that it is not
+# really useful for a user to build ExclusiveStartKey manually when
+# scanning a GSI. The problem is that the sort order of the extra tie
+# column - c - is NOT defined in DynamoDB. In Alternator, it is also sorted
+# like a second sort key, but this is not true in DynamoDB and the sorting
+# of these ties is unspecified, and empirically - not in sorted order.
+# So the user is unlikely to know how to invent the 'c' value for
+# ExclusiveStartKey, which makes this feature not very useful for anything
+# besides paging.
+def test_gsi_query_exclusivestartkey(test_table_gsi_5):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'x': str(i%3)} for i in range(23)]
+    with test_table_gsi_5.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # GSIs are eventually consistent, so we may need to retry our scan
+    # but usually, we won't.
+    timeout = time.time() + 10
+    while time.time() < timeout:
+        exclusive_start_key = {'p': p, 'x': '1', 'c': '7'}
+        query_args = {
+            'ConsistentRead': False,
+            'IndexName': 'hello',
+            'KeyConditions': {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        }
+        response = test_table_gsi_5.query(
+            ExclusiveStartKey=exclusive_start_key, **query_args)
+        got_items = response['Items']
+        # Now we have a problem - we don't know which order to expect items
+        # to be returned. We do know that items are sorted by x, but don't
+        # know how items tied on x will be sorted! In Scylla, the tied items
+        # will be sorted by "c" (the second clustering key of the view),
+        # but it turns out that this is NOT guaranteed in DynamoDB and
+        # the tied items are ordered in an unknown way.
+        # So what we can do is the read *all* the items from the GSI (without
+        # an ExclusiveStartKey), and then verify that ExclusiveStartKey
+        # started in the right place of that all_gsi_items.
+        all_gsi_items = test_table_gsi_5.query(**query_args)['Items']
+        if multiset(all_gsi_items) != multiset(items):
+            # we didn't read yet all items, need to retry
+            time.sleep(0.1)
+            continue
+        index = all_gsi_items.index(exclusive_start_key)
+        expected_items = all_gsi_items[index+1:]
+        if multiset(expected_items) == multiset(got_items):
+            # Test done successfully
+            break
+        time.sleep(0.1)
+    assert multiset(expected_items) == multiset(got_items)
+
+# In the previous test (test_gsi_query_exclusivestartkey) we should that
+# ExclusiveStartKey contain all the base and GSI key columns (in our
+# case - p,c,x). Here we verify that it is not allowed for any one of
+# these columns to be missing in ExclusiveStartKey
+def test_gsi_query_exclusivestartkey_missing_column(test_table_gsi_5):
+    # The error that DynamoDB reports if the sort key is missing in
+    # ExclusiveStartKey is "The provided starting key is invalid". In
+    # Alternator, the error is "Key column c not found".
+    with pytest.raises(ClientError, match='ValidationException.*[kK]ey'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={'p': { 'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'}},
+            # missing 'c':
+            ExclusiveStartKey= { 'p': 'dog', 'x': 'cat' })
+    with pytest.raises(ClientError, match='ValidationException.*[kK]ey'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={'p': { 'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'}},
+            # missing 'x':
+            ExclusiveStartKey= { 'p': 'dog', 'c': 'cat' })
+    with pytest.raises(ClientError, match='ValidationException.*[kK]ey'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={'p': { 'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'}},
+            # missing 'p':
+            ExclusiveStartKey= { 'c': 'dog', 'x': 'cat' })
+
+# When Query'ing on a certain GSI partition key and/or sort key,
+# ExclusiveStartKey must have the same partition/sort key value.
+# Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
+    # The error that DynamoDB reports if the wrong partition is mentioned
+    # in ExclusiveStartKey is "The provided starting key is outside query
+    # boundaries based on provided conditions".
+    # Query a whole GSI partition:
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={'p': { 'AttributeValueList': ['right'], 'ComparisonOperator': 'EQ'}},
+            ExclusiveStartKey= { 'p': 'wrong', 'c': 'dog', 'x': 'cat' })
+    # Query with a GSI partition and sort key (this can still return
+    # multiple items, so ExclusiveStartKey makes sense).
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={
+                'p': { 'AttributeValueList': ['rightp'], 'ComparisonOperator': 'EQ'},
+                'x': { 'AttributeValueList': ['rightx'], 'ComparisonOperator': 'EQ'}
+            },
+            ExclusiveStartKey= { 'p': 'rightp', 'c': 'dog', 'x': 'wrongx' })
+    # Confirm that rightp, rightx the ExclusiveStartKey *is* supported
+    test_table_gsi_5.query(
+        ConsistentRead=False,
+        IndexName='hello',
+        KeyConditions={
+            'p': { 'AttributeValueList': ['rightp'], 'ComparisonOperator': 'EQ'},
+            'x': { 'AttributeValueList': ['rightx'], 'ComparisonOperator': 'EQ'}
+        },
+        ExclusiveStartKey= { 'p': 'rightp', 'c': 'dog', 'x': 'rightx' })
+    # If ExclusiveStartKey's p includes the wrong value but x is right,
+    # DynamoDB prints a different - and strange - error message: "The query
+    # can return at most one row and cannot be restarted". This message is not
+    # really true: As we saw in the previous statement, when ExclusiveStartKey
+    # does contain the right values - it is allowed, and this query doesn't
+    # really return just one row.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_5.query(
+            ConsistentRead=False,
+            IndexName='hello',
+            KeyConditions={
+                'p': { 'AttributeValueList': ['rightp'], 'ComparisonOperator': 'EQ'},
+                'x': { 'AttributeValueList': ['rightx'], 'ComparisonOperator': 'EQ'}
+            },
+            ExclusiveStartKey= { 'p': 'wrongp', 'c': 'dog', 'x': 'rightx' })
+
+# Check that ExclusiveStartKey cannot contain any spurious column names
+# beyond the actual primary key columns of the base and the GSI.
+# Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
+    query_args = {
+        'ConsistentRead': False,
+        'IndexName': 'hello',
+        'KeyConditions': {
+            'p': { 'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'},
+            'x': { 'AttributeValueList': ['cat'], 'ComparisonOperator': 'EQ'}
+        }
+    }
+    exclusive_start_key = { 'p': 'dog', 'c': 'mouse', 'x': 'cat' }
+    # This ExclusiveStartKey has the right columns - p, c and x - and works.
+    test_table_gsi_5.query(ExclusiveStartKey=exclusive_start_key, **query_args)
+    # If we add to exclusive_start_key a spurious column y, it fails.
+    exclusive_start_key['y'] = 'meerkat'
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        test_table_gsi_5.query(ExclusiveStartKey=exclusive_start_key, **query_args)
