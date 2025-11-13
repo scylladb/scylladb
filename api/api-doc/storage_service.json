@@ -961,6 +961,14 @@
                           "type":"string",
                           "paramType":"query",
                           "enum": ["all", "dc", "rack", "node"]
+                      },
+                      {
+                         "name":"primary_replica_only",
+                         "description":"Load the sstables and stream to the primary replica node within the scope, if one is specified. If not, stream to the global primary replica.",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"boolean",
+                         "paramType":"query"
                       }
                   ]
               }

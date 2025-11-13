@@ -504,6 +504,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto bucket = req->get_query_param("bucket");
         auto prefix = req->get_query_param("prefix");
         auto scope = parse_stream_scope(req->get_query_param("scope"));
+        auto primary_replica_only = validate_bool_x(req->get_query_param("primary_replica_only"), false);
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -513,7 +514,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto sstables = parsed.GetArray() |
             std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
             std::ranges::to<std::vector>();
-        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope);
+        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope, primary_replica_only);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 

@@ -5696,7 +5696,7 @@ future<std::map<token, inet_address>> storage_service::get_tablet_to_endpoint_ma
     const auto& tmap = tm.tablets().get_tablet_map(table);
     std::map<token, inet_address> result;
     for (std::optional<locator::tablet_id> tid = tmap.first_tablet(); tid; tid = tmap.next_tablet(*tid)) {
-        result.emplace(tmap.get_last_token(*tid), _address_map.get(tmap.get_primary_replica(*tid).host));
+        result.emplace(tmap.get_last_token(*tid), _address_map.get(tmap.get_primary_replica(*tid, tm.get_topology()).host));
         co_await coroutine::maybe_yield();
     }
     co_return result;
@@ -8300,4 +8300,3 @@ future<> storage_service::query_cdc_streams(table_id table, noncopyable_function
 }
 
 } // namespace service
-

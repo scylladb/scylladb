@@ -753,7 +753,7 @@ static future<bool> scan_table(
         auto my_host_id = erm->get_topology().my_host_id();
         const auto &tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
         for (std::optional tablet = tablet_map.first_tablet(); tablet; tablet = tablet_map.next_tablet(*tablet)) {
-            auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet);
+            auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
             // check if this is the primary replica for the current tablet
             if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
                 co_await scan_tablet(*tablet, proxy, abort_source, page_sem, expiration_stats, scan_ctx, tablet_map);
