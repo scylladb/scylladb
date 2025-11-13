@@ -1945,9 +1945,8 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
 void shard_of_with_tablets(schema_ptr schema,
                            const std::vector<sstables::shared_sstable>& sstables,
                            std::filesystem::path data_dir_path,
-                           sstables::sstables_manager& sstable_manager,
+                           const db::config& dbcfg,
                            reader_permit permit) {
-    auto& dbcfg = sstable_manager.db_config();
     auto tablets = tools::load_system_tablets(dbcfg, data_dir_path,
                                               schema->ks_name(), schema->cf_name(),
                                               permit).get();
@@ -2004,7 +2003,7 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
         shard_of_with_vnodes(sstables, sstable_manager, vm);
     } else {
         auto info = extract_from_sstable_path(vm);
-        shard_of_with_tablets(schema, sstables, info.data_dir_path, sstable_manager, permit);
+        shard_of_with_tablets(schema, sstables, info.data_dir_path, dbcfg, permit);
     }
 }
 
