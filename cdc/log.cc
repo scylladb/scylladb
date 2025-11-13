@@ -1590,7 +1590,7 @@ public:
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
-        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _log_schema(_schema->cdc_schema() ? _schema->cdc_schema() : ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _options(options)
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
         , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())

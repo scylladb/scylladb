@@ -579,6 +579,7 @@ private:
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
+    schema_ptr _cdc_schema;
 
     const std::array<column_count_type, 3> _offsets;
 
@@ -635,6 +636,7 @@ public:
     };
 private:
     struct reversed_tag { };
+    struct with_cdc_schema_tag { };
 
     lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def) const;
     void rebuild();
@@ -642,10 +644,11 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, const schema_static_props& props, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base = std::nullopt);
+    schema(private_tag, const raw_schema&, const schema_static_props& props, schema_ptr cdc_schema, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base = std::nullopt);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
+    schema(with_cdc_schema_tag, const schema&, schema_ptr cdc_schema);
     ~schema();
     const schema_static_props& static_props() const {
         return _static_props;
@@ -888,6 +891,9 @@ public:
     bool is_view() const {
         return bool(_view_info);
     }
+    schema_ptr cdc_schema() const {
+        return _cdc_schema;
+    }
     const query::partition_slice& full_slice() const {
         return *_full_slice;
     }
@@ -962,6 +968,8 @@ public:
     // different C++ objects).
     // The schema's version is also reversed using UUID_gen::negate().
     schema_ptr make_reversed() const;
+
+    schema_ptr make_with_cdc(schema_ptr cdc_schema) const;
 
     // Get the reversed counterpart of this schema from the schema registry.
     //

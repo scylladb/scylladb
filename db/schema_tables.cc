@@ -28,6 +28,7 @@
 #include "utils/log.hh"
 #include "schema/frozen_schema.hh"
 #include "schema/schema_registry.hh"
+#include "cdc/cdc_options.hh"
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
@@ -2077,7 +2078,9 @@ future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     const schema_ctxt& ctxt = proxy;
-    co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types());
+    // The CDC schema is set to nullptr because we don't have it yet, but we will
+    // check and update it soon if needed in create_tables_from_tables_partition.
+    co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr);
 }
 
 // Limit concurrency of user tables to prevent stalls.
@@ -2095,10 +2098,28 @@ constexpr size_t max_concurrent = 8;
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(sharded<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     auto tables = std::map<sstring, schema_ptr>();
+    auto tables_with_cdc = std::map<sstring, schema_ptr>();
     co_await max_concurrent_for_each(result->rows().begin(), result->rows().end(), max_concurrent, [&] (const query::result_set_row& row) -> future<> {
         schema_ptr cfm = co_await create_table_from_table_row(proxy, row);
-        tables.emplace(cfm->cf_name(), std::move(cfm));
+        if (!cfm->cdc_options().enabled()) {
+            tables.emplace(cfm->cf_name(), std::move(cfm));
+        } else {
+            // defer tables with CDC enabled. we want to construct all CDC tables first
+            // so then we can construct the schemas for these tables with the pointer to
+            // its CDC schema.
+            tables_with_cdc.emplace(cfm->cf_name(), std::move(cfm));
+        }
     });
+    for (auto&& [name, cfm] : tables_with_cdc) {
+        schema_ptr cdc_schema;
+        if (auto it = tables.find(cdc::log_name(name)); it != tables.end()) {
+            cdc_schema = it->second;
+        } else {
+            slogger.warn("Did not find CDC log schema for table {}", name);
+        }
+        schema_ptr extended_cfm = cdc_schema ? cfm->make_with_cdc(cdc_schema) : cfm;
+        tables.emplace(std::move(name), std::move(extended_cfm));
+    }
     co_return std::move(tables);
 }
 
@@ -2247,7 +2268,7 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
     }
 }
 
-schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, std::optional<table_schema_version> version)
+schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, schema_ptr cdc_schema, std::optional<table_schema_version> version)
 {
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
 
@@ -2329,6 +2350,10 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         builder.with_version(*version);
     } else {
         builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+    }
+
+    if (cdc_schema) {
+        builder.with_cdc_schema(cdc_schema);
     }
 
     if (auto partitioner = sm.partitioner()) {

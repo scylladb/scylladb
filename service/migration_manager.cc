@@ -1219,7 +1219,9 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
             // referenced by the incoming request.
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
-            auto us = s.unfreeze(db::schema_ctxt(proxy));
+            // We don't set the CDC schema here because it's not included in the RPC and we're
+            // not using raft mode.
+            auto us = s.unfreeze(db::schema_ctxt(proxy), nullptr);
             // if this is a view - sanity check that its schema doesn't need fixing.
             schema_ptr base_schema;
             if (us->is_view()) {
@@ -1227,12 +1229,8 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
                 base_schema = db.find_schema(us->view_info()->base_id());
                 db::schema_tables::check_no_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema);
             }
-            return db::schema_tables::store_column_mapping(proxy, us, true).then([us, base_schema] -> view_schema_and_base_info {
-                if (us->is_view()) {
-                    return {frozen_schema(us), us->view_info()->base_info()};
-                } else {
-                    return {frozen_schema(us)};
-                }
+            return db::schema_tables::store_column_mapping(proxy, us, true).then([us, base_schema] -> extended_frozen_schema {
+                return extended_frozen_schema(us);
             });
         });
     });
