@@ -379,6 +379,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .column_index_auto_scale_threshold_in_kb = cfg.column_index_auto_scale_threshold_in_kb,
         .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
         .data_file_directories = cfg.data_file_directories(),
+        .format = cfg.sstable_format,
     };
 }
 

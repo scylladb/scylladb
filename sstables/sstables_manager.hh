@@ -102,6 +102,7 @@ public:
         utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
         const std::vector<sstring>& data_file_directories;
+        utils::updateable_value<sstring> format = utils::updateable_value<sstring>(fmt::to_string(sstable_version_types::me));
     };
 
 private:

@@ -2762,6 +2762,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             .available_memory = 1_GiB,
             .enable_sstable_key_validation = dbcfg.enable_sstable_key_validation(),
             .data_file_directories = dbcfg.data_file_directories(),
+            .format = dbcfg.sstable_format,
         };
         sstables::storage_manager::config stm_cfg;
         stm_cfg.object_storage_clients_memory = 100_MiB;

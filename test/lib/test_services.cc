@@ -256,6 +256,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
                 .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
                 .memory_reclaim_threshold = db_config->components_memory_reclaim_threshold,
                 .data_file_directories = db_config->data_file_directories(),
+                .format = db_config->sstable_format,
             },
             feature_service,
             cache_tracker,
