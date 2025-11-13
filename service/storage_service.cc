@@ -265,6 +265,7 @@ storage_service::storage_service(abort_source& abort_source,
     }
 
     init_messaging_service();
+    _migration_manager.local().plug_storage_service(*this);
 }
 
 storage_service::~storage_service() = default;
@@ -3423,6 +3424,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 }
 
 future<> storage_service::stop() {
+    co_await _migration_manager.local().unplug_storage_service();
     // if there is a background "isolate" shutdown
     // in progress, we need to sync with it. Mostly
     // relevant for tests

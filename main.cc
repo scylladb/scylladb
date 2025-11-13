@@ -1702,7 +1702,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting migration manager");
             debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(ss), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
