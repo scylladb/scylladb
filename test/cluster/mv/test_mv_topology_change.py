@@ -478,3 +478,43 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
                 logger.error("Missing MV row for id %s base token %s", mid, id_to_token[mid])
             logger.error(f"Expected {actual_inserts} rows, got {len(mv_rows)} in MV")
             raise
+
+# Reproduces #26976
+# Write to a table with MV while a new node is joining, right after the join is completed
+# on the topology coordinator, but the joining node is delayed in applying the group0 state.
+# The joining node receives base mutations from the other nodes to apply as the new replica,
+# and it also should generate view updates for them while in a joining state.
+@pytest.mark.asyncio
+async def test_mv_write_during_node_join(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(1, cmdline=cmdline)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int PRIMARY KEY, val int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.t_by_v AS SELECT * FROM {ks}.t WHERE val IS NOT NULL PRIMARY KEY (val, id)")
+
+        log0 = await manager.server_open_log(servers[0].server_id)
+        m = await log0.mark()
+
+        # Add a new node with delayed group0 apply
+        logger.info("Adding a new node")
+        server_add_task = asyncio.create_task(manager.server_add(
+            config={'error_injections_at_startup': ['group0_state_machine::delay_apply']}, cmdline=cmdline))
+
+        await log0.wait_for("has joined the cluster", from_mark=m, timeout=60)
+
+        # Write while the coordinator has finished the node join and sees it as a normal replica, but the new node
+        # is in an older state (preferably before write_both_read_new for the test).
+        logger.info("Writing rows to the table")
+        N = 100
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (id, val) VALUES ({i}, {i+1})") for i in range(N)])
+
+        await server_add_task
+
+        logger.info("Verifying rows in the materialized view")
+        async def all_rows_found():
+            rows = await cql.run_async(f"SELECT COUNT(*) AS cnt FROM {ks}.t_by_v")
+            if len(rows) == 1 and rows[0].cnt == N:
+                return True
+        await wait_for(all_rows_found, time.time() + 60)
