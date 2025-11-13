@@ -260,13 +260,12 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     8. The total number of warnings should be small.
     """
 
-    cmdline = []
     # Not needed, but it will be of tremendous help if we end up debugging a failure.
-    cmdline.extend(["--logger-log-level", "view_building_coordinator=trace",
-                    "--logger-log-level", "view_building_worker=trace",
-                    "--logger-log-level", "load_balancer=debug",
-                    "--logger-log-level", "storage_service=debug",
-                    "--logger-log-level", "raft_topology=debug"])
+    cmdline = ["--logger-log-level", "view_building_coordinator=trace",
+               "--logger-log-level", "view_building_worker=trace",
+               "--logger-log-level", "load_balancer=debug",
+               "--logger-log-level", "storage_service=debug",
+               "--logger-log-level", "raft_topology=debug"]
 
     s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
