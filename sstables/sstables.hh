@@ -624,6 +624,7 @@ private:
     mutable std::optional<size_t> _total_reclaimable_memory{0};
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
+    bool _unlinked{false};
 public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }

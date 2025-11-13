@@ -2806,7 +2806,7 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
     }
-    if (!has_component(component_type::Digest)) {
+    if (!has_component(component_type::Digest) || _unlinked) {
         co_return std::nullopt;
     }
     sstring digest_str;
@@ -2837,7 +2837,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
-    if (!has_component(component_type::CRC)) {
+    if (!has_component(component_type::CRC) || _unlinked) {
         co_return nullptr;
     }
     auto checksum = make_lw_shared<sstables::checksum>();
@@ -3347,6 +3347,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 
 future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
+    _unlinked = true;
     _on_delete(*this);
 
     auto remove_fut = _storage->wipe(*this, sync);
