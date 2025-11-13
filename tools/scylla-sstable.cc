@@ -1955,7 +1955,8 @@ void shard_of_with_tablets(schema_ptr schema,
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        writer.Key(fmt::to_string(sst->get_filename()));
+        auto key = fmt::to_string(sst->get_filename());
+        writer.Key(key);
         writer.StartArray();
 
         // token ranges are distributed across tablets, so we just check for
@@ -1967,7 +1968,9 @@ void shard_of_with_tablets(schema_ptr schema,
         // the "system.tablets" table, and "i" is the index of current tablet.
         auto tablet = tablets.upper_bound(first_token);
         if (auto last_tablet = tablets.lower_bound(last_token); tablet != last_tablet) {
-            fmt::print(std::cerr, "sstable spans across multiple tablets\n");
+            auto first_id = std::distance(tablets.begin(), tablet);
+            auto last_id = std::distance(tablets.begin(), last_tablet);
+            fmt::print(std::cerr, "sstable {} spans across multiple tablets: [{},{}]\n", key, first_id, last_id);
         }
         if (tablet == tablets.end()) {
             fmt::print(std::cerr, "unable to find replica set for sstable: {}\n", sst->get_filename());
