@@ -66,6 +66,9 @@ async def test_maintenance_mode(manager: ManagerClient):
         await manager.server_update_config(server_a.server_id, "maintenance_mode", "true")
         await manager.server_start(server_a.server_id)
 
+        log = await manager.server_open_log(server_a.server_id)
+        await log.wait_for(r"initialization completed \(maintenance mode\)")
+
         # Check that the regular CQL port is not available
         assert socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect_ex((server_a.ip_addr, 9042)) != 0
 
