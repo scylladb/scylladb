@@ -60,7 +60,7 @@ namespace bpo = boost::program_options;
 
 using namespace tools::utils;
 
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const db::config&, const bpo::variables_map&);
 
 namespace std {
 // required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
@@ -845,7 +845,7 @@ void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_
 }
 
 void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -871,7 +871,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 }
 
 void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, compaction::compaction_type_options::scrub::mode>> scrub_modes{
         {"abort", compaction::compaction_type_options::scrub::mode::abort},
         {"skip", compaction::compaction_type_options::scrub::mode::skip},
@@ -915,7 +915,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -956,7 +956,7 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
 }
 
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -994,7 +994,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 }
 
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1284,7 +1284,7 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
 }
 
 void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1525,7 +1525,7 @@ public:
 };
 
 void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1549,7 +1549,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
 }
 
 void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map&) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1592,7 +1592,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
 }
 
 void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1763,7 +1763,7 @@ future<> consume_queries(input_stream<char>&& is, std::function<future<>(std::st
 }
 
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& manager, const bpo::variables_map& vm) {
+        sstables::sstables_manager& manager, const db::config&, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
         {"none", mutation_fragment_stream_validation_level::none},
         {"partition_region", mutation_fragment_stream_validation_level::partition_region},
@@ -1870,7 +1870,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
 }
 
 void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& manager, const bpo::variables_map& vm) {
+        sstables::sstables_manager& manager, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1891,7 +1891,7 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
 
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -1990,6 +1990,7 @@ void shard_of_with_tablets(schema_ptr schema,
 void shard_of_operation(schema_ptr schema, reader_permit permit,
                         const std::vector<sstables::shared_sstable>& sstables,
                         sstables::sstables_manager& sstable_manager,
+                        const db::config& dbcfg,
                         const bpo::variables_map& vm) {
     // uses "tablets" by default. as new scylla installations enable "tablet" by
     // default
@@ -2117,7 +2118,7 @@ public:
 };
 
 void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sstable_manager, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sstable_manager, const db::config&, const bpo::variables_map& vm) {
     if (vm.contains("query") && vm.contains("query-file")) {
         throw std::invalid_argument("cannot provide both -q|--query and --query-file");
     }
@@ -2185,7 +2186,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
 }
 
 void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
@@ -2812,7 +2813,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
 
         try {
-            operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config);
+            operations_with_func.at(operation)(schema, permit, sstables, sst_man, dbcfg, app_config);
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
