@@ -345,6 +345,10 @@ public:
 
     abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _kind(k) {}
+
+    abstract_type(const abstract_type&) = delete;
+    abstract_type& operator=(const abstract_type&) = delete;
+
     virtual ~abstract_type() {}
     bool less(bytes_view v1, bytes_view v2) const { return compare(v1, v2) < 0; }
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
