@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "seastar/core/future.hh"
+#include "seastar/core/when_all.hh"
 #include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
@@ -67,13 +69,25 @@ auto listen_on_port(std::unique_ptr<http_server> server, sstring host, uint16_t 
     co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
 }
 
-auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
-        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+auto make_http_server(std::function<void(routes& r)> set_routes) {
     static unsigned id = 0;
     auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
     server->set_content_streaming(true);
-    co_return co_await listen_on_port(std::move(server), std::move(host), port);
+    return server;
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
+        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port);
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, server_socket socket) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    auto server = make_http_server(set_routes);
+    auto& listeners = http_server_tester::listeners(*server);
+    listeners.push_back(std::move(socket));
+    co_await server->do_accepts(listeners.size() - 1);
+    co_return std::make_tuple(std::move(server), listeners.back().local_address().port());
 }
 
 auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
@@ -224,6 +238,11 @@ public:
 };
 
 class unavailable_server {
+    struct Connection {
+        lowres_clock::time_point timestamp;
+        connected_socket socket;
+    };
+
 public:
     explicit unavailable_server(uint16_t port)
         : _port(port) {
@@ -237,8 +256,10 @@ public:
     }
 
     future<> stop() {
-        _socket.abort_accept();
-        co_await _gate.close();
+        if (_socket) {
+            _socket.abort_accept();
+            co_await _gate.close();
+        }
     }
 
     sstring host() const {
@@ -249,8 +270,28 @@ public:
         return _port;
     }
 
-    size_t connections() const {
+    const std::vector<Connection>& connections() const {
         return _connections;
+    }
+
+    future<seastar::server_socket> take_socket() {
+        _running = false;
+        // Make a connection to unblock accept() in run loop.
+        co_await seastar::connect(socket_address(net::inet_address(_host), _port));
+        co_await _gate.close();
+        co_return std::move(_socket);
+    }
+
+    void auto_shutdown_off() {
+        _auto_shutdown = false;
+    }
+
+    future<> shutdown_all_and_clear() {
+        std::vector<Connection> tmp;
+        std::swap(tmp, _connections);
+        for (auto& conn : tmp) {
+            co_await shutdown(conn.socket);
+        }
     }
 
 private:
@@ -266,24 +307,33 @@ private:
     }
 
     future<> run() {
-        while (true) {
+        while (_running) {
             try {
-                auto s = co_await _socket.accept();
-                _connections++;
-                s.connection.shutdown_output();
-                s.connection.shutdown_input();
-                co_await s.connection.wait_input_shutdown();
+                auto result = co_await _socket.accept();
+                _connections.push_back(Connection{.timestamp = lowres_clock::now(), .socket = std::move(result.connection)});
+                if (_auto_shutdown) {
+                    co_await shutdown(_connections.back().socket);
+                }
             } catch (...) {
                 break;
             }
         }
     }
 
+    future<> shutdown(connected_socket& cs) {
+        cs.shutdown_output();
+        cs.shutdown_input();
+        co_await cs.wait_input_shutdown();
+    }
+
+
     seastar::server_socket _socket;
     seastar::gate _gate;
     uint16_t _port;
     sstring _host;
-    size_t _connections = 0;
+    std::vector<Connection> _connections;
+    bool _running = true;
+    bool _auto_shutdown = true;
 };
 
 auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
@@ -318,6 +368,16 @@ public:
         co_await listen();
     }
 
+    future<> start(server_socket socket) {
+        auto [server, addr] = co_await new_http_server(
+                [this](auto& r) {
+                    set_routes(r);
+                },
+                std::move(socket));
+        _http_server = std::move(server);
+        _port = addr.port();
+    }
+
     future<> stop() {
         co_await _http_server->stop();
     }
@@ -342,11 +402,8 @@ private:
     future<> listen() {
         co_await try_on_loopback_address([this](auto host) -> future<> {
             auto [s, addr] = co_await new_http_server(
-                    [this](routes& r) {
-                        auto ann = [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                            return handle_request(std::move(req), std::move(rep));
-                        };
-                        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"), new function_handler(ann, "json"));
+                    [this](auto& r) {
+                        set_routes(r);
                     },
                     host.c_str(), _port);
             _http_server = std::move(s);
@@ -355,12 +412,33 @@ private:
         });
     }
 
-    future<std::unique_ptr<reply>> handle_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+    future<std::unique_ptr<reply>> handle_ann_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
         ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);
         co_return rep;
+    }
+
+    future<std::unique_ptr<reply>> handle_status_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->set_status(status_type::ok);
+        rep->write_body("json", "SERVING");
+        co_return rep;
+    }
+
+    void set_routes(routes& r) {
+        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_ann_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
+        r.add(operation_type::GET, url("/api/v1/status").remainder("status"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_status_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
     }
 
     uint16_t _port = 0;
@@ -823,7 +901,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return unavail_s->connections() > 1;
+                    co_return unavail_s->connections().size() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
@@ -887,7 +965,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return unavail_s->connections() > 1;
+                    co_return unavail_s->connections().size() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
@@ -1027,4 +1105,132 @@ SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_limit
             .finally([&s1] {
                 return s1->stop();
             });
+}
+
+SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
+    auto unavail_server = co_await make_unavailable_server();
+    std::unique_ptr<vs_mock_server> avail_server;
+    constexpr auto HOSTNAME = "server.node";
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://{}:{}", HOSTNAME, unavail_server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{HOSTNAME, std::vector<std::string>{unavail_server->host()}}});
+                vs.start_background_tasks();
+
+                // Send request to unavailable node - this will put the node to backoff.
+                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_CHECK(!result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(result.error()));
+
+                // Replace the unavailable server with an available one.
+                avail_server = std::make_unique<vs_mock_server>();
+                co_await avail_server->start(co_await unavail_server->take_socket());
+
+                // Wait until node is taken out of the backoff state and used for requests again.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return result.has_value();
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_server->stop();
+                if (avail_server) {
+                    co_await avail_server->stop();
+                }
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failures) {
+    using keys = std::expected<vector_store_client::primary_keys, vector_store_client::ann_error>;
+
+    auto unavail_s = co_await make_unavailable_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                std::vector<future<keys>> requests;
+                unavail_s->auto_shutdown_off();
+                constexpr auto NUM_OF_PARALLEL_REQUESTS = 50;
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
+                vs.start_background_tasks();
+
+                for (int i = 0; i < NUM_OF_PARALLEL_REQUESTS; ++i) {
+                    requests.push_back(vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                }
+                // Wait for all requests to establish a connection with the server.
+                co_await repeat_until([&unavail_s]() -> future<bool> {
+                    co_return unavail_s->connections().size() == NUM_OF_PARALLEL_REQUESTS;
+                });
+                // Shutdown all connections, causing all requests to fail.
+                // The number of connections will drop to zero.
+                co_await unavail_s->shutdown_all_and_clear();
+                // Wait for all requests to complete.
+                co_await when_all(requests.begin(), requests.end());
+
+                // After the backoff period, a single status check is expected to verify node recovery.
+                // The test server keeps the subsequent status check connection open (auto_shutdown_off()).
+                // This prevents the client's backoff mechanism from sending another status request
+                // while the first one is pending, ensuring that exactly one new connection is made.
+                // This makes the test assertion deterministic.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    co_return unavail_s->connections().size() == 1;
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_s->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request_timeout_cfg) {
+    auto unavail_s = co_await make_unavailable_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
+                vs.start_background_tasks();
+
+                // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
+                cfg.db_config->read_request_timeout_in_ms.set(100);
+                // Trigger status checking by making ANN request to unavailable server.
+                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                co_await repeat_until([&unavail_s]() -> future<bool> {
+                    // Wait for 1 ANN request + 4 status check connections (5 total)
+                    co_return unavail_s->connections().size() > 4;
+                });
+
+                // Verify backoff timing between status check connections.
+                // Skip the first connection (ANN request) and analyze status check intervals.
+                auto duration_between_1st_and_2nd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(2).timestamp - unavail_s->connections().at(1).timestamp);
+                BOOST_CHECK_GE(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(100));
+                BOOST_CHECK_LT(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(200));
+                auto duration_between_2nd_and_3rd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(3).timestamp - unavail_s->connections().at(2).timestamp);
+                // Max backoff time reached at 200ms, so subsequent status checks use fixed 200ms intervals.
+                BOOST_CHECK_GE(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(200)); // 200ms = 100ms * 2
+                BOOST_CHECK_LT(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(400));
+                auto duration_between_3rd_and_4th_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        unavail_s->connections().at(4).timestamp - unavail_s->connections().at(3).timestamp);
+                BOOST_CHECK_GE(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(200));
+                BOOST_CHECK_LT(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(400));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_s->stop();
+            }));
 }
