@@ -176,6 +176,13 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 
+## Zero-token nodes
+
+Zero-token nodes (the nodes started with `join_ring=false`) never own tokens or become
+tablet replicas. Hence, the logic described above is significantly simplified for them.
+For example, a bootstrapping zero-token node completes the transition on the
+`join_group0` state, as the following tasks (like creating a new CDC generation,
+streaming, and tablet migrations) are unneeded.
 
 # Load balancing
 
