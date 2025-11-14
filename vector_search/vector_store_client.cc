@@ -8,12 +8,11 @@
 
 #include "vector_store_client.hh"
 #include "dns.hh"
-#include "load_balancer.hh"
 #include "clients.hh"
 #include "uri.hh"
+#include "utils.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
-#include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
 #include "utils/rjson.hh"
@@ -201,14 +200,6 @@ auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
 
     vslogger.info("Vector Store service URIs set to: '{}'", uris_csv);
     return ret;
-}
-
-sstring response_content_to_sstring(const std::vector<temporary_buffer<char>>& buffers) {
-    sstring result;
-    for (const auto& buf : buffers) {
-        result.append(buf.get(), buf.size());
-    }
-    return result;
 }
 
 std::vector<sstring> get_hosts(const std::vector<uri>& uris) {
