@@ -112,6 +112,8 @@ A node state may have additional parameters associated with it. For instance
 
 Additionally to specific node states, there entire topology can also be in a transitioning state:
 
+- `join_group0` - a join request from a bootstrapping/replacing node has been accepted. The node joins group 0 and,
+    in the case of a bootstrapping node, receives bootstrap tokens.
 - `commit_cdc_generation` - a new CDC generation data was written to internal tables earlier
     and now we need to commit the generation - create a timestamp for it and tell every node
     to start using it for CDC log table writes.
@@ -128,8 +130,9 @@ Additionally to specific node states, there entire topology can also be in a tra
     requests from starting. Intended to be used in tests which want to prevent internally-triggered topology
     operations during the test.
 
-When a node bootstraps, we create new tokens for it and a new CDC generation
-and enter the `commit_cdc_generation` state. Once the generation is committed,
+When a node bootstraps, we move the topology to `join_group0` state, where we add
+the node to group 0, create new tokens for it, and create a new CDC generation.
+Then, we enter the `commit_cdc_generation` state. Once the generation is committed,
 we enter `write_both_read_old` state. After the entire cluster learns about it,
 streaming starts. When streaming finishes, we move to `write_both_read_new`
 state and again the whole cluster needs to learn about it and make sure that no
