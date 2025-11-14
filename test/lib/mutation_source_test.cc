@@ -2036,6 +2036,7 @@ private:
     // The "777" prefix is so that it's easily distinguishable from other numbers in the printout.
     // Also makes it easy to grep for a particular element.
     uint64_t _seq = 777000000;
+    compress _compress = compress::yes;
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -2056,6 +2057,10 @@ private:
         for (column_id i = 0; i < column_count; ++i) {
             add_column(format("v{:d}", i), column_kind::regular_column);
             add_column(format("s{:d}", i), column_kind::static_column);
+        }
+
+        if(!_compress) {
+            builder.set_compressor_params(compression_parameters::no_compression());
         }
 
         return builder.build();
@@ -2085,8 +2090,8 @@ private:
         return tombstone(gen_timestamp(l), new_expiry());
     }
 public:
-    explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf") : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
+    explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes, generate_uncompactable uc = generate_uncompactable::no,
+            std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf", compress c = compress::yes) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc), _compress(c) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
         auto seed = seed_opt.value_or(tests::random::get_int<uint32_t>());
         std::cout << "random_mutation_generator seed: " << seed << "\n";
@@ -2399,8 +2404,9 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name))
+random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc,
+        std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name, compress c)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name, c))
 { }
 
 mutation random_mutation_generator::operator()() {

@@ -757,7 +757,8 @@ private:
                                         tracing::trace_state_ptr trace_state,
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr,
-                                        const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
+                                        const sstables::sstable_predicate& = sstables::default_sstable_predicate(),
+                                        sstables::integrity_check integrity = sstables::integrity_check::no) const;
 
     lw_shared_ptr<const sstables::sstable_set> make_compound_sstable_set() const;
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
