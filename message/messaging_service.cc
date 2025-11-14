@@ -364,19 +364,25 @@ sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr
     return ret;
 }
 
-future<> messaging_service::ban_host(locator::host_id id) {
-    return container().invoke_on_all([id] (messaging_service& ms) {
-        if (ms._banned_hosts.contains(id) || ms.is_shutting_down()) {
+future<> messaging_service::ban_hosts(const utils::chunked_vector<locator::host_id>& ids) {
+    if (ids.empty()) {
+        return make_ready_future<>();
+    }
+    return container().invoke_on_all([&ids] (messaging_service& ms) {
+        if (ms.is_shutting_down()) {
             return;
         }
-
-        ms._banned_hosts.insert(id);
-        auto [start, end] = ms._host_connections.equal_range(id);
-        for (auto it = start; it != end; ++it) {
-            auto& conn_ref = it->second;
-            conn_ref.server.abort_connection(conn_ref.conn_id);
+        for (const auto id: ids) {
+            if (const auto [it, inserted] = ms._banned_hosts.insert(id); !inserted) {
+                continue;
+            }
+            auto [start, end] = ms._host_connections.equal_range(id);
+            for (auto it = start; it != end; ++it) {
+                auto& conn_ref = it->second;
+                conn_ref.server.abort_connection(conn_ref.conn_id);
+            }
+            ms._host_connections.erase(start, end);
         }
-        ms._host_connections.erase(start, end);
     });
 }
 
