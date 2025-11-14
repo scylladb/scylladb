@@ -32,14 +32,26 @@ class RestApiSession:
         self.port = port
         self.session = requests.Session()
 
-    def send(self, method, path, params={}):
-        url=f"http://{self.host}:{self.port}/{path}"
+    def send(self, method, path, params=None, json_body=None):
+        """Send an HTTP request.
+
+        method: HTTP method string (GET/POST/DELETE/...)
+        path: path relative to server root (no leading slash needed)
+        params: dict of query parameters (optional)
+        json_body: Python object to JSON-serialize as request body when provided
+        """
+        if params is None:
+            params = {}
+        url = f"http://{self.host}:{self.port}/{path}"
         if params:
             sep = '?'
             for key, value in params.items():
                 url += f"{sep}{key}={value}"
                 sep = '&'
-        req = self.session.prepare_request(requests.Request(method, url))
+        if json_body is not None:
+            req = self.session.prepare_request(requests.Request(method, url, json=json_body))
+        else:
+            req = self.session.prepare_request(requests.Request(method, url))
         return self.session.send(req)
 
 # "api" fixture: set up client object for communicating with Scylla API.
