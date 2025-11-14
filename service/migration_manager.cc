@@ -54,7 +54,7 @@ const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, service::storage_proxy& sp);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
-            service::storage_proxy& storage_proxy, sharded<service::storage_service>& ss, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
+            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
           _notifier(notifier)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
@@ -75,7 +75,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
             })
         )
         , _background_tasks("migration_manager::background_tasks")
-        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _ss(ss), _gossiper(gossiper), _group0_client(group0_client)
+        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _ss("migration_manager::storage_service"), _gossiper(gossiper), _group0_client(group0_client)
         , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _concurrent_ddl_retries{10}
@@ -92,6 +92,14 @@ future<> migration_manager::stop() {
     } catch (...) {
         mlogger.error("schema_push failed: {}", std::current_exception());
     }
+}
+
+void migration_manager::plug_storage_service(service::storage_service& ss) {
+    _ss.plug(ss.shared_from_this());
+}
+
+future<> migration_manager::unplug_storage_service() {
+    return _ss.unplug();
 }
 
 future<> migration_manager::drain()
@@ -392,9 +400,13 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
     mlogger.debug("Applying schema mutations from {}", src);
     auto& proxy = _storage_proxy;
     const auto& db = proxy.get_db().local();
+    auto ss = _ss.get_permit();
+    if (!ss) {
+        co_return;
+    }
 
     if (_as.abort_requested()) {
-        return make_exception_future<>(abort_requested_exception());
+        throw abort_requested_exception{};
     }
 
     utils::chunked_vector<mutation> mutations;
@@ -407,16 +419,19 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
         }
     } catch (replica::no_such_column_family& e) {
         mlogger.error("Error while applying schema mutations from {}: {}", src, e);
-        return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
-                    std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
+        throw std::runtime_error(fmt::format("Error while applying schema mutations: {}", e));
     }
-    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _ss, _feat, std::move(mutations));
+    co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), ss.get()->container(), _feat, std::move(mutations));
 }
 
 future<> migration_manager::reload_schema() {
     mlogger.info("Reloading schema");
+    auto ss = _ss.get_permit();
+    if (!ss) {
+        co_return;
+    }
     utils::chunked_vector<mutation> mutations;
-    return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, std::move(mutations), true);
+    co_await db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), ss.get()->container(), _feat, std::move(mutations), true);
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const locator::host_id& endpoint) {
@@ -1081,7 +1096,11 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
 }
 
 future<> migration_manager::announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard guard) {
-    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, schema);
+    auto ss = _ss.get_permit();
+    if (!ss) {
+        co_return;
+    }
+    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), ss.get()->container(), _feat, schema);
 
     try {
         using namespace std::placeholders;
