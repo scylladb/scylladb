@@ -28,6 +28,7 @@ Scylla uses the following directory structure to store all its SSTables, for exa
     │   │   │       ├── ...
     │   │   │       └── mc-1-big-TOC.txt
     │   │   ├── staging
+    │   │   ├── quarantine
     │   │   └── upload
     │   └── cf-7ec943202fc611e9a130000000000000
     │       ├── snapshots
@@ -36,6 +37,7 @@ Scylla uses the following directory structure to store all its SSTables, for exa
     │       │       ├── ks-cf-ka-3-TOC.txt
     │       │       └── manifest.json
     │       ├── staging
+    │       ├── quarantine
     │       └── upload
     ├── system
     │   ├── schema_columnfamilies-45f5b36024bc3f83a3631034ea4fa697
@@ -165,6 +167,21 @@ The per-table directory may contain several sub-directories, as listed below:
 
 * Upload directory (`upload`)  
   Used for ingesting external SSTables into Scylla on startup.
+
+
+* Quarantine directory (`quarantine`)
+  A sub-directory holding SSTables that have been quarantined, typically due to
+  validation failures or corruption detected during scrub operations.
+  
+  Quarantined SSTables are isolated to prevent them from being read or used by the
+  database. They can be inspected manually for debugging purposes or removed using
+  the `drop_quarantined_sstables` API operation.
+  
+  The scrub operation can be configured to handle quarantined SSTables using the
+  `quarantine_mode` parameter with the following options:
+  - `INCLUDE`: Process both regular and quarantined SSTables (default)
+  - `EXCLUDE`: Skip quarantined SSTables during scrub
+  - `ONLY`: Process only quarantined SSTables
 
 
 * Temporary SSTable directory (`<generation>.sstable`)  
