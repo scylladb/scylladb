@@ -7,6 +7,7 @@
  */
 
 #include "seastar/core/future.hh"
+#include "seastar/core/when_all.hh"
 #include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
@@ -265,7 +266,7 @@ public:
     }
 
     size_t connections() const {
-        return _connections;
+        return _connections.size();
     }
 
     future<seastar::server_socket> take_socket() {
@@ -274,6 +275,18 @@ public:
         co_await seastar::connect(socket_address(net::inet_address(_host), _port));
         co_await _gate.close();
         co_return std::move(_socket);
+    }
+
+    void auto_shutdown_off() {
+        _auto_shutdown = false;
+    }
+
+    future<> shutdown_all_and_clear() {
+        std::vector<seastar::accept_result> tmp;
+        std::swap(tmp, _connections);
+        for (auto& conn : tmp) {
+            co_await shutdown(conn.connection);
+        }
     }
 
 private:
@@ -291,23 +304,30 @@ private:
     future<> run() {
         while (_running) {
             try {
-                auto s = co_await _socket.accept();
-                _connections++;
-                s.connection.shutdown_output();
-                s.connection.shutdown_input();
-                co_await s.connection.wait_input_shutdown();
+                _connections.push_back(co_await _socket.accept());
+                if (_auto_shutdown) {
+                    co_await shutdown(_connections.back().connection);
+                }
             } catch (...) {
                 break;
             }
         }
     }
 
+    future<> shutdown(connected_socket& cs) {
+        cs.shutdown_output();
+        cs.shutdown_input();
+        co_await cs.wait_input_shutdown();
+    }
+
+
     seastar::server_socket _socket;
     seastar::gate _gate;
     uint16_t _port;
     sstring _host;
-    size_t _connections = 0;
+    std::vector<seastar::accept_result> _connections;
     bool _running = true;
+    bool _auto_shutdown = true;
 };
 
 auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
@@ -1079,4 +1099,89 @@ SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_limit
             .finally([&s1] {
                 return s1->stop();
             });
+}
+
+SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
+    auto unavail_server = co_await make_unavailable_server();
+    std::unique_ptr<vs_mock_server> avail_server;
+    constexpr auto HOSTNAME = "server.node";
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://{}:{}", HOSTNAME, unavail_server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{HOSTNAME, std::vector<std::string>{unavail_server->host()}}});
+                vs.start_background_tasks();
+
+                // Send request to unavailable node - this will put the node to backoff.
+                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_CHECK(!result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(result.error()));
+
+                // Replace the unavailable server with an available one.
+                avail_server = std::make_unique<vs_mock_server>();
+                co_await avail_server->start(co_await unavail_server->take_socket());
+
+                // Wait until node is taken out of the backoff state and used for requests again.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return result.has_value();
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_server->stop();
+                if (avail_server) {
+                    co_await avail_server->stop();
+                }
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failures) {
+    using keys = std::expected<vector_store_client::primary_keys, vector_store_client::ann_error>;
+
+    auto unavail_s = co_await make_unavailable_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                std::vector<future<keys>> requests;
+                unavail_s->auto_shutdown_off();
+                constexpr auto NUM_OF_PARALLEL_REQUESTS = 50;
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
+                vs.start_background_tasks();
+
+                for (int i = 0; i < NUM_OF_PARALLEL_REQUESTS; ++i) {
+                    requests.push_back(vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                }
+                // Wait for all requests to establish a connection with the server.
+                co_await repeat_until([&unavail_s]() -> future<bool> {
+                    co_return unavail_s->connections() == NUM_OF_PARALLEL_REQUESTS;
+                });
+                // Shutdown all connections, causing all requests to fail.
+                // The number of connections will drop to zero.
+                co_await unavail_s->shutdown_all_and_clear();
+                // Wait for all requests to complete.
+                co_await when_all(requests.begin(), requests.end());
+
+                // After the backoff period, a single status check is expected to verify node recovery.
+                // The test server keeps the subsequent status check connection open (auto_shutdown_off()).
+                // This prevents the client's backoff mechanism from sending another status request
+                // while the first one is pending, ensuring that exactly one new connection is made.
+                // This makes the test assertion deterministic.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    co_return unavail_s->connections() == 1;
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_s->stop();
+            }));
 }
