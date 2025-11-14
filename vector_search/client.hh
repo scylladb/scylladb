@@ -48,9 +48,18 @@ public:
     }
 
 private:
+    seastar::future<response> request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
+            std::optional<seastar::http::reply::status_type>&& expected, seastar::abort_source& as);
+
+    seastar::future<bool> check_status();
+    void handle_server_unavailable();
+    seastar::future<> run_checking_status();
+    bool is_checking_status_in_progress() const;
+
     endpoint_type _endpoint;
     seastar::http::experimental::client _http_client;
+    seastar::future<> _checking_status_future = seastar::make_ready_future();
+    seastar::abort_source _as;
 };
-
 
 } // namespace vector_search
