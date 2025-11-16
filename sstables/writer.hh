@@ -248,7 +248,8 @@ template<typename W, typename First, typename Second, typename... Rest>
 requires Writer<W>
 inline void write(sstable_version_types v, W& out, const First& first, const Second& second, Rest&&... rest) {
     write(v, out, first);
-    write(v, out, second, std::forward<Rest>(rest)...);
+    write(v, out, second);
+    (..., write(v, out, std::forward<Rest>(rest)));
 }
 
 template <class T, typename W>
