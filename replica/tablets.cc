@@ -714,8 +714,8 @@ struct tablet_metadata_builder {
             co_await tm.set_colocated_table(table, base_table);
         }
 
-        for (const auto& [table, tids] : pending_repair_time_update) {
-            const auto& tmap = tm.get_tablet_map(table);
+        for (const auto& [base_table, tids] : pending_repair_time_update) {
+            const auto& tmap = tm.get_tablet_map(base_table);
             auto myid = db.get_token_metadata().get_my_id();
             for (auto tid : tids) {
                 auto range = tmap.get_token_range(tid);
@@ -723,10 +723,12 @@ struct tablet_metadata_builder {
                 auto repair_time = info.repair_time;
                 for (auto r : info.replicas) {
                     if (r.host == myid) {
-                        auto& gc_state = db.get_compaction_manager().get_shared_tombstone_gc_state();
-                        gc_state.insert_pending_repair_time_update(table, range, to_gc_clock(repair_time), r.shard);
-                        tablet_logger.debug("Insert pending repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
-                                table, tid, range, repair_time);
+                        for (auto table : tm.all_table_groups().at(base_table)) {
+                            auto& gc_state = db.get_compaction_manager().get_shared_tombstone_gc_state();
+                            gc_state.insert_pending_repair_time_update(table, range, to_gc_clock(repair_time), r.shard);
+                            tablet_logger.debug("Insert pending repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
+                                    table, tid, range, repair_time);
+                        }
                         break;
                     }
                 }
