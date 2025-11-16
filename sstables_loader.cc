@@ -213,7 +213,8 @@ private:
         return result;
     }
 
-    future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
+    future<>
+    stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
             llog.debug("Directly downloading fully contained SSTables to local node from object storage.");
             return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
@@ -228,25 +229,33 @@ private:
                         co_await sst->load(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
                         co_await _table.add_sstable_and_update_cache(sst);
                     } else {
-                        co_await smp::submit_to(shards.front(),
-                                                [this,
-                                                 ks = _table.schema()->ks_name(),
-                                                 cf = _table.schema()->cf_name(),
-                                                 descriptor = sst->get_descriptor(component_type::TOC)] -> future<> {
-                                                    llog.debug("Loading SSTable on foreign shard {}", this_shard_id());
-                                                    auto& db = _db.local();
-                                                    auto& table = db.find_column_family(ks, cf);
-                                                    auto sst = table.get_sstables_manager().make_sstable(table.schema(),
-                                                                                                         table.get_storage_options(),
-                                                                                                         descriptor.generation,
-                                                                                                         sstables::sstable_state::normal,
-                                                                                                         descriptor.version,
-                                                                                                         descriptor.format);
-                                                    sst->set_sstable_level(0);
-                                                    co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
-                                                    co_return co_await table.add_sstable_and_update_cache(sst);
-                                                });
+                        std::exception_ptr eptr;
+                        try {
+                            co_await smp::submit_to(shards.front(),
+                                                    [this,
+                                                     ks = _table.schema()->ks_name(),
+                                                     cf = _table.schema()->cf_name(),
+                                                     descriptor = sst->get_descriptor(component_type::TOC)] -> future<> {
+                                                        llog.debug("Loading SSTable on foreign shard {}", this_shard_id());
+                                                        auto& db = _db.local();
+                                                        auto& table = db.find_column_family(ks, cf);
+                                                        auto sst = table.get_sstables_manager().make_sstable(table.schema(),
+                                                                                                             table.get_storage_options(),
+                                                                                                             descriptor.generation,
+                                                                                                             sstables::sstable_state::normal,
+                                                                                                             descriptor.version,
+                                                                                                             descriptor.format);
+                                                        sst->set_sstable_level(0);
+                                                        co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
+                                                        co_return co_await table.add_sstable_and_update_cache(sst);
+                                                    });
+                        } catch (...) {
+                            eptr = std::current_exception();
+                        }
                         co_await sst->destroy();
+                        if (eptr) {
+                            std::rethrow_exception(eptr);
+                        }
                     }
                 }
             });
@@ -264,54 +273,55 @@ private:
 
         for (auto it = sstables.cbegin(); it != sstables.cend();) {
             auto sst_nr = std::min(max_ssts_per_batch, std::distance(it, sstables.cend()));
-            co_await coroutine::parallel_for_each(it, it + sst_nr, [this, downloaded_sstables, &foptions, &stream_options](const auto& sstable) mutable -> future<> {
-                auto client = _storage_manager.get_endpoint_client(_endpoint);
-                auto components = sstable->all_components();
-                for (auto& component : components) {
-                    if (component.first == component_type::TOC) {
-                        std::swap(component, components.back());
-                        break;
-                    }
-                }
-                auto gen = _table.get_sstable_generation_generator()();
-                for (const auto& [type, _] : components) {
-                    auto fqn = sstables::object_name(_bucket, _prefix, sstable->component_basename(type));
-                    auto descriptor = sstable->get_descriptor(type);
-                    llog.debug("Trying to download sstable component from {}", fqn);
-                    auto sstable_sink = sstables::create_stream_sink(
-                        _table.schema(),
-                        _table.get_sstables_manager(),
-                        _table.get_storage_options(),
-                        sstables::sstable_state::normal,
-                        sstables::sstable::component_basename(
-                            _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, type),
-                        type == component_type::TOC);
-                    auto out = co_await sstable_sink->output(foptions, stream_options);
-                    auto source = client->make_download_source(fqn, nullptr /*FIX IT*/);
-                    std::exception_ptr eptr;
-                    try {
-                        while (true) {
-                            auto buff = co_await source.get();
-                            if (!buff) {
-                                break;
-                            }
-                            co_await out.write(buff.get(), buff.size());
+            co_await coroutine::parallel_for_each(
+                it, it + sst_nr, [this, downloaded_sstables, &foptions, &stream_options](const auto& sstable) mutable -> future<> {
+                    auto client = _storage_manager.get_endpoint_client(_endpoint);
+                    auto components = sstable->all_components();
+                    for (auto& component : components) {
+                        if (component.first == component_type::TOC) {
+                            std::swap(component, components.back());
+                            break;
                         }
-                    } catch (...) {
-                        eptr = std::current_exception();
                     }
-                    co_await source.close();
-                    co_await out.close();
-                    if (eptr) {
-                        co_await sstable_sink->abort();
-                        std::rethrow_exception(eptr);
+                    auto gen = _table.get_sstable_generation_generator()();
+                    for (const auto& [type, _] : components) {
+                        auto fqn = sstables::object_name(_bucket, _prefix, sstable->component_basename(type));
+                        auto descriptor = sstable->get_descriptor(type);
+                        llog.debug("Trying to download sstable component from {}", fqn);
+                        auto sstable_sink = sstables::create_stream_sink(
+                            _table.schema(),
+                            _table.get_sstables_manager(),
+                            _table.get_storage_options(),
+                            sstables::sstable_state::normal,
+                            sstables::sstable::component_basename(
+                                _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, type),
+                            type == component_type::TOC);
+                        auto out = co_await sstable_sink->output(foptions, stream_options);
+                        auto source = client->make_download_source(fqn, nullptr /*FIX IT*/);
+                        std::exception_ptr eptr;
+                        try {
+                            while (true) {
+                                auto buff = co_await source.get();
+                                if (!buff) {
+                                    break;
+                                }
+                                co_await out.write(buff.get(), buff.size());
+                            }
+                        } catch (...) {
+                            eptr = std::current_exception();
+                        }
+                        co_await source.close();
+                        co_await out.close();
+                        if (eptr) {
+                            co_await sstable_sink->abort();
+                            std::rethrow_exception(eptr);
+                        }
+                        if (auto sst = co_await sstable_sink->close_and_seal()) {
+                            co_await sst->load_owner_shards(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
+                            downloaded_sstables.emplace_back(std::move(sst));
+                        }
                     }
-                    if (auto sst = co_await sstable_sink->close_and_seal()) {
-                        co_await sst->load_owner_shards(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
-                        downloaded_sstables.emplace_back(std::move(sst));
-                    }
-                }
-            });
+                });
             if (progress) {
                 progress->advance(sst_nr);
             }
