@@ -246,6 +246,7 @@ private:
                                                     co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
                                                     co_return co_await table.add_sstable_and_update_cache(sst);
                                                 });
+                        co_await sst->destroy();
                     }
                 }
             });
@@ -263,7 +264,7 @@ private:
 
         for (auto it = sstables.cbegin(); it != sstables.cend();) {
             auto sst_nr = std::min(max_ssts_per_batch, std::distance(it, sstables.cend()));
-            co_await coroutine::parallel_for_each(it, it + sst_nr, [this, /*&downloaded_sstables,*/ &foptions, &stream_options](const auto& sstable) -> future<> {
+            co_await coroutine::parallel_for_each(it, it + sst_nr, [this, downloaded_sstables, &foptions, &stream_options](const auto& sstable) mutable -> future<> {
                 auto client = _storage_manager.get_endpoint_client(_endpoint);
                 auto components = sstable->all_components();
                 for (auto& component : components) {
@@ -305,10 +306,10 @@ private:
                         co_await sstable_sink->abort();
                         std::rethrow_exception(eptr);
                     }
-                    /*if (auto sst = co_await sstable_sink->close_and_seal()) {
+                    if (auto sst = co_await sstable_sink->close_and_seal()) {
                         co_await sst->load_owner_shards(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
                         downloaded_sstables.emplace_back(std::move(sst));
-                    }*/
+                    }
                 }
             });
             if (progress) {
