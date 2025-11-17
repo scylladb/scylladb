@@ -102,7 +102,6 @@ class audit final : public seastar::async_sharded_service<audit> {
     std::map<sstring, std::set<sstring>> _audited_tables;
     category_set _audited_categories;
 
-    sstring _storage_helper_class_name;
     std::unique_ptr<storage_helper> _storage_helper_ptr;
 
     const db::config& _cfg;
@@ -125,18 +124,20 @@ public:
     static audit& local_audit_instance() {
         return audit_instance().local();
     }
-    static future<> create_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm);
-    static future<> start_audit(const db::config& cfg, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
+    static future<> start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
     static future<> stop_audit();
     static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table);
     static audit_info_ptr create_no_audit_info();
-    audit(locator::shared_token_metadata& stm, sstring&& storage_helper_name,
+    audit(locator::shared_token_metadata& stm,
+          cql3::query_processor& qp,
+          service::migration_manager& mm,
+          std::set<sstring>&& audit_modes,
           std::set<sstring>&& audited_keyspaces,
           std::map<sstring, std::set<sstring>>&& audited_tables,
           category_set&& audited_categories,
           const db::config& cfg);
     ~audit();
-    future<> start(const db::config& cfg, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> start(const db::config& cfg);
     future<> stop();
     future<> shutdown();
     bool should_log(const audit_info* audit_info) const;

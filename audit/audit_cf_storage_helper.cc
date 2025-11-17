@@ -11,7 +11,6 @@
 #include "cql3/query_processor.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "utils/UUID_gen.hh"
-#include "utils/class_registrator.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
@@ -197,8 +196,5 @@ cql3::query_options audit_cf_storage_helper::make_login_data(socket_address node
     };
     return cql3::query_options(cql3::default_cql_config, db::consistency_level::ONE, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT);
 }
-
-using registry = class_registrator<storage_helper, audit_cf_storage_helper, cql3::query_processor&, service::migration_manager&>;
-static registry registrator1("audit_cf_storage_helper");
 
 }

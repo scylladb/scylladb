@@ -126,10 +126,13 @@ class AuditBackend:
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    def audit_mode(self) -> str:
+        raise NotImplementedError
+
     def before_cluster_start(self):
         pass
 
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
         raise NotImplementedError
 
 
@@ -144,6 +147,10 @@ class AuditBackendTable(AuditBackend):
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    @override
+    def audit_mode(self) -> str:
+        return "table"
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
@@ -153,10 +160,10 @@ class AuditBackendTable(AuditBackend):
         return new_audit_settings
 
     @override
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
         """_summary_
-        returns a sorted list of audit log, the logs are sorted by the event times (time-uuid)
-        with the node as tie breaker.
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
         """
         # We would like to have named tuples as results so we can verify the
         # order in which the fields are returned as the tests make assumptions about this.
@@ -164,7 +171,7 @@ class AuditBackendTable(AuditBackend):
         res = session.execute(SimpleStatement(self.AUDIT_LOG_QUERY, consistency_level=consistency_level))
         res_list = list(res)
         res_list.sort(key=lambda row: (row.event_time.time, row.node))
-        return res_list
+        return { self.audit_mode(): res_list }
 
 
 class UnixSockerListener:
@@ -236,24 +243,35 @@ class AuditBackendSyslog(AuditBackend):
         if os.path.exists(self.socket_path):
             os.remove(self.socket_path)
 
+    @override
+    def audit_mode(self) -> str:
+        return "syslog"
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
         new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # This is a hack. The test framework uses "table" as "not none".
+        # Appropriate audit mode should be passed from the test itself, and not set here.
+        # This converts "table" to its own audit mode, or keeps "none" as is.
         if "audit" in new_audit_settings and new_audit_settings["audit"] == "table":
-            new_audit_settings["audit"] = "syslog"
+            new_audit_settings["audit"] = self.audit_mode()
         new_audit_settings["audit_unix_socket_path"] = self.socket_path
         for key in modifiers:
             new_audit_settings[key] = modifiers[key]
         return new_audit_settings
 
     @override
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
+        """_summary_
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
+        """
         lines = self.unix_socket_listener.get_lines()
         entries = []
         for idx, line in enumerate(lines):
             entries.append(self.line_to_row(line, idx))
-        return entries
+        return { self.audit_mode(): entries }
 
     def line_to_row(self, line, idx):
         metadata, data = line.split(": ", 1)
@@ -278,6 +296,57 @@ class AuditBackendSyslog(AuditBackend):
         self.socket_path = new_socket_path
 
 
+class AuditBackendComposite(AuditBackend):
+    audit_default_settings = {"audit": "table,syslog", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+    backends: list[AuditBackend]
+
+    def __init__(self):
+        super().__init__()
+        self.backends = [AuditBackendTable(), AuditBackendSyslog()]
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for backend in reversed(self.backends):
+            try:
+                backend.__exit__(exc_type, exc_val, exc_tb)
+            except Exception as e:
+                logger.error(f"Error while exiting backend: {e}")
+
+    @override
+    def audit_mode(self) -> str:
+        return ",".join([backend.audit_mode() for backend in self.backends])
+
+    def update_audit_settings(self, audit_settings, modifiers=None):
+        if modifiers is None:
+            modifiers = {}
+        new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # This is a hack. The test framework uses "table" as "not none".
+        # The syslog backend may change "table" to "syslog" before this is called.
+        # Appropriate audit mode should be passed from the test itself, and not set here.
+        # This converts "table" or "syslog" to its own audit mode, or keeps "none" as is.
+        for backend in self.backends:
+            new_audit_settings = backend.update_audit_settings(new_audit_settings)
+        if "audit" in new_audit_settings and (new_audit_settings["audit"] == "table" or new_audit_settings["audit"] == "syslog"):
+            new_audit_settings["audit"] = self.audit_mode()
+        for key in modifiers:
+            new_audit_settings[key] = modifiers[key]
+        return new_audit_settings
+
+    @override
+    def get_audit_log_dict(self, session, consistency_level):
+        """_summary_
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
+        """
+        rows_dict = dict[str, list[AuditEntry]]()
+        for backend in self.backends:
+            backend_rows_dict = backend.get_audit_log_dict(session, consistency_level)
+            for mode, backend_rows in backend_rows_dict.items():
+                assert mode not in rows_dict
+                rows_dict[mode] = backend_rows
+        return rows_dict
+
+
 @pytest.mark.single_node
 class TestCQLAudit(AuditTester):
     """
@@ -286,33 +355,36 @@ class TestCQLAudit(AuditTester):
 
     AUDIT_LOG_QUERY = "SELECT * FROM audit.audit_log"
 
-    def deduplicate_audit_entries(self, entries):
+    def deduplicate_audit_entries(self, entries_dict):
         """
-        Returns a list of audit entries with duplicate entries removed.
+        Returns a dictionary mapping audit mode name to a list of audit entries with duplicate entries removed.
         """
-        unique = set()
-        deduplicated_entries = []
+        deduplicated_entries_dict = dict[str, list[AuditEntry]]()
 
-        for entry in entries:
-            fields_subset = (entry.node, entry.category, entry.consistency, entry.error, entry.keyspace_name, entry.operation, entry.source, entry.table_name, entry.username)
+        for mode, entries in entries_dict.items():
+            unique = set()
+            deduplicated_entries = list[AuditEntry]()
+            for entry in entries:
+                fields_subset = (entry.node, entry.category, entry.consistency, entry.error, entry.keyspace_name, entry.operation, entry.source, entry.table_name, entry.username)
 
-            if fields_subset in unique:
-                continue
+                if fields_subset in unique:
+                    continue
 
-            unique.add(fields_subset)
-            deduplicated_entries.append(entry)
+                unique.add(fields_subset)
+                deduplicated_entries.append(entry)
+            deduplicated_entries_dict[mode] = deduplicated_entries
 
-        return deduplicated_entries
+        return deduplicated_entries_dict
 
-    def get_audit_log_list(self, session):
+    def get_audit_log_dict(self, session):
         """_summary_
-        returns a sorted list of audit log, the logs are sorted by the event times (time-uuid)
-        with the node as tie breaker.
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
         """
         consistency_level = ConsistencyLevel.QUORUM if len(self.cluster.nodelist()) > 1 else ConsistencyLevel.ONE
-        log_list = self.helper.get_audit_log_list(session, consistency_level)
-        logger.debug(f"get_audit_log_list: {log_list}")
-        return log_list
+        log_dict = self.helper.get_audit_log_dict(session, consistency_level)
+        logger.debug(f"get_audit_log_dict: {log_dict}")
+        return log_dict
 
     # This assert is added just in order to still fail the test if the order of columns is changed, this is an implied assumption
     def assert_audit_row_fields(self, row):
@@ -341,13 +413,17 @@ class TestCQLAudit(AuditTester):
         assert row.table_name == table
         assert row.username == user
 
-    def get_audit_entries_count(self, session):
-        res_list = self.get_audit_log_list(session)
-        res_list = self.filter_out_noise(res_list, filter_out_all_auth=True, filter_out_use=True)
-        logger.debug("Printing audit table content:")
-        for row in res_list:
-            logger.debug("  %s", row)
-        return len(res_list)
+    def get_audit_entries_count_dict(self, session) -> dict[str, int]:
+        """_summary_
+        returns a dictionary mapping audit mode name to the count of audit log entries for that mode.
+        """
+        reg_dict = self.get_audit_log_dict(session)
+        reg_dict = self.filter_out_noise(reg_dict, filter_out_all_auth=True, filter_out_use=True)
+        for mode, reg_list in reg_dict.items():
+            logger.debug(f"Printing audit {mode} content:")
+            for row in reg_list:
+                logger.debug("  %s", row)
+        return { mode: len(reg_list) for mode, reg_list in reg_dict.items() }
 
     @staticmethod
     def token_in_range(token, start_token, end_token):
@@ -395,17 +471,23 @@ class TestCQLAudit(AuditTester):
 
     @contextmanager
     def assert_exactly_n_audit_entries_were_added(self, session: Session, expected_entries: int):
-        count_before = self.get_audit_entries_count(session)
+        counts_before = self.get_audit_entries_count_dict(session)
         yield
-        count_after = self.get_audit_entries_count(session)
-        assert count_after == count_before + expected_entries, f"Expected {expected_entries} new audit entries, but got {count_after - count_before} new entries"
+        counts_after = self.get_audit_entries_count_dict(session)
+        assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+        for mode, count_before in counts_before.items():
+            count_after = counts_after[mode]
+            assert count_after == count_before + expected_entries, f"Expected {expected_entries} new audit entries, but got {count_after - count_before} new entries"
 
     @contextmanager
     def assert_no_audit_entries_were_added(self, session):
-        count_before = self.get_audit_entries_count(session)
+        counts_before = self.get_audit_entries_count_dict(session)
         yield
-        count_after = self.get_audit_entries_count(session)
-        assert count_before == count_after, f"audit entries count changed (before: {count_before} after: {count_after})"
+        counts_after = self.get_audit_entries_count_dict(session)
+        assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+        for mode, count_before in counts_before.items():
+            count_after = counts_after[mode]
+            assert count_before == count_after, f"audit entries count changed (before: {count_before} after: {count_after})"
 
     def execute_and_validate_audit_entry(  # noqa: PLR0913
         self,
@@ -456,56 +538,70 @@ class TestCQLAudit(AuditTester):
 
     # Filter out queries that can appear in random moments of the tests,
     # such as LOGINs and USE statements.
-    def filter_out_noise(self, rows, filter_out_all_auth=False, filter_out_cassandra_auth=False, filter_out_use=False):
-        if filter_out_all_auth:
-            rows = [row for row in rows if row.category != "AUTH"]
-        if filter_out_cassandra_auth:
-            rows = [row for row in rows if not (row.category == "AUTH" and row.username == "cassandra")]
-        if filter_out_use:
-            rows = [row for row in rows if "USE " not in row.operation]
-        return rows
+    def filter_out_noise(self, rows_dict, filter_out_all_auth=False, filter_out_cassandra_auth=False, filter_out_use=False) -> dict[str, list[AuditEntry]]:
+        for mode, rows in rows_dict.items():
+            if filter_out_all_auth:
+                rows = [row for row in rows if row.category != "AUTH"]
+            if filter_out_cassandra_auth:
+                rows = [row for row in rows if not (row.category == "AUTH" and row.username == "cassandra")]
+            if filter_out_use:
+                rows = [row for row in rows if "USE " not in row.operation]
+            rows_dict[mode] = rows
+        return rows_dict
 
     @contextmanager
     def assert_entries_were_added(self, session: Session, expected_entries: list[AuditEntry], merge_duplicate_rows: bool = True, filter_out_cassandra_auth: bool = False):
         # Get audit entries before executing the query, to later compare with
         # audit entries after executing the query.
-        rows_before = self.get_audit_log_list(session)
-        set_of_rows_before = set(rows_before)
-        assert len(set_of_rows_before) == len(rows_before), f"audit table contains duplicate rows: {rows_before}"
-
+        set_of_rows_before_dict = dict[str, set[AuditEntry]]()
+        rows_before_dict = self.get_audit_log_dict(session)
+        for mode, rows_before in rows_before_dict.items():
+            set_of_rows_before = set(rows_before)
+            assert len(set_of_rows_before) == len(rows_before), f"audit {mode} contains duplicate rows: {rows_before}"
+            set_of_rows_before_dict[mode] = set_of_rows_before
         yield
 
-        new_rows = []
+        new_rows_dict = dict[str, list[AuditEntry]]()
         def is_number_of_new_rows_correct():
-            rows_after = self.get_audit_log_list(session)
-            set_of_rows_after = set(rows_after)
-            assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
+            rows_after_dict = self.get_audit_log_dict(session)
+            set_of_rows_after_dict = dict[str, set[AuditEntry]]()
+            for mode, rows_after in rows_after_dict.items():
+                set_of_rows_after = set(rows_after)
+                assert len(set_of_rows_after) == len(rows_after), f"audit {mode} contains duplicate rows: {rows_after}"
+                set_of_rows_after_dict[mode] = set_of_rows_after
 
-            nonlocal new_rows
-            new_rows = rows_after[len(rows_before) :]
-            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: rows_after={rows_after}, set_of_rows_after={set_of_rows_after}, set_of_rows_before={set_of_rows_before}"
+            nonlocal new_rows_dict
+            for mode, rows_after in rows_after_dict.items():
+                rows_before = rows_before_dict[mode]
+                new_rows_dict[mode] = rows_after[len(rows_before) :]
+                assert set(new_rows_dict[mode]) == set_of_rows_after_dict[mode] - set_of_rows_before_dict[mode], f"new rows are not the last rows in the audit table: rows_after={rows_after}, set_of_rows_after_dict[{mode}]={set_of_rows_after_dict[mode]}, set_of_rows_before_dict[{mode}]={set_of_rows_before_dict[mode]}"
 
             if merge_duplicate_rows:
-                new_rows = self.deduplicate_audit_entries(new_rows)
+                new_rows_dict = self.deduplicate_audit_entries(new_rows_dict)
 
             auth_not_expected = (len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0)
             use_not_expected = (len([entry for entry in expected_entries if "USE " in entry.statement]) == 0)
 
-            new_rows = self.filter_out_noise(
-                new_rows,
+            new_rows_dict = self.filter_out_noise(
+                new_rows_dict,
                 filter_out_all_auth=auth_not_expected,
                 filter_out_cassandra_auth=filter_out_cassandra_auth,
                 filter_out_use=use_not_expected
             )
 
-            assert len(new_rows) <= len(expected_entries)
-            return len(new_rows) == len(expected_entries)
+            for new_rows in new_rows_dict.values():
+                assert len(new_rows) <= len(expected_entries)
+                if len(new_rows) != len(expected_entries):
+                    return False
+
+            return True
 
         wait_for(is_number_of_new_rows_correct, timeout=60)
-        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
-        assert len(sorted_new_rows) == len(expected_entries)
-        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
-            self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
+        for mode, new_rows in new_rows_dict.items():
+            sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
+            assert len(sorted_new_rows) == len(expected_entries)
+            for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
+                self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
 
     def verify_keyspace(self, audit_settings=None, helper=None):
         """
@@ -548,7 +644,7 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_using_non_existent_keyspace(self, helper_class):
         """
         Test tha using a non-existent keyspace generates an audit entry with an
@@ -664,22 +760,22 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings=AuditTester.audit_default_settings, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_extra_parameter(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_many_ks(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "a,b,c,ks"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_table_not_exists(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "DML,DDL", "audit_keyspaces": "ks", "audit_tables": "ks.fake"}, helper=helper)
@@ -726,6 +822,28 @@ class TestCQLAudit(AuditTester):
         self.ignore_log_patterns.append(expected_error)
         self.cluster.nodes["node1"].watch_log_for(expected_error)
 
+    def test_composite_audit_type_invalid(self):
+        """
+        'audit': table,syslog,invalid
+         check node not started
+        """
+        self.fixture_dtest_setup.allow_log_errors = True
+
+        audit_settings = {"audit": "table,syslog,invalid", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+        cluster = self.cluster
+
+        cluster.set_configuration_options(values=audit_settings)
+
+        try:
+            cluster.populate(1).start(no_wait=True)
+        except (NodeError, RuntimeError):
+            pass
+
+        expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit': invalid\)"
+        self.ignore_log_patterns.append(expected_error)
+        self.cluster.nodes["node1"].watch_log_for(expected_error)
+
     # TODO: verify that the syslog file doesn't exist
     def test_audit_empty_settings(self):
         """
@@ -733,6 +851,14 @@ class TestCQLAudit(AuditTester):
          check node started, ks audit not created
         """
         session = self.prepare(create_keyspace=False, audit_settings={"audit": "none"})
+        assert_invalid(session, "use audit;", expected=InvalidRequest)
+
+    def test_composite_audit_empty_settings(self):
+        """
+        'audit': table,syslog,none
+         check node started, ks audit not created
+        """
+        session = self.prepare(create_keyspace=False, audit_settings={"audit": "table,syslog,none"})
         assert_invalid(session, "use audit;", expected=InvalidRequest)
 
     def test_audit_audit_ks(self):
@@ -746,7 +872,7 @@ class TestCQLAudit(AuditTester):
         self.execute_and_validate_audit_entry(session, query=self.AUDIT_LOG_QUERY, category="QUERY", ks="audit", table="audit_log", audit_settings=audit_settings)
 
     @pytest.mark.single_node
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_invalid(self, helper_class):
         """
         'audit_categories': invalid
@@ -792,20 +918,20 @@ class TestCQLAudit(AuditTester):
         self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part3")
 
     PasswordMaskingCase = namedtuple("PasswordMaskingCase", ["name", "password", "new_password"])
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_user_password_masking(self, helper_class):
         """
         CREATE USER, ALTER USER, DROP USER statements
@@ -922,7 +1048,7 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=Unavailable)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_role_password_masking(self, helper_class):
         """
         CREATE ROLE, ALTER ROLE, DROP ROLE statements
@@ -1094,26 +1220,35 @@ class TestCQLAudit(AuditTester):
                 pytest.fail("Expected insert to fail")
         node_to_stop.start(wait_for_binary_proto=True, wait_other_notice=True)
 
-        rows = []
+        rows_dict = dict[str, list[AuditEntry]]()
         timestamp_before = datetime.datetime.now()
         for i in itertools.count(start=1):
             if datetime.datetime.now() - timestamp_before > datetime.timedelta(seconds=60):
                 pytest.fail(f"audit log not updated after {i} iterations")
 
-            rows = self.get_audit_log_list(session)
-            rows_with_error = list(filter(lambda r: r.error, rows))
-            if len(rows_with_error) == 6:
-                logger.info(f"audit log updated after {i} iterations ({i / 10}s)")
-                assert rows_with_error[0].error is True
-                assert rows_with_error[0].consistency == "THREE"
+            rows_dict = self.get_audit_log_dict(session)
+            # We need to satisfy the end state condition for all audit modes.
+            # If any audit mode is not done yet, continue polling.
+            all_modes_done = True
+            for mode, rows in rows_dict.items():
+                rows_with_error = list(filter(lambda r: r.error, rows))
+                if len(rows_with_error) == 6:
+                    logger.info(f"audit mode {mode} log updated after {i} iterations ({i / 10}s)")
+                    assert rows_with_error[0].error is True
+                    assert rows_with_error[0].consistency == "THREE"
 
-                # We expect the initial insert to be in the audit log.
-                # it is executed in _test_insert_failure_doesnt_report_success_assign_nodes
-                rows_without_error = [row for row in rows if row.operation == query_to_fail and not row.error]
-                assert len(rows_without_error) == 1
+                    # We expect the initial insert to be in the audit log.
+                    # it is executed in _test_insert_failure_doesnt_report_success_assign_nodes
+                    rows_without_error = [row for row in rows if row.operation == query_to_fail and not row.error]
+                    assert len(rows_without_error) == 1
+                else:
+                    # An audit mode is not done yet, early exit to continue polling.
+                    all_modes_done = False
+                    break
+            if all_modes_done:
                 break
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_prepare(self, helper_class):
         """Test prepare statement"""
         with helper_class() as helper:
@@ -1141,7 +1276,7 @@ class TestCQLAudit(AuditTester):
                 table="cf",
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_permissions(self, helper_class):
         """Test user permissions"""
 
@@ -1173,7 +1308,7 @@ class TestCQLAudit(AuditTester):
                 expected_error=Unauthorized,
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_batch(self, helper_class):
         """
         BATCH statement
@@ -1309,7 +1444,7 @@ class TestCQLAudit(AuditTester):
                     self.verify_change(node, param, settings[param], mark, expected_result)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1370,7 +1505,7 @@ class TestCQLAudit(AuditTester):
                 session.execute(auditted_query)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
@@ -1402,7 +1537,7 @@ class TestCQLAudit(AuditTester):
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
                 session.execute(auditted_query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_parallel_syslog_audit(self, helper_class):
         """
         Test that cluster doesn't fail if multiple queries are audited in parallel

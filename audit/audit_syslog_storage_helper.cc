@@ -21,7 +21,6 @@
 #include <fmt/chrono.h>
 
 #include "cql3/query_processor.hh"
-#include "utils/class_registrator.hh"
 
 namespace cql3 {
 
@@ -142,8 +141,5 @@ future<> audit_syslog_storage_helper::write_login(const sstring& username,
 
     co_await syslog_send_helper(msg.c_str());
 }
-
-using registry = class_registrator<storage_helper, audit_syslog_storage_helper, cql3::query_processor&, service::migration_manager&>;
-static registry registrator1("audit_syslog_storage_helper");
 
 }
