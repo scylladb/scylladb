@@ -3591,6 +3591,14 @@ table::query(schema_ptr query_schema,
         querier_opt = std::move(*saved_querier);
     }
 
+    co_await utils::get_local_injector().inject("replica_query_wait", [&] (auto& handler) -> future<> {
+        auto table_name = handler.template get<std::string_view>("table");
+        if (table_name && *table_name == _schema->cf_name()) {
+            tlogger.info("replica_query_wait: waiting");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+        }
+    });
+
     while (!qs.done()) {
         auto&& range = *qs.current_partition_range++;
 
@@ -4150,6 +4158,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    co_await utils::get_local_injector().inject("tablet_cleanup_completion_wait", utils::wait_for_message(std::chrono::seconds(5)));
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
