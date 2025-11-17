@@ -10,9 +10,14 @@ from test.nodetool.utils import check_nodetool_fails_with
 
 def test_cleanup(nodetool, scylla_only):
     nodetool("cleanup", expected_requests=[
-        expected_request("POST", "/storage_service/cleanup_all", response=0),
+        expected_request("POST", "/storage_service/cleanup_all/", params={"global": "false"}, response=0),
     ])
 
+
+def test_cleanup_global(nodetool, scylla_only):
+    nodetool("cluster", "cleanup", expected_requests=[
+        expected_request("POST", "/storage_service/cleanup_all/", params={"global": "true"}, response=0),
+    ])
 
 def test_cleanup_keyspace(nodetool):
     nodetool("cleanup", "ks1", expected_requests=[

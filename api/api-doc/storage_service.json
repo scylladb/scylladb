@@ -1055,13 +1055,37 @@
          ]
       },
       {
-         "path":"/storage_service/cleanup_all",
+         "path":"/storage_service/cleanup_all/",
          "operations":[
             {
                "method":"POST",
                "summary":"Trigger a global cleanup",
                "type":"long",
                "nickname":"cleanup_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                    {
+                     "name":"global",
+                     "description":"true if cleanup of entire cluster is requested",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/mark_node_as_clean",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Mark the node as clean. After that the node will not be considered as needing cleanup during automatic cleanup which is triggered by some topology operations",
+               "type":"void",
+               "nickname":"reset_cleanup_needed",
                "produces":[
                   "application/json"
                ],

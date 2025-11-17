@@ -4962,6 +4962,39 @@ future<> storage_service::do_clusterwide_vnodes_cleanup() {
     rtlogger.info("cluster-wide vnodes cleanup done");
 }
 
+future<> storage_service::reset_cleanup_needed() {
+    auto& server = _group0->group0_server();
+    auto holder = _group0->hold_group0_gate();
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto me = _topology_state_machine._topology.find(server.id());
+        if (!me || me->second.state != node_state::normal) {
+            throw std::runtime_error(format("cannot mark the node as clean: local node {} is either not a member of the cluster or is not in a normal state", server.id()));
+        }
+        if (me->second.cleanup != cleanup_status::needed) {
+            rtlogger.info("cannot reset cleanup flag when it is {}", me->second.cleanup);
+            co_return;
+        }
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.with_node(server.id()).set("cleanup_status", cleanup_status::clean);
+
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup status reset by force for {}", server.id()));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
+        } catch (group0_concurrent_modification&) {
+            rtlogger.info("cleanup flag clearing: concurrent operation is detected, retrying.");
+            continue;
+        }
+        rtlogger.info("cleanup needed flag is reset by force");
+        break;
+    }
+}
+
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
