@@ -40,7 +40,7 @@ async def test_maintenance_mode(manager: ManagerClient):
         # Token ranges of the server A
         # [(start_token, end_token)]
         ranges = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"""SELECT start_token, end_token, endpoint
-                                                                                FROM system.token_ring WHERE keyspace_name = 'ks'
+                                                                                FROM system.token_ring WHERE keyspace_name = '{ks}'
                                                                                 AND endpoint = '{server_a.ip_addr}' ALLOW FILTERING""")]
 
         # Insert data to the cluster and find a key that is stored on server A.
@@ -66,6 +66,9 @@ async def test_maintenance_mode(manager: ManagerClient):
         await manager.server_update_config(server_a.server_id, "maintenance_mode", "true")
         await manager.server_start(server_a.server_id)
 
+        log = await manager.server_open_log(server_a.server_id)
+        await log.wait_for(r"initialization completed \(maintenance mode\)")
+
         # Check that the regular CQL port is not available
         assert socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect_ex((server_a.ip_addr, 9042)) != 0
 
@@ -79,7 +82,7 @@ async def test_maintenance_mode(manager: ManagerClient):
 
         # Check that group0 operations are disabled
         with pytest.raises(ConfigurationException):
-            await maintenance_cql.run_async(f"CREATE TABLE ks.t2 (k int PRIMARY KEY, v int)")
+            await maintenance_cql.run_async(f"CREATE TABLE {ks}.t2 (k int PRIMARY KEY, v int)")
 
         await maintenance_cql.run_async(f"UPDATE {table} SET v = {key_on_server_a + 1} WHERE k = {key_on_server_a}")
 
@@ -90,7 +93,7 @@ async def test_maintenance_mode(manager: ManagerClient):
         await manager.server_stop_gracefully(server_a.server_id)
 
         # Restart in normal mode to see if the changes made in maintenance mode are persisted
-        await manager.server_update_config(server_a.server_id, "maintenance_mode", "false")
+        await manager.server_update_config(server_a.server_id, "maintenance_mode", False)
         await manager.server_start(server_a.server_id, wait_others=1)
         await wait_for_cql_and_get_hosts(cql, [server_a], time.time() + 60)
         await manager.servers_see_each_other([server_a, server_b])
