@@ -396,8 +396,7 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
-    # RF=1 and fast boot options with streaming don't play well together, so force RBNO for bootstrap
-    cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', "--allowed-repair-based-node-ops", "replace,removenode,rebuild,bootstrap,decommission"]
+    cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug']
 
     servers = await manager.servers_add(3, cmdline=cmdline)
     cql = manager.get_cql()
