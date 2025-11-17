@@ -169,7 +169,10 @@ public:
         static thread_local std::mt19937_64 rand_gen(std::random_device().operator()());
         static thread_local std::uniform_int_distribution<int64_t> rand_dist(std::numeric_limits<int64_t>::min());
 
-        auto uuid = UUID(create_time(from_unix_timestamp(when_in_micros)), rand_dist(rand_gen));
+        auto lsb = rand_dist(rand_gen);
+        lsb &= ~0xC000000000000000L; // clear variant bits
+        lsb |= 0x8000000000000000L; // set variant to IETF variant
+        auto uuid = UUID(create_time(from_unix_timestamp(when_in_micros)), lsb);
         SCYLLA_ASSERT(uuid.is_timestamp());
         return uuid;
     }
