@@ -67,6 +67,10 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
 
     logging.info(f"Starting {others}")
     await asyncio.gather(*(manager.server_start(srv.server_id) for srv in others))
+
+    logging.info(f"Waiting until {servers} see each other as alive")
+    await manager.servers_see_each_other(servers)
+
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
