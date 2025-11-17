@@ -2064,3 +2064,71 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
         await load_and_stream_task
 
         await check(ks)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--range-request-timeout-in-ms', '1000', # shorten time coordinator abandon the request, releasing erm
+        '--read-request-timeout-in-ms', '1000',
+        '--abort-on-internal-error', 'true',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        servers.append(await manager.server_add(cmdline=cmdline))
+
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        key = 7 # Whatever
+        tablet_token = 0 # Doesn't matter since there is one tablet
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 0)")
+        rows = await cql.run_async(f"SELECT pk from {ks}.test")
+        assert len(list(rows)) == 1
+
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+        dst_shard = 0
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        await manager.api.enable_injection(servers[0].ip_addr, "replica_query_wait", one_shot=False, parameters={"table": "test"})
+
+        replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
+        await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
+
+        await manager.api.enable_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait", one_shot=False)
+
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+        # migration should proceed once replica query times out on coordinator, causing it to be abandoned
+        await s0_log.wait_for('tablet_cleanup_completion_wait: waiting', from_mark=s0_mark)
+
+        await manager.api.message_injection(servers[0].ip_addr, "replica_query_wait")
+        await manager.api.disable_injection(servers[0].ip_addr, "replica_query_wait")
+
+        # swallow exception of timed out read.
+        try:
+            await replica_query
+        except:
+            pass
+
+        await manager.api.message_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait")
+        logger.info("Waiting for migration to finish")
+        await migration_task
+        logger.info("Migration done")
+
+        rows = await cql.run_async(f"SELECT pk from {ks}.test")
+        assert len(list(rows)) == 1
