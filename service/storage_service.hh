@@ -1010,6 +1010,7 @@ public:
     future<> load_cdc_streams(std::optional<std::unordered_set<table_id>> changed_tables = std::nullopt);
 
     future<> do_clusterwide_vnodes_cleanup();
+    future<> reset_cleanup_needed();
 
     // Starts the upgrade procedure to topology on raft.
     // Must be called on shard 0.
