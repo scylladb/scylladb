@@ -317,7 +317,7 @@ private:
                             std::rethrow_exception(eptr);
                         }
                         if (auto sst = co_await sstable_sink->close_and_seal()) {
-                            co_await sst->load_owner_shards(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
+                            co_await sst->load(_table.get_effective_replication_map()->get_sharder(*_table.schema()));
                             downloaded_sstables.emplace_back(std::move(sst));
                         }
                     }
