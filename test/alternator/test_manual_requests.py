@@ -7,7 +7,6 @@
 
 import base64
 import json
-
 import pytest
 import requests
 import urllib3
