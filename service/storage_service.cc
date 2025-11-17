@@ -6446,6 +6446,7 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
             ssts.push_back(co_await load_sstable(sharder, table, std::move(sst_desc)));
         }
         co_await table.add_sstables_and_update_cache(ssts);
+        _view_building_worker.local().load_sstables(tablet.table, ssts);
     });
     rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
 }
@@ -6685,8 +6686,9 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
         }
-        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
+        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
+            vbw.local().cleanup_staging_sstables(table.get_effective_replication_map(), tablet.table, tablet.tablet);
             return table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
         });
         co_return tablet_operation_result();

@@ -245,23 +245,21 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     // Firstly reorgenize `_sstables_to_register` for easier movement.
     // This is done in separate loop after committing the group0 command, because we need to move values from `_sstables_to_register`
     // (`staging_sstable_task_info` is non-copyable because of `foreign_ptr` field).
-    std::unordered_map<shard_id, std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<foreign_ptr<sstables::shared_sstable>>>>> new_sstables_per_shard;
+    std::unordered_map<shard_id, std::unordered_map<table_id, std::vector<foreign_ptr<sstables::shared_sstable>>>> new_sstables_per_shard;
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
         for (auto& sst_info: sst_infos) {
-            new_sstables_per_shard[sst_info.shard][table_id][sst_info.last_token].push_back(std::move(sst_info.sst_foreign_ptr));
+            new_sstables_per_shard[sst_info.shard][table_id].push_back(std::move(sst_info.sst_foreign_ptr));
         }
     }
 
     for (auto& [shard, sstables_per_table]: new_sstables_per_shard) {
         co_await container().invoke_on(shard, [sstables_for_this_shard = std::move(sstables_per_table)] (view_building_worker& local_vbw) mutable {
-            for (auto& [tid, ssts_map]: sstables_for_this_shard) {
-                for (auto& [token, ssts]: ssts_map) {
-                    auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
-                        return fptr.unwrap_on_owner_shard();
-                    }) | std::ranges::to<std::vector>();
-                    auto& tid_ssts = local_vbw._staging_sstables[tid][token];
-                    tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
-                }
+            for (auto& [tid, ssts]: sstables_for_this_shard) {
+                auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
+                    return fptr.unwrap_on_owner_shard();
+                }) | std::ranges::to<std::vector>();
+                auto& tid_ssts = local_vbw._staging_sstables[tid];
+                tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
             }
         });
     }
@@ -328,7 +326,7 @@ std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_t
                 //                 or maybe it can be registered to view_update_generator directly.
                 tasks_to_create[table_id].emplace_back(table_id, shard, last_token, make_foreign(std::move(sstable)));
             } else {
-                _staging_sstables[table_id][last_token].push_back(std::move(sstable));
+                _staging_sstables[table_id].push_back(std::move(sstable));
             }
         }
     });
@@ -848,13 +846,54 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
 }
 
 future<> view_building_worker::do_process_staging(table_id table_id, dht::token last_token) {
-    if (_staging_sstables[table_id][last_token].empty()) {
+    if (_staging_sstables[table_id].empty()) {
         co_return;
     }
 
     auto table = _db.get_tables_metadata().get_table(table_id).shared_from_this();
-    auto sstables = std::exchange(_staging_sstables[table_id][last_token], {});
-    co_await _vug.process_staging_sstables(std::move(table), std::move(sstables));
+    auto& tablet_map = table->get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
+    auto tid = tablet_map.get_tablet_id(last_token);
+    auto tablet_range = tablet_map.get_token_range(tid);
+
+    // Select sstables belonging to the tablet (identified by `last_token`)
+    std::vector<sstables::shared_sstable> sstables_to_process;
+    for (auto& sst: _staging_sstables[table_id]) {
+        auto sst_last_token = sst->get_last_decorated_key().token();
+        if (tablet_range.contains(sst_last_token, dht::token_comparator())) {
+            sstables_to_process.push_back(sst);
+        }
+    }
+
+    co_await _vug.process_staging_sstables(std::move(table), sstables_to_process);
+
+    try {
+        // Remove processed sstables from `_staging_sstables` map
+        auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
+        std::unordered_set<sstables::shared_sstable> sstables_to_remove(sstables_to_process.begin(), sstables_to_process.end());
+        auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
+            return sstables_to_remove.contains(sst);
+        });
+        _staging_sstables[table_id].erase(first, last);
+    } catch (semaphore_aborted&) {
+        vbw_logger.warn("Semaphore was aborted while waiting to removed processed sstables for table {}", table_id);
+    }
+}
+
+void view_building_worker::load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts) {
+    std::ranges::copy_if(std::move(ssts), std::back_inserter(_staging_sstables[table_id]), [] (auto& sst) {
+        return sst->state() == sstables::sstable_state::staging;
+    });
+}
+
+void view_building_worker::cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid) {
+    auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table_id);
+    auto tablet_range = tablet_map.get_token_range(tid);
+
+    auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
+        auto sst_last_token = sst->get_last_decorated_key().token();
+        return tablet_range.contains(sst_last_token, dht::token_comparator());
+    });
+    _staging_sstables[table_id].erase(first, last);
 }
 
 }
