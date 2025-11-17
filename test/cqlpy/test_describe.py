@@ -1595,7 +1595,7 @@ class AuthSLContext:
 
     def __enter__(self):
         if self.ks:
-            self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'SimpleStrategy', 'replication_factor': 1 }}")
+            self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
         self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
         return self
 

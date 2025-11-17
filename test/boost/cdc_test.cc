@@ -49,6 +49,16 @@ api::timestamp_type find_timestamp(const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
 }
 
+namespace {
+
+cql_test_config enable_tablets() {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
+} // namespace
+
 BOOST_AUTO_TEST_SUITE(cdc_test)
 
 SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
@@ -209,7 +219,7 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
 
         // Conflict on CREATE INDEX which enables cdc log for vector search
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON ks.tbl (b) USING 'vector_index'").get(), exceptions::invalid_request_exception);
-    }).get();
+    }, enable_tablets()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
@@ -256,7 +266,7 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
             e.execute_cql("DROP TABLE ks.tbl").get();
         }
 
-    }).get();
+    }, enable_tablets()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
@@ -413,7 +423,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
             e.execute_cql("DROP TABLE ks.tbl").get();
             required_column_count = 0;
         }
-    }).get();
+    }, enable_tablets()).get();
 }
 
 } // cdc_test namespace
