@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include <unordered_map>
 #include <unordered_set>
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "seastar/core/gate.hh"
 #include "db/view/view_building_state.hh"
@@ -160,7 +161,7 @@ private:
     condition_variable _sstables_to_register_event;
     semaphore _staging_sstables_mutex = semaphore(1);
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
-    std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<sstables::shared_sstable>>> _staging_sstables;
+    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _staging_sstables;
     future<> _staging_sstables_registrator = make_ready_future<>();
 
 public:
@@ -177,6 +178,11 @@ public:
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
+
+    // Used ONLY to load staging sstables migrated during intra-node tablet migration.
+    void load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts);
+    // Used in cleanup/cleanup-target tablet transition stage
+    void cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid);
 
 private:
     future<> run_view_building_state_observer();
