@@ -36,7 +36,7 @@ def with_tracing(rest_api):
     if probability_resp.status_code != 200:
         pytest.skip('Failed to fetch tracing probability')
     probability = probability_resp.text
-    response = requests.post(rest_api+'/storage_service/trace_probability?probability=1')
+    response = requests.post(rest_api+'/storage_service/trace_probability?probability=1&&write_on_close=true')
     if response.status_code != 200:
         pytest.skip('Failed to enable tracing')
     # verify that tracing is really enabled
