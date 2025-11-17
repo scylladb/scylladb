@@ -102,7 +102,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
 
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-    await wait_until_driver_service_level_created(cql, time.time() + 60)
+    await wait_until_driver_service_level_created(manager, time.time() + 60)
 
     result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
     assert set([sl.service_level for sl in result_v2]) == set(sls + [DRIVER_SL_NAME])
@@ -174,7 +174,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     await manager.servers_see_each_other(servers)
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-    await wait_until_driver_service_level_created(cql, time.time() + 60)
+    await wait_until_driver_service_level_created(manager, time.time() + 60)
 
     logging.info("Validating service levels works in v2 mode after leaving recovery")
     new_sl = "sl" + unique_name()
