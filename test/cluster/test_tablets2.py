@@ -1974,3 +1974,93 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
         await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
         await asyncio.sleep(.1)
         await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/26041.
+@pytest.mark.parametrize("primary_replica_only", [False, True])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_load_and_stream_and_split_synchronization(manager: ManagerClient, primary_replica_only):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+    ]
+    servers = [await manager.server_add(config={
+        'tablet_load_stats_refresh_interval_in_seconds': 1
+    }, cmdline=cmdline)]
+    server = servers[0]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+
+    initial_tablets = 1
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        async def check(ks_name: str):
+            logger.info("Checking table")
+            cql = manager.get_cql()
+            rows = await cql.run_async(f"SELECT * FROM {ks_name}.test BYPASS CACHE;")
+            assert len(rows) == len(keys)
+            for r in rows:
+                assert r.c == r.pk
+
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+        await check(ks)
+
+        node_workdir = await manager.server_get_workdir(servers[0].server_id)
+
+        cql = await safe_server_stop_gracefully(manager, servers[0].server_id)
+
+        table_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*"))[0]
+        logger.info(f"Table dir: {table_dir}")
+
+        def move_sstables_to_upload(table_dir: str):
+            logger.info("Moving sstables to upload dir")
+            table_upload_dir = os.path.join(table_dir, "upload")
+            for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
+                for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
+                    dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
+                    logger.info(f"Moving sstable file {src_path} to {dst_path}")
+                    os.rename(src_path, dst_path)
+
+        move_sstables_to_upload(table_dir)
+
+        await manager.server_start(servers[0].server_id)
+        cql = manager.get_cql()
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
+        assert len(rows) == 0
+
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+        await manager.api.enable_injection(servers[0].ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
+
+        s1_log = await manager.server_open_log(servers[0].server_id)
+        s1_mark = await s1_log.mark()
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {initial_tablets * 2}}}")
+
+        await s1_log.wait_for(f"tablet_resize_finalization_post_barrier: waiting", from_mark=s1_mark)
+
+        await manager.api.enable_injection(servers[0].ip_addr, "stream_mutation_fragments", one_shot=True)
+
+        load_and_stream_task = asyncio.create_task(manager.api.load_new_sstables(servers[0].ip_addr, ks, "test", primary_replica_only))
+        await s1_log.wait_for(f"Loading new SSTables for keyspace", from_mark=s1_mark)
+
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
+        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+        await s1_log.wait_for(f"stream_mutation_fragments: waiting", from_mark=s1_mark)
+        await manager.api.message_injection(server.ip_addr, "stream_mutation_fragments")
+
+        await load_and_stream_task
+
+        await check(ks)

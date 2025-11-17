@@ -6970,6 +6970,20 @@ future<> storage_service::await_topology_quiesced() {
     co_await _topology_state_machine.await_not_busy();
 }
 
+future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t expected_version) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.verify_topology_quiesced(expected_version);
+        });
+    }
+
+    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_return _topology_state_machine._topology.version == expected_version && !_topology_state_machine._topology.is_busy();
+}
+
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
     join_node_request_result result;
     rtlogger.info("received request to join from host_id: {}", params.host_id);
@@ -7964,6 +7978,14 @@ future<> storage_service::node_ops_abort_thread() {
 void storage_service::set_topology_change_kind(topology_change_kind kind) {
     _topology_change_kind_enabled = kind;
     _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);
+}
+
+bool storage_service::raft_topology_change_enabled() const {
+    return _topology_change_kind_enabled == topology_change_kind::raft;
+}
+
+bool storage_service::legacy_topology_change_enabled() const {
+    return _topology_change_kind_enabled == topology_change_kind::legacy;
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {
