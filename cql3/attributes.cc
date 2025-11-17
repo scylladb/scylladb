@@ -20,19 +20,21 @@
 namespace cql3 {
 
 std::unique_ptr<attributes> attributes::none() {
-    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}}};
+    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}, {}}};
 }
 
 attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
                        std::optional<cql3::expr::expression>&& time_to_live,
                        std::optional<cql3::expr::expression>&& timeout,
-                       std::optional<sstring> service_level)
+                       std::optional<sstring> service_level,
+                       std::optional<cql3::expr::expression>&& concurrency)
     : _timestamp_unset_guard(timestamp)
     , _timestamp{std::move(timestamp)}
     , _time_to_live_unset_guard(time_to_live)
     , _time_to_live{std::move(time_to_live)}
     , _timeout{std::move(timeout)}
     , _service_level(std::move(service_level))
+    , _concurrency{std::move(concurrency)}
 { }
 
 bool attributes::is_timestamp_set() const {
@@ -49,6 +51,10 @@ bool attributes::is_timeout_set() const {
 
 bool attributes::is_service_level_set() const {
     return bool(_service_level);
+}
+
+bool attributes::is_concurrency_set() const {
+    return bool(_concurrency);
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
@@ -123,6 +129,27 @@ qos::service_level_options attributes::get_service_level(qos::service_level_cont
     return sl_controller.get_service_level(sl_name).slo;
 }
 
+std::optional<int32_t> attributes::get_concurrency(const query_options& options) const {
+    if (!_concurrency.has_value()) {
+        return std::nullopt;
+    }
+
+    cql3::raw_value concurrency_raw = expr::evaluate(*_concurrency, options);
+    if (concurrency_raw.is_null()) {
+        throw exceptions::invalid_request_exception("Invalid null value of concurrency");
+    }
+    int32_t concurrency;
+    try {
+        concurrency = concurrency_raw.view().validate_and_deserialize<int32_t>(*int32_type);
+    } catch (marshal_exception& e) {
+        throw exceptions::invalid_request_exception("Invalid concurrency value");
+    }
+    if (concurrency <= 0) {
+        throw exceptions::invalid_request_exception("Concurrency must be a positive integer");
+    }
+    return concurrency;
+}
+
 void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_timestamp.has_value()) {
         expr::fill_prepare_context(*_timestamp, ctx);
@@ -133,10 +160,13 @@ void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_timeout.has_value()) {
         expr::fill_prepare_context(*_timeout, ctx);
     }
+    if (_concurrency.has_value()) {
+        expr::fill_prepare_context(*_concurrency, ctx);
+    }
 }
 
 std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const {
-    std::optional<expr::expression> ts, ttl, to;
+    std::optional<expr::expression> ts, ttl, to, conc;
 
     if (timestamp.has_value()) {
         ts = prepare_expression(*timestamp, db, ks_name, nullptr, timestamp_receiver(ks_name, cf_name));
@@ -153,7 +183,12 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
         verify_no_aggregate_functions(*timeout, "USING clause");
     }
 
-    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level)}};
+    if (concurrency.has_value()) {
+        conc = prepare_expression(*concurrency, db, ks_name, nullptr, concurrency_receiver(ks_name, cf_name));
+        verify_no_aggregate_functions(*concurrency, "USING clause");
+    }
+
+    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level), std::move(conc)}};
 }
 
 lw_shared_ptr<column_specification> attributes::raw::timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const {
@@ -166,6 +201,10 @@ lw_shared_ptr<column_specification> attributes::raw::time_to_live_receiver(const
 
 lw_shared_ptr<column_specification> attributes::raw::timeout_receiver(const sstring& ks_name, const sstring& cf_name) const {
     return make_lw_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[timeout]", true), duration_type);
+}
+
+lw_shared_ptr<column_specification> attributes::raw::concurrency_receiver(const sstring& ks_name, const sstring& cf_name) const {
+    return make_lw_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[concurrency]", true), data_type_for<int32_t>());
 }
 
 }
