@@ -77,9 +77,11 @@ future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_
                 });
             });
         }
-        co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
-            bm._last_replay = last_replay;
-        });
+        if (all_replayed == all_batches_replayed::yes) {
+            co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
+                bm._last_replay = last_replay;
+            });
+        }
         blogger.debug("Batchlog replay on shard {}: done", dest);
         co_return all_replayed;
     });
@@ -188,6 +190,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
+            all_replayed = all_batches_replayed::no;
             co_return stop_iteration::no;
         }
 
