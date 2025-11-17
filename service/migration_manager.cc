@@ -587,10 +587,10 @@ void migration_notifier::before_create_column_family(const keyspace_metadata& ks
     });
 }
 
-void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) {
-    _listeners.thread_for_each([&ksm, &cfms] (migration_listener* listener) {
+void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&ksm, &cfms, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
-        listener->on_pre_create_column_families(ksm, cfms);
+        listener->on_pre_create_column_families(ksm, cfms, timestamp);
     });
 }
 
@@ -677,7 +677,7 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
             mlogger.info("Create new ColumnFamily: {}", cfm);
         }
 
-        db.get_notifier().pre_create_column_families(ksm, cfms);
+        db.get_notifier().pre_create_column_families(ksm, cfms, timestamp);
 
         utils::chunked_vector<mutation> mutations;
         for (schema_ptr cfm : cfms) {
