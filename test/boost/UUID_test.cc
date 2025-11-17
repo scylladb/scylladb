@@ -286,3 +286,20 @@ BOOST_AUTO_TEST_CASE(test_null_uuid) {
     BOOST_CHECK(!uuid.is_null());
     BOOST_CHECK(uuid);
 }
+
+BOOST_AUTO_TEST_CASE(check_get_random_time_UUID_from_micros_variant) {
+    using namespace std::chrono;
+
+    for (int i = 0; i < 100; i++) {
+        auto tp = system_clock::now();
+        auto micros = duration_cast<microseconds>(tp.time_since_epoch());
+
+        auto uuid = utils::UUID_gen::get_random_time_UUID_from_micros(micros);
+        // check that generated UUID is timeuuid
+        BOOST_CHECK(uuid.is_timestamp());
+        // check that generated UUID preserves the original microsecond time
+        BOOST_CHECK_EQUAL(utils::UUID_gen::micros_timestamp(uuid), micros.count());
+        // check that variant is RFC 4122 (IETF)
+        BOOST_CHECK_EQUAL((uuid.get_least_significant_bits() >> 62) & 0x3, 2);
+    }
+}
