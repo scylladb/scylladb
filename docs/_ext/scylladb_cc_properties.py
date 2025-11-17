@@ -95,11 +95,12 @@ class DBConfigParser:
 
         for match in config_matches:
             name = match[1].strip()
+            liveness_value = match[3].strip() if match[3] else ""
             property_data = {
                 "name": name,
                 "value_status": match[4].strip(),
                 "default": match[5].strip(),
-                "liveness": "True" if match[3] else "False",
+                "liveness": "True" if liveness_value == "LiveUpdate" else "False",
                 "description": match[6].strip(),
             }
             properties.append(property_data)
@@ -135,7 +136,7 @@ class DBConfigParser:
 
             end_pos = next_group_match.start() if next_group_match else len(config_content)
             config_group_content = config_content[group_match.end():end_pos]
-            
+
             current_group = self._parse_group(group_match, config_group_content)
             groups.append(current_group)
 
