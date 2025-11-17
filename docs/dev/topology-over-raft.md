@@ -110,14 +110,17 @@ stateDiagram-v2
 A node state may have additional parameters associated with it. For instance
 'replacing' state has host id of a node been replaced as a parameter.
 
-Additionally to specific node states, there entire topology can also be in a transitioning state:
+Additionally to specific node states, the entire topology can also be in one of the transitioning states listed below.
+Note that these are not all states, as there are other states specific to tablets described in the following sections.
 
+- `join_group0` - a join request from a bootstrapping/replacing node has been accepted. The node joins group 0 and,
+    in the case of a bootstrapping node, receives bootstrap tokens.
 - `commit_cdc_generation` - a new CDC generation data was written to internal tables earlier
     and now we need to commit the generation - create a timestamp for it and tell every node
     to start using it for CDC log table writes.
 - `write_both_read_old` - one of the nodes is in a bootstrapping/decommissioning/removing/replacing state.
-    Writes are going to both new and old replicas (new replicas means calculated according to modified
-    token ring), reads are using old replicas.
+    Writes to vnodes-based tables are going to both new and old replicas (new replicas means calculated according
+    to modified token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 - `left_token_ring` - the decommissioning node left the token ring, but we still need to wait until other
     nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
@@ -128,8 +131,9 @@ Additionally to specific node states, there entire topology can also be in a tra
     requests from starting. Intended to be used in tests which want to prevent internally-triggered topology
     operations during the test.
 
-When a node bootstraps, we create new tokens for it and a new CDC generation
-and enter the `commit_cdc_generation` state. Once the generation is committed,
+When a node bootstraps, we move the topology to `join_group0` state, where we add
+the node to group 0, create new tokens for it, and create a new CDC generation.
+Then, we enter the `commit_cdc_generation` state. Once the generation is committed,
 we enter `write_both_read_old` state. After the entire cluster learns about it,
 streaming starts. When streaming finishes, we move to `write_both_read_new`
 state and again the whole cluster needs to learn about it and make sure that no
@@ -172,6 +176,13 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 
+## Zero-token nodes
+
+Zero-token nodes (the nodes started with `join_ring=false`) never own tokens or become
+tablet replicas. Hence, the logic described above is significantly simplified for them.
+For example, a bootstrapping zero-token node completes the transition on the
+`join_group0` state, as the following tasks (like creating a new CDC generation,
+streaming, and tablet migrations) are unneeded.
 
 # Load balancing
 
@@ -678,15 +689,25 @@ CREATE TABLE system.topology (
     rebuild_option text,
     release_version text,
     replaced_id uuid,
-    ignore_nodes set<uuid>,
+    ignore_nodes set<uuid> static,
     shard_count int,
     tokens set<text>,
+    tokens_string text,
     topology_request text,
     transition_state text static,
+    cleanup_status text,
+    supported_features set<uuid>,
+    request_id timeuuid,
+    version bigint static,
+    fence_version bigint static,
     committed_cdc_generations set<tuple<timestamp, timeuuid>> static,
     unpublished_cdc_generations set<tuple<timestamp, timeuuid>> static,
     global_topology_request text static,
     global_topology_request_id timeuuid static,
+    enabled_features set<text> static,
+    session uuid static,
+    tablet_balancing_enabled boolean static,
+    upgrade_state text static,
     new_cdc_generation_data_uuid timeuuid static,
     new_keyspace_rf_change_ks_name text static,
     new_keyspace_rf_change_data frozen<map<text, text>> static,
@@ -709,12 +730,17 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `topology_request`   -  if set contains one of the supported node-specific topology requests
 - `tokens`             -  if set contains a list of tokens that belongs to the node
 - `replaced_id`        -  if the node replacing or replaced another node here will be the id of that node
-- `ignore_nodes`       -  if set contains a list of ids of nodes ignored during the remove or replace operation
 - `rebuild_option`     -  if the node is being rebuild contains datacenter name that is used as a rebuild source
 - `num_tokens`         -  the requested number of tokens when the node bootstraps
+- `tokens_string`      -  if set contains the `initial_token` value of the bootstrapping node
+- `cleanup_status`     -  contains the cleanup status of the node (clean, needed, or running)
+- `supported_features` -  if set contains the list of cluster features supported by the node
+- `request_id`         -  the ID of the current request for the node or the last one if there is no current request
 
 There are also a few static columns for cluster-global properties:
 
+- `ignore_nodes` - if set, contains a list of node IDs to be ignored during remove or replace topology operations
+                   and tablet-related operations such as migration, split, and merge.
 - `transition_state` - the transitioning state of the cluster (as described earlier), may be null
 - `committed_cdc_generations` - the IDs of the committed CDC generations
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
@@ -725,7 +751,12 @@ There are also a few static columns for cluster-global properties:
 - `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
 - `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
 - `global_requests` - contains a list of ids of pending global requests, the information about requests (type and parameters)
-                      can be obtained from topology_requests table by using request's id as a look up key.
+                      can be obtained from topology_requests table by using request's id as a look up key
+- `version` - the current topology version
+- `fence_version` - the current fence version
+- `enabled_features` - the list of cluster features enabled by the cluster
+- `session` - if set contains the ID of the current session
+- `tablet_balancing_enabled` - if false, the tablet balancing has been disabled
 
 # Join procedure
 
@@ -847,20 +878,87 @@ topology coordinator fiber and coordinates the remaining steps:
 
 If a disaster happens and a majority of nodes are lost, changes to the group 0
 state are no longer possible and a manual recovery procedure needs to be performed.
-Our current procedure starts by switching all nodes to a special "recovery" mode
-in which nodes do not use raft at all. In this mode, dead nodes are supposed
-to be removed from the cluster via `nodetool removenode`. After all dead nodes
-are removed, state related to group 0 is deleted and nodes are restarted in
-regular mode, allowing the cluster to re-form group 0.
 
-Topology on raft fits into this procedure in the following way:
+## The procedure
 
-- When nodes are restarted in recovery mode, they revert to gossiper-based
-  operations. This allows to perform `nodetool removenode` without having
-  a majority of nodes. In this mode, `system.topology` is *not* updated, so
-  it becomes outdated at the end.
-- Before disabling recovery mode on the nodes, the `system.topology` table
-  needs to be truncated on all nodes. This will cause nodes to revert to
-  legacy topology operations after exiting recovery mode.
-- After re-forming group 0, the cluster needs to be upgraded again to raft
-  topology by the administrator.
+Our current procedure starts by removing the persistent group 0 ID and the group 0
+discovery state on all live nodes. This process ensures that live nodes will try to
+join a new group 0 during the next restart.
+
+The issue is that one of the live nodes has to create the new group 0, and not every
+node is a safe choice. It turns out that we can choose only nodes with the latest
+`commit_index` (see this [section](#choosing-the-recovery-leader) for a detailed
+explanation). We call the chosen node the *recovery leader*.
+
+Once the recovery leader is chosen, all live nodes can join the new group 0 during
+a rolling restart. Nodes learn about the recovery leader through the
+`recovery_leader` config option. Also, the recovery leader must be restarted first
+to create the new group 0 before other nodes try to join it.
+
+After successfully restarting all live nodes, dead nodes can be removed via
+`nodetool removenode` or by replacing them.
+
+Finally, the persisted internal state of the old group 0 can be cleaned up.
+
+## Topology coordinator during recovery
+
+After joining the new group 0 during the procedure, live nodes don't execute any
+"special recovery code" related to topology.
+
+In particular, the recovery leader normally starts the topology coordinator fiber.
+This fiber is designed to ensure that a started topology operation never hangs
+(it succeeds or is rolled back) regardless of the conditions. So, if the majority
+has been lost in the middle of some work done by the topology coordinator, the new
+topology coordinator (run on the recovery leader) will finish this work. It will
+usually fail and be rolled back, e.g., due to `global_token_metadata_barrier`
+failing after a global topology command sent to a dead normal node fails.
+
+Note that this behavior is necessary to ensure that the new topology coordinator
+will eventually be able to start handling the topology requests to remove/replace
+dead nodes. Those requests will succeed thanks to the `ignore_dead_nodes` and
+`ignore_dead_nodes_for_replace` options.
+
+## Gossip during recovery
+
+A node always includes its group 0 ID in `gossip_digest_syn`, and the receiving node
+rejects the message if the ID is different from its local ID. However, nodes can
+temporarily belong to two different group 0's during the recovery procedure. To keep
+the gossip working, we've decided to additionally include the local `recovery_leader`
+value in `gossip_digest_syn`. Nodes ignore group 0 ID mismatch if the sender or the
+receiver has a non-empty `recovery_leader` (usually both have it).
+
+## Choosing the recovery leader
+
+The group 0 state persisted on the recovery leader becomes the initial state of
+other nodes that join the new group 0 (which happens through the Raft snapshot
+transfer). After all, the Raft state machine must be consistent at the beginning.
+
+When a disaster happens, live nodes can have different commit indexes, and the nodes
+that are behind have no way of catching up without majority. Imagine there are two
+live nodes - node A and node B, node A has `commit_index`=10, and node B has
+`commit_index`=11. Also, assume that the log entry with index 11 is a schema change
+that adds a new column to a table. Node B could have already handled some replica
+writes to the new column. If node A became the recovery leader and node B joined the
+new group 0, node B would receive a snapshot that regresses its schema version. Node
+B could end up in an inconsistent state with data in a column that doesn't exist
+according to group 0. Hence, node B must be the recovery leader.
+
+## Loss of committed entries
+
+It can happen that a group 0 entry has been committed by a majority consisting of
+only dead nodes. Then, no matter what recovery leader we choose, it won't have this
+entry. This is fine, assuming that the following group 0 causality property holds on
+all live nodes: any persisted effect on the node’s state is written only after
+the group 0 state it depends on has already been persisted.
+
+For example, the above property holds for schema changes and writes because
+a replica persists a write only after applying the group 0 entry with the latest
+schema, which is ensured by a read barrier.
+
+It's critical for recovery safety to ensure that no subsystem breaks group 0 causality.
+Fortunately, this property is natural and not very limiting.
+
+Losing a committed entry can be observed by external systems. For example, the latest
+schema version in the cluster can go back in time from the driver's perspective. This
+is outside the scope of the recovery procedure, though, and it shouldn't cause
+problems in practice.
