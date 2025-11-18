@@ -486,6 +486,12 @@ struct load_stats {
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
 
+    // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
+    // other hosts based on the tablet transition info:
+    // - if the tablet is in migration, and the given host is pending, the tablet size will be searched on the leaving replica
+    // - if the tablet is being rebuilt, we will return the average tablet size of all the replicas
+    std::optional<uint64_t> get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const;
+
     // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
     // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
     // corresponding to the post-resize tablet_map.
