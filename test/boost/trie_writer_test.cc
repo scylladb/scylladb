@@ -6,12 +6,14 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#define BOOST_TEST_MODULE core
-#include <boost/test/unit_test.hpp>
+#include <seastar/core/memory.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/testing/test_case.hh>
 #include <xxhash.h>
 #include <fmt/ranges.h>
 #include <numeric>
 #include "test/lib/log.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "utils/bit_cast.hh"
 #include "sstables/trie/trie_writer.hh"
@@ -219,7 +221,7 @@ void test_one_set_of_strings(
 // and large enough to provide coverage for all logic.
 // (If you modify the limits, you should probably at least check
 // that you didn't make code coverage lower).
-BOOST_AUTO_TEST_CASE(test_exhaustive) {
+SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
     // testlog.set_level(seastar::log_level::trace);
     // trie_logger.set_level(seastar::log_level::trace);
     size_t max_input_length = 3;
@@ -250,4 +252,63 @@ BOOST_AUTO_TEST_CASE(test_exhaustive) {
         }
     }
     testlog.info("test_exhaustive: cases={}", case_counter);
+}
+
+struct null_trie_output_stream {
+    sink_pos _pos{0};
+    size_t _page_size = 0;
+    null_trie_output_stream(size_t page_size) : _page_size(page_size) {
+    }
+    node_size serialized_size(const writer_node& x, sink_pos start_pos) const {
+        return node_size(1);
+    }
+    sink_pos write(const writer_node& x, sink_pos start_pos) {
+        _pos = _pos + sink_offset(1);
+        return _pos;
+    }
+    size_t page_size() const {
+        return _page_size;
+    };
+    void pad_to_page_boundary() {
+        size_t pad = bytes_left_in_page();
+        _pos = _pos + sink_offset(pad);
+    };
+    size_t bytes_left_in_page() const {
+        return round_up(_pos.value + 1, page_size()) - _pos.value;
+    };
+    sink_pos pos() const {
+        return _pos;
+    }
+    void skip(size_t sz) {
+        _pos = _pos + sink_offset(sz);
+    }
+};
+static_assert(trie_writer_sink<null_trie_output_stream>);
+
+// Reproducer for scylladb/scylladb#27082
+//
+// Feeds many keys to a trie_writer, checks that memory usage doesn't grow without bounds.
+SEASTAR_THREAD_TEST_CASE(test_finite_memory_usage) {
+    // trie_logger.set_level(seastar::log_level::trace);
+
+    const size_t n_keys = 1000000;
+    const size_t memory_usage_before = seastar::memory::stats().allocated_memory();
+
+    // Max memory usage for a dense dataset is around 256 * 256 * 80.
+    // (~80 bytes per leaf node, 256 leaf node per internal node, 256 internal nodes).
+    // With TRIE_SANITIZE_BUMP_ALLOCATOR, we allow way more memory for extra allocator metadata.
+    const size_t max_allowed_memory_usage = memory_usage_before + 8000000 * (TRIE_SANITIZE_BUMP_ALLOCATOR ? 10 : 1);
+
+    auto out = null_trie_output_stream(4096);
+    auto wr = trie_writer(out);
+    auto dummy_payload = trie_payload(1, std::array<std::byte, 1>{});
+    std::vector<std::byte> prev_key;
+    for (uint32_t i = 0; i < n_keys; ++i) {
+        std::vector<std::byte> curr_key(std::from_range, object_representation(seastar::cpu_to_be(i)));
+        size_t depth = std::ranges::mismatch(curr_key, prev_key).in1 - curr_key.begin();
+        wr.add(depth, std::span(curr_key).subspan(depth), dummy_payload);
+        prev_key = curr_key;
+        tests::require_greater_equal(seastar::memory::stats().allocated_memory(), memory_usage_before);
+        tests::require_less_equal(seastar::memory::stats().allocated_memory(), max_allowed_memory_usage);
+    }
 }
