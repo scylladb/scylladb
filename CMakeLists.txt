@@ -116,6 +116,7 @@ list(APPEND absl_cxx_flags
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     list(APPEND ABSL_GCC_FLAGS ${absl_cxx_flags})
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    list(APPEND absl_cxx_flags "-Wno-deprecated-builtins")
     list(APPEND ABSL_LLVM_FLAGS ${absl_cxx_flags})
 endif()
 set(ABSL_DEFAULT_LINKOPTS
