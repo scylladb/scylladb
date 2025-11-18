@@ -77,6 +77,7 @@ public:
 class service final : public seastar::peering_sharded_service<service> {
     utils::loading_cache_config _loading_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
+    cache& _cache;
 
     cql3::query_processor& _qp;
 
@@ -107,6 +108,7 @@ class service final : public seastar::peering_sharded_service<service> {
 public:
     service(
             utils::loading_cache_config,
+            cache& cache,
             cql3::query_processor&,
             ::service::raft_group0_client&,
             ::service::migration_notifier&,

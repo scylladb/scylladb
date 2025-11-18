@@ -715,11 +715,14 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         co_return;
     }
 
-    co_await _qp.container().invoke_on_all([] (cql3::query_processor& qp) {
+    if (_qp.auth_version < db::system_keyspace::auth_version_t::v2) {
         // auth-v2 gets enabled when consistent topology changes are enabled
         // (see topology::upgrade_state_type::done above) as we use the same migration procedure
-        qp.auth_version = db::system_keyspace::auth_version_t::v2;
-    });
+        co_await _qp.container().invoke_on_all([] (cql3::query_processor& qp) {
+            qp.auth_version = db::system_keyspace::auth_version_t::v2;
+        });
+        co_await auth_cache().load_all();
+    }
 
     co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
         sl_controller.upgrade_to_v2(_qp, _group0->client());
