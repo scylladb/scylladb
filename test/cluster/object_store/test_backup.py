@@ -953,7 +953,6 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
         assert len(streamed_to) == 2
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="issue #26979")
 async def test_backup_broken_streaming(manager: ManagerClient, s3_server):
     # Define configuration for the servers.
     objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
