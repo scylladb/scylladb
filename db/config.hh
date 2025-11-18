@@ -470,6 +470,7 @@ public:
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
 
     named_value<sstring> vector_store_primary_uri;
+    named_value<sstring> vector_store_secondary_uri;
 
     named_value<bool> abort_on_ebadf;
 

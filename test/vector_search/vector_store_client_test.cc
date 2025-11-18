@@ -999,3 +999,51 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
                 co_await unavail_s->stop();
             }));
 }
+
+SEASTAR_TEST_CASE(vector_store_client_secondary_uri) {
+    auto primary = co_await make_unavailable_server();
+    auto secondary = co_await make_vs_mock_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://primary.node:{}", primary->port()));
+    cfg.db_config->vector_store_secondary_uri.set(format("http://secondary.node:{}", secondary->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns(
+                        {{"primary.node", std::vector<std::string>{primary->host()}}, {"secondary.node", std::vector<std::string>{secondary->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_CHECK(keys);
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await primary->stop();
+                co_await secondary->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
+    auto secondary = co_await make_vs_mock_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_secondary_uri.set(format("http://secondary.node:{}", secondary->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"secondary.node", std::vector<std::string>{secondary->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_CHECK(keys);
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await secondary->stop();
+            }));
+}
