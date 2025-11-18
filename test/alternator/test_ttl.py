@@ -22,8 +22,8 @@ from .util import new_test_table, random_string, full_query, unique_table_name, 
 # both values. Thanks to this, the tests will run for both vnodes and tables without the need to change
 # their argument list.
 @pytest.fixture(params=[
-    [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
-    [{'Key': 'experimental:initial_tablets', 'Value': '0'}],
+    [{'Key': 'system:initial_tablets', 'Value': 'none'}],
+    [{'Key': 'system:initial_tablets', 'Value': '0'}],
 ], ids=["using vnodes", "using tablets"], autouse=True)
 def tags_param(request):
     # Set TAGS in the global namespace of this module
@@ -655,10 +655,16 @@ def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
 # becoming expired. This event should contain be a REMOVE event, contain
 # the appropriate information about the expired item (its key and/or its
 # content), and a special userIdentity flag saying that this is not a regular
-# REMOVE but an expiration.
+# REMOVE but an expiration. Reproduces issue #11523.
 @pytest.mark.veryslow
 @pytest.mark.xfail(reason="TTL expiration event in streams not yet marked")
 def test_ttl_expiration_streams(dynamodb, dynamodbstreams):
+    # Alternator Streams currently doesn't work with tablets, so until
+    # #23838 is solved, skip this test on tablets.
+    for tag in TAGS:
+        if tag['Key'] == 'system:initial_tablets' and tag['Value'].isdigit():
+            pytest.skip("Streams test skipped on tablets due to #23838")
+
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within
     # max_duration, we report a failure.
