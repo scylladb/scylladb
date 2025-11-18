@@ -549,6 +549,50 @@ class ScyllaNode:
         except KeyboardInterrupt:
             pass
 
+
+    @staticmethod
+    def _set_stress_val(key, val, res):
+        def parse_num(s):
+            return float(s.replace(',', ''))
+
+        if "[" in val:
+            p = re.compile(r'^\s*([\d\.\,]+\d?)\s*\[.*')
+            m = p.match(val)
+            if m:
+                res[key] = parse_num(m.group(1))
+            p = re.compile(r'^.*READ:\s*([\d\.\,]+\d?)[^\d].*')
+            m = p.match(val)
+            if m:
+                res[key + ":read"] = parse_num(m.group(1))
+            p = re.compile(r'.*WRITE:\s*([\d\.\,]+\d?)[^\d].*')
+            m = p.match(val)
+            if m:
+                res[key + ":write"] = parse_num(m.group(1))
+        else:
+            try:
+                res[key] = parse_num(val)
+            except ValueError:
+                res[key] = val
+
+    
+    def stress_object(self, stress_options=None, ignore_errors=None, **kwargs):
+        if ignore_errors:
+            self.warning("passing `ignore_errors` to stress_object() is deprecated")
+        ret = self.stress(stress_options, **kwargs)
+        p = re.compile(r'^\s*([^:]+)\s*:\s*(\S.*)\s*$')
+        res = {}
+        start = False
+        for line in [s.strip() for s in ret.stdout.splitlines()]:
+            if start:
+                m = p.match(line)
+                if m:
+                    ScyllaNode._set_stress_val(m.group(1).strip().lower(), m.group(2).strip(), res)
+            else:
+                if line == 'Results:':
+                    start = True
+        return res
+
+
     def flush(self, ks: str | None = None, table: str | None = None, **kwargs) -> None:
         cmd = ["flush"]
         if ks:
