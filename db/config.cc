@@ -1035,8 +1035,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Controls whether traffic between nodes is compressed. The valid values are:\n"
         "* all: All traffic is compressed.\n"
         "* dc : Traffic between data centers is compressed.\n"
+        "* rack : Traffic between racks is compressed.\n"
         "* none : No compression.",
-        {"all", "dc", "none"})
+        {"all", "dc", "rack", "none"})
     , internode_compression_zstd_max_cpu_fraction(this, "internode_compression_zstd_max_cpu_fraction", liveness::LiveUpdate, value_status::Used, 0.000,
         "ZSTD compression of RPC will consume at most this fraction of each internode_compression_zstd_quota_refresh_period_ms time slice.\n"
         "If you wish to try out zstd for RPC compression, 0.05 is a reasonable starting point.")

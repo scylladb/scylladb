@@ -283,6 +283,7 @@ public:
 
     enum class compress_what {
         none,
+        rack,
         dc,
         all,
     };

@@ -1077,17 +1077,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return *topology_status;
     };
 
-    auto must_encrypt = [&] {
-        if (_cfg.encrypt == encrypt_what::none) {
-            return false;
-        }
+    // helper for the rack/dc option handling in encryption/compression
+    // checkers. Accepts either enum type.
+    auto must_helper = [&](auto opt) {
+        using type = std::decay_t<decltype(opt)>;
 
-        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
-        if (_cfg.encrypt == encrypt_what::all || _cfg.encrypt == encrypt_what::transitional || idx == TOPOLOGY_INDEPENDENT_IDX) {
-            return true;
-        }
-
-        // either rack/dc need to be in same dc to use non-tls
+        // either rack/dc need to be in same dc to avoid tls/compression
         if (!has_topology() || !is_same_dc(id.addr)) {
             return true;
         }
@@ -1099,7 +1094,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
         // if cross-rack tls, check rack.
-        if (_cfg.encrypt == encrypt_what::dc) {
+        if (opt == type::dc) {
             return false;
         }
 
@@ -1110,6 +1105,18 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         // See above: We need to ensure either (local) bind address is same as
         // broadcast or that the rack info we get for it is the same.
         return broadcast_address != laddr && !is_same_rack(laddr);
+    };
+    auto must_encrypt = [&] {
+        if (_cfg.encrypt == encrypt_what::none) {
+            return false;
+        }
+
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        if (_cfg.encrypt == encrypt_what::all || _cfg.encrypt == encrypt_what::transitional || idx == TOPOLOGY_INDEPENDENT_IDX) {
+            return true;
+        }
+
+        return must_helper(_cfg.encrypt);
     }();
 
     auto must_compress = [&] {
@@ -1122,7 +1129,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        return !has_topology() || !is_same_dc(id.addr);
+        return must_helper(_cfg.compress);
     }();
 
     auto must_tcp_nodelay = [&] {
