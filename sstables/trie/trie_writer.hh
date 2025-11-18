@@ -324,6 +324,7 @@ inline void trie_writer<Output>::compact_after_writing_children(ptr<writer_node>
         // Check that we aren't freeing things still in use.
         expensive_assert(x._global_pos < x->_transition._global_pos);
     #endif
+    _allocator.discard(x->_transition.offset(x->_transition_length));
     // Step 3.
     x->reserve_children(n_children, _allocator);
     // Even though only the 4 copied child fields are needed after this point,
