@@ -1175,6 +1175,22 @@ private:
         bool full = is_incremental_repair_using_all_sstables();
         auto& tinfo = tmap.get_tablet_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
+        // Consider this:
+        // 1) n1 is the topology coordinator
+        // 2) n1 schedules and executes a tablet repair with session id s1 for a tablet on n3 an n4.
+        // 3) n3 and n4 take and store the lock in _rs._repair_compaction_locks[s1]
+        // 4) n1 steps down before it executes locator::tablet_transition_stage::end_repair
+        // 5) n2 becomes the new topology coordinator
+        // 6) n2 runs locator::tablet_transition_stage::repair again
+        // 7) n3 and n4 try to take the lock again and hang since the lock is already taken
+        // To avoid the deadlock, we can throw in step 7 so that n2 will
+        // proceed to the end_repair stage and release the lock. After that,
+        // the scheduler could schedule the tablet repair again.
+        if (_rs._repair_compaction_locks.contains(_frozen_topology_guard)) {
+            auto msg = fmt::format("Tablet repair session={} table={} is in progress", _frozen_topology_guard, tid);
+            rlogger.info("{}", msg);
+            throw std::runtime_error(msg);
+        }
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
@@ -3449,6 +3465,8 @@ public:
             if (master.is_incremental_repair() && !_failed) {
                 mark_as_repaired = true;
             }
+
+            utils::get_local_injector().inject("repair_finish_wait", utils::wait_for_message(300s)).get();
 
             parallel_for_each(nodes_to_stop, coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                 auto node = ns.node;

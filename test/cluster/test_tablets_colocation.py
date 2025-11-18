@@ -393,6 +393,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 3. bring the node back up - it is now missing some data
 # 4. run tablet repair on the base table
 # 5. verify both the base table and the view contain the missing data on the node that was down
+@pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/27119")
 @pytest.mark.asyncio
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
     cfg = {'enable_tablets': True}
