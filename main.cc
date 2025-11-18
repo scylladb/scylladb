@@ -1513,6 +1513,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sstring compress_what = cfg->internode_compression();
             if (compress_what == "all") {
                 mscfg.compress = netw::messaging_service::compress_what::all;
+            } else if (compress_what == "rack") {
+                mscfg.compress = netw::messaging_service::compress_what::rack;
             } else if (compress_what == "dc") {
                 mscfg.compress = netw::messaging_service::compress_what::dc;
             }
