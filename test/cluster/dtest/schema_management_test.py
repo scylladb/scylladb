@@ -25,10 +25,7 @@ from tools.cluster_topology import generate_cluster_topology
 from tools.data import create_c1c2_table, insert_c1c2, query_c1c2, rows_to_list
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.next_gating
 
-
-@pytest.mark.dtest_full
 class TestSchemaManagement(Tester):
     def test_prepared_statements_work_after_node_restart_after_altering_schema_without_changing_columns(self):
         ring_delay_sec = 5
@@ -146,7 +143,6 @@ class TestSchemaManagement(Tester):
         rows = sessions[0].execute(SimpleStatement(f"SELECT * FROM {ks}.{step3_table}", consistency_level=ConsistencyLevel.ALL))
         assert len(rows_to_list(rows)) == 1, f"Expected 1 row but got rows:{rows} instead"
 
-    @pytest.mark.use_cassandra_stress
     @pytest.mark.parametrize("case", ("write", "read", "read_and_write"))
     def test_alter_table_in_parallel_to_read_and_write(self, case):
         """
@@ -369,7 +365,6 @@ class TestSchemaManagement(Tester):
         rows = session.execute(SimpleStatement("SELECT * FROM cf", consistency_level=ConsistencyLevel.ALL))
         assert rows_to_list(rows) == [], f"Expected an empty result set, got {rows}"
 
-    @pytest.mark.dtest_debug
     def test_writes_schema_recreated_while_node_down(self):
         self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
         self.cluster.populate(generate_cluster_topology(rack_num=3))
@@ -405,7 +400,6 @@ class TestSchemaManagement(Tester):
         assert rows_to_list(rows) == expected, f"Expected {expected}, got {rows_to_list(rows)}"
 
 
-@pytest.mark.dtest_full
 class TestLargePartitionAlterSchema(Tester):
     # Issue scylladb/scylla: #5135:
     #
@@ -626,7 +620,6 @@ class DDL(NamedTuple):
     expected_prev_diff: set | None
 
 
-@pytest.mark.dtest_full
 class TestSchemaHistory(Tester):
     def prepare(self):
         cluster = self.cluster
@@ -634,7 +627,7 @@ class TestSchemaHistory(Tester):
         # create cluster with 3 racks with 1 node in each rack
         cluster_topology = generate_cluster_topology(rack_num=3)
         rf = 3
-        cluster.populate(cluster_topology).start()
+        cluster.populate(cluster_topology).start(wait_other_notice=True)
         self.session = self.patient_cql_connection(self.cluster.nodelist()[0], row_factory=dict_factory)
         create_ks(self.session, "lwt_load_ks", rf)
 
