@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
-
+import json
 import os
 import logging
 import asyncio
+import subprocess
+import tempfile
+
 import pytest
 import time
 import random
 
+<<<<<<< HEAD
 from test.pylib.minio_server import MinioServer
+||||||| parent of 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
+=======
+from test.cqlpy.util import local_process_id
+>>>>>>> 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import get_s3_resource, format_tuples
 from test.cluster.conftest import skip_mode
+<<<<<<< HEAD
 from test.cluster.util import wait_for_cql_and_get_hosts
+||||||| parent of 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication
+=======
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
+>>>>>>> 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
 from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_first_completed
@@ -740,3 +754,475 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_serv
     print(f'Status: {status}')
     assert 'state' in status and status['state'] == 'failed'
     assert 'error' in status and 'Not Found' in status['error']
+<<<<<<< HEAD
+||||||| parent of 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope rack streams only to primary replica in the same rack.
+    The test checks that each mutation exists exactly 2 times within the cluster, once in each rack
+    (each restoring node streams to one primary replica in its rack. Without primary_replica_only we'd see 4 replicas, 2 in each rack).
+    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same rack.'''
+
+    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 1)
+    scope = "rack"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        nodes_by_operation = defaultdict(list)
+        for r in res:
+            nodes_by_operation[r[1].group(1)].append(r[1].group(2))
+
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
+        for op, nodes in nodes_by_operation.items():
+            logger.info(f'Operation {op} streamed to nodes {nodes}')
+            assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
+            assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope dc permits cross-rack streaming.
+    The test checks that each mutation exists exactly 1 time within the cluster, in one of the racks.
+    (each restoring node would pick the same primary replica, one would pick it within its own rack(itself), one would pick it from the other rack.
+     Without primary_replica_only we'd see 2 replicas, 1 in each rack).
+    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-rack streaming is allowed
+    and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
+
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    scope = "dc"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ r[1].group(1) for r in res ])
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
+        assert len(streamed_to) == 2
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope dc streams only to primary replica in the local dc.
+    The test checks that each mutation exists exactly 2 times within the cluster, once in each dc
+    (each restoring node streams to one primary replica in its dc. Without primary_replica_only we'd see 4 replicas, 2 in each dc).
+    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same dc.'''
+
+    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 2)
+    scope = "dc"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        nodes_by_operation = defaultdict(list)
+        for r in res:
+            nodes_by_operation[r[1].group(1)].append(r[1].group(2))
+
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
+        for op, nodes in nodes_by_operation.items():
+            logger.info(f'Operation {op} streamed to nodes {nodes}')
+            assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
+            assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope all permits cross-dc streaming.
+    The test checks that each mutation exists exactly 1 time within the cluster, in only one of the dcs.
+    (each restoring node would pick the same primary replica, one would pick it within its own dc(itself), one would pick it from the other dc.
+     Without primary_replica_only, we'd see 2 replicas, 1 in each dc).
+    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-dc streaming is allowed
+    and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
+
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 2)
+    scope = "all"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger, dcs_num=2)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    r_servers = servers
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ r[1].group(1) for r in res ])
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
+        assert len(streamed_to) == 2
+=======
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="issue #26979")
+async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
+    # Define configuration for the servers.
+    objconf = s3_storage.create_endpoint_conf()
+    config = {
+        'enable_user_defined_functions': False,
+        'object_storage_endpoints': objconf,
+        'experimental_features': ['keyspace-storage-options'],
+        'task_ttl_in_seconds': 300,
+    }
+    cmd = ['--smp', '1', '--logger-log-level', 'sstables_loader=debug:sstable=debug']
+    server = await manager.server_add(config=config, cmdline=cmd)
+
+    # Obtain the CQL interface from the manager.
+    cql = manager.get_cql()
+
+    pid = local_process_id(cql)
+    if not pid:
+        pytest.skip("Can't find local Scylla process")
+    # Now that we know the process id, use /proc to find the executable.
+    try:
+        scylla_path = os.readlink(f'/proc/{pid}/exe')
+    except:
+        pytest.skip("Can't find local Scylla executable")
+    # Confirm that this executable is a real tool-providing Scylla by trying
+    # to run it with the "--list-tools" option
+    try:
+        subprocess.check_output([scylla_path, '--list-tools'])
+    except:
+        pytest.skip("Local server isn't Scylla")
+
+    async with new_test_keyspace(manager,
+                                 "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
+        table = 'test_cf'
+        create_table_query = (
+            f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text) "
+            f"WITH tablets = {{'min_tablet_count': '16'}};"
+        )
+        cql.execute(create_table_query)
+
+        expected_rows = 0
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            resource_dir = "test/resource/sstables/fully_partially_contained_ssts"
+            schema_file = os.path.join(tmp_dir, "schema.cql")
+            with open(schema_file, "w") as f:
+                f.write(f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text)")
+                f.flush()
+            for root, _, files in os.walk(resource_dir):
+                for file in files:
+                    local_path = os.path.join(root, file)
+                    print("Processing file:", local_path)
+                    sst = subprocess.check_output(
+                        [scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-format", "json",
+                         "--output-dir", tmp_dir, "--input-file", local_path])
+                    expected_rows += json.loads(subprocess.check_output(
+                        [scylla_path, "sstable", "query", "-q", f"SELECT COUNT(*) FROM scylla_sstable.{table}",
+                         "--output-format", "json", "--sstables",
+                         os.path.join(tmp_dir, f"me-{sst.decode().strip()}-big-TOC.txt")]).decode())[0]['count']
+
+            prefix = unique_name('/test/streaming_')
+            s3_resource = s3_storage.get_resource()
+            bucket = s3_resource.Bucket(s3_storage.bucket_name)
+            sstables = []
+
+            print(f"Uploading files from '{tmp_dir}' to prefix '{prefix}':")
+
+            for root, _, files in os.walk(tmp_dir):
+                for file in files:
+                    if file.endswith("-TOC.txt"):
+                        sstables.append(file)
+                    local_path = os.path.join(root, file)
+                    s3_key = f"{prefix}/{file}"
+
+                    print(f" - Uploading {local_path} to {s3_key}")
+                    bucket.upload_file(local_path, s3_key)
+
+        restore_task_id = await manager.api.restore(
+            server.ip_addr, keyspace, table,
+            s3_storage.address, s3_storage.bucket_name,
+            prefix, sstables, "node"
+        )
+
+        status = await manager.api.wait_task(server.ip_addr, restore_task_id)
+        assert status and status.get(
+            'state') == 'done', f"Restore task failed on server {server.server_id}. Reason {status}"
+
+        res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
+
+        assert res[0].count == expected_rows, f"number of rows after restore is incorrect: {res[0].count}"
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope rack streams only to primary replica in the same rack.
+    The test checks that each mutation exists exactly 2 times within the cluster, once in each rack
+    (each restoring node streams to one primary replica in its rack. Without primary_replica_only we'd see 4 replicas, 2 in each rack).
+    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same rack.'''
+
+    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 1)
+    scope = "rack"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        nodes_by_operation = defaultdict(list)
+        for r in res:
+            nodes_by_operation[r[1].group(1)].append(r[1].group(2))
+
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
+        for op, nodes in nodes_by_operation.items():
+            logger.info(f'Operation {op} streamed to nodes {nodes}')
+            assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
+            assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope dc permits cross-rack streaming.
+    The test checks that each mutation exists exactly 1 time within the cluster, in one of the racks.
+    (each restoring node would pick the same primary replica, one would pick it within its own rack(itself), one would pick it from the other rack.
+     Without primary_replica_only we'd see 2 replicas, 1 in each rack).
+    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-rack streaming is allowed
+    and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
+
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    scope = "dc"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ r[1].group(1) for r in res ])
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
+        assert len(streamed_to) == 2
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope dc streams only to primary replica in the local dc.
+    The test checks that each mutation exists exactly 2 times within the cluster, once in each dc
+    (each restoring node streams to one primary replica in its dc. Without primary_replica_only we'd see 4 replicas, 2 in each dc).
+    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same dc.'''
+
+    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 2)
+    scope = "dc"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        nodes_by_operation = defaultdict(list)
+        for r in res:
+            nodes_by_operation[r[1].group(1)].append(r[1].group(2))
+
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
+        for op, nodes in nodes_by_operation.items():
+            logger.info(f'Operation {op} streamed to nodes {nodes}')
+            assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
+            assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
+
+@pytest.mark.asyncio
+async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerClient, object_storage):
+    '''Check that restoring with primary_replica_only and scope all permits cross-dc streaming.
+    The test checks that each mutation exists exactly 1 time within the cluster, in only one of the dcs.
+    (each restoring node would pick the same primary replica, one would pick it within its own dc(itself), one would pick it from the other dc.
+     Without primary_replica_only, we'd see 2 replicas, 1 in each dc).
+    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-dc streaming is allowed
+    and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
+
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 2)
+    scope = "all"
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger, dcs_num=2)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    r_servers = servers
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ r[1].group(1) for r in res ])
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
+        assert len(streamed_to) == 2
+>>>>>>> 656ce27e7f (streaming: add pytest case to reproduce mutation loss issue)
