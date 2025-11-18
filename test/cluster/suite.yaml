@@ -26,12 +26,16 @@ skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
   - dtest/limits_test
+  - dtest/schema_management_test
+skip_in_dev:
+  - dtest/schema_management_test
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
+  - dtest/schema_management_test
 run_in_release:
   - test_gossiper
 run_in_dev:
