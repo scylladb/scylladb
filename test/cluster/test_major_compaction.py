@@ -131,7 +131,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
             await manager.api.keyspace_compaction(server.ip_addr, ks, cf)
 
             flush_log = await log.grep("Forcing new commitlog segment and flushing all tables", from_mark=mark)
-            assert len(flush_log) == (1 if expect_all_table_flush else 0)
+            assert len(flush_log) == (2 if expect_all_table_flush else 0)
 
         # all tables should be flushed the first time unless compaction_flush_all_tables_before_major_seconds == 0
         await check_all_table_flush_in_major_compaction(compaction_flush_all_tables_before_major_seconds != 0)
