@@ -274,8 +274,8 @@ in this case ``[0.1, 0.2, 0.3, 0.4]``.
 
 .. warning:: 
 
-  Currently, vector queries do not support filtering with ``WHERE`` clause, grouping with ``GROUP BY`` and paging.
-  This will be added in the future releases.
+  Currently, vector queries do not support filtering with ``WHERE`` clause, returning similarity distances,
+  grouping with ``GROUP BY`` and paging. This will be added in the future releases.
 
 
 .. _limit-clause:
