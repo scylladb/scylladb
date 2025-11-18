@@ -1752,6 +1752,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
                                 dst, tablet, duration, res.repair_time);
                     })) {
+                        if (utils::get_local_injector().enter("delay_end_repair_update")) {
+                            break;
+                        }
+
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
                         auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
