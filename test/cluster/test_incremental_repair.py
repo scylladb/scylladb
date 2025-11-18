@@ -9,6 +9,7 @@ from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
+from test.cluster.util import find_server_by_host_id, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
 
 import pytest
 import asyncio
@@ -689,3 +690,77 @@ async def test_tablet_repair_tablet_time_metrics(manager: ManagerClient):
 
     assert time1 == 0
     assert time2 > 0
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/26346
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_finishes_when_tablet_skips_end_repair_stage(manager):
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            table = cf.split('.')[-1]
+
+            coord = await get_topology_coordinator(manager)
+            coord_serv = await find_server_by_host_id(manager, servers, coord)
+            coord_log = await manager.server_open_log(coord_serv.server_id)
+            coord_mark = await coord_log.mark()
+
+            await manager.api.enable_injection(coord_serv.ip_addr, "delay_end_repair_update", one_shot=False)
+            response = await manager.api.tablet_repair(servers[0].ip_addr, ks, table, "all", await_completion=False, incremental_mode="incremental")
+            task_id = response['tablet_task_id']
+
+            await coord_log.wait_for("Finished tablet repair", from_mark=coord_mark)
+            await trigger_stepdown(manager, coord_serv)
+
+            # Disable injection in case, the same node is elected as coordinator
+            await manager.api.disable_injection(coord_serv.ip_addr, "delay_end_repair_update")
+            await manager.api.wait_task(servers[0].ip_addr, task_id)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_rejoin_do_tablet_operation(manager):
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            table = cf.split('.')[-1]
+
+            async def get_coord():
+                coord = await get_topology_coordinator(manager)
+                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_log = await manager.server_open_log(coord_serv.server_id)
+                return coord, coord_serv, coord_log
+
+            for s in servers:
+                await manager.api.enable_injection(s.ip_addr, "repair_finish_wait", one_shot=False)
+
+            coord, coord_serv, coord_log = await get_coord()
+
+            response = await manager.api.tablet_repair(servers[0].ip_addr, ks, table, "all", await_completion=False, incremental_mode="incremental")
+            task_id = response['tablet_task_id']
+
+            await coord_log.wait_for("Initiating tablet repair")
+            await trigger_stepdown(manager, coord_serv)
+
+            coord, coord_serv, coord_log = await get_coord()
+            await coord_log.wait_for("Initiating tablet repair")
+
+            found = False
+            for run in range(10):
+                for s in servers:
+                    log = await manager.server_open_log(s.server_id)
+                    res = await log.grep('Repair retry joining with existing session for tablet')
+                    if len(res) > 0:
+                        found = True
+                        break
+                if found:
+                    break
+                await asyncio.sleep(3)
+            assert found
+
+            for s in servers:
+                await manager.api.message_injection(s.ip_addr, "repair_finish_wait")
+                await manager.api.disable_injection(s.ip_addr, "repair_finish_wait")
+            await coord_log.wait_for("Finished tablet repair")
