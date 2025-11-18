@@ -774,7 +774,6 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="issue #26979")
 async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
     # Define configuration for the servers.
     objconf = s3_storage.create_endpoint_conf()
