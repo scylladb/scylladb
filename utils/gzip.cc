@@ -19,20 +19,13 @@ namespace utils {
 
 namespace {
 
-// GZIP header constants
-constexpr uint8_t GZIP_ID1 = 0x1f;
-constexpr uint8_t GZIP_ID2 = 0x8b;
-constexpr uint8_t GZIP_CM_DEFLATE = 0x08;
+// Maximum size for a single output chunk (1 MB)
+constexpr size_t MAX_OUTPUT_CHUNK_SIZE = 1024 * 1024;
 
-// GZIP header flags
-constexpr uint8_t GZIP_FTEXT = 0x01;
-constexpr uint8_t GZIP_FHCRC = 0x02;
-constexpr uint8_t GZIP_FEXTRA = 0x04;
-constexpr uint8_t GZIP_FNAME = 0x08;
-constexpr uint8_t GZIP_FCOMMENT = 0x10;
-
-// Linearize chunked_content into a contiguous buffer
-std::vector<char> linearize_chunked_content(const rjson::chunked_content& chunks) {
+// Build a contiguous buffer from chunks for decompression
+// This is necessary because libdeflate requires complete input
+// We build the buffer incrementally and free input chunks as we go
+std::vector<char> build_input_buffer(rjson::chunked_content& chunks) {
     size_t total_size = 0;
     for (const auto& chunk : chunks) {
         total_size += chunk.size();
@@ -41,94 +34,14 @@ std::vector<char> linearize_chunked_content(const rjson::chunked_content& chunks
     std::vector<char> result;
     result.reserve(total_size);
     
-    for (const auto& chunk : chunks) {
+    for (auto& chunk : chunks) {
         result.insert(result.end(), chunk.begin(), chunk.end());
+        // Free the chunk immediately after copying to save memory
+        chunk = temporary_buffer<char>();
     }
+    chunks.clear();
     
     return result;
-}
-
-// Read a uint16_t in little-endian format
-uint16_t read_le16(const char* data) {
-    const auto* p = reinterpret_cast<const uint8_t*>(data);
-    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-
-// Read a uint32_t in little-endian format
-uint32_t read_le32(const char* data) {
-    const auto* p = reinterpret_cast<const uint8_t*>(data);
-    return static_cast<uint32_t>(p[0]) | 
-           (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
-// Parse gzip header and return the offset to the compressed data
-// Throws on invalid header
-size_t parse_gzip_header(const char* data, size_t data_size) {
-    if (data_size < 10) {
-        throw std::runtime_error("Invalid gzip data: too short for header");
-    }
-    
-    auto* p = reinterpret_cast<const uint8_t*>(data);
-    
-    // Check magic bytes
-    if (p[0] != GZIP_ID1 || p[1] != GZIP_ID2) {
-        throw std::runtime_error("Invalid gzip data: bad magic bytes");
-    }
-    
-    // Check compression method
-    if (p[2] != GZIP_CM_DEFLATE) {
-        throw std::runtime_error("Invalid gzip data: unsupported compression method");
-    }
-    
-    uint8_t flags = p[3];
-    size_t offset = 10; // Skip fixed header
-    
-    // Skip FEXTRA
-    if (flags & GZIP_FEXTRA) {
-        if (offset + 2 > data_size) {
-            throw std::runtime_error("Invalid gzip data: truncated FEXTRA");
-        }
-        uint16_t xlen = read_le16(data + offset);
-        offset += 2;
-        offset += xlen;
-        if (offset > data_size) {
-            throw std::runtime_error("Invalid gzip data: truncated FEXTRA");
-        }
-    }
-    
-    // Skip FNAME (null-terminated string)
-    if (flags & GZIP_FNAME) {
-        while (offset < data_size && p[offset] != 0) {
-            offset++;
-        }
-        if (offset >= data_size) {
-            throw std::runtime_error("Invalid gzip data: truncated FNAME");
-        }
-        offset++; // Skip null terminator
-    }
-    
-    // Skip FCOMMENT (null-terminated string)
-    if (flags & GZIP_FCOMMENT) {
-        while (offset < data_size && p[offset] != 0) {
-            offset++;
-        }
-        if (offset >= data_size) {
-            throw std::runtime_error("Invalid gzip data: truncated FCOMMENT");
-        }
-        offset++; // Skip null terminator
-    }
-    
-    // Skip FHCRC
-    if (flags & GZIP_FHCRC) {
-        offset += 2;
-        if (offset > data_size) {
-            throw std::runtime_error("Invalid gzip data: truncated FHCRC");
-        }
-    }
-    
-    return offset;
 }
 
 } // anonymous namespace
@@ -136,11 +49,13 @@ size_t parse_gzip_header(const char* data, size_t data_size) {
 future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, size_t length_limit) {
     // Use thread context for potentially blocking operations
     return seastar::async([compressed_body = std::move(compressed_body), length_limit] () mutable {
-        // Linearize the chunked input
-        std::vector<char> compressed_data = linearize_chunked_content(compressed_body);
+        if (compressed_body.empty()) {
+            throw std::runtime_error("Invalid gzip data: empty input");
+        }
         
-        // Free the input chunks to save memory
-        compressed_body.clear();
+        // Build input buffer from chunks, freeing them as we go
+        // Unfortunately, libdeflate requires the complete compressed input at once
+        std::vector<char> compressed_data = build_input_buffer(compressed_body);
         
         if (compressed_data.empty()) {
             throw std::runtime_error("Invalid gzip data: empty input");
@@ -166,36 +81,29 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
         size_t input_offset = 0;
         
         // Process potentially multiple concatenated gzip members
+        // libdeflate_gzip_decompress handles all gzip format details (headers, trailers, etc.)
         while (input_offset < compressed_data.size()) {
             const char* current_input = compressed_data.data() + input_offset;
             size_t remaining_input = compressed_data.size() - input_offset;
-            
-            // Parse the gzip header to check validity
-            try {
-                parse_gzip_header(current_input, remaining_input);
-            } catch (const std::runtime_error& e) {
-                // If we've successfully decompressed at least one member, 
-                // then trailing junk is an error
-                if (total_decompressed > 0) {
-                    throw std::runtime_error(std::string("Invalid gzip data: junk after gzip data: ") + e.what());
-                }
-                throw;
-            }
             
             // Check if we've reached the limit before starting decompression
             if (total_decompressed >= length_limit) {
                 throw std::runtime_error("Decompressed data exceeds length limit");
             }
             
-            // Allocate output buffer with an initial guess
-            // We'll use a generous initial size and grow if needed
-            const size_t initial_chunk_size = std::min(size_t(1024 * 1024), length_limit - total_decompressed);
+            // Allocate output buffer - start with a reasonable size and grow if needed
+            // Limit chunk size to avoid allocating too much at once
+            const size_t initial_chunk_size = std::min({
+                size_t(MAX_OUTPUT_CHUNK_SIZE),
+                length_limit - total_decompressed,
+                remaining_input * 10  // Heuristic: decompressed size often < 10x compressed
+            });
             std::vector<char> output_buffer(initial_chunk_size);
             
             size_t actual_in_bytes = 0;
             size_t actual_out_bytes = 0;
             
-            // Try decompression with progressively larger output buffers
+            // Try decompression with progressively larger output buffers if needed
             libdeflate_result res;
             size_t max_output_size = length_limit - total_decompressed;
             
@@ -238,7 +146,7 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
             }
             
             // libdeflate_gzip_decompress returns how many bytes were consumed
-            // This includes header, compressed data, and trailer
+            // This includes the entire gzip member (header, compressed data, and trailer)
             if (actual_in_bytes == 0) {
                 throw std::runtime_error("Invalid gzip data: no bytes consumed");
             }
@@ -249,11 +157,15 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
                 throw std::runtime_error("Decompressed data exceeds length limit");
             }
             
-            // Move decompressed data into a temporary_buffer and add to result
-            if (actual_out_bytes > 0) {
-                temporary_buffer<char> chunk(actual_out_bytes);
-                std::memcpy(chunk.get_write(), output_buffer.data(), actual_out_bytes);
+            // Move decompressed data into temporary_buffer chunks
+            // Split into reasonably-sized chunks to avoid holding too much contiguous memory
+            size_t offset = 0;
+            while (offset < actual_out_bytes) {
+                size_t chunk_size = std::min(MAX_OUTPUT_CHUNK_SIZE, actual_out_bytes - offset);
+                temporary_buffer<char> chunk(chunk_size);
+                std::memcpy(chunk.get_write(), output_buffer.data() + offset, chunk_size);
                 result.push_back(std::move(chunk));
+                offset += chunk_size;
             }
             
             // Move to the next gzip member
