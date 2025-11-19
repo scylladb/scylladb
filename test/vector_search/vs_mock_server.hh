@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils.hh"
+#include "utils/rjson.hh"
 #include "seastar/http/request.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
@@ -140,7 +141,7 @@ private:
     std::vector<request> _ann_requests;
     std::vector<request> _status_requests;
     response _next_ann_response{seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
-    response _next_status_response{seastar::http::reply::status_type::ok, "SERVING"};
+    response _next_status_response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
 };
 

@@ -10,6 +10,7 @@
 #include "utils.hh"
 #include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/rjson.hh"
 #include <seastar/http/request.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
@@ -128,7 +129,8 @@ seastar::future<bool> client::check_status() {
         co_return false;
     }
     auto resp = co_await std::move(f);
-    co_return response_content_to_sstring(resp.content) == "SERVING";
+    auto json = rjson::parse(std::move(resp.content));
+    co_return json.IsString() && json.GetString() == std::string_view("SERVING");
 }
 
 seastar::future<> client::close() {
