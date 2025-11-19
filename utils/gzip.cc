@@ -131,33 +131,6 @@ size_t parse_gzip_header(const char* data, size_t data_size) {
     return offset;
 }
 
-// Get the size of a gzip member (including header and trailer)
-// Returns 0 if the data doesn't contain a complete gzip member
-size_t get_gzip_member_size(const char* data, size_t data_size) {
-    size_t header_size = parse_gzip_header(data, data_size);
-    
-    // We need at least the trailer (8 bytes)
-    if (data_size < header_size + 8) {
-        return 0;
-    }
-    
-    // Unfortunately, we need to decompress to know where the compressed data ends
-    // We'll use libdeflate to try decompressing and see how much input it consumes
-    
-    // For now, we'll use a heuristic approach:
-    // Try to find the next gzip header or use all remaining data
-    for (size_t i = header_size + 1; i + 8 <= data_size; i++) {
-        // Check if we found another gzip header
-        auto* p = reinterpret_cast<const uint8_t*>(data + i);
-        if (i + 10 <= data_size && p[0] == GZIP_ID1 && p[1] == GZIP_ID2 && p[2] == GZIP_CM_DEFLATE) {
-            return i;
-        }
-    }
-    
-    // Assume all remaining data is part of this member
-    return data_size;
-}
-
 } // anonymous namespace
 
 future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, size_t length_limit) {
@@ -197,10 +170,9 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
             const char* current_input = compressed_data.data() + input_offset;
             size_t remaining_input = compressed_data.size() - input_offset;
             
-            // Parse the gzip header
-            size_t header_size;
+            // Parse the gzip header to check validity
             try {
-                header_size = parse_gzip_header(current_input, remaining_input);
+                parse_gzip_header(current_input, remaining_input);
             } catch (const std::runtime_error& e) {
                 // If we've successfully decompressed at least one member, 
                 // then trailing junk is an error
@@ -258,6 +230,12 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
                 } else {
                     throw std::runtime_error("Gzip decompression failed");
                 }
+            }
+            
+            // libdeflate_gzip_decompress returns how many bytes were consumed
+            // This includes header, compressed data, and trailer
+            if (actual_in_bytes == 0) {
+                throw std::runtime_error("Invalid gzip data: no bytes consumed");
             }
             
             // Check total size limit
