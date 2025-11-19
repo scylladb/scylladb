@@ -201,7 +201,7 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         "";
     builder.with_view_info(schema, false, where_clause);
 
-    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name()));
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name(), false));
     builder.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 
     // A local secondary index should be backed by a *synchronous* view,
