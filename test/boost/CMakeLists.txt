@@ -61,6 +61,8 @@ add_scylla_test(compound_test
   KIND SEASTAR)
 add_scylla_test(compress_test
   KIND BOOST)
+add_scylla_test(gzip_test
+  KIND SEASTAR)
 add_scylla_test(config_test
   KIND SEASTAR)
 add_scylla_test(continuous_data_consumer_test

@@ -22,6 +22,7 @@ target_sources(utils
     error_injection.cc
     exceptions.cc
     file_lock.cc
+    gzip.cc
     gz/crc_combine.cc
     gz/crc_combine_table.cc
     hashers.cc
@@ -79,6 +80,7 @@ target_link_libraries(utils
     Boost::regex
 	crypto
     cryptopp::cryptopp
+    libdeflate::libdeflate
     rapidxml::rapidxml
     yaml-cpp::yaml-cpp
     GnuTLS::gnutls)
