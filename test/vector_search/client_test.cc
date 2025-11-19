@@ -10,6 +10,7 @@
 #include "vector_search/client.hh"
 #include "vs_mock_server.hh"
 #include "utils.hh"
+#include "utils//rjson.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/testing/test_case.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -136,7 +137,7 @@ SEASTAR_TEST_CASE(becomes_up_when_server_status_is_serving) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::internal_server_error, "Internal Server Error"});
-    server->next_status_response(vs_mock_server::response{seastar::http::reply::status_type::ok, "SERVING"});
+    server->next_status_response(vs_mock_server::response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")});
     client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT};
 
     co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
@@ -160,7 +161,7 @@ SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
     for (auto const& status : non_serving_statuses) {
         auto server = co_await make_vs_mock_server();
         server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::internal_server_error, "Internal Server Error"});
-        server->next_status_response(vs_mock_server::response{seastar::http::reply::status_type::ok, status});
+        server->next_status_response(vs_mock_server::response{seastar::http::reply::status_type::ok, rjson::quote_json_string(status)});
         client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT};
 
         co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
