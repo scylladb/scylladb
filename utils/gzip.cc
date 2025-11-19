@@ -182,6 +182,11 @@ future<rjson::chunked_content> ungzip(rjson::chunked_content&& compressed_body, 
                 throw;
             }
             
+            // Check if we've reached the limit before starting decompression
+            if (total_decompressed >= length_limit) {
+                throw std::runtime_error("Decompressed data exceeds length limit");
+            }
+            
             // Allocate output buffer with an initial guess
             // We'll use a generous initial size and grow if needed
             const size_t initial_chunk_size = std::min(size_t(1024 * 1024), length_limit - total_decompressed);
