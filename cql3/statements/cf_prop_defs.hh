@@ -110,7 +110,7 @@ public:
     bool get_synchronous_updates_flag() const;
     std::optional<db::tablet_options::map_type> get_tablet_options() const;
 
-    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const;
+    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 
