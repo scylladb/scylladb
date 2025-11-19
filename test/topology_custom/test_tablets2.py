@@ -1919,7 +1919,6 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'table=debug',
         '--target-tablet-size-in-bytes', '10000',
-        '--smp', '1',
     ]
     servers = [await manager.server_add(config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
