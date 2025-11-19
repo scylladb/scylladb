@@ -55,10 +55,6 @@ bool is_request_aborted(std::exception_ptr& err) {
     return try_catch<abort_requested_exception>(err) != nullptr;
 }
 
-bool is_server_error(http::reply::status_type status) {
-    return status >= http::reply::status_type::internal_server_error;
-}
-
 future<client::request_error> map_err(std::exception_ptr& err) {
     if (is_server_unavailable(err)) {
         co_return service_unavailable_error{};
@@ -95,14 +91,7 @@ seastar::future<client::request_result> client::request(
         }
         co_return std::unexpected{co_await map_err(err)};
     }
-    auto resp = co_await std::move(f);
-    if (is_server_error(resp.status)) {
-        _logger.warn("client ({}:{}): received HTTP status {}: {}", _endpoint.host, _endpoint.port, static_cast<int>(resp.status),
-                response_content_to_sstring(resp.content));
-        handle_server_unavailable();
-        co_return std::unexpected{service_unavailable_error{}};
-    }
-    co_return resp;
+    co_return co_await std::move(f);
 }
 
 seastar::future<client::response> client::request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
