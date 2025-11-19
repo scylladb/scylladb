@@ -394,6 +394,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 4. run tablet repair on the base table
 # 5. verify both the base table and the view contain the missing data on the node that was down
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="tablet repair of colocated tables is not supported currently")
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
     cfg = {'enable_tablets': True}
     cmdline = [
