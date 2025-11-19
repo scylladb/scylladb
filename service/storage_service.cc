@@ -6421,26 +6421,6 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
     on_internal_error(slogger, "Got wrong tablet_operation_repair_result");
 }
 
-future<service::tablet_operation_repair_result> storage_service::repair_colocated_tablets(locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, service::session_id session_id) {
-    auto base_repair_result = co_await repair_tablet(base_tablet, session_id);
-    gc_clock::time_point min_repair_time = base_repair_result.repair_time;
-
-    // repair derived co-located tablets
-    for (auto tablet : tablets) {
-        if (tablet == base_tablet) {
-            continue;
-        }
-
-        auto tablet_repair_result = co_await repair_tablet(tablet, session_id);
-
-        min_repair_time = std::min(min_repair_time, tablet_repair_result.repair_time);
-    }
-
-    co_return tablet_operation_repair_result {
-        min_repair_time
-    };
-}
-
 future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
     if (leaving.host != pending.host) {
         throw std::runtime_error(fmt::format("Leaving and pending tablet replicas belong to different nodes, {} and {} respectively",
@@ -7774,12 +7754,6 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id) {
         return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
             auto res = co_await ss.repair_tablet(tablet, session_id);
-            co_return res;
-        });
-    });
-    ser::storage_service_rpc_verbs::register_tablet_repair_colocated(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, rpc::optional<service::session_id> session_id) {
-        return handle_raft_rpc(dst_id, [base_tablet, tablets = std::move(tablets), session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
-            auto res = co_await ss.repair_colocated_tablets(base_tablet, std::move(tablets), session_id);
             co_return res;
         });
     });
