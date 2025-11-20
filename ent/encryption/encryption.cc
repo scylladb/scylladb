@@ -281,6 +281,7 @@ class encryption_context_impl : public encryption_context {
     std::vector<std::unordered_map<sstring, shared_ptr<azure_host>>> _per_thread_azure_host_cache;
     std::vector<shared_ptr<encryption_schema_extension>> _per_thread_global_user_extension;
     std::vector<std::optional<db::system_keyspace::replicated_key_provider_version_t>> _per_thread_replicated_keys_version;
+    std::vector<std::vector<replicated_keys_state_change_callback>> _per_thread_replicated_keys_listeners;
     std::unique_ptr<encryption_config> _cfg;
     sharded<cql3::query_processor>* _qp;;
     sharded<service::migration_manager>* _mm;
@@ -298,6 +299,7 @@ public:
         , _per_thread_azure_host_cache(smp::count)
         , _per_thread_global_user_extension(smp::count)
         , _per_thread_replicated_keys_version(smp::count)
+        , _per_thread_replicated_keys_listeners(smp::count)
         , _cfg(std::move(cfg))
         , _qp(find_or_null<cql3::query_processor>(services))
         , _mm(find_or_null<service::migration_manager>(services))
@@ -489,6 +491,20 @@ public:
     }
     bool allow_per_table_encryption() const {
         return _allow_per_table_encryption;
+    }
+
+    void register_replicated_keys_state_listener(replicated_keys_state_change_callback callback) override {
+        _per_thread_replicated_keys_listeners[this_shard_id()].push_back(std::move(callback));
+    }
+
+    future<> notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t version) override {
+        return smp::invoke_on_all([this, version] {
+            auto& listeners = _per_thread_replicated_keys_listeners[this_shard_id()];
+            for (const auto& listener : listeners) {
+                logg.debug("Notifying replicated key state change listener {}", listener.target_type().name());
+                listener(version);
+            }
+        });
     }
 
     future<db::system_keyspace::replicated_key_provider_version_t> get_or_load_replicated_keys_version() override {

@@ -90,7 +90,46 @@ public:
         , _system_key(std::move(system_key))
         , _local_provider(std::move(local_provider))
         , _original_options(opts)
-    {}
+    {
+        _ctxt.register_replicated_keys_state_listener([this](db::system_keyspace::replicated_key_provider_version_t version) {
+            switch (version) {
+            case db::system_keyspace::replicated_key_provider_version_t::v1:
+                if (!_keys_on.has_value()) {
+                    _keys_on = keys_location::sys_repl_keys_ks;
+                }
+                if (*_keys_on == keys_location::sys_repl_keys_ks) {
+                    break;
+                }
+                on_internal_error(log, seastar::format("Cannot downgrade Replicated Key Provider to version v1 (current state: {})", static_cast<int>(*_keys_on)));
+            case db::system_keyspace::replicated_key_provider_version_t::v1_5:
+                if (!_keys_on.has_value()) {
+                    _keys_on = keys_location::both;
+                }
+                if (*_keys_on == keys_location::both) {
+                    break;
+                }
+                if (*_keys_on == keys_location::sys_repl_keys_ks) {
+                    log.info("Replicated Key Provider upgrading to version v1_5");
+                    _keys_on = keys_location::both;
+                    break;
+                }
+                on_internal_error(log, seastar::format("Cannot downgrade Replicated Key Provider to version v1_5 (current state: {})", static_cast<int>(*_keys_on)));
+            case db::system_keyspace::replicated_key_provider_version_t::v2:
+                if (!_keys_on.has_value()) {
+                    _keys_on = keys_location::group0;
+                }
+                if (*_keys_on == keys_location::group0) {
+                    break;
+                }
+                if (*_keys_on == keys_location::both) {
+                    log.info("Replicated Key Provider upgrading to version v2");
+                    _keys_on = keys_location::group0;
+                    break;
+                }
+                on_internal_error(log, "Cannot upgrade Replicated Key Provider from v1 to v2 directly.");
+            }
+        });
+    }
 
 
     future<std::tuple<key_ptr, opt_bytes>> key(const key_info&, opt_bytes = {}) override;
