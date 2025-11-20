@@ -1199,6 +1199,18 @@ private:
                         config,
                         auth::authentication_options(),
                         mc).get();
+
+                if (cfg->authenticator() == "PasswordAuthenticator") {
+                    auth::authentication_options auth_opts;
+                    auth_opts.credentials = auth::password_option{"cassandra"};
+                    auth::create_role(
+                        _auth_service.local(),
+                        "cassandra",
+                        config,
+                        auth_opts,
+                        mc).get();
+                }
+
                 std::move(mc).commit(group0_client, as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
