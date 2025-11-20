@@ -144,6 +144,10 @@ public:
 
     void reset_authorization_cache();
 
+    bool is_used_by_maintenance_socket() const noexcept {
+        return _used_by_maintenance_socket == maintenance_socket_enabled::yes;
+    }
+
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
     ///
