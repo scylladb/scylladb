@@ -352,3 +352,26 @@ def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, scylla_only, 
                 f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
                 trace=True,
             )
+
+
+
+@pytest.mark.xfail(reason="""We do not support primary key filtering yet, see VECTOR-374, 
+                            additionally this test will fail when that issue is fixed because pytest does not run the vector search backend.
+                            It does pass on Cassandra however, so we keep it xfailed for future reference.""")
+def test_ann_query_with_restriction_works_only_on_pk(cql, test_keyspace):
+    schema = 'p int primary key, q int, v vector<float, 3>'
+    custom_index = 'vector_index' if is_scylla(cql) else 'sai'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}'")
+        cql.execute(f"INSERT INTO {table} (p, q, v) VALUES (1, 1, [1.0, 1.0, 1.0])")
+        cql.execute(f"INSERT INTO {table} (p, q, v) VALUES (2, 2, [1.0, 1.0, 1.0])")
+        cql.execute(f"INSERT INTO {table} (p, q, v) VALUES (3, 3, [1.0, 1.0, 1.0])")
+
+        result = cql.execute(f"SELECT * FROM {table} WHERE p = 1 ORDER BY v ANN OF [1.0, 1.0, 1.0] LIMIT 3")
+
+        assert len(result.current_rows) == 1
+        assert result.current_rows[0].p == 1
+        with pytest.raises(InvalidRequest, match="ANN ordering by vector requires all restricted column(s) to be indexed"):
+            cql.execute(f"SELECT * FROM {table} WHERE q = 1 ORDER BY v ANN OF [1.0, 1.0, 1.0] LIMIT 3")
+
+

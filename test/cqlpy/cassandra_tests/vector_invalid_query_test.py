@@ -150,6 +150,7 @@ def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
 #         assertThatThrownBy(() -> execute("SELECT * FROM %s ORDER BY value ann of [0.0, 0.0] LIMIT 2")).isInstanceOf(InvalidRequestException.class);
 #     }
 
+@pytest.mark.xfail(reason="As we do not support filtering yet, wrong error is thrown, once VECTOR-374 is done, this should pass")
 def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -187,6 +188,7 @@ def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
 #         assertEquals(1, result.size());
 #     }
 
+@pytest.mark.xfail(reason="As we do not support filtering yet, wrong error is thrown, once VECTOR-374 is done, this should pass")
 def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>, c int)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
