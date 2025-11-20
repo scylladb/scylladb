@@ -1453,4 +1453,8 @@ unsigned messaging_service::add_statement_tenant(sstring tenant_name, scheduling
     return idx;
 }
 
+bool messaging_service::supports_load_and_stream_abort_rpc_message() const noexcept {
+    return _feature_service.load_and_stream_abort_rpc_message;
+}
+
 } // namespace net
