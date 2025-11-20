@@ -9,9 +9,10 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "load_balancer.hh"
-#include "client.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
+#include "clients.hh"
+#include "uri.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/sequential_producer.hh"
@@ -54,14 +55,7 @@ using port_number = vector_search::vector_store_client::port_number;
 using primary_key = vector_search::vector_store_client::primary_key;
 using primary_keys = vector_search::vector_store_client::primary_keys;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
-using tcp_keepalive_params = net::tcp_keepalive_params;
-using time_point = lowres_clock::time_point;
-
-/// Timeout for waiting for a new client to be available
-constexpr auto WAIT_FOR_CLIENT_TIMEOUT = std::chrono::seconds(5);
-
-/// The number of times to retry an /ann request if all nodes fail with a system error.
-constexpr auto ANN_RETRIES = 3;
+using uri = vector_search::uri;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
@@ -76,11 +70,6 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     }
     return port;
 }
-
-struct uri {
-    host_name host;
-    port_number port;
-};
 
 auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
     constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
@@ -97,20 +86,6 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
         return {};
     }
     return {{host, *port}};
-}
-
-
-/// Wait for a condition variable to be signaled or timeout.
-auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<void> {
-    auto result = co_await coroutine::as_future(cv.wait(timeout));
-    if (result.failed()) {
-        auto err = result.get_exception();
-        if (try_catch<condition_variable_timed_out>(err) != nullptr) {
-            co_return;
-        }
-        co_await coroutine::return_exception_ptr(std::move(err));
-    }
-    co_return;
 }
 
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
@@ -244,34 +219,17 @@ std::vector<sstring> get_hosts(const std::vector<uri>& uris) {
     return ret;
 }
 
-template <typename Variant>
-auto make_unexpected(const auto& err) {
-    return std::unexpected{std::visit(
-            [](auto&& err) {
-                return Variant{err};
-            },
-            err)};
-};
-
 } // namespace
 
 namespace vector_search {
 
 struct vector_store_client::impl {
-
-    using clients_type = std::vector<lw_shared_ptr<client>>;
-
     utils::observer<sstring> uri_observer;
-    clients_type current_clients;
-    clients_type old_clients;
     std::vector<uri> _uris;
-    gate client_producer_gate;
-    condition_variable refresh_client_cv;
-    milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
-    sequential_producer<clients_type> clients_producer;
     dns dns;
     uint64_t dns_refreshes = 0;
     seastar::metrics::metric_groups _metrics;
+    clients _clients;
 
 
     impl(utils::config_file::named_value<sstring> cfg)
@@ -284,131 +242,33 @@ struct vector_store_client::impl {
             }
         }))
         , _uris(parse_uris(cfg()))
-        , clients_producer([&]() -> future<clients_type> {
-            return try_with_gate(client_producer_gate, [this] -> future<clients_type> {
-                dns.trigger_refresh();
-                co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
-                co_return current_clients;
-            });
-        })
-        , dns(vslogger, get_hosts(_uris), [this](auto const& addrs) -> future<> {
-            co_await handle_addresses_changed(addrs);
-        }, dns_refreshes) {
+
+        , dns(
+                  vslogger, get_hosts(_uris),
+                  [this](auto const& addrs) -> future<> {
+                      co_await handle_addresses_changed(addrs);
+                  },
+                  dns_refreshes)
+        , _clients([this]() {
+            dns.trigger_refresh();
+        }) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
     }
 
     void handle_uris_changed(std::vector<uri> uris) {
-        clear_current_clients();
+        _clients.clear();
         _uris = std::move(uris);
         dns.hosts(get_hosts(_uris));
     }
 
-    auto handle_addresses_changed(const dns::host_address_map& addrs) -> future<> {
-        clear_current_clients();
-        for (const auto& uri : _uris) {
-            auto it = addrs.find(uri.host);
-            if (it != addrs.end()) {
-                for (const auto& addr : it->second) {
-                    current_clients.push_back(make_lw_shared<client>(client::endpoint_type{uri.host, uri.port, addr}));
-                }
-            }
-        }
-
-        refresh_client_cv.broadcast();
-        co_await cleanup_old_clients();
+    future<> handle_addresses_changed(const dns::host_address_map& addrs) {
+        co_await _clients.handle_changed(_uris, addrs);
     }
 
     auto is_disabled() const -> bool {
         return _uris.empty();
-    }
-
-    void clear_current_clients() {
-        old_clients.insert(old_clients.end(), std::make_move_iterator(current_clients.begin()), std::make_move_iterator(current_clients.end()));
-        current_clients.clear();
-    }
-
-    /// Cleanup current clients
-    auto cleanup_current_clients() -> future<> {
-        for (auto& client : current_clients) {
-            co_await client->close();
-        }
-        current_clients.clear();
-    }
-
-    /// Cleanup old clients that are no longer used.
-    auto cleanup_old_clients() -> future<> {
-        // iterate over old clients and close them. There is a co_await in the loop
-        // so we need to use [] accessor and copying clients to avoid dangling references of iterators.
-        // NOLINTNEXTLINE(modernize-loop-convert)
-        for (auto it = 0U; it < old_clients.size(); ++it) {
-            auto& client = old_clients[it];
-            if (client && client.owned()) {
-                auto client_cloned = client;
-                client = nullptr;
-                co_await client_cloned->close();
-            }
-        }
-        std::erase_if(old_clients, [](auto const& client) {
-            return !client;
-        });
-    }
-
-    using get_client_error = std::variant<aborted, addr_unavailable, disabled>;
-
-    /// Get the current http client or wait for a new one to be available.
-    auto get_clients(abort_source& as) -> future<std::expected<clients_type, get_client_error>> {
-        if (is_disabled()) {
-            co_return std::unexpected{disabled{}};
-        }
-        if (!current_clients.empty()) {
-            co_return current_clients;
-        }
-
-        auto current_clients = co_await coroutine::as_future(clients_producer(as));
-
-        if (current_clients.failed()) {
-            auto err = current_clients.get_exception();
-            if (as.abort_requested()) {
-                co_return std::unexpected{aborted{}};
-            }
-            co_await coroutine::return_exception_ptr(std::move(err));
-        }
-        auto clients = co_await std::move(current_clients);
-        if (clients.empty()) {
-            co_return std::unexpected{addr_unavailable{}};
-        }
-        co_return clients;
-    }
-
-    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable, disabled>;
-
-    auto make_request(operation_type method, http_path path, std::optional<json_content> content, abort_source& as)
-            -> future<std::expected<client::response, make_request_error>> {
-        for (auto retries = 0; retries < ANN_RETRIES; ++retries) {
-            auto clients = co_await get_clients(as);
-            if (!clients) {
-                co_return make_unexpected<make_request_error>(clients.error());
-            }
-
-            load_balancer lb(std::move(*clients), random_engine);
-            while (auto client = lb.next()) {
-                auto result = co_await client->request(method, path, content, as);
-                if (result) {
-                    co_return std::move(result.value());
-                }
-                if (std::holds_alternative<service_unavailable_error>(result.error())) {
-                    // try next client
-                    continue;
-                }
-                co_return make_unexpected<make_request_error>(result.error());
-            }
-
-            dns.trigger_refresh();
-        }
-
-        co_return std::unexpected{service_unavailable{}};
     }
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
@@ -421,7 +281,7 @@ struct vector_store_client::impl {
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
         auto content = write_ann_json(std::move(vs_vector), limit);
 
-        auto resp = co_await make_request(operation_type::POST, std::move(path), std::move(content), as);
+        auto resp = co_await _clients.request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
             co_return std::unexpected{std::visit(
                     [](auto&& err) {
@@ -457,11 +317,8 @@ void vector_store_client::start_background_tasks() {
 }
 
 auto vector_store_client::stop() -> future<> {
-    _impl->refresh_client_cv.signal();
-    co_await _impl->client_producer_gate.close();
+    co_await _impl->_clients.stop();
     co_await _impl->dns.stop();
-    co_await _impl->cleanup_old_clients();
-    co_await _impl->cleanup_current_clients();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
@@ -478,7 +335,7 @@ void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& v
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
-    vsc._impl->wait_for_client_timeout = timeout;
+    vsc._impl->_clients.timeout(timeout);
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
@@ -490,7 +347,7 @@ void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) 
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::vector<inet_address>> {
-    auto clients = co_await vsc._impl->get_clients(as);
+    auto clients = co_await vsc._impl->_clients.get_clients(as);
     std::vector<inet_address> ret;
     if (!clients) {
         co_return ret;
