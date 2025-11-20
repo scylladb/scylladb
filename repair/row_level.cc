@@ -1173,8 +1173,8 @@ private:
             on_internal_error(rlogger, format("Repair range={} does not match tablet range={}", _range, range));
         }
         bool full = is_incremental_repair_using_all_sstables();
-        auto& tinfo = tmap.get_tablet_info(id);
-        auto sstables_repaired_at = tinfo.sstables_repaired_at;
+        const auto& tinfo = tmap.get_tablet_info(id);
+        auto sstables_repaired_at = tinfo.sstables_repaired_at();
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
@@ -3336,8 +3336,8 @@ public:
                 auto erm = table.get_effective_replication_map();
                 auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_table_id);
                 auto last_token = _range.end() ? _range.end()->value() : dht::maximum_token();
-                auto& tinfo = tmap.get_tablet_info(last_token);
-                auto sstables_repaired_at = tinfo.sstables_repaired_at;
+                auto&& tinfo = tmap.get_tablet_info(last_token);
+                auto sstables_repaired_at = tinfo.sstables_repaired_at();
                 repaired_at = sstables_repaired_at + 1;
             }
 
