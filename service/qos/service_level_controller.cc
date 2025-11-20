@@ -592,6 +592,17 @@ future<scheduling_group> service_level_controller::auth_integration::get_user_sc
 }
 
 future<scheduling_group> service_level_controller::get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
+    // Special case:
+    // -------------
+    // The maintenance socket can communicate with Scylla before `auth_integration`
+    // is registered, and we need to prepare for it.
+    // For the discussion, see: scylladb/scylladb#26816.
+    //
+    // TODO: Get rid of this.
+    if (!usr.has_value() || auth::is_anonymous(usr.value())) {
+        return make_ready_future<scheduling_group>(get_default_scheduling_group());
+    }
+
     SCYLLA_ASSERT(_auth_integration != nullptr);
     return _auth_integration->get_user_scheduling_group(usr);
 }
@@ -1071,7 +1082,10 @@ future<std::vector<cql3::description>> service_level_controller::auth_integratio
 }
 
 future<std::vector<cql3::description>> service_level_controller::describe_service_levels() {
-    SCYLLA_ASSERT(_auth_integration != nullptr);
+    if (_auth_integration == nullptr) {
+        throw std::runtime_error("Describing service levels requires that `auth_integration` has been registered, "
+                "but it has not. One of the potential reasons is using the maintenance socket.");
+    }
 
     std::vector<cql3::description> created_service_levels_descs = co_await describe_created_service_levels();
     std::vector<cql3::description> attached_service_levels_descs = co_await _auth_integration->describe_attached_service_levels();
