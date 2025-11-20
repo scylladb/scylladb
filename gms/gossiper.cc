@@ -2802,3 +2802,4 @@ auto fmt::formatter<gms::loaded_endpoint_state>::format(const gms::loaded_endpoi
             st.opt_dc_rack ? st.opt_dc_rack->rack : "",
             st.tokens);
 }
+
