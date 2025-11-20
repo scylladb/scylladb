@@ -47,6 +47,7 @@ options {
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
+#include "cql3/statements/raw/rebuild_materialized_view_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/raw/use_statement.hh"
 #include "cql3/statements/raw/batch_statement.hh"
@@ -359,6 +360,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
+    | st51=rebuildMaterializedViewStatement  { $stmt = std::move(st51); }
     ;
 
 /*
@@ -674,6 +676,18 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
             std::vector<::shared_ptr<cql3::column_identifier::raw>>(), std::move(attrs));
 	  }
 	;
+
+rebuildMaterializedViewStatement returns [std::unique_ptr<raw::rebuild_materialized_view_statement> expr]
+    @init {
+        auto attrs = std::make_unique<cql3::attributes::raw>();
+        expression wclause = conjunction{};
+    }
+	: K_REBUILD K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingClause[attrs] )?
+	  {
+            return std::make_unique<raw::rebuild_materialized_view_statement>(
+                std::move(cf), std::move(wclause), std::move(attrs));
+	  }
+    ;
 
 /**
  * BEGIN BATCH
@@ -2155,6 +2169,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_REBUILD
         ) { $str = $k.text; }
     ;
 
@@ -2366,6 +2381,7 @@ K_LIKE:        L I K E;
 
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
+K_REBUILD:     R E B U I L D;
 
 K_EXECUTE:     E X E C U T E;
 
