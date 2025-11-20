@@ -416,7 +416,7 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
     descriptor.creator = [&t] (shard_id) {
-        return t.make_sstable();
+        return t.make_sstable(sstables::sstable_state::normal);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
@@ -2276,33 +2276,6 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     auto options = compaction_type_options::make_split(std::move(opt.classifier));
 
     return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
-}
-
-future<std::vector<sstables::shared_sstable>>
-compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
-    if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
-    }
-    if (!can_proceed(&t)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
-    }
-    std::vector<sstables::shared_sstable> ret;
-
-    auto gate = get_compaction_state(&t).gate.hold();
-    compaction_progress_monitor monitor;
-    compaction_data info = create_compaction_data();
-    compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
-    };
-    desc.replacer = [&] (compaction_completion_desc d) {
-        std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
-    };
-
-    co_await compact_sstables(std::move(desc), info, t, monitor);
-    co_await sst->unlink();
-
-    co_return ret;
 }
 
 // Submit a table to be scrubbed and wait for its termination.

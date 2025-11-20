@@ -1138,7 +1138,7 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
     auto holder = cg.async_gate().hold();
     auto& view = cg.view_for_sstable(sst);
     auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_sstable");
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, view, co_await split_compaction_options());
+    co_return co_await compaction::maybe_split_offline_sstable(sst, view, co_await split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
@@ -1373,29 +1373,34 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
     });
 }
 
-future<>
+future<std::vector<sstables::shared_sstable>>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    for (auto sst : co_await maybe_split_new_sstable(new_sst)) {
+    auto output = co_await maybe_split_new_sstable(new_sst);
+    for (auto sst : output) {
         auto& cg = compaction_group_for_sstable(sst);
         // Hold gate to make share compaction group is alive.
         auto holder = cg.async_gate().hold();
         co_await do_add_sstable_and_update_cache(cg, std::move(sst), offstrategy, trigger_compaction);
     }
+    co_return output;
 }
 
-future<>
+future<std::vector<sstables::shared_sstable>>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     bool do_trigger_compaction = offstrategy == sstables::offstrategy::no;
-    co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy, do_trigger_compaction);
+    co_return co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy, do_trigger_compaction);
 }
 
-future<>
+future<std::vector<sstables::shared_sstable>>
 table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts) {
     constexpr bool do_not_trigger_compaction = false;
+    std::vector<sstables::shared_sstable> ret;
     for (auto& sst : ssts) {
-        co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
+        auto output = co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
+        std::ranges::move(output, std::back_inserter(ret));
     }
     trigger_compaction();
+    co_return ret;
 }
 
 future<>
@@ -2601,8 +2606,8 @@ public:
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _t.get_sstables_manager();
     }
-    sstables::shared_sstable make_sstable() const override {
-        return _t.make_sstable();
+    sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
+        return _t.make_sstable(state);
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));

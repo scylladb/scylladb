@@ -144,10 +144,16 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
         co_return 0;
     }
 
-    co_await table.add_sstables_and_update_cache(new_sstables).handle_exception([&table] (std::exception_ptr ep) {
+    std::exception_ptr ep;
+    try {
+        new_sstables = co_await table.add_sstables_and_update_cache(new_sstables);
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
         dblog.error("Failed to load SSTables for {}.{}: {}. Aborting.", table.schema()->ks_name(), table.schema()->cf_name(), ep);
         abort();
-    });
+    }
 
     if (needs_view_update == db::view::sstable_destination_decision::staging_managed_by_vbc) {
         co_await vbw.local().register_staging_sstable_tasks(new_sstables, table.schema()->id());
@@ -429,7 +435,8 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
     co_await directory.invoke_on_all([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
         co_await dir.do_for_each_sstable([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
             auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
-            return _global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
+            // Here we don't care about the sstables actually loaded into the table, so we can ignore the return.
+            return _global_table->add_sstable_and_update_cache(sst, requires_offstrategy).discard_result();
         });
         if (do_allow_offstrategy_compaction) {
             _global_table->trigger_offstrategy_compaction();
