@@ -179,3 +179,56 @@ def test_default_shares_in_listings(scylla_only, cql):
 
             list_sl = cql.execute(f"LIST SERVICE LEVEL {sl}").one()
             assert list_sl.shares == 1000
+
+# Verify that we cannot manipulate the default service level
+# and that the messages Scylla returns are informative.
+def test_manipulating_default_service_level(cql, scylla_only):
+    default_sl = "default"
+    # Service levels are case-sensitive (if used with quotation marks).
+    fake_default_sl = '"DeFaUlT"'
+
+    with new_user(cql) as role:
+        # Creation.
+        create_err = f"The default service level, {default_sl}, already exists and cannot be created"
+        with pytest.raises(InvalidRequest, match=create_err):
+            cql.execute(f"CREATE SERVICE LEVEL {default_sl} WITH SHARES = 100")
+
+        # Alteration.
+        alter_err = f"The default service level, {default_sl}, cannot be altered"
+        with pytest.raises(InvalidRequest, match=alter_err):
+            cql.execute(f"ALTER SERVICE LEVEL {default_sl} WITH SHARES = 200")
+
+        # Attachment.
+        attach_err = f"The default service level, {default_sl}, cannot be attached to a role. " \
+                      "If you want to detach an attached service level, use the DETACH SERVICE " \
+                      "LEVEL statement"
+        with pytest.raises(InvalidRequest, match=attach_err):
+            cql.execute(f"ATTACH SERVICE LEVEL {default_sl} TO {role}")
+
+        # Dropping.
+        drop_err = f"The default service level, {default_sl}, cannot be dropped"
+        with pytest.raises(InvalidRequest, match=drop_err):
+            cql.execute(f"DROP SERVICE LEVEL {default_sl}")
+
+# Verify that we can manipulate service levels whose names are similar
+# to the name of the default service level, but they're not the same.
+# Sanity check.
+def test_manipulating_fake_default_service_level(cql, scylla_only):
+    # Service levels are case-sensitive (if used with quotation marks).
+    fake_default_sl = '"DeFaUlT"'
+
+    with new_user(cql) as role:
+        try:
+            # Creation.
+            cql.execute(f"CREATE SERVICE LEVEL {fake_default_sl} WITH SHARES = 100")
+
+            # Alteration.
+            cql.execute(f"ALTER SERVICE LEVEL {fake_default_sl} WITH SHARES = 200")
+
+            # Attachment.
+            cql.execute(f"ATTACH SERVICE LEVEL {fake_default_sl} TO {role}")
+
+            # Dropping.
+            cql.execute(f"DROP SERVICE LEVEL {fake_default_sl}")
+        finally:
+            cql.execute(f"DROP SERVICE LEVEL IF EXISTS {fake_default_sl}")
