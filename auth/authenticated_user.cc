@@ -10,6 +10,8 @@
 
 #include "auth/authenticated_user.hh"
 
+#include "auth/common.hh"
+
 namespace auth {
 
 authenticated_user::authenticated_user(std::string_view name)
@@ -20,6 +22,12 @@ static const authenticated_user the_anonymous_user{};
 
 const authenticated_user& anonymous_user() noexcept {
     return the_anonymous_user;
+}
+
+static const authenticated_user the_maintenance_user(auth::meta::MAINTENANCE_ROLE_NAME);
+
+const authenticated_user& maintenance_user() noexcept {
+    return the_maintenance_user;
 }
 
 }
