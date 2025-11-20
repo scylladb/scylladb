@@ -56,8 +56,17 @@ using namespace std::chrono_literals;
 
 logging::logger cdc_log("cdc");
 
+namespace {
+
+// When dropping a column from a CDC log table, we set the drop timestamp
+// `column_drop_leeway` seconds into the future to ensure that for writes concurrent
+// with column drop, the write timestamp is before the column drop timestamp.
+constexpr auto column_drop_leeway = std::chrono::seconds(5);
+
+} // anonymous namespace
+
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema(const schema&, api::timestamp_type, std::optional<table_id> = {}, schema_ptr = nullptr);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -167,7 +176,7 @@ public:
             ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
-            auto log_schema = create_log_schema(schema);
+            auto log_schema = create_log_schema(schema, timestamp);
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
@@ -205,7 +214,7 @@ public:
             ensure_that_table_has_no_counter_columns(new_schema);
             ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+            auto new_log_schema = create_log_schema(new_schema, timestamp, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
             auto log_mut = log_schema 
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
@@ -496,7 +505,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
+static schema_ptr create_log_schema(const schema& s, api::timestamp_type timestamp, std::optional<table_id> uuid, schema_ptr old) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
@@ -531,6 +540,28 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
     b.with_column(log_meta_column_name_bytes("ttl"), long_type);
     b.with_column(log_meta_column_name_bytes("end_of_batch"), boolean_type);
     b.set_caching_options(caching_options::get_disabled_caching_options());
+
+    auto validate_new_column = [&] (const sstring& name) {
+        // When dropping a column from a CDC log table, we set the drop timestamp to be
+        // `column_drop_leeway` seconds into the future (see `create_log_schema`).
+        // Therefore, when recreating a column with the same name, we need to validate
+        // that it's not recreated too soon and that the drop timestamp has passed.
+        if (old && old->dropped_columns().contains(name)) {
+            const auto& drop_info = old->dropped_columns().at(name);
+            auto create_time = api::timestamp_clock::time_point(api::timestamp_clock::duration(timestamp));
+            auto drop_time = api::timestamp_clock::time_point(api::timestamp_clock::duration(drop_info.timestamp));
+            if (drop_time > create_time) {
+                throw exceptions::invalid_request_exception(format("Cannot add column {} because a column with the same name was dropped too recently. Please retry after {} seconds",
+                        name, std::chrono::duration_cast<std::chrono::seconds>(drop_time - create_time).count() + 1));
+            }
+        }
+    };
+
+    auto add_column = [&] (sstring name, data_type type) {
+        validate_new_column(name);
+        b.with_column(to_bytes(name), type);
+    };
+
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
             auto type = column.type;
@@ -552,9 +583,9 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
                     }
                 ));
             }
-            b.with_column(log_data_column_name_bytes(column.name()), type);
+            add_column(log_data_column_name(column.name_as_text()), type);
             if (is_data_col) {
-                b.with_column(log_data_column_deleted_name_bytes(column.name()), boolean_type);
+                add_column(log_data_column_deleted_name(column.name_as_text()), boolean_type);
             }
             if (column.type->is_multi_cell()) {
                 auto dtype = visit(*type, make_visitor(
@@ -570,7 +601,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
                         throw std::invalid_argument("Should not reach");
                     }
                 ));
-                b.with_column(log_data_column_deleted_elements_name_bytes(column.name()), dtype);
+                add_column(log_data_column_deleted_elements_name(column.name_as_text()), dtype);
             }
         }
     };
@@ -592,7 +623,8 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
         // not super efficient, but we don't do this often.
         for (auto& col : old->all_columns()) {
             if (!b.has_column({col.name(), col.name_as_text() })) {
-                b.without_column(col.name_as_text(), col.type, api::new_timestamp());
+                auto drop_ts = api::timestamp_clock::now() + column_drop_leeway;
+                b.without_column(col.name_as_text(), col.type, drop_ts.time_since_epoch().count());
             }
         }
     }
