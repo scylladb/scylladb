@@ -9,6 +9,7 @@
 #include "vector_search/vector_store_client.hh"
 #include "utils.hh"
 #include "vs_mock_server.hh"
+#include "unavailable_server.hh"
 #include "seastar/core/future.hh"
 #include "seastar/core/when_all.hh"
 #include "db/config.hh"
@@ -118,111 +119,6 @@ public:
         return *this;
     }
 };
-
-class unavailable_server {
-    struct Connection {
-        lowres_clock::time_point timestamp;
-        connected_socket socket;
-    };
-
-public:
-    explicit unavailable_server(uint16_t port)
-        : _port(port) {
-    }
-
-    future<> start() {
-        co_await listen();
-        (void)try_with_gate(_gate, [this] {
-            return run();
-        });
-    }
-
-    future<> stop() {
-        if (_socket) {
-            _socket.abort_accept();
-            co_await _gate.close();
-        }
-    }
-
-    sstring host() const {
-        return _host;
-    }
-
-    uint16_t port() const {
-        return _port;
-    }
-
-    const std::vector<Connection>& connections() const {
-        return _connections;
-    }
-
-    future<seastar::server_socket> take_socket() {
-        _running = false;
-        // Make a connection to unblock accept() in run loop.
-        co_await seastar::connect(socket_address(net::inet_address(_host), _port));
-        co_await _gate.close();
-        co_return std::move(_socket);
-    }
-
-    void auto_shutdown_off() {
-        _auto_shutdown = false;
-    }
-
-    future<> shutdown_all_and_clear() {
-        std::vector<Connection> tmp;
-        std::swap(tmp, _connections);
-        for (auto& conn : tmp) {
-            co_await shutdown(conn.socket);
-        }
-    }
-
-private:
-    future<> listen() {
-        co_await try_on_loopback_address([this](auto host) -> future<> {
-            ::listen_options opts;
-            opts.set_fixed_cpu(this_shard_id());
-            _socket = seastar::listen(socket_address(net::inet_address(host), _port), opts);
-            _port = _socket.local_address().port();
-            _host = std::move(host);
-            return make_ready_future<>();
-        });
-    }
-
-    future<> run() {
-        while (_running) {
-            try {
-                auto result = co_await _socket.accept();
-                _connections.push_back(Connection{.timestamp = lowres_clock::now(), .socket = std::move(result.connection)});
-                if (_auto_shutdown) {
-                    co_await shutdown(_connections.back().socket);
-                }
-            } catch (...) {
-                break;
-            }
-        }
-    }
-
-    future<> shutdown(connected_socket& cs) {
-        cs.shutdown_output();
-        cs.shutdown_input();
-        co_await cs.wait_input_shutdown();
-    }
-
-
-    seastar::server_socket _socket;
-    seastar::gate _gate;
-    uint16_t _port;
-    sstring _host;
-    std::vector<Connection> _connections;
-    bool _running = true;
-    bool _auto_shutdown = true;
-};
-
-auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
-    auto ret = std::make_unique<unavailable_server>(port);
-    co_await ret->start();
-    co_return ret;
-}
 
 } // namespace
 
