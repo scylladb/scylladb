@@ -9,7 +9,7 @@
 
 import pytest
 from . import nodetool
-from .util import new_test_table
+from .util import new_test_table, new_materialized_view, is_scylla
 from cassandra.protocol import ConfigurationException, SyntaxException
 
 # In older Cassandra and Scylla, the name of the compression algorithm was
@@ -94,3 +94,44 @@ def test_huge_chunk_length(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
         with pytest.raises(ConfigurationException, match='chunk_length_in_kb'):
             cql.execute("ALTER TABLE " + table + " with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }")
+
+# Check that whatever is currently the default sstable compression algorithm
+# (for a long time it was LZ4Compressor but issue #26610 changed it to
+# LZ4WithDictsCompressor), the base table and all its auxiliary tables -
+# materialized view, secondary index and CDC log table - should use the same
+# compression. We don't care if this happens because all these tables use
+# the same default - or alternatively because the auxiliary tables "inherit"
+# the configuration of the base table (#20388). Both are fine for this test.
+#
+# If the test runs on Cassandra, only the materialized view part of the test
+# is done - the CDC and secondary index implementation on Cassandra is
+# different and does not have an ordinary table backing it.
+# Reproduces issue #26914
+@pytest.mark.xfail(reason='issue #26914')
+def test_aux_tables_compression_parity(cql, test_keyspace):
+    extra = "with cdc = {'enabled': true}" if is_scylla(cql) else ""
+    with new_test_table(cql, test_keyspace, "p int primary key, v int", extra) as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            cql.execute(f'CREATE INDEX ON {table}(v)')
+            # base table's compression setting:
+            ks, cf = table.split('.')
+            r = list(cql.execute(f"SELECT compression FROM system_schema.tables WHERE  keyspace_name='{ks}' and table_name='{cf}'"))
+            assert len(r) == 1
+            base_compression = r[0].compression
+            # view table's compression setting:
+            _, view = mv.split('.')
+            r = list(cql.execute(f"SELECT compression FROM system_schema.views WHERE  keyspace_name='{ks}' and view_name='{view}'"))
+            assert len(r) == 1
+            view_compression = r[0].compression
+            if extra: # Scylla-only part
+                # secondary index's backing view's compression setting:
+                r = list(cql.execute(f"SELECT compression FROM system_schema.views WHERE  keyspace_name='{ks}' and view_name='{cf}_v_idx_index'"))
+                assert len(r) == 1
+                index_compression = r[0].compression
+                assert view_compression == index_compression
+                # CDC log table's compression setting:
+                r = list(cql.execute(f"SELECT compression FROM system_schema.tables WHERE  keyspace_name='{ks}' and table_name='{cf}_scylla_cdc_log'"))
+                assert len(r) == 1
+                cdc_compression = r[0].compression
+                assert view_compression == cdc_compression
+            assert base_compression == view_compression
