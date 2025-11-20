@@ -1976,7 +1976,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }
-    if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
+    if (index_opt || parameters->allow_filtering() || !(restrictions->is_empty()) || check_needs_allow_filtering_anyway(*restrictions)) {
         throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
     }
     index_opt = *it;
