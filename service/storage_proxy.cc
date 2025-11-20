@@ -615,8 +615,16 @@ private:
                     try {
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, reply_to_host_id, shard, timeout);
+
+                        // This erm ensures that tablet migrations wait for replica requests,
+                        // even if the coordinator is no longer available.
+                        // This can happen if the coordinator was fenced out, a request timeout
+                        // was reached on it or the coordinator node crashed and was added
+                        // to the ignored_nodes list.
+                        const auto erm = s->table().get_effective_replication_map();
+
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        co_await p->run_fenceable_write(s->table().get_effective_replication_map()->get_replication_strategy(),
+                        co_await p->run_fenceable_write(erm->get_replication_strategy(),
                             fence, src_addr,
                             [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
@@ -866,6 +874,12 @@ private:
             slogger.info("storage_proxy::handle_read injection done");
         });
 
+        // This erm ensures that tablet migrations wait for replica requests,
+        // even if the coordinator is no longer available.
+        // This can happen if the coordinator was fenced out, a request timeout was reached on it
+        // or the coordinator node crashed and was added to the ignored_nodes list.
+        auto erm = s->table().get_effective_replication_map();
+
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
@@ -873,7 +887,6 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_data_reads++;
                 if (!oda) {
                     throw std::runtime_error("READ_DATA called without digest algorithm");
@@ -990,6 +1003,14 @@ private:
 
         auto schema = co_await get_schema_for_read(cmd.schema_version, src_addr, src_shard, *timeout);
         dht::token token = dht::get_token(*schema, key);
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        // This can happen if the LWT coordinator was fenced out, a request timeout was reached on it
+        // or the coordinator node crashed and was added to the ignored_nodes list.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
@@ -1030,6 +1051,14 @@ private:
         });
         auto schema = co_await get_schema_for_read(proposal.update.schema_version(), src_addr, src_shard, *timeout);
         dht::token token = proposal.update.decorated_key(*schema).token();
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        // This can happen if the LWT coordinator was fenced out, a request timeout was reached on it
+        // or the coordinator node crashed and was added to the ignored_nodes list.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
@@ -1071,6 +1100,14 @@ private:
         auto d = defer([] { pruning--; });
         auto schema = co_await get_schema_for_read(schema_id, src_addr, src_shard, *timeout);
         dht::token token = dht::get_token(*schema, key);
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        // This can happen if the LWT coordinator was fenced out, a request timeout was reached on it
+        // or the coordinator node crashed and was added to the ignored_nodes list.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;

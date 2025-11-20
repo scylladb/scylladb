@@ -4536,7 +4536,6 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
-    co_await utils::get_local_injector().inject("tablet_cleanup_completion_wait", utils::wait_for_message(std::chrono::seconds(5)));
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
