@@ -103,7 +103,7 @@ class TestBypassCache(Tester):
         return metric_errors
 
     def cache_thresh(self):
-        return 800 if not self.tablets else 150
+        return 300 if not self.tablets else 150
 
     def metric_name_for_index_cache_hits(self):
         """
