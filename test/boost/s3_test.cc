@@ -887,6 +887,7 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
      * `aws::environment_aws_credentials_provider` to obtain credentials. As a result, if this functionality fails, all S3-related tests will fail immediately.
      */
 
+    std::abort();
     auto host = tests::getenv_safe("MOCK_S3_SERVER_HOST");
     auto port = std::stoul(tests::getenv_safe("MOCK_S3_SERVER_PORT"));
     tmpdir tmp;
