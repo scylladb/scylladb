@@ -2133,6 +2133,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (cfg->maintenance_mode()) {
                 checkpoint(stop_signal, "entering maintenance mode");
 
+                // Notify maintenance auth service that maintenance mode is starting
+                maintenance_auth_service.invoke_on_all([](auth::service& svc) {
+                    auth::set_maintenance_mode(svc);
+                    return make_ready_future<>();
+                }).get();
+
                 ss.local().start_maintenance_mode().get();
 
                 seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());

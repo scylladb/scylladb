@@ -113,6 +113,11 @@ public:
     virtual future<> stop() = 0;
 
     ///
+    /// Notify that the maintenance mode is starting.
+    ///
+    virtual void set_maintenance_mode() {}
+
+    ///
     /// Ensure that superuser role exists.
     ///
     /// \returns a future once it is ensured that the superuser role exists.

@@ -16,6 +16,18 @@
 
 namespace auth {
 
+void maintenance_socket_role_manager::set_maintenance_mode() {
+    _is_maintenance_mode = true;
+}
+
+maintenance_socket_role_manager::maintenance_socket_role_manager(
+        cql3::query_processor& qp,
+        ::service::raft_group0_client& rg0c,
+        ::service::migration_manager& mm,
+        cache& c)
+    : _is_maintenance_mode(false) {
+}
+
 std::string_view maintenance_socket_role_manager::qualified_java_name() const noexcept {
     return "com.scylladb.auth.MaintenanceSocketRoleManager";
 }
@@ -44,39 +56,72 @@ future<T> operation_not_supported_exception(std::string_view operation) {
         std::runtime_error(fmt::format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
-future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::group0_batch&) {
+template<typename T = void>
+future<T> operation_not_available_in_maintenance_mode_exception(std::string_view operation) {
+    return make_exception_future<T>(
+        std::runtime_error(fmt::format("role manager: {} operation not available through maintenance socket in maintenance mode", operation)));
+}
+
+future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("CREATE");
+    }
     return operation_not_supported_exception("CREATE");
 }
 
 future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("DROP");
+    }
     return operation_not_supported_exception("DROP");
 }
 
-future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&, ::service::group0_batch&) {
+future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update& u, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("ALTER");
+    }
     return operation_not_supported_exception("ALTER");
 }
 
 future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("GRANT");
+    }
     return operation_not_supported_exception("GRANT");
 }
 
 future<> maintenance_socket_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("REVOKE");
+    }
     return operation_not_supported_exception("REVOKE");
 }
 
-future<role_set> maintenance_socket_role_manager::query_granted(std::string_view grantee_name, recursive_role_query) {
+future<role_set> maintenance_socket_role_manager::query_granted(std::string_view grantee_name, recursive_role_query m) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<role_set>("QUERY GRANTED");
+    }
     return operation_not_supported_exception<role_set>("QUERY GRANTED");
 }
 
-future<role_to_directly_granted_map> maintenance_socket_role_manager::query_all_directly_granted(::service::query_state&) {
+future<role_to_directly_granted_map> maintenance_socket_role_manager::query_all_directly_granted(::service::query_state& qs) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<role_to_directly_granted_map>("QUERY ALL DIRECTLY GRANTED");
+    }
     return operation_not_supported_exception<role_to_directly_granted_map>("QUERY ALL DIRECTLY GRANTED");
 }
 
-future<role_set> maintenance_socket_role_manager::query_all(::service::query_state&) {
+future<role_set> maintenance_socket_role_manager::query_all(::service::query_state& qs) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<role_set>("QUERY ALL");
+    }
     return operation_not_supported_exception<role_set>("QUERY ALL");
 }
 
 future<bool> maintenance_socket_role_manager::exists(std::string_view role_name) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<bool>("EXISTS");
+    }
     return operation_not_supported_exception<bool>("EXISTS");
 }
 
@@ -88,23 +133,38 @@ future<bool> maintenance_socket_role_manager::can_login(std::string_view role_na
     return make_ready_future<bool>(true);
 }
 
-future<std::optional<sstring>> maintenance_socket_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state&) {
+future<std::optional<sstring>> maintenance_socket_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<std::optional<sstring>>("GET ATTRIBUTE");
+    }
     return operation_not_supported_exception<std::optional<sstring>>("GET ATTRIBUTE");
 }
 
-future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attribute_for_all(std::string_view attribute_name, ::service::query_state&) {
+future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attribute_for_all(std::string_view attribute_name, ::service::query_state& qs) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<role_manager::attribute_vals>("QUERY ATTRIBUTE");
+    }
     return operation_not_supported_exception<role_manager::attribute_vals>("QUERY ATTRIBUTE");
 }
 
 future<> maintenance_socket_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("SET ATTRIBUTE");
+    }
     return operation_not_supported_exception("SET ATTRIBUTE");
 }
 
 future<> maintenance_socket_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("REMOVE ATTRIBUTE");
+    }
     return operation_not_supported_exception("REMOVE ATTRIBUTE");
 }
 
 future<std::vector<cql3::description>> maintenance_socket_role_manager::describe_role_grants() {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception<std::vector<cql3::description>>("DESCRIBE ROLE GRANTS");
+    }
     return operation_not_supported_exception<std::vector<cql3::description>>("DESCRIBE SCHEMA WITH INTERNALS");
 }
 

@@ -139,6 +139,11 @@ public:
     future<permission_set> get_uncached_permissions(const role_or_anonymous&, const resource&) const;
 
     ///
+    /// Notify the service that the node is entering maintenance mode.
+    ///
+    void set_maintenance_mode();
+
+    ///
     /// Query whether the named role has been granted a role that is a superuser.
     ///
     /// A role is always granted to itself. Therefore, a role that "is" a superuser also "has" superuser.
@@ -207,6 +212,8 @@ private:
     future<std::vector<cql3::description>> describe_roles(bool with_hashed_passwords);
     future<std::vector<cql3::description>> describe_permissions() const;
 };
+
+void set_maintenance_mode(service&);
 
 future<bool> has_superuser(const service&, const authenticated_user&);
 

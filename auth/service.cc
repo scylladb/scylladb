@@ -317,6 +317,10 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
     return _cache.get_permissions(maybe_role, r);
 }
 
+void service::set_maintenance_mode() {
+    _role_manager->set_maintenance_mode();
+}
+
 future<bool> service::has_superuser(std::string_view role_name, const role_set& roles) const {
     for (const auto& role : roles) {
         if (co_await _role_manager->is_superuser(role)) {
@@ -668,6 +672,10 @@ future<std::vector<cql3::description>> service::describe_auth(bool with_hashed_p
 //
 // Free functions.
 //
+
+void set_maintenance_mode(service& ser) {
+    ser.set_maintenance_mode();
+}
 
 future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     if (is_anonymous(u)) {
