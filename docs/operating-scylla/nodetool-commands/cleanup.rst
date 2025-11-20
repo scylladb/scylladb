@@ -20,6 +20,8 @@ To clean up the data of a specific node and specific keyspace, use this command:
 
    nodetool -h <host name> cleanup <keyspace>
 
+To clean up entire cluster see :doc:`nodetool cluster cleanup </operating-scylla/nodetool-commands/cluster/cleanup/>`
+
 .. warning::
 
    Make sure there are no topology changes before running cleanup. To validate, run ``nodetool status``, all nodes should be in status Up Normal (``UN``).

@@ -20,6 +20,7 @@
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <time.h>
 #include <algorithm>
 #include <functional>
@@ -806,8 +807,14 @@ rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>
 static
 future<json::json_return_type>
 rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        apilog.info("cleanup_all");
-        auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
+        bool global = true;
+        if (auto global_param = req->get_query_param("global"); !global_param.empty()) {
+            global = validate_bool(global_param);
+        }
+
+        apilog.info("cleanup_all global={}", global);
+
+        auto done = !global ? false : co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
             if (!ss.is_topology_coordinator_enabled()) {
                 co_return false;
             }
@@ -817,12 +824,33 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         if (done) {
             co_return json::json_return_type(0);
         }
-        // fall back to the local global cleanup if topology coordinator is not enabled
+        // fall back to the local cleanup if topology coordinator is not enabled or local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<global_cleanup_compaction_task_impl>({}, db);
         co_await task->done();
+
+        // Mark this node as clean
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+            if (ss.is_topology_coordinator_enabled()) {
+                co_await ss.reset_cleanup_needed();
+            }
+        });
+
         co_return json::json_return_type(0);
+}
+
+static
+future<json::json_return_type>
+rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+        apilog.info("reset_cleanup_needed");
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) {
+            if (!ss.is_topology_coordinator_enabled()) {
+                throw std::runtime_error("mark_node_as_clean is only supported when topology over raft is enabled");
+            }
+            return ss.reset_cleanup_needed();
+        });
+        co_return json_void();
 }
 
 static
@@ -1827,6 +1855,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::force_keyspace_compaction.set(r, rest_bind(rest_force_keyspace_compaction, ctx));
     ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
+    ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
     ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
     ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
@@ -1911,6 +1940,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::force_keyspace_compaction.unset(r);
     ss::force_keyspace_cleanup.unset(r);
     ss::cleanup_all.unset(r);
+    ss::reset_cleanup_needed.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);
     ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
