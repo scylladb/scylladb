@@ -46,6 +46,7 @@
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
 #include "sstables/trie/bti_index.hh"
+#include "compaction/compaction_fwd.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -116,6 +117,7 @@ struct sstable_writer_config {
     size_t summary_byte_cost;
     sstring origin;
     bool correct_pi_block_width = true;
+    replica::owned_ranges_ptr owned_ranges = nullptr;
 
 private:
     explicit sstable_writer_config() {}
@@ -253,6 +255,8 @@ public:
     // Load set of shards that own the SSTable, while reading the minimum
     // from disk to achieve that.
     future<> load_owner_shards(const dht::sharder& sharder);
+
+    dht::token_range_vector load_token_ranges() const;
 
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
@@ -672,7 +676,8 @@ private:
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
-                               std::optional<scylla_metadata::ext_timestamp_stats> ts_stats);
+                               std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
+                               std::optional<scylla_metadata::token_ranges> token_ranges);
 
     future<> read_filter(sstable_open_config cfg = {});
 

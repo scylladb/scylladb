@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
+#include "compaction/compaction_fwd.hh"
 #include "db/view/view.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
@@ -1056,7 +1057,7 @@ future<> database::create_local_system_table(
     auto lock = get_tables_metadata().hold_write_lock();
     std::exception_ptr ex;
     try {
-        add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+        co_await add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -1073,10 +1074,22 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+future<owned_ranges_ptr> maybe_make_owned_ranges_ptr(locator::effective_replication_map_ptr erm, locator::host_id host_id) {
+    if (!erm) {
+        co_return nullptr;
+    }
+    if (erm->get_token_metadata().sorted_tokens().empty()) {
+        co_return nullptr;
+    }
+    co_return make_owned_ranges_ptr(co_await erm->get_ranges(host_id));
+}
+
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
+    auto my_host_id = get_token_metadata().get_topology().my_host_id();
     locator::effective_replication_map_ptr erm;
+    owned_ranges_ptr owned_ranges_ptr;  // For vnode-based replication
     if (auto pt_rs = rs.maybe_as_per_table()) {
         auto metadata_ptr = not_commited_new_metadata;
         if (!metadata_ptr) {
@@ -1086,10 +1099,11 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
         erm = ks.get_static_effective_replication_map();
+        owned_ranges_ptr = co_await maybe_make_owned_ranges_ptr(erm, my_host_id);
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm, owned_ranges_ptr);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
@@ -1122,7 +1136,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
     auto& ks = find_keyspace(schema->ks_name());
     std::exception_ptr ex;
     try {
-        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+        co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -3769,6 +3783,10 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         co_return coroutine::exception(std::move(ep));
     }
     co_return result;
+}
+
+owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
+    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
 }
 
 } // namespace replica

@@ -1357,6 +1357,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
         case sstables::scylla_metadata_type::Schema: return "schema";
+        case sstables::scylla_metadata_type::TokenRanges: return "token_ranges";
     }
     std::abort();
 }

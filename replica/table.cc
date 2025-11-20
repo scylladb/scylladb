@@ -1668,7 +1668,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
-            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+            sstables::sstable_writer_config cfg = configure_writer("memtable");
             cfg.backup = incremental_backups_enabled();
 
             auto newtab = make_sstable();
@@ -2256,7 +2256,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
+future<> table::perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
                                            tasks::task_info info,
                                            do_flush do_flush) {
     auto* cg = try_get_compaction_group_with_static_sharding();
@@ -2605,8 +2605,7 @@ public:
         return _t.make_sstable();
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
-        auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
-        return cfg;
+        return _t.configure_writer(std::move(origin));
     }
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();
@@ -2753,10 +2752,11 @@ void storage_group::clear_sstables() {
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
-        locator::effective_replication_map_ptr erm)
+        locator::effective_replication_map_ptr erm, owned_ranges_ptr owned_ranges)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _erm(std::move(erm))
+    , _owned_ranges(std::move(owned_ranges))
     , _storage_opts(std::move(sopts))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
                          keyspace_label(_schema->ks_name()),
@@ -4559,6 +4559,12 @@ future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const
         partition_count += co_await sst->estimated_keys_for_range(tr);
     });
     co_return partition_count;
+}
+
+sstables::sstable_writer_config table::configure_writer(sstring origin) const {
+    auto cfg = get_sstables_manager().configure_writer(origin);
+    cfg.owned_ranges = get_owned_ranges();
+    return cfg;
 }
 
 } // namespace replica

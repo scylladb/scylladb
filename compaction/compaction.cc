@@ -589,7 +589,7 @@ protected:
     std::optional<sstables::sstable_set::incremental_selector> _selector;
     std::unordered_set<sstables::shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
-    const owned_ranges_ptr _owned_ranges = {};
+    const replica::owned_ranges_ptr _owned_ranges = {};
     // required for reshard compaction.
     const dht::sharder* _sharder = nullptr;
     const std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;

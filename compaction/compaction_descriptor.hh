@@ -14,7 +14,7 @@
 #include <variant>
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
-#include "compaction_fwd.hh"
+#include "replica/database_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 
 namespace compaction {
@@ -173,7 +173,7 @@ struct compaction_descriptor {
     // This also selects the kind of compaction to do.
     compaction_type_options options = compaction_type_options::make_regular();
     // If engaged, compaction will cleanup the input sstables by skipping non-owned ranges.
-    compaction::owned_ranges_ptr owned_ranges;
+    replica::owned_ranges_ptr owned_ranges;
     // Required for reshard compaction.
     const dht::sharder* sharder;
 
@@ -203,7 +203,7 @@ struct compaction_descriptor {
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                    sstables::run_id run_identifier = sstables::run_id::create_random_id(),
                                    compaction_type_options options = compaction_type_options::make_regular(),
-                                   compaction::owned_ranges_ptr owned_ranges_ = {})
+                                   replica::owned_ranges_ptr owned_ranges_ = {})
         : sstables(std::move(sstables))
         , level(level)
         , max_sstable_bytes(max_sstable_bytes)
