@@ -51,7 +51,7 @@ class password_authenticator : public authenticator {
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
-    static std::string default_superuser(const db::config&);
+    static std::string default_superuser(cql3::query_processor& qp);
 
     password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
 
