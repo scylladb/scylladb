@@ -348,44 +348,9 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
         progress->start(_tablet_map.tablet_count());
     }
 
-    // sstables are sorted by first key in reverse order.
-    auto sstable_it = _sstables.rbegin();
-
     for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid); })) {
         auto tablet_range = _tablet_map.get_token_range(tablet_id);
-
-        auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
-            return dht::token_range(sst->get_first_decorated_key().token(),
-                                    sst->get_last_decorated_key().token());
-        };
-
-        std::vector<sstables::shared_sstable> sstables_fully_contained;
-        std::vector<sstables::shared_sstable> sstables_partially_contained;
-
-        // sstable is exhausted if its last key is before the current tablet range
-        auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
-            return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
-        };
-        while (sstable_it != _sstables.rend() && exhausted(*sstable_it)) {
-            sstable_it++;
-        }
-
-        for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
-            auto sst_token_range = sstable_token_range(*sst_it);
-            // sstables are sorted by first key, so we're done with current tablet when
-            // the next sstable doesn't overlap with its owned token range.
-            if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
-                break;
-            }
-
-            if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(*sst_it);
-            } else {
-                sstables_partially_contained.push_back(*sst_it);
-            }
-            co_await coroutine::maybe_yield();
-        }
-
+        auto [sstables_fully_contained, sstables_partially_contained] = co_await get_sstables_by_tablet_range(_sstables, tablet_range);
         auto per_tablet_progress = make_shared<per_tablet_stream_progress>(
             progress,
             sstables_fully_contained.size() + sstables_partially_contained.size());
@@ -824,4 +789,34 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
                                                                                        std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
     co_return task->id();
+}
+
+future<std::tuple<std::vector<sstables::shared_sstable>, std::vector<sstables::shared_sstable>>>
+get_sstables_by_tablet_range(const std::vector<sstables::shared_sstable>& sstables, const dht::token_range& tablet_range) {
+    std::vector<sstables::shared_sstable> sstables_fully_contained;
+    std::vector<sstables::shared_sstable> sstables_partially_contained;
+    // sstables are sorted by first key in reverse order.
+    for (const auto& sst : std::ranges::reverse_view(sstables)) {
+        auto sst_first = sst->get_first_decorated_key().token();
+        auto sst_last = sst->get_last_decorated_key().token();
+        dht::token_range sst_token_range{sst_first, sst_last};
+
+        // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
+        if (tablet_range.before(sst_last, dht::token_comparator{})) {
+            continue;
+        }
+
+        // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
+        if (tablet_range.after(sst_first, dht::token_comparator{})) {
+            break;
+        }
+
+        if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
+            sstables_fully_contained.push_back(sst);
+        } else {
+            sstables_partially_contained.push_back(sst);
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::make_tuple(std::move(sstables_fully_contained), std::move(sstables_partially_contained));
 }

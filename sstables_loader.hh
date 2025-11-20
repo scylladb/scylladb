@@ -10,6 +10,7 @@
 
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
@@ -134,3 +135,6 @@ public:
 
     class download_task_impl;
 };
+
+future<std::tuple<std::vector<sstables::shared_sstable>, std::vector<sstables::shared_sstable>>>
+get_sstables_by_tablet_range(const std::vector<sstables::shared_sstable>& sstables, const dht::token_range& tablet_range);
