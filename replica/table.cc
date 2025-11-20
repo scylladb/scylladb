@@ -1347,8 +1347,8 @@ table::clone_tablet_storage(locator::tablet_id tid) {
 }
 
 void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {
-    _stats.live_disk_space_used += sst->bytes_on_disk();
-    _stats.total_disk_space_used += sst->bytes_on_disk();
+    _stats.live_disk_space_used += sst->get_file_size_stats();
+    _stats.total_disk_space_used += sst->get_file_size_stats();
     _stats.live_sstable_count++;
 }
 
@@ -1788,8 +1788,9 @@ void table::set_metrics() {
                 ms::make_counter("memtable_range_tombstone_reads", _stats.memtable_range_tombstone_reads, ms::description("Number of range tombstones read from memtables"))(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_row_tombstone_reads", _stats.memtable_row_tombstone_reads, ms::description("Number of row tombstones read from memtables"))(cf)(ks),
                 ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
-                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
-                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used.on_disk)(cf)(ks),
+                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used.on_disk)(cf)(ks),
+                ms::make_gauge("total_disk_space_before_compression", ms::description("Hypothetical total disk space used if data files weren't compressed"), _stats.total_disk_space_used.before_compression)(cf)(ks),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
                 ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks),
                 ms::make_gauge("pending_sstable_deletions",
@@ -1846,9 +1847,10 @@ void table::set_metrics() {
                 ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_row_writes", _stats.memtable_app_stats.row_writes, ms::description("Number of row writes performed in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_row_hits", _stats.memtable_app_stats.row_hits, ms::description("Number of rows overwritten by write operations in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used.on_disk)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                ms::make_gauge("total_disk_space_before_compression", ms::description("Hypothetical total disk space used if data files weren't compressed"), _stats.total_disk_space_used.before_compression)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
-                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used.on_disk)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
                 ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.reads.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.writes.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
@@ -1884,6 +1886,10 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
     return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk();
 }
 
+sstables::file_size_stats compaction_group::live_disk_space_used_full_stats() const noexcept {
+    return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
+}
+
 uint64_t storage_group::live_disk_space_used() const noexcept {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
@@ -1893,21 +1899,25 @@ uint64_t compaction_group::total_disk_space_used() const noexcept {
     return live_disk_space_used() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
 }
 
+sstables::file_size_stats compaction_group::total_disk_space_used_full_stats() const noexcept {
+    return live_disk_space_used_full_stats() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::get_file_size_stats)), sstables::file_size_stats{}, std::plus{});
+}
+
 void table::rebuild_statistics() {
-    _stats.live_disk_space_used = 0;
+    _stats.live_disk_space_used = {};
     _stats.live_sstable_count = 0;
-    _stats.total_disk_space_used = 0;
+    _stats.total_disk_space_used = {};
 
     for_each_compaction_group([this] (const compaction_group& cg) {
-        _stats.live_disk_space_used += cg.live_disk_space_used();
-        _stats.total_disk_space_used += cg.total_disk_space_used();
+        _stats.live_disk_space_used += cg.live_disk_space_used_full_stats();
+        _stats.total_disk_space_used += cg.total_disk_space_used_full_stats();
         _stats.live_sstable_count += cg.live_sstable_count();
     });
 }
 
 void table::subtract_compaction_group_from_stats(const compaction_group& cg) noexcept {
-    _stats.live_disk_space_used -= cg.live_disk_space_used();
-    _stats.total_disk_space_used -= cg.total_disk_space_used();
+    _stats.live_disk_space_used -= cg.live_disk_space_used_full_stats();
+    _stats.total_disk_space_used -= cg.total_disk_space_used_full_stats();
     _stats.live_sstable_count -= cg.live_sstable_count();
 }
 

@@ -66,6 +66,13 @@ static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& 
     }, std::plus<int64_t>());
 }
 
+static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
+        std::function<int64_t(const replica::column_family_stats&)> f) {
+    return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
+        return f(cf.get_stats());
+    }, std::plus<int64_t>());
+}
+
 static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::database>& db, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
     return do_with(std::move(tables), [&db, set] (const std::vector<table_info>& tables) {
         return db.invoke_on_all([&tables, set] (replica::database& db) {
@@ -1066,10 +1073,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     ss::get_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(db, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(db, [](const replica::column_family_stats& stats) {
+            return stats.live_disk_space_used.on_disk;
+        });
     });
     ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(db, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(db, [](const replica::column_family_stats& stats) {
+            return stats.live_disk_space_used.on_disk;
+        });
     });
 
     ss::get_keyspaces.set(r, [&db] (const_req req) {

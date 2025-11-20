@@ -227,7 +227,7 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
                 // Tables will be kept in descending order.
                 std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
                     try {
-                        return db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
+                        return db.find_column_family(tti.ti.id).get_stats().live_disk_space_used.on_disk;
                     } catch (const replica::no_such_column_family& e) {
                         return int64_t(-1);
                     }
@@ -281,7 +281,7 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
                     try {
                         return std::accumulate(kti.table_infos.begin(), kti.table_infos.end(), int64_t(0), [&] (int64_t sum, const table_info& t) {
                             try {
-                                sum += db.find_column_family(t.id).get_stats().live_disk_space_used;
+                                sum += db.find_column_family(t.id).get_stats().live_disk_space_used.on_disk;
                             } catch (const replica::no_such_column_family&) {
                                 // ignore
                             }

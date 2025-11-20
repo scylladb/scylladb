@@ -12,6 +12,7 @@
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
+#include "sstables/file_size_stats.hh"
 #include "shared_sstable.hh"
 #include "dht/ring_position.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -77,10 +78,10 @@ const sstable_predicate& default_sstable_predicate();
 
 class sstable_set_impl {
 protected:
-    uint64_t _bytes_on_disk = 0;
+    file_size_stats _file_size_stats;
 
     // for cloning
-    explicit sstable_set_impl(uint64_t bytes_on_disk) noexcept : _bytes_on_disk(bytes_on_disk) {}
+    explicit sstable_set_impl(file_size_stats bytes_on_disk) noexcept : _file_size_stats(bytes_on_disk) {}
 public:
     sstable_set_impl() = default;
     sstable_set_impl(const sstable_set_impl&) = default;
@@ -96,14 +97,17 @@ public:
     // Return true iff sst was erased
     virtual bool erase(shared_sstable sst) = 0;
     virtual size_t size() const noexcept = 0;
-    virtual uint64_t bytes_on_disk() const noexcept {
-        return _bytes_on_disk;
+    uint64_t bytes_on_disk() const noexcept {
+        return get_file_size_stats().on_disk;
     }
-    uint64_t add_bytes_on_disk(uint64_t delta) noexcept {
-        return _bytes_on_disk += delta;
+    virtual file_size_stats get_file_size_stats() const noexcept {
+        return _file_size_stats;
     }
-    uint64_t sub_bytes_on_disk(uint64_t delta) noexcept {
-        return _bytes_on_disk -= delta;
+    void add_file_size_stats(const file_size_stats& delta) noexcept {
+        _file_size_stats += delta;
+    }
+    void sub_file_size_stats(const file_size_stats& delta) noexcept {
+        _file_size_stats -= delta;
     }
     using selector_and_schema_t = std::tuple<std::unique_ptr<incremental_selector_impl>, const schema&>;
     virtual selector_and_schema_t make_incremental_selector() const = 0;
@@ -164,6 +168,7 @@ public:
     bool erase(shared_sstable sst);
     size_t size() const noexcept;
     uint64_t bytes_on_disk() const noexcept;
+    file_size_stats get_file_size_stats() const noexcept;
 
     // Used to incrementally select sstables from sstable set using ring-position.
     // sstable set must be alive during the lifetime of the selector.

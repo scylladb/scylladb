@@ -80,7 +80,7 @@ void load_broadcaster::start_broadcasting() {
         _done = _db.map_reduce0([](replica::database& db) {
             int64_t res = 0;
             db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-                res += table->get_stats().live_disk_space_used;
+                res += table->get_stats().live_disk_space_used.on_disk;
             });
             return res;
         }, int64_t(0), std::plus<int64_t>()).then([this] (int64_t size) {
