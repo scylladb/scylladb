@@ -6025,6 +6025,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
                     throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
                 });
+                utils::get_local_injector().inject("raft_topology_barrier_and_drain_hold_erm", [this] {
+                    // simulate erm that is held for too long during topology
+                    // operation
+                    auto erms = _db.local().get_non_local_strategy_keyspaces_erms();
+                    for (auto& [ks, erm] : erms) {
+                       rtlogger.info("holding erms for keyspace {} version {}", ks, erm->get_token_metadata().get_version());
+                    }
+                    (void)sleep(std::chrono::seconds(10)).then([erms = std::move(erms)] {
+                       rtlogger.info("release erms");
+                    });
+                });
                 co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
