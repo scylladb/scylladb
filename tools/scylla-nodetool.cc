@@ -472,7 +472,9 @@ void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
     } else {
-        client.post("/storage_service/cleanup_all");
+        std::unordered_map<sstring, sstring> params;
+        params["global"] = "false";
+        client.post("/storage_service/cleanup_all/", std::move(params));
     }
 }
 
@@ -527,6 +529,12 @@ std::optional<sstring> maybe_get_hosts(const bpo::variables_map& vm) {
         return fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
     }
     return std::nullopt;
+}
+
+void cluster_cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    params["global"] = "true";
+    client.post("/storage_service/cleanup_all/", std::move(params));
 }
 
 void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -3736,13 +3744,29 @@ For more information, see: {}
                             typed_option<std::vector<sstring>>("table", "The table(s) to repair, if missing all tables are repaired", -1),
                         },
                     },
+                    {
+                        "cleanup",
+                        "Remove unused data from the cluster",
+fmt::format(R"(
+When running nodetool cluster cleanup on a single node, the cleanup is executed on all nodes in the cluster that require it.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/cluster/cleanup.html")),
+                        {
+                        },
+                        {
+                        },
+                    },
                 }
             },
             {
                 {
                     {
-                        "repair", { cluster_repair_operation }
+                        "repair", { cluster_repair_operation },
                     },
+                    {
+                        "cleanup", { cluster_cleanup_operation }
+                    }
                 }
             }
         },
