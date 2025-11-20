@@ -269,3 +269,13 @@ async def object_storage(request, pytestconfig, tmpdir):
         yield server
     finally:
         await server.stop()
+
+@pytest.fixture(scope="function")
+async def s3_storage(pytestconfig, tmpdir):
+    server = create_s3_server(pytestconfig, tmpdir)
+
+    try:
+        await server.start()
+        yield server
+    finally:
+        await server.stop()
