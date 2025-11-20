@@ -18,6 +18,8 @@
 #include "sstables_loader.hh"
 #include "replica/distributed_loader.hh"
 #include "replica/database.hh"
+#include "seastar/core/shard_id.hh"
+#include "sstables/shared_sstable.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
@@ -28,6 +30,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "types/types.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -138,13 +141,13 @@ protected:
     replica::database& _db;
     replica::table& _table;
     locator::effective_replication_map_ptr _erm;
-    std::vector<sstables::shared_sstable> _sstables;
+    std::vector<sstable_to_restore> _sstables;
     const primary_replica_only _primary_replica_only;
     const unlink_sstables _unlink_sstables;
     const stream_scope _stream_scope;
 public:
     sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
-                     std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
+                     std::vector<sstable_to_restore> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
             : _ms(ms)
             , _db(db)
             , _table(db.find_column_family(table_id))
@@ -160,8 +163,8 @@ public:
         // the amount of data we need to put on the wire.
         // Elements are popped off from the back of the vector, therefore we're sorting
         // it in descending order, to start from the smaller tokens.
-        std::ranges::sort(_sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
-            return x->compare_by_first_key(*y) > 0;
+        std::ranges::sort(_sstables, [] (const sstable_to_restore& x, const sstable_to_restore& y) {
+            return x.sstable.value()->compare_by_first_key(*y.sstable.value()) > 0;
         });
     }
 
@@ -181,7 +184,7 @@ class tablet_sstable_streamer : public sstable_streamer {
     const locator::tablet_map& _tablet_map;
 public:
     tablet_sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
-                            std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
+                            std::vector<sstable_to_restore> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
         : sstable_streamer(ms, db, table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
@@ -257,7 +260,10 @@ future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
     }
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
 
-    co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(progress));
+    auto shared_sstables = _sstables
+        | std::views::transform([] (const sstable_to_restore& sst) { return sst.sstable.value(); })
+        | std::ranges::to<std::vector>();
+    co_await stream_sstables(full_partition_range, std::move(shared_sstables), std::move(progress));
 }
 
 bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
@@ -363,25 +369,30 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
         std::vector<sstables::shared_sstable> sstables_partially_contained;
 
         // sstable is exhausted if its last key is before the current tablet range
-        auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
-            return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
+        auto exhausted = [&tablet_range] (const sstable_to_restore& sst) {
+            return tablet_range.before(sst.sstable.value()->get_last_decorated_key().token(), dht::token_comparator{});
         };
         while (sstable_it != _sstables.rend() && exhausted(*sstable_it)) {
             sstable_it++;
         }
 
         for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
-            auto sst_token_range = sstable_token_range(*sst_it);
+            // restoring from old backups will still require reading the token range info
+            // from the sstable, so we populate it here if missing.
+            // So will require refreshing sstables from local upload dirs.
+            if (!sst_it->token_range.has_value()) {
+                sst_it->token_range = sstable_token_range(sst_it->sstable.value());
+            }
             // sstables are sorted by first key, so we're done with current tablet when
             // the next sstable doesn't overlap with its owned token range.
-            if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
+            if (!tablet_range.overlaps(sst_it->token_range.value(), dht::token_comparator{})) {
                 break;
             }
 
-            if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(*sst_it);
+            if (tablet_range.contains(sst_it->token_range.value(), dht::token_comparator{})) {
+                sstables_fully_contained.push_back(sst_it->sstable.value());
             } else {
-                sstables_partially_contained.push_back(*sst_it);
+                sstables_partially_contained.push_back(sst_it->sstable.value());
             }
             co_await coroutine::maybe_yield();
         }
@@ -564,7 +575,7 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 }
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
-        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
+        ::table_id table_id, std::vector<sstable_to_restore> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
@@ -618,7 +629,13 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             };
             std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name, cfg);
             co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary, scope] (sstables_loader& loader) mutable -> future<> {
-                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only(primary), true, scope, {});
+
+                auto sstables_to_refresh = sstables_on_shards[this_shard_id()]
+                    | std::views::transform([] (const sstables::shared_sstable& s) { 
+                        return sstable_to_restore(s->component_basename(component_type::TOC), s);
+                    })
+                    | std::ranges::to<std::vector>();
+                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_to_refresh), primary_replica_only(primary), true, scope, {});
             });
         } else {
             co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, _view_building_worker, ks_name, cf_name, skip_cleanup, skip_reshape);
@@ -643,7 +660,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _cf;
     sstring _prefix;
     sstables_loader::stream_scope _scope;
-    std::vector<sstring> _sstables;
+    std::unordered_map<sstring, sstable_to_restore> _sstables;
     const primary_replica_only _primary_replica;
     struct progress_holder {
         // Wrap stream_progress in a smart pointer to enable polymorphism.
@@ -668,8 +685,8 @@ protected:
 
 public:
     download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
-            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables,
-            sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
+            sstring endpoint, sstring bucket,
+            sstring ks, sstring cf, sstring prefix, std::unordered_map<sstring, sstable_to_restore> sstables, sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _endpoint(std::move(endpoint))
@@ -745,7 +762,9 @@ future<> sstables_loader::download_task_impl::run() {
     llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
 
     std::vector<seastar::abort_source> shard_aborts(smp::count);
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
+
+    auto sstable_names = _sstables | std::views::keys | std::ranges::to<std::vector>();
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, sstable_names, _endpoint, _bucket, _prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
@@ -765,8 +784,18 @@ future<> sstables_loader::download_task_impl::run() {
         });
         co_await _progress_per_shard.start();
         _progress_state = progress_state::initialized;
-        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
+
+        std::vector<std::vector<sstable_to_restore>> sstables_to_restore(sstables_on_shards.size());
+        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id, &sstables_to_restore] (sstables_loader& loader) mutable -> future<> {
+            sstables_to_restore[this_shard_id()].reserve(sstables_on_shards[this_shard_id()].size());
+            for (auto& s : sstables_on_shards[this_shard_id()]) {
+                auto it = _sstables.find(s->component_basename(component_type::TOC));
+                SCYLLA_ASSERT(it != _sstables.end());
+                sstables_to_restore[this_shard_id()].push_back(it->second);
+                sstables_to_restore[this_shard_id()].back().sstable = std::move(s);
+            }
+
+            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_to_restore[this_shard_id()]), _primary_replica, false, _scope,
                                             _progress_per_shard.local().progress);
         });
     } catch (...) {
@@ -814,7 +843,7 @@ future<> sstables_loader::stop() {
 }
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::unordered_map<sstring, sstable_to_restore> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
