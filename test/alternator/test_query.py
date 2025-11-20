@@ -377,6 +377,80 @@ def test_query_exclusivestartkey(test_table_sn):
         got_sort_keys = [x['c'] for x in got_items]
         assert expected_sort_keys == got_sort_keys
 
+# In the previous test (test_query_exclusivestartkey) we checked that
+# in a table with a partition and sort key, ExclusiveStartKey that specifies
+# both works. Here we verify that it is not allowed for ExclusiveStartKey
+# to specify *only* the partition key - if you want the query to start in
+# the beginning of the partition, don't specify an ExclusiveStartKey at all.
+def test_query_exclusivestartkey_missing_sortkey(test_table_sn):
+    p = random_string()
+    # The error that DynamoDB reports if the sort key is missing in
+    # ExclusiveStartKey is "The provided starting key is invalid". In
+    # Alternator, the error is "Key column c not found".
+    with pytest.raises(ClientError, match='ValidationException.*[kK]ey'):
+        test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            # missing 'c' in ExclusiveStartKey!
+            ExclusiveStartKey= { 'p': p })
+
+# When Query'ing on the partition key 'right', ExclusiveStartKey must be in
+# the same partition 'right' being queried - it must not be some other
+# partition. Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_query_exclusivestartkey_wrong_partition(test_table_sn):
+    # The error that DynamoDB reports if the wrong partition is mentioned
+    # in ExclusiveStartKey is "The provided starting key is outside query
+    # boundaries based on provided conditions".
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': ['right'], 'ComparisonOperator': 'EQ'}},
+            # The partition key part of ExclusiveStartKey should be 'right',
+            # trying something else like 'wrong' should fail
+            ExclusiveStartKey= { 'p': 'wrong', 'c': 0 })
+
+# Check that ExclusiveStartKey cannot contain any spurious column names
+# beyond the actual primary key (here a partition key and sort key)
+# Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_query_exclusivestartkey_spurious_column(test_table_sn):
+    p = random_string()
+    # The error that DynamoDB reports if ExclusiveStartKey has spurious
+    # columns is "The provided starting key is invalid".
+    with pytest.raises(ClientError, match='ValidationException.*starting key'):
+        test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            # 'x' is not part of the key, so this should cause an error
+            ExclusiveStartKey= { 'p': p, 'c': 0, 'x': 3 })
+
+# The previous tests, and actually all tests in this file, all used a table
+# with both a partition key and a sort key. Naturally, "Query" is meant to
+# be used on a table with a sort key. However, it actually works also on
+# a table with just a partition key. Let's check that it works.
+def test_query_no_sort_key(test_table_s):
+    p = random_string()
+    item = {'p': p, 'animal': 'dog'}
+    test_table_s.put_item(Item=item)
+    got = test_table_s.query(
+            ConsistentRead=True,
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})['Items']
+    assert got == [item]
+
+# Although a Query is allowed on a table with just a partition key and no
+# sort key (and always returns a single item), ExclusiveStartKey makes no
+# sense for these one-item partitions: Since it is *exclusive*, i.e., the
+# response shouldn't include the given key, the response would be completely
+# empty...  So DynamoDB doesn't allow this case at all.
+# Reproduces issue #26988.
+@pytest.mark.xfail(reason="issue #26988")
+def test_query_no_sort_key_exclusive_start_key(test_table_s):
+    p = random_string()
+    # DynamoDB gives the error message "The provided exclusive start key
+    # is invalid: ExclusiveStartKey: {p=AttributeValue: {S:KPQ4X3JE19}}"
+    with pytest.raises(ClientError, match='ValidationException.*ExclusiveStartKey'):
+        test_table_s.query(
+                KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+                ExclusiveStartKey={'p': p})
+
 # Test that the ScanIndexForward parameter works, and can be used to
 # return items sorted in reverse order. Combining this with Limit can
 # be used to return the last items instead of the first items of the
