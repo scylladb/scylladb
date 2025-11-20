@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
 from test.cluster.conftest import skip_mode
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import get_topology_coordinator, new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
@@ -236,3 +236,114 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
     mv_rows = await cql.run_async(f"SELECT * FROM ks.mv")
     mv2_rows = await cql.run_async(f"SELECT * FROM ks.mv2")
     assert len(base_rows) == len(mv_rows) == len(mv2_rows) == 129
+
+# It may happen that a node fails to process an RPC request from the coordinator.
+# In that case, we would like to prevent sending more requests to it because
+# they're most likely going to fail as well. Verify that that's the case.
+#
+# Reproduces scylladb/scylladb#26686.
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
+    """
+    Scenario:
+    1. Set up a cluster. Two racks are sufficient.
+    2. Create the schema. Fill in the table with enough data so that the view
+       building won't finish immediately.
+    3. Create a view.
+    4. Enable the error injection that will simulate gossip taking time with marking
+       nodes as DOWN.
+    5. Stop the target node.
+    6. Wait for the view building coordinator to report that sending an RPC
+       to the target node has failed.
+    7. Disable the injection and revive the target node.
+    8. The total number of warnings should be small.
+    """
+
+    # Not needed, but it will be of tremendous help if we end up debugging a failure.
+    cmdline = ["--logger-log-level", "view_building_coordinator=trace",
+               "--logger-log-level", "view_building_worker=trace",
+               "--logger-log-level", "load_balancer=debug",
+               "--logger-log-level", "storage_service=debug",
+               "--logger-log-level", "raft_topology=debug"]
+
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+
+    row_count = 50_000
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks.t (pk, ck, v) VALUES ({i}, {i + 1}, {i + 2})") for i in range(row_count)])
+
+    # Topology coordinator = view building coordinator.
+    topology_coordinator = await get_topology_coordinator(manager)
+    if topology_coordinator != host_id1:
+        s1, s2 = s2, s1
+        host_id1, host_id2 = host_id2, host_id1
+    logger.info(f"Coordinator: server ID={s1.server_id}, IP={s1.ip_addr}, host ID={host_id1}")
+    logger.info(f"Target: server ID={s2.server_id}, IP={s2.ip_addr}, host ID={host_id2}")
+
+    # Prevent the target node from processing everything too early.
+    pause_vb_err = "view_building_worker_pause_build_range_task"
+    await manager.api.enable_injection(s2.ip_addr, pause_vb_err, one_shot=False)
+
+    log = await manager.server_open_log(s1.server_id)
+    mark = await log.mark()
+
+    # Make the view building coordinator ignore the gossiper. The purpose of this
+    # is to simulate a situation when the gossiper doesn't mark a dead node as
+    # such immediately. In a scenario like that, the view building coordinator
+    # will be retrying to send a request to it.
+    ignore_gossiper_err = "view_building_coordinator_ignore_gossiper"
+    await manager.api.enable_injection(s1.ip_addr, ignore_gossiper_err, one_shot=False)
+    await manager.server_stop(s2.server_id)
+
+    start = time.time()
+
+    # We want to have at least 2 tablets per node to force node 1
+    # to have multiple tablet replica targets on node 2. Why?
+    #
+    # Because we also want to test that Scylla won't undergo a storm
+    # of warning messages from the view building coordinator. They should
+    # be rate limited. If we have multiple tablet replica targets, we will
+    # verify that the number of those messages is controlled.
+    #
+    # Hence: min_tablet_count = 2 * (node count) = 4.
+    #
+    # We rely on two assumptions
+    # 1. Each node will have at least two shards.
+    # 2. The load balancer will distribute the tablets equally between the nodes.
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT * FROM ks.t "
+                        "WHERE pk IS NOT NULL AND ck IS NOT NULL AND v IS NOT NULL "
+                        "PRIMARY KEY ((ck, pk), v) "
+                        "WITH tablets = {'min_tablet_count': 4}")
+
+    error = rf"Work on tasks .* on replica {host_id2}:\d+, failed with error"
+
+    await log.wait_for(error, from_mark=mark)
+    await manager.api.disable_injection(s1.ip_addr, ignore_gossiper_err)
+    await manager.server_start(s2.server_id)
+
+    # Not needed anymore.
+    await manager.api.disable_injection(s2.ip_addr, pause_vb_err)
+    await wait_for_view(cql, "mv", 2)
+
+    end = time.time()
+    # The duration of the view building process (in seconds, rounded up).
+    duration = int(end - start) + 1
+
+    matches = await log.grep(error, from_mark=mark)
+    match_count = len(matches)
+
+    logger.info(f"Got {match_count} matches")
+
+    # Technically, we shouldn't get more than one failure per second,
+    # but let's cut it some slack to avoid flakiness.
+    slack = 5
+
+    assert match_count <= duration + slack
