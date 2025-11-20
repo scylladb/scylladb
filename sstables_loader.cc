@@ -368,10 +368,16 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
 
         for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
             auto sst_token_range = sstable_token_range(*sst_it);
-            // sstables are sorted by first key, so we're done with current tablet when
-            // the next sstable doesn't overlap with its owned token range.
+
+            // sstables are sorted by first key, so should skip this SSTable since it
+            // doesn't overlap with the current tablet range.
             if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
-                break;
+                // If the start of the next SSTable's token range lies beyond the current tablet's token
+                // range, we can safely conclude that no more relevant SSTables remain for this tablet.
+                if (tablet_range.after(sst_token_range.start()->value(), dht::token_comparator{})) {
+                    break;
+                }
+                continue;
             }
 
             if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
