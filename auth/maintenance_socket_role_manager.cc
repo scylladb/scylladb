@@ -28,6 +28,22 @@ static const class_registrator<
         cache&> registration(sstring{maintenance_socket_role_manager_name});
 
 
+bool maintenance_socket_role_manager::is_maintenance_mode() const {
+    return _is_maintenance_mode;
+}
+
+void maintenance_socket_role_manager::set_maintenance_mode() {
+    _is_maintenance_mode = true;
+}
+
+maintenance_socket_role_manager::maintenance_socket_role_manager(
+        cql3::query_processor& qp,
+        ::service::raft_group0_client& rg0c,
+        ::service::migration_manager& mm,
+        cache& c)
+    : _is_maintenance_mode(false) {
+}
+
 std::string_view maintenance_socket_role_manager::qualified_java_name() const noexcept {
     return maintenance_socket_role_manager_name;
 }
@@ -56,15 +72,30 @@ future<T> operation_not_supported_exception(std::string_view operation) {
         std::runtime_error(fmt::format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
+template<typename T = void>
+future<T> operation_not_available_in_maintenance_mode_exception(std::string_view operation) {
+    return make_exception_future<T>(
+        std::runtime_error(fmt::format("role manager: {} operation not available through maintenance socket in maintenance mode", operation)));
+}
+
 future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::group0_batch&) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("CREATE");
+    }
     return operation_not_supported_exception("CREATE");
 }
 
 future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("DROP");
+    }
     return operation_not_supported_exception("DROP");
 }
 
 future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&, ::service::group0_batch&) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("ALTER");
+    }
     return operation_not_supported_exception("ALTER");
 }
 

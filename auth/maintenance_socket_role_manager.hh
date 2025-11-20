@@ -29,8 +29,13 @@ extern const std::string_view maintenance_socket_role_manager_name;
 // This role manager is used by the maintenance socket. It has disabled all role management operations to not depend on
 // system_auth keyspace, which may be not yet created when the maintenance socket starts listening.
 class maintenance_socket_role_manager final : public role_manager {
+    bool _is_maintenance_mode;
+
 public:
-    maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&) {}
+    bool is_maintenance_mode() const;
+    void set_maintenance_mode();
+
+    maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
 
     virtual std::string_view qualified_java_name() const noexcept override;
 
