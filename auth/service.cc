@@ -27,6 +27,7 @@
 #include "auth/common.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/ldap_role_manager.hh"
+#include "auth/maintenance_socket_authenticator.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/role_or_anonymous.hh"
@@ -1043,6 +1044,16 @@ role_manager_factory make_role_manager_factory(
         };
     }
     throw std::invalid_argument(fmt::format("Unknown role manager: {}", name));
+}
+
+authenticator_factory make_maintenance_socket_authenticator_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    return [&qp, &g0, &mm, &auth_cache] {
+        return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+    };
 }
 
 role_manager_factory make_maintenance_socket_role_manager_factory(
