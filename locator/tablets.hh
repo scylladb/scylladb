@@ -21,12 +21,14 @@
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
+#include "raft/raft.hh"
 
 #include <ranges>
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+
 
 namespace gms {
 class feature_service;
@@ -248,6 +250,11 @@ struct tablet_info {
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
+};
+
+struct tablet_raft_info {
+    raft::group_id group_id;
+    auto operator<=>(const tablet_raft_info& rhs) const = default;
 };
 
 // Merges tablet_info b into a, but with following constraints:
@@ -546,6 +553,7 @@ public:
 class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
+    using raft_info_container = utils::chunked_vector<tablet_raft_info>;
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
     // The implementation assumes that _tablets.size() is a power of 2:
@@ -557,18 +565,22 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
+    /// When raft is enabled, the _raft_info container
+    /// contains a record for every tablet, empty otherwise.
+    raft_info_container _raft_info;
     repair_scheduler_config _repair_scheduler_config;
 
     // Internal constructor, used by clone() and clone_gently().
-    tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info, repair_scheduler_config repair_scheduler_config)
+    tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions, resize_decision resize_decision, tablet_task_info resize_task_info,
+            repair_scheduler_config repair_scheduler_config, raft_info_container raft_info)
         : _tablets(std::move(tablets))
         , _log2_tablets(log2_tablets)
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
-    {}
+        , _raft_info(std::move(raft_info))
+        , _repair_scheduler_config(std::move(repair_scheduler_config)) {
+    }
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -580,7 +592,7 @@ public:
     /// Constructs a tablet map.
     ///
     /// \param tablet_count The desired tablets to allocate. Must be a power of two.
-    explicit tablet_map(size_t tablet_count);
+    explicit tablet_map(size_t tablet_count, bool with_raft = false);
 
     tablet_map(tablet_map&&) = default;
     tablet_map(const tablet_map&) = delete;
@@ -605,6 +617,14 @@ public:
     /// If there is no transition for a given tablet, returns nullptr.
     /// \throws std::logic_error If the given id does not belong to this instance.
     const tablet_transition_info* get_tablet_transition_info(tablet_id) const;
+
+    /// Returns whether raft info was initialized.
+    [[nodiscard]] bool has_raft_info() const noexcept {
+        return !_raft_info.empty();
+    }
+
+    /// Get raft info for a tablet.
+    [[nodiscard]] const tablet_raft_info& get_tablet_raft_info(tablet_id) const;
 
     /// Returns the largest token owned by a given tablet.
     /// \throws std::logic_error If the given id does not belong to this instance.
@@ -714,6 +734,7 @@ public:
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
     void clear_tablet_transition_info(tablet_id);
+    void set_tablet_raft_info(tablet_id, tablet_raft_info);
     void clear_transitions();
 
     // Destroys gently.
