@@ -11,6 +11,7 @@
 #include "auth/cache.hh"
 #include "auth/resource.hh"
 #include "auth/role_manager.hh"
+#include "auth/standard_role_manager.hh"
 #include <seastar/core/future.hh>
 
 namespace cql3 {
@@ -24,13 +25,24 @@ class raft_group0_client;
 
 namespace auth {
 
-// This role manager is used by the maintenance socket. It has disabled all role management operations to not depend on
-// system_auth keyspace, which may be not yet created when the maintenance socket starts listening.
+// This role manager is used by the maintenance socket. It has disabled all role management operations
+// in maintenance mode. In normal mode it delegates all operations to a standard_role_manager,
+// which is created on demand when the node joins the cluster.
 class maintenance_socket_role_manager final : public role_manager {
+    cql3::query_processor& _qp;
+    ::service::raft_group0_client& _group0_client;
+    ::service::migration_manager& _migration_manager;
+    cache& _cache;
+    std::optional<standard_role_manager> _std_mgr;
     bool _is_maintenance_mode;
 
 public:
     void set_maintenance_mode() override;
+
+    // Ensures role management operations are enabled.
+    // It must be called once the node has joined the cluster.
+    // In the meantime all role management operations will fail.
+    future<> ensure_role_operations_are_enabled() override;
 
     maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
 
@@ -75,6 +87,10 @@ public:
     virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) override;
 
     virtual future<std::vector<cql3::description>> describe_role_grants() override;
+
+private:
+    future<> validate_operation(std::string_view name);
+
 };
 
 }

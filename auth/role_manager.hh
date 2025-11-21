@@ -125,6 +125,11 @@ public:
     virtual future<> ensure_superuser_is_created() = 0;
 
     ///
+    /// Ensure role management operations are enabled. Some role managers may defer initialization.
+    ///
+    virtual future<> ensure_role_operations_are_enabled() { return make_ready_future<>(); }
+
+    ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
     virtual future<> create(std::string_view role_name, const role_config&, ::service::group0_batch&) = 0;

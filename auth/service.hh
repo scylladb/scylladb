@@ -153,6 +153,11 @@ public:
     future<bool> has_superuser(std::string_view role_name) const;
 
     ///
+    /// Ensure that the role operations are enabled. Some role managers defer initialization.
+    ///
+    future<> ensure_role_operations_are_enabled();
+    
+    ///
     /// Create a role with optional authentication information.
     ///
     /// \returns an exceptional future with \ref role_already_exists if the user or role exists.
@@ -216,6 +221,8 @@ private:
 void set_maintenance_mode(service&);
 
 future<bool> has_superuser(const service&, const authenticated_user&);
+
+future<> ensure_role_operations_are_enabled(service&);
 
 future<role_set> get_roles(const service&, const authenticated_user&);
 
@@ -430,6 +437,14 @@ authenticator_factory make_authenticator_factory(
 /// @param name The role manager class name (e.g., "CassandraRoleManager")
 role_manager_factory make_role_manager_factory(
         std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a factory for the maintenance socket authenticator.
+/// This authenticator is not config-selectable and is only used for the maintenance socket.
+authenticator_factory make_maintenance_socket_authenticator_factory(
         sharded<cql3::query_processor>& qp,
         ::service::raft_group0_client& g0,
         sharded<::service::migration_manager>& mm,

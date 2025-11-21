@@ -29,6 +29,7 @@
 #include "auth/common.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/ldap_role_manager.hh"
+#include "auth/maintenance_socket_authenticator.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/role_or_anonymous.hh"
@@ -354,6 +355,10 @@ static void validate_authentication_options_are_supported(
     if (options.options) {
         check(authentication_option::options);
     }
+}
+
+future<> service::ensure_role_operations_are_enabled() {
+    return _role_manager->ensure_role_operations_are_enabled();
 }
 
 future<> service::create_role(std::string_view name,
@@ -683,6 +688,10 @@ future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     }
 
     return ser.has_superuser(*u.name);
+}
+
+future<> ensure_role_operations_are_enabled(service& ser) {
+    return ser.underlying_role_manager().ensure_role_operations_are_enabled();
 }
 
 future<role_set> get_roles(const service& ser, const authenticated_user& u) {
@@ -1031,6 +1040,16 @@ role_manager_factory make_role_manager_factory(
         };
     }
     throw std::invalid_argument(fmt::format("Unknown role manager: {}", name));
+}
+
+authenticator_factory make_maintenance_socket_authenticator_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    return [&qp, &g0, &mm, &auth_cache] {
+        return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+    };
 }
 
 role_manager_factory make_maintenance_socket_role_manager_factory(

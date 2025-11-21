@@ -19,6 +19,7 @@
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
+#include "auth/maintenance_socket_authenticator.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
@@ -2096,7 +2097,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 checkpoint(stop_signal, "starting maintenance auth service");
                 maintenance_auth_service.start(std::ref(qp), std::ref(group0_client), std::ref(mm_notifier),
                         auth::make_authorizer_factory(auth::allow_all_authorizer_name, qp, group0_client, mm),
-                        auth::make_authenticator_factory(auth::allow_all_authenticator_name, qp, group0_client, mm, auth_cache),
+                        auth::make_maintenance_socket_authenticator_factory(qp, group0_client, mm, auth_cache),
                         auth::make_maintenance_socket_role_manager_factory(qp, group0_client, mm, auth_cache),
                         maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
@@ -2265,6 +2266,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
             stop_signal.ready(false);
+
+            if (cfg->maintenance_socket() != "ignore") {
+                // Enable role operations now that node joined the cluster
+                maintenance_auth_service.invoke_on_all([](auth::service& svc) {
+                    return auth::ensure_role_operations_are_enabled(svc);
+                }).get();
+            }
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
