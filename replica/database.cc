@@ -3290,7 +3290,7 @@ table& database::tables_metadata::get_table(table_id id) const {
 }
 
 table_id database::tables_metadata::get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const {
-    return _ks_cf_to_uuid.at(kscf);
+    return _ks_cf_to_uuid.at(ks_cf_t{kscf});
 }
 
 lw_shared_ptr<table> database::tables_metadata::get_table_if_exists(table_id id) const {
