@@ -360,6 +360,10 @@ private:
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 
+        void update_user_scheduling_group_v1(const std::optional<auth::authenticated_user>& usr);
+        void update_user_scheduling_group_v2(const std::optional<auth::authenticated_user>& usr);
+        void update_service_level_scheduling_group();
+
         friend event_notifier;
     };
 
