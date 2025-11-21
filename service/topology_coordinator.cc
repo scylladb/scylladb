@@ -2045,6 +2045,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    void collect_table_replicas(const locator::tablet_metadata& tablets, table_id table_id, 
+        std::unordered_set<locator::host_id>& replicas)
+    {
+        collect_table_replicas(tablets.get_tablet_map(table_id), replicas);
+    }
+
+    void collect_table_replicas(const locator::tablet_map& tablet_map,
+            std::unordered_set<locator::host_id>& replicas)
+    {
+        const auto& excluded_nodes = _topo_sm._topology.excluded_tablet_nodes;
+        for (const auto& tinfo: tablet_map.tablets()) {
+            for (const auto& replica: tinfo.replicas) {
+                if (!excluded_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                    replicas.insert(replica.host);
+                }
+            }
+        }
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         co_await utils::get_local_injector().inject("handle_tablet_resize_finalization_wait", [] (auto& handler) -> future<> {
             rtlogger.info("handle_tablet_resize_finalization: waiting");
@@ -2090,13 +2109,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto new_cnt = new_tablet_map.tablet_count();
             if (old_cnt > new_cnt) {
                 std::unordered_set<locator::host_id> replicas;
-                for (auto& tinfo : tmap.tablets()) {
-                    for (auto& r : tinfo.replicas) {
-                        if (!is_excluded(raft::server_id(r.host.uuid()))) {
-                            replicas.insert(r.host);
-                        }
-                    }
-                }
+                collect_table_replicas(tmap, replicas);
                 if (_feature_service.tablet_incremental_repair) {
                     rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
                     if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
@@ -2150,15 +2163,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 // Collect the IDs of the hosts with replicas, but ignore excluded nodes
                 std::unordered_set<locator::host_id> replica_hosts;
-                const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
-                        if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                            replica_hosts.insert(replica.host);
-                        }
-                    }
-                    return make_ready_future<>();
-                });
+                collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
 
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
