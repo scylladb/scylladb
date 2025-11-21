@@ -922,14 +922,14 @@ sphinx-markdown-tables = "0.0.17"
 
 [[package]]
 name = "sphinx-scylladb-theme"
-version = "1.8.8"
+version = "1.8.9"
 description = "A Sphinx Theme for ScyllaDB documentation projects"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "sphinx_scylladb_theme-1.8.8-py3-none-any.whl", hash = "sha256:9b37f58b745bfc818b6f0869cbcc414a3ad6658023b22a6abbec44da5c09cf80"},
-    {file = "sphinx_scylladb_theme-1.8.8.tar.gz", hash = "sha256:15af599424f8b2ddbf14644b267c0bd31bc3fbbd64bca5b97d7b31bdb84d2c3d"},
+    {file = "sphinx_scylladb_theme-1.8.9-py3-none-any.whl", hash = "sha256:f8649a7753a29494fd2b417d1cb855035dddb9ebd498ea033fd73f5f9338271e"},
+    {file = "sphinx_scylladb_theme-1.8.9.tar.gz", hash = "sha256:ab7cda4c10a0d067c5c3a45f7b1f68cb8ebefe135a0be0738bfa282a344769b6"},
 ]
 
 [package.dependencies]
@@ -1456,4 +1456,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "456aca4179669adb90bbf41b82f5feb29fcc5fbfe0000ce19fafcf135d6c1c3d"
+content-hash = "602f889547b748f568e07a03dad6a4a90f2006a15837a281622fd844f771ec6e"
