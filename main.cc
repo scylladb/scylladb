@@ -17,6 +17,7 @@
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
+#include "auth/maintenance_socket_authenticator.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
@@ -2076,7 +2077,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 checkpoint(stop_signal, "starting maintenance auth service");
                 auth::service_config maintenance_auth_config;
                 maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
-                maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
+                maintenance_auth_config.authenticator_java_name = sstring{auth::maintenance_socket_authenticator_name};
                 maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
                 maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(auth_cache), std::ref(hashing_worker)).get();
@@ -2223,6 +2224,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
             stop_signal.ready(false);
+
+            if (cfg->maintenance_socket() != "ignore") {
+                // Enable role operations now that node joined the cluster
+                maintenance_auth_service.invoke_on_all([](auth::service& svc) {
+                    auto& rm = dynamic_cast<auth::maintenance_socket_role_manager&>(svc.underlying_role_manager());
+                    return rm.enable_role_operations();
+                }).get();
+            }
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).

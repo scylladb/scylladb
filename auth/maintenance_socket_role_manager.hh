@@ -11,6 +11,7 @@
 #include "auth/cache.hh"
 #include "auth/resource.hh"
 #include "auth/role_manager.hh"
+#include "auth/standard_role_manager.hh"
 #include <seastar/core/future.hh>
 
 namespace cql3 {
@@ -29,9 +30,16 @@ extern const std::string_view maintenance_socket_role_manager_name;
 // This role manager is used by the maintenance socket. It has disabled all role management operations to not depend on
 // system_auth keyspace, which may be not yet created when the maintenance socket starts listening.
 class maintenance_socket_role_manager final : public role_manager {
+    cql3::query_processor& _qp;
+    ::service::raft_group0_client& _group0_client;
+    ::service::migration_manager& _migration_manager;
+    cache& _cache;
+    std::optional<standard_role_manager> _std_mgr;
     bool _is_maintenance_mode;
 
 public:
+    future<> enable_role_operations();
+
     bool is_maintenance_mode() const;
     void set_maintenance_mode();
 
