@@ -45,11 +45,6 @@ class repair_history_map_ptr;
 class per_table_history_maps {
 public:
     std::unordered_map<table_id, repair_history_map_ptr> _repair_maps;
-
-    // Separating the group0 GC time - it is not kept per table, but for the whole group0:
-    // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
-    // - we also always use the full token range for the group0 tables (so we don't need to store the token ranges)
-    gc_clock::time_point _group0_gc_time = gc_clock::time_point::min();
 };
 
 class tombstone_gc_options;
@@ -68,6 +63,11 @@ class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     lw_shared_ptr<const per_table_history_maps> _reconcile_history_maps;
 
+    // Separating the group0 GC time - it is not kept per table, but for the whole group0:
+    // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
+    // - we also always use the full token range for the group0 tables (so we don't need to store the token ranges)
+    gc_clock::time_point _group0_gc_time = gc_clock::time_point::min();
+
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
@@ -75,12 +75,16 @@ private:
 
 public:
     shared_tombstone_gc_state();
-    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps);
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps, gc_clock::time_point group0_gc_time);
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
     const per_table_history_maps& get_reconcile_history_maps() const noexcept {
         return *_reconcile_history_maps;
+    }
+
+    gc_clock::time_point get_group0_gc_time() const noexcept {
+        return _group0_gc_time;
     }
 
     void set_gc_time_min_source(gc_time_min_source src) {
