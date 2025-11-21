@@ -6,9 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "vector_search/vector_store_client.hh"
+#include "utils.hh"
+#include "vs_mock_server.hh"
 #include "seastar/core/future.hh"
 #include "seastar/core/when_all.hh"
-#include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"
@@ -38,139 +40,19 @@
 namespace {
 
 using namespace seastar;
+using namespace test::vector_search;
 
 using vector_store_client = vector_search::vector_store_client;
 using vector_store_client_tester = vector_search::vector_store_client_tester;
 using config = vector_store_client::config;
 using configuration_exception = exceptions::configuration_exception;
 using inet_address = seastar::net::inet_address;
-using function_handler = httpd::function_handler;
-using http_server = httpd::http_server;
-using http_server_tester = httpd::http_server_tester;
 using milliseconds = std::chrono::milliseconds;
 using seconds = std::chrono::seconds;
-using operation_type = httpd::operation_type;
-using port_number = vector_store_client::port_number;
-using reply = http::reply;
-using request = http::request;
-using routes = httpd::routes;
 using status_type = http::reply::status_type;
-using url = httpd::url;
-
-constexpr auto const* LOCALHOST = "127.0.0.1";
-
-auto listen_on_port(std::unique_ptr<http_server> server, sstring host, uint16_t port) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    auto inaddr = net::inet_address(host);
-    auto const addr = socket_address(inaddr, port);
-    ::listen_options opts;
-    opts.set_fixed_cpu(this_shard_id());
-    co_await server->listen(addr, opts);
-    auto const& listeners = http_server_tester::listeners(*server);
-    BOOST_CHECK_EQUAL(listeners.size(), 1);
-    co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
-}
-
-auto make_http_server(std::function<void(routes& r)> set_routes) {
-    static unsigned id = 0;
-    auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
-    set_routes(server->_routes);
-    server->set_content_streaming(true);
-    return server;
-}
-
-auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
-        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port);
-}
-
-auto new_http_server(std::function<void(routes& r)> set_routes, server_socket socket) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    auto server = make_http_server(set_routes);
-    auto& listeners = http_server_tester::listeners(*server);
-    listeners.push_back(std::move(socket));
-    co_await server->do_accepts(listeners.size() - 1);
-    co_return std::make_tuple(std::move(server), listeners.back().local_address().port());
-}
-
-auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
-    auto begin = lowres_clock::now();
-    while (!co_await func()) {
-        if (lowres_clock::now() - begin > timeout) {
-            co_return false;
-        }
-        co_await seastar::yield();
-    }
-    co_return true;
-}
-
-constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
-
-auto repeat_until(std::function<future<bool>()> func) -> future<bool> {
-    return repeat_until(STANDARD_WAIT, std::move(func));
-}
-
-
-class abort_source_timeout {
-    abort_source as;
-    timer<> t;
-
-public:
-    explicit abort_source_timeout(milliseconds timeout = STANDARD_WAIT)
-        : t(timer([&]() {
-            as.request_abort();
-        })) {
-        t.arm(timeout);
-    }
-
-    abort_source& get() {
-        return as;
-    }
-
-    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
-        t.cancel();
-        as = abort_source();
-        t.arm(timeout);
-        return as;
-    }
-};
 
 auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);
-}
-
-// A sample correct ANN response for the test table created in create_test_table().
-constexpr auto CORRECT_RESPONSE_FOR_TEST_TABLE = R"({
-    "primary_keys": {
-        "pk1": [5, 6],
-        "pk2": [7, 8],
-        "ck1": [9, 1],
-        "ck2": [2, 3]
-    },
-    "distances": [0.1, 0.2]
-})";
-
-auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) -> future<schema_ptr> {
-    co_await env.execute_cql(fmt::format(R"(
-        create table {}.{} (
-            pk1 tinyint, pk2 tinyint,
-            ck1 tinyint, ck2 tinyint,
-            embedding vector<float, 3>,
-            primary key ((pk1, pk2), ck1, ck2))
-    )",
-            ks, cf));
-    co_return env.local_db().find_schema(ks, cf);
-}
-
-future<> try_on_loopback_address(std::function<future<>(sstring)> func) {
-    constexpr size_t MAX_LOCALHOST_ADDR_TO_TRY = 127;
-    for (size_t i = 1; i < MAX_LOCALHOST_ADDR_TO_TRY; i++) {
-        auto host = fmt::format("127.0.0.{}", i);
-        try {
-            co_await func(std::move(host));
-            co_return;
-        } catch (...) {
-        }
-    }
-    throw std::runtime_error("unable to perform action on any 127.0.0.x address");
 }
 
 auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
@@ -341,120 +223,6 @@ auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavai
     auto ret = std::make_unique<unavailable_server>(port);
     co_await ret->start();
     co_return ret;
-}
-
-class vs_mock_server {
-public:
-    struct ann_req {
-        sstring path;
-        sstring body;
-    };
-
-    struct ann_resp {
-        status_type status;
-        sstring body;
-    };
-
-    explicit vs_mock_server(uint16_t port)
-        : _port(port) {
-    }
-
-    explicit vs_mock_server(ann_resp next_ann_response)
-        : _next_ann_response(std::move(next_ann_response)) {
-    }
-
-    vs_mock_server() = default;
-
-    future<> start() {
-        co_await listen();
-    }
-
-    future<> start(server_socket socket) {
-        auto [server, addr] = co_await new_http_server(
-                [this](auto& r) {
-                    set_routes(r);
-                },
-                std::move(socket));
-        _http_server = std::move(server);
-        _port = addr.port();
-    }
-
-    future<> stop() {
-        co_await _http_server->stop();
-    }
-
-    sstring host() const {
-        return _host;
-    }
-
-    uint16_t port() const {
-        return _port;
-    }
-
-    const std::vector<ann_req>& requests() const {
-        return _ann_requests;
-    }
-
-    void next_ann_response(ann_resp response) {
-        _next_ann_response = std::move(response);
-    }
-
-private:
-    future<> listen() {
-        co_await try_on_loopback_address([this](auto host) -> future<> {
-            auto [s, addr] = co_await new_http_server(
-                    [this](auto& r) {
-                        set_routes(r);
-                    },
-                    host.c_str(), _port);
-            _http_server = std::move(s);
-            _port = addr.port();
-            _host = std::move(host);
-        });
-    }
-
-    future<std::unique_ptr<reply>> handle_ann_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
-        ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
-        _ann_requests.push_back(std::move(r));
-        rep->set_status(_next_ann_response.status);
-        rep->write_body("json", _next_ann_response.body);
-        co_return rep;
-    }
-
-    future<std::unique_ptr<reply>> handle_status_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
-        rep->set_status(status_type::ok);
-        rep->write_body("json", "SERVING");
-        co_return rep;
-    }
-
-    void set_routes(routes& r) {
-        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"),
-                new function_handler(
-                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                            return handle_ann_request(std::move(req), std::move(rep));
-                        },
-                        "json"));
-        r.add(operation_type::GET, url("/api/v1/status").remainder("status"),
-                new function_handler(
-                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                            return handle_status_request(std::move(req), std::move(rep));
-                        },
-                        "json"));
-    }
-
-    uint16_t _port = 0;
-    sstring _host;
-    std::unique_ptr<http_server> _http_server;
-    std::vector<ann_req> _ann_requests;
-    ann_resp _next_ann_response{status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
-    const sstring INDEXES_PATH = "/api/v1/indexes";
-};
-
-template <typename... Args>
-auto make_vs_mock_server(Args&&... args) -> future<std::unique_ptr<vs_mock_server>> {
-    auto server = std::make_unique<vs_mock_server>(std::forward<Args>(args)...);
-    co_await server->start();
-    co_return server;
 }
 
 } // namespace
@@ -716,9 +484,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 // server responds with 404 - client should return service_error
                 server->next_ann_response({status_type::not_found, "idx2 not found"});
                 auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
-                BOOST_REQUIRE(!server->requests().empty());
-                BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
-                BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx2/ann");
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx2/ann");
                 BOOST_REQUIRE(!keys);
                 auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
                 BOOST_CHECK(err != nullptr);
@@ -727,9 +495,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!server->requests().empty());
-                BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
-                BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx/ann");
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx/ann");
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
@@ -847,14 +615,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
 SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
-    // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
-    auto s1 = co_await make_vs_mock_server(vs_mock_server::ann_resp(status_type::not_found, "Not found"));
-    auto s2 = co_await make_vs_mock_server(vs_mock_server::ann_resp(status_type::service_unavailable, "Service unavailable"));
-
-    constexpr auto is_s2_response = [](const auto& keys) -> bool {
-        return !keys && std::holds_alternative<vector_store_client::service_error>(keys.error()) &&
-               std::get<vector_store_client::service_error>(keys.error()).status == status_type::service_unavailable;
-    };
+    auto s1 = co_await make_vs_mock_server();
+    auto s2 = co_await make_vs_mock_server();
 
     auto cfg = cql_test_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
@@ -868,11 +630,14 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
                 vs.start_background_tasks();
 
+                // Change URI setting to point to s2
                 env.db_config().vector_store_primary_uri.set(format("http://good.authority.here:{}", s2->port()));
 
                 // Wait until requests are handled by s2
+                // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return s2->ann_requests().size() > 0;
                 }));
             },
             cfg)
@@ -936,7 +701,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return !s1->requests().empty() && !s2->requests().empty();
+                    co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
             cfg)
@@ -1000,7 +765,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                    co_return !s1->requests().empty() && !s2->requests().empty();
+                    co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
             cfg)
