@@ -1487,7 +1487,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtlogger.info("Skipped tablet rebuild repair of {} as no tablet replica was found", gid);
                             return make_ready_future<>();
                         }
-                        auto dst = locator::maybe_get_primary_replica(gid.tablet, {tsi.read_from.begin(), tsi.read_from.end()}, [] (const auto& tr) { return true; }).value().host;
+                        auto dst = locator::maybe_get_primary_replica(gid.tablet, {tsi.read_from.begin(), tsi.read_from.end()},
+                                                                      _db.get_token_metadata().get_topology(), [] (const auto& tr) { return true; }).value().host;
                         rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
                         return do_with(gids, [this, dst, session_id = trinfo.session_id] (const auto& gids) {
                             return do_for_each(gids, [this, dst, session_id] (locator::global_tablet_id gid) {
@@ -1707,7 +1708,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         const auto& topo = _db.get_token_metadata().get_topology();
                         locator::host_id dst;
                         if (hosts_filter.empty() && dcs_filter.empty()) {
-                            auto primary = tmap.get_primary_replica(gid.tablet);
+                            auto primary = tmap.get_primary_replica(gid.tablet, topo);
                             dst = primary.host;
                         } else {
                             auto dst_opt = tmap.maybe_get_selected_replica(gid.tablet, topo, tinfo.repair_task_info);

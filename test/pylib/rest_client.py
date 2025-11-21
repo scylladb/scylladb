@@ -366,13 +366,14 @@ class ScyllaRESTAPIClient:
                 params[key] = value
         return await self.client.post_json(f"/storage_service/backup", host=node_ip, params=params)
 
-    async def restore(self, node_ip: str, ks: str, cf: str, dest: str, bucket: str, prefix: str, sstables: list[str], scope: str = None) -> str:
+    async def restore(self, node_ip: str, ks: str, cf: str, dest: str, bucket: str, prefix: str, sstables: list[str], scope: str = None, primary_replica_only=False) -> str:
         """Restore keyspace:table from backup"""
         params = {"keyspace": ks,
                   "table": cf,
                   "endpoint": dest,
                   "bucket": bucket,
-                  "prefix": prefix}
+                  "prefix": prefix,
+                  "primary_replica_only": "true" if primary_replica_only else "false"}
         if scope is not None:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
