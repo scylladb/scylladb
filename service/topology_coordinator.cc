@@ -2075,7 +2075,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
-        auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
+        std::unordered_set<locator::host_id> barrier_nodes;
+        for (const auto table_id: plan.resize_plan().finalize_resize) {
+            collect_table_replicas(tm->tablets(), table_id, barrier_nodes);
+            co_await coroutine::maybe_yield();
+        }
+        co_await scope_barrier_and_drain(std::move(g), barrier_nodes, "tablet_resize_finaliztion");
+        auto guard = co_await start_operation();
 
         co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
 
