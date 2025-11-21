@@ -250,14 +250,20 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             "test_env",
             cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler,
             cfg.corrupt_data_handler == nullptr ? nop_cd_handler : *cfg.corrupt_data_handler,
-            *db_config,
+            sstables::sstables_manager::config{
+                .available_memory = cfg.available_memory,
+                .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
+                .memory_reclaim_threshold = db_config->components_memory_reclaim_threshold,
+                .data_file_directories = db_config->data_file_directories(),
+                .format = db_config->sstable_format,
+            },
             feature_service,
             cache_tracker,
-            cfg.available_memory,
             dir_sem,
             [host_id = locator::host_id::create_random_id()]{ return host_id; },
             scf,
             abort,
+            {}, // extensions
             current_scheduling_group(),
             sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)

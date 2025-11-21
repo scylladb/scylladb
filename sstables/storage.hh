@@ -124,6 +124,6 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
 
-std::vector<std::filesystem::path> get_local_directories(const db::config& db, const data_dictionary::storage_options::local& so);
+std::vector<std::filesystem::path> get_local_directories(const std::vector<sstring>& data_file_directories, const data_dictionary::storage_options::local& so);
 
 } // namespace sstables

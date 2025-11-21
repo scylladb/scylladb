@@ -156,7 +156,7 @@ future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_na
 
 static future<file> maybe_wrap_file(const sstable& sst, component_type type, open_flags flags, future<file> f) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+        for (auto * ext : sst.manager().file_io_extensions()) {
             f = with_file_close_on_failure(std::move(f), [ext, &sst, type, flags] (file f) {
                return ext->wrap_file(sst, type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
@@ -688,7 +688,7 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+        for (auto* ext : sst.manager().file_io_extensions()) {
             std::exception_ptr p;
             try {
                 sink = co_await ext->wrap_sink(sst, type, std::move(sink));
@@ -706,7 +706,7 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
 
 static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source src, uint64_t offset, uint64_t len) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+        for (auto* ext : sst.manager().file_io_extensions()) {
             std::exception_ptr p;
             try {
                 src = co_await ext->wrap_source(sst, type, std::move(src));
@@ -848,7 +848,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
 
 static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
-    for (const auto& dd : mgr.config().data_file_directories()) {
+    for (const auto& dd : mgr.get_config().data_file_directories) {
         auto uuid_sstring = s.id().to_sstring();
         boost::erase_all(uuid_sstring, "-");
         auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
@@ -867,10 +867,10 @@ static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
-std::vector<std::filesystem::path> get_local_directories(const db::config& db, const data_dictionary::storage_options::local& so) {
+std::vector<std::filesystem::path> get_local_directories(const std::vector<sstring>& data_file_directories, const data_dictionary::storage_options::local& so) {
     // see how this path is formatted by init_table_storage() above
     auto table_dir = so.dir.parent_path().filename() / so.dir.filename();
-    return db.data_file_directories()
+    return data_file_directories
             | std::views::transform([&table_dir] (const auto& datadir) {
                 return std::filesystem::path(datadir) / table_dir;
             })
@@ -895,7 +895,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
     co_await std::visit(overloaded_functor {
         [&mgr, &ks_name] (const data_dictionary::storage_options::local&) -> future<> {
-            const auto& data_dirs = mgr.config().data_file_directories();
+            const auto& data_dirs = mgr.get_config().data_file_directories;
             if (data_dirs.size() > 0) {
                 auto dir = format("{}/{}", data_dirs[0], ks_name);
                 co_await io_check([&dir] { return touch_directory(dir); });

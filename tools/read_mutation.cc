@@ -11,6 +11,7 @@
 #include "replica/database.hh"
 #include "partition_slice_builder.hh"
 #include "gms/feature_service.hh"
+#include "db/extensions.hh"
 
 #include <algorithm>
 #include <seastar/util/closeable.hh>
@@ -19,7 +20,14 @@ sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstabl
     : corrupt_data_handler(db::corrupt_data_handler::register_metrics::no)
     , feature_service_impl(std::make_unique<gms::feature_service>(gms::feature_config{get_disabled_features_from_db_config(dbcfg)}))
     , dir_sem(1)
-    , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
+    , sst_man("schema_loader", large_data_handler, corrupt_data_handler,
+        sstables::sstables_manager::config {
+            .available_memory = memory::stats().total_memory(),
+            .data_file_directories = dbcfg.data_file_directories(),
+        },
+        feature_service, tracker, dir_sem, []{ return locator::host_id{}; }, scf, abort,
+        dbcfg.extensions().sstable_file_io_extensions())
+{
 }
 
 sstable_manager_service::~sstable_manager_service() = default;

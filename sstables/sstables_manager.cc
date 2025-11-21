@@ -27,16 +27,18 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem,
-    noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory& compressor_factory, const abort_source& abort, scheduling_group maintenance_sg, storage_manager* shared)
+    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
+    noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory& compressor_factory, const abort_source& abort, std::vector<file_io_extension*> file_io_extensions, scheduling_group maintenance_sg, storage_manager* shared)
     : _storage(shared)
-    , _available_memory(available_memory)
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
-    , _db_config(dbcfg), _features(feat), _cache_tracker(ct)
+    , _config(std::move(cfg))
+    , _file_io_extensions(std::move(file_io_extensions))
+    , _features(feat)
+    , _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
-        max_memory_sstable_metadata_concurrent_reads(available_memory),
+        max_memory_sstable_metadata_concurrent_reads(_config.available_memory),
         fmt::format("sstables_manager_{}", name),
         std::numeric_limits<size_t>::max(),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
@@ -152,6 +154,12 @@ bool storage_manager::is_known_endpoint(sstring endpoint) const {
     return _object_storage_endpoints.contains(endpoint);
 }
 
+std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
+    return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
+        return type == "" || ep.second.cfg.is_storage_of_type(type);
+    }) | std::views::keys | std::ranges::to<std::vector>();
+}
+
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
         return sstm.container().invoke_on_all([&cfg](auto& sstm) -> future<> {
@@ -177,7 +185,7 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
 }
 
 sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
-    auto preferred_format = sstables::version_from_string(config().sstable_format());
+    auto preferred_format = sstables::version_from_string(_config.format());
     auto ms_supported = bool(_features.ms_sstable);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
@@ -187,7 +195,7 @@ sstables::sstable::version_types sstables_manager::get_preferred_sstable_version
 }
 
 sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
-    auto preferred_format = sstables::version_from_string(config().sstable_format());
+    auto preferred_format = sstables::version_from_string(_config.format());
     auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
@@ -215,15 +223,15 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     sstable_writer_config cfg;
 
-    cfg.promoted_index_block_size = _db_config.column_index_size_in_kb() * 1024;
-    cfg.promoted_index_auto_scale_threshold = (size_t)_db_config.column_index_auto_scale_threshold_in_kb() * 1024;
+    cfg.promoted_index_block_size = _config.column_index_size;
+    cfg.promoted_index_auto_scale_threshold = (size_t)_config.column_index_auto_scale_threshold_in_kb() * 1024;
     if (!cfg.promoted_index_auto_scale_threshold) {
         cfg.promoted_index_auto_scale_threshold = std::numeric_limits<size_t>::max();
     }
-    cfg.validation_level = _db_config.enable_sstable_key_validation()
+    cfg.validation_level = _config.enable_sstable_key_validation
             ? mutation_fragment_stream_validation_level::clustering_key
             : mutation_fragment_stream_validation_level::token;
-    cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
+    cfg.summary_byte_cost = summary_byte_cost(_config.sstable_summary_ratio);
 
     cfg.origin = std::move(origin);
 
@@ -256,7 +264,7 @@ future<> sstables_manager::maybe_reclaim_components() {
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
-    return _available_memory * _db_config.components_memory_reclaim_threshold();
+    return _config.available_memory * _config.memory_reclaim_threshold();
 }
 
 size_t sstables_manager::get_memory_available_for_reclaimable_components() const {
@@ -264,7 +272,7 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() const
 }
 
 future<> sstables_manager::components_reclaim_reload_fiber() {
-    auto components_memory_reclaim_threshold_observer = _db_config.components_memory_reclaim_threshold.observe([&] (double) {
+    auto components_memory_reclaim_threshold_observer = _config.memory_reclaim_threshold.observe([&] (double) {
         // any change to the components_memory_reclaim_threshold config should trigger reload/reclaim
         _components_memory_change_event.signal();
     });
@@ -437,7 +445,7 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
 }
 
 std::vector<std::filesystem::path> sstables_manager::get_local_directories(const data_dictionary::storage_options::local& so) const {
-    return sstables::get_local_directories(_db_config, so);
+    return sstables::get_local_directories(_config.data_file_directories, so);
 }
 
 void sstables_manager::on_unlink(sstable* sst) {

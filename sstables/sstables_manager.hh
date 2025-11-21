@@ -81,6 +81,7 @@ public:
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
+    std::vector<sstring> endpoints(sstring type = "") const noexcept;
 };
 
 class sstables_manager {
@@ -92,6 +93,19 @@ class sstables_manager {
             boost::intrusive::constant_time_size<false>,
             boost::intrusive::compare<sstable::lesser_reclaimed_memory>>;
 
+public:
+    struct config {
+        size_t available_memory;
+        bool enable_sstable_key_validation = false;
+        bool enable_data_integrity_check = false;
+        double sstable_summary_ratio = 0.0005;
+        size_t column_index_size = 64 << 10;
+        utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
+        utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
+        const std::vector<sstring>& data_file_directories;
+        utils::updateable_value<sstring> format = utils::updateable_value<sstring>(fmt::to_string(sstable_version_types::me));
+    };
+
 private:
     enum class notification_event_type {
         // Note: other event types like "added" may be needed in the future
@@ -100,10 +114,10 @@ private:
     using signal_type = boost::signals2::signal_type<void (sstables::generation_type, notification_event_type), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
 
     storage_manager* _storage;
-    size_t _available_memory;
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
-    const db::config& _db_config;
+    config _config;
+    std::vector<sstables::file_io_extension*> _file_io_extensions;
     gms::feature_service& _features;
 
     // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
@@ -148,14 +162,14 @@ public:
             sstring name,
             db::large_data_handler& large_data_handler,
             db::corrupt_data_handler& corrupt_data_handler,
-            const db::config& dbcfg,
+            config cfg,
             gms::feature_service& feat,
             cache_tracker&,
-            size_t available_memory,
             directory_semaphore& dir_sem,
             noncopyable_function<locator::host_id()>&& resolve_host_id,
             sstable_compressor_factory&,
             const abort_source& abort,
+            std::vector<file_io_extension*> file_io_extension = {},
             scheduling_group maintenance_sg = current_scheduling_group(),
             storage_manager* shared = nullptr);
     virtual ~sstables_manager();
@@ -181,8 +195,9 @@ public:
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
-    const db::config& config() const { return _db_config; }
+    const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
+    const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }
 
     // Get the highest supported sstable version, according to cluster features.
     sstables::sstable::version_types get_highest_supported_format() const noexcept;
