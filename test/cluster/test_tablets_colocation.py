@@ -5,7 +5,7 @@
 #
 from contextlib import asynccontextmanager
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.conftest import skip_mode
@@ -439,3 +439,42 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
         rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
         pks = set(row.pk for row in rows)
         assert 1 in pks and 2 in pks
+
+# Test that tombstone_gc repair works for colocated tables.
+@pytest.mark.asyncio
+async def test_tombstone_gc_insert_flush_colocated_tables(manager: ManagerClient):
+    """
+    Create a table and a colocated MV with tombstone_gc=repair, do repair, and verify
+    the pending repair time is inserted for both the table and the MV.
+    """
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c) WITH tombstone_gc = {{'mode':'repair'}};")
+
+        table_id = await manager.get_table_id(ks, "test")
+        mv_id = await manager.get_view_id(ks, "mv")
+
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i+1});") for i in range(10)])
+
+        logs = []
+        for s in servers:
+            await manager.api.set_logger_level(s.ip_addr, "database", "debug")
+            await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
+            logs.append(await manager.server_open_log(s.server_id))
+
+        # Run repair on the base table
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all")
+
+        # Wait for both table and MV to have insert/flush log lines
+        async def is_repair_time_inserted(table_id):
+            for log in logs:
+                inserts = await log.grep(rf'.*Insert pending repair time for tombstone gc: table={table_id}.*')
+                flushes = await log.grep(rf'.*Flush pending repair time for tombstone gc: table={table_id}.*')
+                inserted = len(inserts) == len(flushes) and len(inserts) > 0
+                if inserted:
+                    return True
+        await wait_for(lambda: is_repair_time_inserted(table_id), time.time() + 60)
+        await wait_for(lambda: is_repair_time_inserted(mv_id), time.time() + 60)
