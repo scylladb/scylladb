@@ -763,6 +763,10 @@ public:
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
     //
+    // When created with `raw_stream::compressed_chunks`, compressed sstable data
+    // will be streamed as raw compressed chunks with checksum verification but
+    // without decompression, and digests will be calculated.
+    //
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
@@ -770,11 +774,21 @@ public:
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
     // if integrity checking is disabled or the SSTable is compressed.
-    using raw_stream = bool_class<class raw_stream_tag>;
+    enum class raw_stream {
+        no,
+        yes,
+        compressed_chunks
+    };
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
+
+    future<input_stream<char>> data_stream(uint64_t pos, size_t len,
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+        file_input_stream_options options,
+        raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+        integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -810,6 +824,8 @@ private:
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
     // runs in async context (called from storage::open)
     void write_toc(file_writer w);
+    static future<uint32_t> read_digest_from_file(file f);
+    static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
 public:
 
     shareable_components& get_shared_components() const {
@@ -1088,6 +1104,8 @@ public:
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
     future<std::optional<uint32_t>> read_digest();
+    future<std::optional<uint32_t>> read_digest(file f);
+    future<lw_shared_ptr<checksum>> read_checksum(file f);
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
@@ -1212,7 +1230,7 @@ public:
 };
 
 // Translates the result of gathering readable snapshot files into ordered items for streaming.
-std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot&);
+future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_sources(const sstables::sstable_files_snapshot&, reader_permit);
 
 class sstable_stream_sink {
 public:

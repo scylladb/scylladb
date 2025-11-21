@@ -391,7 +391,8 @@ namespace streaming {
 // Send files in the files list to the nodes in targets list over network
 // Returns number of bytes sent over network
 future<size_t>
-tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sources, std::vector<node_and_shard> targets, table_id table, file_stream_id ops_id, service::frozen_topology_guard topo_guard, bool inject_errors) {
+tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sources, std::vector<node_and_shard> targets,
+        table_id table, file_stream_id ops_id, service::frozen_topology_guard topo_guard, bool inject_errors) {
     size_t ops_total_size = 0;
     if (targets.empty()) {
         co_return ops_total_size;
@@ -417,6 +418,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     meta.table = table;
     meta.topo_guard = topo_guard;
     std::exception_ptr error;
+    std::exception_ptr sender_error;
 
     auto stream_options = file_input_stream_options();
     stream_options.buffer_size = file_stream_buffer_size;
@@ -452,7 +454,6 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
 
             // This fiber sends data to peer node
             auto send_data_to_peer = [&] () mutable -> future<> {
-                std::exception_ptr error;
                 try {
                     while (!got_error_from_peer) {
                         may_inject_error(meta, inject_errors, "read_data");
@@ -473,9 +474,9 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                         });
                     }
                 } catch (...) {
-                    error = std::current_exception();
+                    sender_error = std::current_exception();
                 }
-                if (error) {
+                if (sender_error) {
                     // We have to close the stream otherwise if the stream is
                     // ok, the get_status_code_from_peer fiber below might
                     // wait for the source() forever.
@@ -486,7 +487,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                         } catch (...) {
                         }
                     }
-                    std::rethrow_exception(error);
+                    std::rethrow_exception(sender_error);
                 }
 
                 if (fstream) {
@@ -607,7 +608,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     if (error) {
         blogger.warn("fstream[{}] Master failed sending files_nr={} files={} targets={} send_size={} bw={} error={}",
                 ops_id, sources.size(), sources, targets, ops_total_size, get_bw(ops_total_size, ops_start_time), error);
-        std::rethrow_exception(error);
+        std::rethrow_exception(sender_error ? sender_error : error);
     } else {
         blogger.debug("fstream[{}] Master finished sending files_nr={} files={} targets={} send_size={} bw={}",
                 ops_id, sources.size(), sources, targets, ops_total_size, get_bw(ops_total_size, ops_start_time));
@@ -635,13 +636,14 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     auto files = std::list<stream_blob_info>();
 
     auto& sst_gen = table.get_sstable_generation_generator();
+    auto reader = co_await db.obtain_reader_permit(table, "tablet_file_streaming", db::no_timeout, {});
 
     for (auto& sst_snapshot : sstables) {
         auto& sst = sst_snapshot.sst;
         // stable state (across files) is a must for load to work on destination
         auto sst_state = sst->state();
 
-        auto sources = create_stream_sources(sst_snapshot);
+        auto sources = co_await create_stream_sources(sst_snapshot, reader);
         auto newgen = fmt::to_string(sst_gen());
 
         for (auto&& s : sources) {
