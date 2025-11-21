@@ -34,6 +34,11 @@ drop_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
+    if (_service_level == qos::service_level_controller::default_service_level_name) {
+        sstring reason = seastar::format("The default service level, {}, cannot be dropped",
+                qos::service_level_controller::default_service_level_name);
+        throw exceptions::invalid_request_exception(std::move(reason));
+    }
     service::group0_batch mc{std::move(guard)};
     auto& sl = state.get_service_level_controller();
     co_await sl.drop_distributed_service_level(_service_level, _if_exists, mc);

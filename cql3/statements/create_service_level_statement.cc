@@ -45,6 +45,12 @@ create_service_level_statement::execute(query_processor& qp,
         throw exceptions::invalid_request_exception("Names starting with '$' are reserved for internal tenants. Use a different name.");
     }
 
+    if (_service_level == qos::service_level_controller::default_service_level_name) {
+        sstring reason = seastar::format("The default service level, {}, already exists "
+                "and cannot be created", qos::service_level_controller::default_service_level_name);
+        throw exceptions::invalid_request_exception(std::move(reason));
+    }
+
     service::group0_batch mc{std::move(guard)};
     validate_shares_option(qp, _slo);
     

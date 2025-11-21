@@ -1560,6 +1560,10 @@ serviceLevelOrRoleName returns [sstring name]
 | t=QUOTED_NAME        { $name = sstring($t.text); }
 | k=unreserved_keyword { $name = k;
 						 std::transform($name.begin(), $name.end(), $name.begin(), ::tolower);}
+// The literal `default` will not be parsed by any of the previous
+// rules, so we need to cover it manually. Needed by CREATE SERVICE
+// LEVEL and ATTACH SERVICE LEVEL.
+| t=K_DEFAULT          { $name = sstring("default"); }
 | QMARK {add_recognition_error("Bind variables cannot be used for service levels or role names");}
 ;
 
