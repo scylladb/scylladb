@@ -168,6 +168,14 @@ def parse_keyspace_table(name, separator_chars = '.'):
     m = re.match(pat, name)
     return m.group('keyspace'), m.group('table')
 
+
+def excludenode(cql, excluded_host_id: str):
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/storage_service/exclude_node/', params={'hosts': excluded_host_id})
+    else:
+        run_nodetool(cql, "excludenode", excluded_host_id)
+
+
 class no_autocompaction_context:
     """Disable autocompaction for the enclosed scope, for the provided keyspace(s) or keyspace.table(s).
     """

@@ -39,7 +39,7 @@ def padded_name(length):
 # Created to avoid passing the same replication option in every tests.
 @contextmanager
 def new_keyspace(cql, ks_name=unique_name()):
-    cql.execute(f"CREATE KEYSPACE {ks_name} WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE {ks_name} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         yield ks_name
     finally:

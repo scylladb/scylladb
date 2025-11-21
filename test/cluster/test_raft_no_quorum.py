@@ -176,13 +176,13 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
                 'value': '500'
             }
         ]
-    })]
+    }, property_file={"dc": "dc1", "rack": "rack1"})]
 
     logger.info("starting second and third nodes (followers)")
-    servers += await manager.servers_add(servers_num=2)
+    servers += await manager.servers_add(servers_num=2, property_file={"dc": "dc1", "rack": "rack2"})
 
     logger.info('create keyspace and table')
-    ks = await create_new_test_keyspace(manager.get_cql(), "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
+    ks = await create_new_test_keyspace(manager.get_cql(), "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     await manager.get_cql().run_async(f'create table {ks}.test_table (pk int primary key)')
 
     logger.info("stopping the second and third nodes")

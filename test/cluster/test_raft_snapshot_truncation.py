@@ -49,7 +49,7 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     logger.info(f"Log size on {s1}: {log_size}")
     assert (log_size > 0)
 
-    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"After add keyspace Log size on {s1}: {log_size}")
@@ -80,11 +80,11 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     await asyncio.gather(*errs)
 
     original_snap_id = await get_raft_snap_id(cql, h1)
-    
+
     # Create 3 keyspaces.
     keyspaces = []
     for i in range(3):
-        keyspaces.append(await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"))
+        keyspaces.append(await create_new_test_keyspace(cql, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"))
 
     # Drop 2 keyspaces.
     for i in range(2):

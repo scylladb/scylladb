@@ -45,7 +45,7 @@ async def test_query_rebounce(manager: ManagerClient):
     servers = await manager.running_servers()
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1} and tablets = {'enabled': false};") as ks:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         await cql.run_async(f"create table {ks}.lwt (a int, b int, primary key(a));")
 
         await cql.run_async(f"insert into {ks}.lwt (a,b ) values (1, 10);")
