@@ -2070,14 +2070,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
         });
 
+        auto tm = get_token_metadata_ptr();
+        auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
 
         co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
-
-        auto tm = get_token_metadata_ptr();
-        auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
