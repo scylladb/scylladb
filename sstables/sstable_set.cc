@@ -856,9 +856,12 @@ public:
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}, eos={}", fmt::ptr(this), selection.sstables.size(),
                     _selector_position, end_of_stream());
 
-            readers = std::ranges::to<std::vector<mutation_reader>>(selection.sstables
-                    | std::views::filter([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
-                    | std::views::transform([this] (auto& sst) { return this->create_reader(sst); }));
+            readers.clear();
+            for (auto& sst : selection.sstables) {
+                if (_read_sstable_gens.emplace(sst->generation()).second) {
+                    readers.push_back(create_reader(sst));
+                }
+            }
         } while (!end_of_stream() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());
