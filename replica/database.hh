@@ -971,6 +971,8 @@ public:
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
+    void update_tombstone_gc_rf_one();
+
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
