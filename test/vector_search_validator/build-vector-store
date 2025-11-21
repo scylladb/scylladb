@@ -1,0 +1,23 @@
+#!/bin/bash
+
+set -e
+
+usage() {
+    echo "usage: $0 <build-dir>"
+    exit 1
+}
+
+build_dir=$1
+[[ -z $build_dir ]] && usage
+build_dir=$(realpath $build_dir/vector-search-validator)
+
+proj_dir=$(dirname "${BASH_SOURCE[0]}")
+proj_dir=$(realpath $proj_dir)
+
+source "$proj_dir/build-env"
+
+mkdir -p "$build_dir"
+cd "$build_dir"
+
+rm bin/vector-store release/deps/vector_store* -f
+cargo install --git "$VECTOR_STORE_GIT" --rev "$VECTOR_STORE_REV" --root . --target-dir . --no-track vector-store

@@ -528,6 +528,7 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
         prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
         prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
         prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "vector-search-validator", "*", save_log_on_success)
         if TEST_RUNNER != "pytest":
             prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
 
