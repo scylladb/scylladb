@@ -40,7 +40,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) 
     if (!_shared_state) {
         return gc_clock::time_point::min();
     }
-    return check_min(s, _shared_state->get_reconcile_history_maps()._group0_gc_time);
+    return check_min(s, _shared_state->get_group0_gc_time());
 }
 
 void shared_tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
@@ -203,9 +203,10 @@ shared_tombstone_gc_state::shared_tombstone_gc_state()
     : _reconcile_history_maps(make_lw_shared<const per_table_history_maps>())
  { }
 
-shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps)
+shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps, gc_clock::time_point group0_gc_time)
     : _gc_min_source(std::move(gc_min_source))
     , _reconcile_history_maps(std::move(reconcile_history_maps))
+    , _group0_gc_time(group0_gc_time)
 { }
 
 shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&) = default;
@@ -256,13 +257,11 @@ future<> shared_tombstone_gc_state::flush_pending_repair_time_update(replica::da
 };
 
 void shared_tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
-    mutate_repair_history([refresh_time] (per_table_history_maps& maps) {
-        maps._group0_gc_time = refresh_time;
-    });
+    _group0_gc_time = refresh_time;
 }
 
 tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
-    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps));
+    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time));
 }
 
 tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
