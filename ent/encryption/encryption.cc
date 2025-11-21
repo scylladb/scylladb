@@ -280,6 +280,8 @@ class encryption_context_impl : public encryption_context {
     std::vector<std::unordered_map<sstring, shared_ptr<gcp_host>>> _per_thread_gcp_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<azure_host>>> _per_thread_azure_host_cache;
     std::vector<shared_ptr<encryption_schema_extension>> _per_thread_global_user_extension;
+    std::vector<std::optional<db::system_keyspace::replicated_key_provider_version_t>> _per_thread_replicated_keys_version;
+    std::vector<std::vector<replicated_keys_state_change_callback>> _per_thread_replicated_keys_listeners;
     std::unique_ptr<encryption_config> _cfg;
     sharded<cql3::query_processor>* _qp;;
     sharded<service::migration_manager>* _mm;
@@ -296,6 +298,8 @@ public:
         , _per_thread_gcp_host_cache(smp::count)
         , _per_thread_azure_host_cache(smp::count)
         , _per_thread_global_user_extension(smp::count)
+        , _per_thread_replicated_keys_version(smp::count)
+        , _per_thread_replicated_keys_listeners(smp::count)
         , _cfg(std::move(cfg))
         , _qp(find_or_null<cql3::query_processor>(services))
         , _mm(find_or_null<service::migration_manager>(services))
@@ -452,7 +456,7 @@ public:
 
     future<> start() override {
         if (_qp && _ss && _db && _mm) {
-            co_await replicated_key_provider_factory::on_started(get_database().local(), get_migration_manager().local());
+            co_await replicated_key_provider_factory::on_started(*this, get_database().local(), get_migration_manager().local());
         }
     }
     future<> stop() override {
@@ -487,6 +491,41 @@ public:
     }
     bool allow_per_table_encryption() const {
         return _allow_per_table_encryption;
+    }
+
+    void register_replicated_keys_state_listener(replicated_keys_state_change_callback callback) override {
+        _per_thread_replicated_keys_listeners[this_shard_id()].push_back(std::move(callback));
+    }
+
+    future<> notify_replicated_keys_state_change(db::system_keyspace::replicated_key_provider_version_t version) override {
+        return smp::invoke_on_all([this, version]() -> future<> {
+            auto& listeners = _per_thread_replicated_keys_listeners[this_shard_id()];
+            for (const auto& listener : listeners) {
+                logg.debug("Notifying replicated key state change listener {}", listener.target_type().name());
+                co_await listener(version);
+            }
+        });
+    }
+
+    future<db::system_keyspace::replicated_key_provider_version_t> get_or_load_replicated_keys_version() override {
+        auto& cached = _per_thread_replicated_keys_version[this_shard_id()];
+        if (cached) {
+            co_return *cached;
+        }
+
+        // Load from system.scylla_local and cache it on each shard.
+        // This is potentially wasteful if called concurrently from multiple shards, but not harmful.
+        auto version = co_await get_storage_service().local().get_system_keyspace().get_replicated_key_provider_version();
+        co_await set_replicated_keys_version(version);
+        co_return version;
+    }
+
+    future<> set_replicated_keys_version(db::system_keyspace::replicated_key_provider_version_t version) override {
+        return smp::submit_to(0, [this, version] {
+            for (auto& v : _per_thread_replicated_keys_version) {
+                v = version;
+            }
+        });
     }
 };
 
@@ -550,14 +589,17 @@ public:
     future<std::tuple<::shared_ptr<symmetric_key>, opt_bytes>> key_for_write(opt_bytes id = {}) const {
         return _provider->key(_info, std::move(id));
     }
+    future<std::tuple<::shared_ptr<symmetric_key>, opt_bytes>> key_for_write(utils::chunked_vector<mutation>& muts, api::timestamp_type timestamp, opt_bytes id = {}) const {
+        return _provider->key(_info, std::move(id), muts, timestamp);
+    }
 
     bytes serialize() const override {
         return ser::serialize_to_buffer<bytes>(_options, 0);
     }
-    future<> validate(const schema& s) const override {
+    future<> validate(const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type timestamp) const override {
         try {
             co_await _provider->validate();
-            auto k = co_await key_for_write();
+            auto k = co_await key_for_write(muts, timestamp);
             logg.info("Added encryption extension to {}.{}", s.ks_name(), s.cf_name());
             logg.info("   Options: {}", _options);
             logg.info("   Key Algorithm: {}", _info);

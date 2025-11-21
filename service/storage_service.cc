@@ -737,6 +737,16 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             break;
     }
 
+    if (_replicated_keys_migration_mgr) {
+        auto replicated_key_provider_version = co_await _sys_ks.local().get_replicated_key_provider_version();
+        if (replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v1_5) {
+            co_await _replicated_keys_migration_mgr->upgrade_to_v1_5();
+        }
+        if (replicated_key_provider_version == db::system_keyspace::replicated_key_provider_version_t::v2) {
+            co_await _replicated_keys_migration_mgr->upgrade_to_v2();
+        }
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
@@ -1404,8 +1414,11 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
                 co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
     }
 
+    insert_join_request_mutations.emplace_back(
+            co_await _sys_ks.local().make_replicated_key_provider_version_mutation(write_timestamp, db::system_keyspace::replicated_key_provider_version_t::v2));
+
     topology_change change{std::move(insert_join_request_mutations)};
-    
+
     auto history_append = db::system_keyspace::make_group0_history_state_id_mutation(new_group0_state_id,
             _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
     auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
@@ -7705,6 +7718,9 @@ void storage_service::init_messaging_service() {
                     additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
                     additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
+                if (ss._feature_service.encrypted_keys_on_group0) {
+                    additional_tables.push_back(db::system_keyspace::encrypted_keys()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -7759,6 +7775,11 @@ void storage_service::init_messaging_service() {
             auto vb_processing_base_mut = co_await ss._sys_ks.local().get_view_building_processing_base_id_mutation();
             if (vb_processing_base_mut) {
                 mutations.emplace_back(*vb_processing_base_mut);
+            }
+
+            auto replicated_key_provider_version_mut = co_await ss._sys_ks.local().get_replicated_key_provider_version_mutation();
+            if (replicated_key_provider_version_mut) {
+                mutations.emplace_back(*replicated_key_provider_version_mut);
             }
 
             co_return raft_snapshot{
@@ -8330,6 +8351,10 @@ future<> storage_service::query_cdc_timestamps(table_id table, bool ascending, n
 
 future<> storage_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const utils::chunked_vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
     return _cdc_gens.local().query_cdc_streams(table, std::move(f));
+}
+
+raft_group0_client* storage_service::get_group0_client() noexcept {
+    return _group0 ? &_group0->client() : nullptr;
 }
 
 } // namespace service

@@ -103,6 +103,7 @@ namespace {
             system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::CDC_STREAMS_STATE,
             system_keyspace::CDC_STREAMS_HISTORY,
+            system_keyspace::ENCRYPTED_KEYS,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -130,6 +131,7 @@ namespace {
                 system_keyspace::VIEW_BUILD_STATUS_V2,
                 system_keyspace::CDC_STREAMS_STATE,
                 system_keyspace::CDC_STREAMS_HISTORY,
+                system_keyspace::ENCRYPTED_KEYS,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -1257,6 +1259,21 @@ schema_ptr system_keyspace::view_build_status_v2() {
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::encrypted_keys() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, ENCRYPTED_KEYS);
+        return schema_builder(NAME, ENCRYPTED_KEYS, std::make_optional(id))
+                .with_column("key_file", utf8_type, column_kind::partition_key)
+                .with_column("cipher", utf8_type, column_kind::partition_key)
+                .with_column("strength", int32_type, column_kind::clustering_key)
+                .with_column("key_id", timeuuid_type, column_kind::clustering_key)
+                .with_column("key", utf8_type)
                 .with_hash_version()
                 .build();
     }();
@@ -2603,7 +2620,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history(), encrypted_keys()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -3332,6 +3349,39 @@ future<mutation> system_keyspace::make_view_builder_version_mutation(api::timest
     auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VIEW_BUILDER_VERSION_KEY, std::to_string(int64_t(version))});
     if (muts.size() != 1) {
          on_internal_error(slogger, fmt::format("expected 1 view_builder_version mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+static constexpr auto REPLICATED_KEY_PROVIDER_VERSION_KEY = "replicated_key_provider_version";
+
+future<system_keyspace::replicated_key_provider_version_t> system_keyspace::get_replicated_key_provider_version() {
+    auto str_opt = co_await get_scylla_local_param(REPLICATED_KEY_PROVIDER_VERSION_KEY);
+    if (!str_opt) {
+        co_return replicated_key_provider_version_t::v1;
+    }
+    auto& str = *str_opt;
+    if (str == "" || str == "10") {
+        co_return replicated_key_provider_version_t::v1;
+    }
+    if (str == "15") {
+        co_return replicated_key_provider_version_t::v1_5;
+    }
+    if (str == "20") {
+        co_return replicated_key_provider_version_t::v2;
+    }
+    on_internal_error(slogger, fmt::format("unexpected replicated_key_provider_version in scylla_local got {}", str));
+}
+
+future<std::optional<mutation>> system_keyspace::get_replicated_key_provider_version_mutation() {
+    return get_scylla_local_mutation(_db, REPLICATED_KEY_PROVIDER_VERSION_KEY);
+}
+
+future<mutation> system_keyspace::make_replicated_key_provider_version_mutation(api::timestamp_type ts, db::system_keyspace::replicated_key_provider_version_t version) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {REPLICATED_KEY_PROVIDER_VERSION_KEY, std::to_string(int64_t(version))});
+    if (muts.size() != 1) {
+         on_internal_error(slogger, fmt::format("expected 1 replicated_key_provider_version mutation got {}", muts.size()));
     }
     co_return std::move(muts[0]);
 }
