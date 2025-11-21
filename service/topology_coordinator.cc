@@ -1472,6 +1472,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::chunked_vector<canonical_mutation> updates;
         bool needs_barrier = false;
         bool has_transitions = false;
+        std::unordered_set<locator::host_id> barrier_nodes;
 
         shared_promise barrier;
         auto fail_barrier = seastar::defer([&] {
@@ -1516,6 +1517,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto do_barrier = [&] {
                 return advance_in_background(gid, tablet_state.barriers[trinfo.stage], "barrier", [&] {
                     needs_barrier = true;
+                    for (const auto& r: tmap.get_tablet_info(gid.tablet).replicas) {
+                        barrier_nodes.insert(r.host);
+                    }
+                    if (trinfo.pending_replica) {
+                        barrier_nodes.insert(trinfo.pending_replica->host);
+                    }
                     return barrier.get_shared_future();
                 });
             };
@@ -1956,7 +1963,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!guard) {
                 guard = co_await start_operation();
             }
-            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            guard = co_await global_barrier_and_fence(std::move(guard), barrier_nodes, "tablets migration");
             barrier.set_value();
             fail_barrier.cancel();
             co_return;
