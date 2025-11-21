@@ -351,7 +351,7 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
     # Block (on streaming) the base or view tablet migrations, so that one table will have
     # temporarily more replicas (that aren't pending) than the other.
     await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': 'ks', 'table': delayed_replica}) for s in servers])
-    ks_fut = cql.run_async(f"ALTER KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc2':1}}")
+    ks_fut = cql.run_async(f"ALTER KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1}}")
 
     # Wait until the not blocked migration finishes before performing a write
     async def first_migration_done():

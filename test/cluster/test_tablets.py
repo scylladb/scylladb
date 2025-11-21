@@ -17,7 +17,7 @@ from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -342,10 +342,10 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
             # changing RF of dc2 from 0 to 2 should fail
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': ['rack1', 'rack2']}}")
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': ['rack1', 'rack2']}}")
 
         # changing RF of dc2 from 0 to 1 should succeed
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': ['rack1']}}")
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': ['rack1']}}")
         # ensure that RFs of both DCs are equal to 1 now, i.e. that omitting dc1 in above command didn't change it
         repl = get_replication(cql, ks)
         logger.info(f"repl = {repl}")
@@ -366,10 +366,47 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
             await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': ['rack1', 'rack2']}}")
 
         # check that we can remove all replicas from dc2 by changing RF from 1 to 0
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 0}}")
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}")
         # check that we can remove all replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0}}")
 
+
+@pytest.mark.asyncio
+async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
+
+    logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
+    # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
+    await manager.servers_add(2, config=config, auto_rack_dc="dc1")
+    await manager.servers_add(2, config=config, auto_rack_dc="dc2")
+
+    async def check_rf(ks: str, expected_dc1_rf: int, expected_dc2_rf: int):
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+        repl = parse_replication_options(res[0].replication)
+        logger.info(f"repl = {repl}")
+        assert get_replica_count(repl['dc1']) == expected_dc1_rf if expected_dc1_rf > 0 else 'dc1' not in repl
+        assert get_replica_count(repl['dc2']) == expected_dc2_rf if expected_dc2_rf > 0 else 'dc2' not in repl
+        return repl
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"create table {ks}.t (pk int primary key)")
+
+        await check_rf(ks=ks, expected_dc1_rf=1, expected_dc2_rf=1)
+
+        with pytest.raises(ConfigurationException, match="Attempted to implicitly drop replicas in datacenter dc2. If this is the desired behavior, set replication factor to 0 in dc2 explicitly."):
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}")
+        repl = await check_rf(ks=ks, expected_dc1_rf=1, expected_dc2_rf=1)
+
+        dc1_rf = repl['dc1']
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {dc1_rf}, 'dc2': 0}}")
+        await check_rf(ks=ks, expected_dc1_rf=1, expected_dc2_rf=0)
+
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}")
+        await check_rf(ks=ks, expected_dc1_rf=2, expected_dc2_rf=0)
+
+        await cql.run_async(f"alter keyspace {ks} with durable_writes = true")
+        await check_rf(ks=ks, expected_dc1_rf=2, expected_dc2_rf=0)
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads

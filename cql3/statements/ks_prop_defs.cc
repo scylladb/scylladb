@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "seastar/core/format.hh"
 #include "seastar/core/sstring.hh"
 #include "utils/assert.hh"
 #include "cql3/statements/ks_prop_defs.hh"
@@ -111,6 +112,17 @@ static locator::replication_strategy_config_options prepare_options(
 
     if (!is_nts) {
         return options;
+    }
+
+    if (uses_tablets) {
+        for (const auto& opt: old_options) {
+            if (opt.first == ks_prop_defs::REPLICATION_FACTOR_KEY) {
+                on_internal_error(logger, format("prepare_options: old_options contains invalid key '{}'", ks_prop_defs::REPLICATION_FACTOR_KEY));
+            }
+            if (!options.contains(opt.first)) {
+                throw exceptions::configuration_exception(fmt::format("Attempted to implicitly drop replicas in datacenter {}. If this is the desired behavior, set replication factor to 0 in {} explicitly.", opt.first, opt.first));
+            }
+        }
     }
 
     // For users' convenience, expand the 'replication_factor' option into a replication factor for each DC.
