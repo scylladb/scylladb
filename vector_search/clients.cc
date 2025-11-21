@@ -135,7 +135,6 @@ future<> clients::stop() {
     _refresh_cv.signal();
     co_await _gate.close();
     co_await close_clients();
-    co_await close_old_clients();
 }
 
 void clients::clear() {
@@ -147,7 +146,11 @@ future<> clients::close_clients() {
     for (auto& client : _clients) {
         co_await client->close();
     }
+    for (auto& client : _old_clients) {
+        co_await client->close();
+    }
     _clients.clear();
+    _old_clients.clear();
 }
 
 future<> clients::close_old_clients() {
