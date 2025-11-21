@@ -813,7 +813,7 @@ public:
     const lw_shared_ptr<const sstables::sstable_set>& find_sstable_set(size_t i) const {
         auto it = _sstable_sets.find(i);
         if (it == _sstable_sets.end() || !it->second) [[unlikely]] {
-            on_internal_error(tablet_logger, format("SSTable set wasn't found for tablet {} of table {}.{}", i, schema()->ks_name(), schema()->cf_name()));
+            throw std::runtime_error(format("SSTable set wasn't found for tablet {} of table {}.{}", i, schema()->ks_name(), schema()->cf_name()));
         }
         return it->second;
     }
