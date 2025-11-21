@@ -55,8 +55,13 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     auto schema_extensions = _properties->make_schema_extensions(db.extensions());
     _properties->validate(db, keyspace(), schema_extensions);
 
+    auto gc_opts = _properties->get_tombstone_gc_options(schema_extensions);
+    if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
+        throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on materialized view tables.");
+    }
+
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
+    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), false);
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(
