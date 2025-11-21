@@ -777,7 +777,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
     auto erm = table.get_effective_replication_map();
     auto ctx = seastar::make_shared<read_context>(db, s, erm, cmd, ranges, trace_state, timeout);
 
-    tombstone_gc_state gc_state = tombstone_gc_enabled ? table.get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+    tombstone_gc_state gc_state = tombstone_gc_enabled ? table.get_tombstone_gc_state() : tombstone_gc_state::no_gc();
 
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {

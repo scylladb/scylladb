@@ -598,8 +598,7 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<sstables::shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
-    // optional tombstone_gc_state that is used when gc has to check only the compacting sstables to collect tombstones.
-    std::optional<tombstone_gc_state> _tombstone_gc_state_with_commitlog_check_disabled;
+    tombstone_gc_state _tombstone_gc_state;
     int64_t _output_repaired_at = 0;
 private:
     // Keeps track of monitors for input sstable.
@@ -649,9 +648,12 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
-        , _tombstone_gc_state_with_commitlog_check_disabled(descriptor.gc_check_only_compacting_sstables ? std::make_optional(_table_s.get_tombstone_gc_state().with_commitlog_check_disabled()) : std::nullopt)
+        , _tombstone_gc_state(_table_s.get_tombstone_gc_state())
         , _progress_monitor(progress_monitor)
     {
+        if (descriptor.gc_check_only_compacting_sstables) {
+            _tombstone_gc_state = _tombstone_gc_state.with_commitlog_check_disabled();
+        }
         std::unordered_set<sstables::run_id> ssts_run_ids;
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (sstables::shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
@@ -849,8 +851,8 @@ private:
         return _table_s.get_compaction_strategy().make_sstable_set(_table_s);
     }
 
-    const tombstone_gc_state& get_tombstone_gc_state() const {
-        return _tombstone_gc_state_with_commitlog_check_disabled ? _tombstone_gc_state_with_commitlog_check_disabled.value() : _table_s.get_tombstone_gc_state();
+    tombstone_gc_state get_tombstone_gc_state() const {
+        return _tombstone_gc_state;
     }
 
     future<> setup() {
@@ -1050,7 +1052,7 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value(), is_shadowable);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(), is_shadowable);
         };
     }
 

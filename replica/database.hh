@@ -950,6 +950,8 @@ public:
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
 private:
+    void update_tombstone_gc_rf_one();
+
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
@@ -1359,6 +1361,8 @@ public:
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
+
+    tombstone_gc_state get_tombstone_gc_state() const;
 
     friend class compaction_group;
     friend class compaction::compaction_task_impl;
