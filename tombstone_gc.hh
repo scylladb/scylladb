@@ -42,10 +42,7 @@ class database;
 // the "repair" tombstone GC mode).
 class repair_history_map_ptr;
 
-class per_table_history_maps {
-public:
-    std::unordered_map<table_id, repair_history_map_ptr> _repair_maps;
-};
+using per_table_history_maps = std::unordered_map<table_id, repair_history_map_ptr>;
 
 class tombstone_gc_options;
 
@@ -79,9 +76,7 @@ public:
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
-    const per_table_history_maps& get_reconcile_history_maps() const noexcept {
-        return *_reconcile_history_maps;
-    }
+    const per_table_history_maps& get_reconcile_history_maps() const noexcept;
 
     gc_clock::time_point get_group0_gc_time() const noexcept {
         return _group0_gc_time;
