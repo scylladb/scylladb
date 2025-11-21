@@ -27,7 +27,7 @@ repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const ta
     if (!_shared_state) {
         return {};
     }
-    auto& reconcile_history_maps = _shared_state->get_reconcile_history_maps()._repair_maps;
+    auto& reconcile_history_maps = _shared_state->get_reconcile_history_maps();
     auto it = reconcile_history_maps.find(id);
     if (it != reconcile_history_maps.end()) {
         return it->second;
@@ -45,7 +45,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) 
 
 void shared_tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
     mutate_repair_history([id] (per_table_history_maps& maps) {
-        maps._repair_maps.erase(id);
+        maps.erase(id);
     });
 }
 
@@ -213,8 +213,11 @@ shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&
 
 shared_tombstone_gc_state::~shared_tombstone_gc_state() { }
 
-static void do_update_repair_time(per_table_history_maps& maps, table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
-    auto& reconcile_history_maps = maps._repair_maps;
+const per_table_history_maps& shared_tombstone_gc_state::get_reconcile_history_maps() const noexcept {
+    return *_reconcile_history_maps;
+}
+
+static void do_update_repair_time(per_table_history_maps& reconcile_history_maps, table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
     auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
     if (inserted || !it->second) { // check for failed past update, leaving behind nullptr
         it->second = seastar::make_lw_shared<repair_history_map>();
