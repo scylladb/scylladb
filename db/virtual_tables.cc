@@ -1158,6 +1158,104 @@ private:
     }
 };
 
+class tablet_sizes : public group0_virtual_table {
+private:
+    sharded<service::tablet_allocator>& _talloc;
+    sharded<replica::database>& _db;
+public:
+    tablet_sizes(sharded<service::tablet_allocator>& talloc,
+                 sharded<replica::database>& db,
+                 sharded<service::raft_group_registry>& raft_gr,
+                 sharded<netw::messaging_service>& ms)
+        : group0_virtual_table(build_schema(), raft_gr, ms)
+        , _talloc(talloc)
+        , _db(db)
+    { }
+
+    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+        auto stats = _talloc.local().get_load_stats();
+        while (!stats) {
+            // Wait for stats to be refreshed by topology coordinator
+            {
+                abort_on_expiry aoe(permit.timeout());
+                reader_permit::awaits_guard ag(permit);
+                co_await seastar::sleep_abortable(std::chrono::milliseconds(200), aoe.abort_source());
+            }
+            if (!co_await is_leader(permit)) {
+                co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+                co_return;
+            }
+            stats = _talloc.local().get_load_stats();
+        }
+
+        auto tm = _db.local().get_token_metadata_ptr();
+
+        auto prepare_replica_sizes = [] (const std::unordered_map<host_id, uint64_t>& replica_sizes) {
+            map_type_impl::native_type tmp;
+            for (auto& r: replica_sizes) {
+                auto replica = r.first.uuid();
+                int64_t tablet_size = int64_t(r.second);
+                auto map_element = std::make_pair<data_value, data_value>(data_value(replica), data_value(tablet_size));
+                tmp.push_back(std::move(map_element));
+            }
+            return tmp;
+        };
+
+        auto prepare_missing_replica = [] (const std::unordered_set<host_id>& missing_replicas) {
+            set_type_impl::native_type tmp;
+            for (auto& r: missing_replicas) {
+                tmp.push_back(data_value(r.uuid()));
+            }
+            return tmp;
+        };
+
+        auto map_type = map_type_impl::get_instance(uuid_type, long_type, false);
+        auto set_type = set_type_impl::get_instance(uuid_type, false);
+        for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
+            mutation m(schema(), make_partition_key(table));
+            co_await tmap->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
+                auto trange = tmap->get_token_range(tid);
+                int64_t last_token = trange.end()->value().raw();
+                auto& r = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(last_token).serialize_nonnull()));
+                const range_based_tablet_id rb_tid {table, trange};
+                std::unordered_map<host_id, uint64_t> replica_sizes;
+                std::unordered_set<host_id> missing_replicas;
+                for (auto& replica : tinfo.replicas) {
+                    auto tablet_size_opt = stats->get_tablet_size(replica.host, rb_tid);
+                    if (tablet_size_opt) {
+                        replica_sizes[replica.host] = *tablet_size_opt;
+                    } else {
+                        missing_replicas.insert(replica.host);
+                    }
+                }
+                set_cell(r.cells(), "replicas", make_map_value(map_type, prepare_replica_sizes(replica_sizes)));
+                set_cell(r.cells(), "missing_replicas", make_set_value(set_type, prepare_missing_replica(missing_replicas)));
+                return make_ready_future<>();
+            });
+
+            mutation_sink(m);
+        }
+    }
+
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "tablet_sizes");
+        return schema_builder(system_keyspace::NAME, "tablet_sizes", std::make_optional(id))
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("last_token", long_type, column_kind::clustering_key)
+            .with_column("replicas", map_type_impl::get_instance(uuid_type, long_type, false))
+            .with_column("missing_replicas", set_type_impl::get_instance(uuid_type, false))
+            .with_sharder(1, 0) // shard0-only
+            .with_hash_version()
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(table_id table) {
+        return dht::decorate_key(*_s, partition_key::from_single_value(
+                *_s, data_value(table.uuid()).serialize_nonnull()));
+    }
+};
+
 class cdc_timestamps_table : public streaming_virtual_table {
 private:
     replica::database& _db;
@@ -1353,6 +1451,7 @@ future<> initialize_virtual_tables(
     co_await add_table(std::make_unique<clients_table>(ss));
     co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
     co_await add_table(std::make_unique<load_per_node>(tablet_allocator, dist_db, dist_raft_gr, ms, dist_gossiper));
+    co_await add_table(std::make_unique<tablet_sizes>(tablet_allocator, dist_db, dist_raft_gr, ms));
     co_await add_table(std::make_unique<cdc_timestamps_table>(db, ss));
     co_await add_table(std::make_unique<cdc_streams_table>(db, ss));
 

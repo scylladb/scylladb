@@ -1680,11 +1680,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::end_migration: {
-                    // Move the tablet size in load_stats
-                    auto leaving = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
-                    auto pending = trinfo.pending_replica;
-                    const dht::token_range trange {tmap.get_token_range(gid.tablet)};
-                    migrate_tablet_size(leaving->host, pending->host, gid, trange);
+                    // Update load_stats after a migration or rebuild
+                    update_load_stats_on_end_migration(gid, tmap, trinfo);
 
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
@@ -1905,9 +1902,36 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
-    void migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) {
+    // Migrates tablet size from leaving to pending host after migration,
+    // or creates a new tablet size on pending host after a rebuild
+    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
-            auto new_load_stats = old_load_stats->migrate_tablet_size(leaving, pending, gid, trange);
+            lw_shared_ptr<locator::load_stats> new_load_stats;
+            auto& tinfo = tmap.get_tablet_info(gid.tablet);
+            auto leaving = locator::get_leaving_replica(tinfo, trinfo);
+            auto pending = trinfo.pending_replica;
+            const dht::token_range trange {tmap.get_token_range(gid.tablet)};
+            if (leaving && pending) {
+                // Handle tablet migration
+                new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
+            } else if (!leaving && pending) {
+                // Handle rebuild: compute the average tablet size of existing replicas
+                new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
+                uint64_t tablet_size_sum = 0;
+                size_t replica_count = 0;
+                const locator::range_based_tablet_id rb_tid {gid.table, trange};
+                for (auto r : tinfo.replicas) {
+                    auto tablet_size_opt = new_load_stats->get_tablet_size(r.host, rb_tid);
+                    if (tablet_size_opt) {
+                        tablet_size_sum += *tablet_size_opt;
+                        replica_count++;
+                    }
+                }
+
+                if (replica_count && new_load_stats->tablet_stats.contains(pending->host)) {
+                    new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
+                }
+            }
             if (new_load_stats) {
                 _tablet_allocator.set_load_stats(std::move(new_load_stats));
             }
