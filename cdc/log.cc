@@ -586,11 +586,9 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, const replica::database& db,
-        const keyspace_metadata& ksm, api::timestamp_type timestamp, std::optional<table_id> uuid, schema_ptr old)
+static void set_default_properties_log_table(schema_builder& b, const schema& s,
+        const replica::database& db, const keyspace_metadata& ksm)
 {
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
-    b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = s.cdc_options().ttl();
@@ -616,13 +614,22 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
                         std::to_string(std::max(1, window_seconds / 2))},
         });
     }
+    b.set_caching_options(caching_options::get_disabled_caching_options());
+
+    auto rs = generate_replication_strategy(ksm, db.get_token_metadata().get_topology());
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
+    b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
+}
+
+static void add_columns_to_cdc_log(schema_builder& b, const schema& s,
+        const api::timestamp_type timestamp, const schema_ptr old)
+{
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
     b.with_column(log_meta_column_name_bytes("ttl"), long_type);
     b.with_column(log_meta_column_name_bytes("end_of_batch"), boolean_type);
-    b.set_caching_options(caching_options::get_disabled_caching_options());
 
     auto validate_new_column = [&] (const sstring& name) {
         // When dropping a column from a CDC log table, we set the drop timestamp to be
@@ -692,14 +699,27 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
     add_columns(s.clustering_key_columns());
     add_columns(s.static_columns(), true);
     add_columns(s.regular_columns(), true);
+}
+
+static schema_ptr create_log_schema(const schema& s, const replica::database& db,
+        const keyspace_metadata& ksm, api::timestamp_type timestamp, std::optional<table_id> uuid, schema_ptr old)
+{
+    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+
+    b.with_partitioner(cdc::cdc_partitioner::classname);
+
+    if (old) {
+        // If the user reattaches the log table, do not change its properties.
+        b.set_properties(old->get_properties());
+    } else {
+        set_default_properties_log_table(b, s, db, ksm);
+    }
+
+    add_columns_to_cdc_log(b, s, timestamp, old);
 
     if (uuid) {
         b.set_uuid(*uuid);
     }
-
-    auto rs = generate_replication_strategy(ksm, db.get_token_metadata().get_topology());
-    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
-    b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 
     /**
      * #10473 - if we are redefining the log table, we need to ensure any dropped
