@@ -2909,6 +2909,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
     recalculate_tablet_count_stats();
     set_metrics();
+
+    update_tombstone_gc_rf_one();
 }
 
 void table::on_flush_timer() {
@@ -3219,6 +3221,17 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     }
 
     recalculate_tablet_count_stats();
+
+    update_tombstone_gc_rf_one();
+}
+
+void table::update_tombstone_gc_rf_one() {
+    auto& st = _compaction_manager.get_shared_tombstone_gc_state();
+    if (_erm && _erm->get_replication_factor() == 1) {
+        st.set_table_rf_one(_schema->id());
+    } else {
+        st.set_table_rf_n(_schema->id());
+    }
 }
 
 void table::recalculate_tablet_count_stats() {
