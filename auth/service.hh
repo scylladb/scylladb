@@ -435,6 +435,14 @@ role_manager_factory make_role_manager_factory(
         sharded<::service::migration_manager>& mm,
         sharded<cache>& cache);
 
+/// Creates a factory for the maintenance socket authenticator.
+/// This authenticator is not config-selectable and is only used for the maintenance socket.
+authenticator_factory make_maintenance_socket_authenticator_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
 /// Creates a factory for the maintenance socket role manager.
 /// This role manager is not config-selectable and is only used for the maintenance socket.
 role_manager_factory make_maintenance_socket_role_manager_factory(
