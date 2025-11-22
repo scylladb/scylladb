@@ -1322,6 +1322,10 @@ const std::vector<expr::expression>& statement_restrictions::index_restrictions(
     return _index_restrictions;
 }
 
+bool statement_restrictions::is_empty() const {
+    return !_where.has_value();
+}
+
 // Current score table:
 // local and restrictions include full partition key: 2
 // global: 1

@@ -60,3 +60,11 @@ def test_ann_query_with_null_vector(cql, test_keyspace):
 
         with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
             cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF null LIMIT 5")
+
+@pytest.mark.xfail(reason="We do not support primary key filtering yet")
+def test_ann_query_with_pk_restriction_fails(cql, test_keyspace):
+    schema = 'p int primary key, v vector<float, 3>'
+    custom_index = 'vector_index' if is_scylla(cql) else 'sai'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}'")
+        cql.execute(f"SELECT * FROM {table} WHERE p = 1 ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 5")
