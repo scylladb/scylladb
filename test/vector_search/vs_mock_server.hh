@@ -43,6 +43,10 @@ public:
         : _next_ann_response(std::move(next_ann_response)) {
     }
 
+    explicit vs_mock_server(seastar::httpd::http_server::server_credentials_ptr credentials)
+        : _credentials(credentials) {
+    }
+
     vs_mock_server() = default;
 
     seastar::future<> start() {
@@ -94,7 +98,7 @@ private:
                     [this](auto& r) {
                         set_routes(r);
                     },
-                    host.c_str(), _port);
+                    host.c_str(), _port, _credentials);
             _http_server = std::move(s);
             _port = addr.port();
             _host = std::move(host);
@@ -143,6 +147,7 @@ private:
     response _next_ann_response{seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
     response _next_status_response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
+    seastar::httpd::http_server::server_credentials_ptr _credentials;
 };
 
 template <typename... Args>

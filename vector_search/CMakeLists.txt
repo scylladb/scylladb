@@ -4,7 +4,8 @@ target_sources(vector_search
     vector_store_client.cc
     dns.cc
     client.cc
-    clients.cc)
+    clients.cc
+    truststore.cc)
 target_link_libraries(vector_search
   PUBLIC
     Seastar::seastar

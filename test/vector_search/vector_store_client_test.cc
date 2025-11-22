@@ -10,6 +10,7 @@
 #include "utils.hh"
 #include "vs_mock_server.hh"
 #include "unavailable_server.hh"
+#include "certificates.hh"
 #include "seastar/core/future.hh"
 #include "seastar/core/when_all.hh"
 #include "db/config.hh"
@@ -17,6 +18,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
+#include <cstdio>
 #include <functional>
 #include <chrono>
 #include <memory>
@@ -35,7 +37,7 @@
 #include <seastar/net/tcp.hh>
 #include <variant>
 #include <vector>
-
+#include <filesystem>
 
 namespace {
 
@@ -941,5 +943,129 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
             cfg)
             .finally(coroutine::lambda([&] -> future<> {
                 co_await secondary->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https) {
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", certs.server_cert_cn(), server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", certs.ca_cert_file()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_CHECK(keys);
+                co_return;
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
+    auto broken_cert = co_await seastar::make_tmp_file();
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", certs.server_cert_cn(), server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", broken_cert.get_path().string()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                co_await create_test_table(env, "ks", "idx");
+                co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
+                    configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
+                    vs.start_background_tasks();
+                    co_return;
+                });
+                // Ensure using wrong CA cert
+                co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
+                    auto schema = env.local_db().find_schema("ks", "idx");
+                    auto as = abort_source_timeout();
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    BOOST_REQUIRE(!keys);
+                });
+
+                // Copy good cert file to wrong cert file to simulate cert update/rewrite
+                std::filesystem::copy_file(
+                        std::string(certs.ca_cert_file()), std::string(broken_cert.get_path().string()), std::filesystem::copy_options::overwrite_existing);
+
+                // Wait for the client to reload the CA cert and succeed
+                co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
+                    auto schema = env.local_db().find_schema("ks", "idx");
+                    auto as = abort_source_timeout();
+                    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                        co_return keys.has_value();
+                    }));
+                });
+
+                BOOST_CHECK(!server->status_requests().empty());
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+                co_await remove(broken_cert);
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    const auto hostname = fmt::format("wrong.{}", certs.server_cert_cn());
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", hostname, server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", certs.ca_cert_file()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{hostname, std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error) {
+    auto broken_cert = co_await seastar::make_tmp_file();
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", certs.server_cert_cn(), server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", broken_cert.get_path().string()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+                co_await remove(broken_cert);
             }));
 }

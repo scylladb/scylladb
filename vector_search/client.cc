@@ -27,15 +27,17 @@ namespace vector_search {
 namespace {
 
 class client_connection_factory : public http::experimental::connection_factory {
-    socket_address _addr;
+    client::endpoint_type _endpoint;
+    shared_ptr<tls::certificate_credentials> _creds;
 
 public:
-    explicit client_connection_factory(socket_address addr)
-        : _addr(addr) {
+    explicit client_connection_factory(client::endpoint_type endpoint, shared_ptr<tls::certificate_credentials> creds)
+        : _endpoint(std::move(endpoint))
+        , _creds(std::move(creds)) {
     }
 
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
-        auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
+        auto socket = co_await connect();
         socket.set_nodelay(true);
         socket.set_keepalive_parameters(net::tcp_keepalive_params{
                 .idle = 60s,
@@ -45,10 +47,23 @@ public:
         socket.set_keepalive(true);
         co_return socket;
     }
+
+private:
+    future<connected_socket> connect() {
+        auto addr = socket_address(_endpoint.ip, _endpoint.port);
+        if (_creds) {
+            return tls::connect(_creds, addr, tls::tls_options{.server_name = _endpoint.host});
+        }
+        return seastar::connect(addr, {}, transport::TCP);
+    }
 };
 
 bool is_server_unavailable(std::exception_ptr& err) {
     return try_catch<std::system_error>(err) != nullptr;
+}
+
+bool is_server_problem(std::exception_ptr& err) {
+    return is_server_unavailable(err) || try_catch<tls::verification_error>(err) != nullptr;
 }
 
 bool is_request_aborted(std::exception_ptr& err) {
@@ -56,7 +71,7 @@ bool is_request_aborted(std::exception_ptr& err) {
 }
 
 future<client::request_error> map_err(std::exception_ptr& err) {
-    if (is_server_unavailable(err)) {
+    if (is_server_problem(err)) {
         co_return service_unavailable_error{};
     }
     if (is_request_aborted(err)) {
@@ -70,9 +85,10 @@ auto constexpr BACKOFF_RETRY_MIN_TIME = 100ms;
 
 } // namespace
 
-client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms)
+client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms,
+        ::shared_ptr<seastar::tls::certificate_credentials> credentials)
     : _endpoint(std::move(endpoint_))
-    , _http_client(std::make_unique<client_connection_factory>(socket_address(endpoint_.ip, endpoint_.port)))
+    , _http_client(std::make_unique<client_connection_factory>(_endpoint, std::move(credentials)))
     , _logger(logger)
     , _request_timeout(std::move(request_timeout_in_ms)) {
 }
@@ -86,7 +102,7 @@ seastar::future<client::request_result> client::request(
     auto f = co_await seastar::coroutine::as_future(request_impl(method, std::move(path), std::move(content), std::nullopt, as));
     if (f.failed()) {
         auto err = f.get_exception();
-        if (is_server_unavailable(err)) {
+        if (is_server_problem(err)) {
             handle_server_unavailable();
         }
         co_return std::unexpected{co_await map_err(err)};
