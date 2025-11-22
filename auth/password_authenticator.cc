@@ -49,6 +49,7 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::raft_group0_client&,
         ::service::migration_manager&,
+        cache&,
         utils::alien_worker&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
@@ -63,10 +64,11 @@ std::string password_authenticator::default_superuser(const db::config& cfg) {
 password_authenticator::~password_authenticator() {
 }
 
-password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, utils::alien_worker& hashing_worker)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, utils::alien_worker& hashing_worker)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
+    , _cache(cache)
     , _stopped(make_ready_future<>()) 
     , _superuser(default_superuser(qp.db().get_config()))
     , _hashing_worker(hashing_worker)
@@ -315,11 +317,20 @@ future<authenticated_user> password_authenticator::authenticate(
     const sstring password = credentials.at(PASSWORD_KEY);
 
     try {
-        const std::optional<sstring> salted_hash = co_await get_password_hash(username);
-        if (!salted_hash) {
-            throw exceptions::authentication_exception("Username and/or password are incorrect");
+        std::optional<sstring> salted_hash;
+        if (legacy_mode(_qp)) {
+            salted_hash = co_await get_password_hash(username);
+            if (!salted_hash) {
+                throw exceptions::authentication_exception("Username and/or password are incorrect");
+            }
+        } else {
+            auto role = _cache.get(username);
+            if (!role || role->salted_hash.empty()) {
+                throw exceptions::authentication_exception("Username and/or password are incorrect");
+            }
+            salted_hash = role->salted_hash;
         }
-        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
+        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash] {
             return passwords::check(password, *salted_hash);
         });
         if (!password_match) {

@@ -83,17 +83,18 @@ static const class_registrator<
     ldap_role_manager,
     cql3::query_processor&,
     ::service::raft_group0_client&,
-    ::service::migration_manager&> registration(ldap_role_manager_full_name);
+    ::service::migration_manager&,
+    cache&> registration(ldap_role_manager_full_name);
 
 ldap_role_manager::ldap_role_manager(
         std::string_view query_template, std::string_view target_attr, std::string_view bind_name, std::string_view bind_password,
-        cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm)
-        : _std_mgr(qp, rg0c, mm), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
+        cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
+        : _std_mgr(qp, rg0c, mm, cache), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
         , _bind_password(bind_password)
         , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this))) {
 }
 
-ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm)
+ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
     : ldap_role_manager(
             qp.db().get_config().ldap_url_template(),
             qp.db().get_config().ldap_attr_role(),
@@ -101,7 +102,8 @@ ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_
             qp.db().get_config().ldap_bind_passwd(),
             qp,
             rg0c,
-            mm) {
+            mm,
+            cache) {
 }
 
 std::string_view ldap_role_manager::qualified_java_name() const noexcept {

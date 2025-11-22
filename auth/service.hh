@@ -21,6 +21,7 @@
 #include "auth/authorizer.hh"
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
+#include "auth/cache.hh"
 #include "auth/role_manager.hh"
 #include "auth/common.hh"
 #include "cql3/description.hh"
@@ -77,6 +78,7 @@ public:
 class service final : public seastar::peering_sharded_service<service> {
     utils::loading_cache_config _loading_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
+    cache& _cache;
 
     cql3::query_processor& _qp;
 
@@ -107,6 +109,7 @@ class service final : public seastar::peering_sharded_service<service> {
 public:
     service(
             utils::loading_cache_config,
+            cache& cache,
             cql3::query_processor&,
             ::service::raft_group0_client&,
             ::service::migration_notifier&,
@@ -128,6 +131,7 @@ public:
             ::service::migration_manager&,
             const service_config&,
             maintenance_socket_enabled,
+            cache&,
             utils::alien_worker&);
 
     future<> start(::service::migration_manager&, db::system_keyspace&);

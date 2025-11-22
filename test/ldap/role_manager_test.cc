@@ -29,7 +29,7 @@ auto make_manager(cql_test_env& env) {
         std::default_delete<auth::standard_role_manager>()(m);
     };
     return std::unique_ptr<auth::standard_role_manager, decltype(stop_role_manager)>(
-            new auth::standard_role_manager(env.local_qp(), env.get_raft_group0_client(),  env.migration_manager().local()),
+            new auth::standard_role_manager(env.local_qp(), env.get_raft_group0_client(),  env.migration_manager().local(), env.auth_cache().local()),
             std::move(stop_role_manager));
 }
 
@@ -284,8 +284,8 @@ auto make_ldap_manager(cql_test_env& env, sstring query_template = default_query
     };
     return std::unique_ptr<auth::ldap_role_manager, decltype(stop_role_manager)>(
             new auth::ldap_role_manager(query_template, /*target_attr=*/"cn", manager_dn, manager_password,
-                                        env.local_qp(), env.get_raft_group0_client(), env.migration_manager().local()),
-            std::move(stop_role_manager));
+                    env.local_qp(), env.get_raft_group0_client(), env.migration_manager().local(), env.auth_cache().local()),
+        std::move(stop_role_manager));
 }
 
 void create_ldap_roles(cql_test_env& env, auth::role_manager& rmgr) {
