@@ -408,7 +408,7 @@ elif [ "$ID" == "arch" ]; then
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
 
-cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
+cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
 
 CURL_ARGS=$(minio_download_jobs)
 if [ ! -z "${CURL_ARGS}" ]; then
