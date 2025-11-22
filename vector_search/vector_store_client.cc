@@ -14,6 +14,7 @@
 #include "clients.hh"
 #include "uri.hh"
 #include "utils.hh"
+#include "truststore.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "dht/i_partitioner.hh"
@@ -70,22 +71,22 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     }
     return port;
 }
-
 auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
-    constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
+    constexpr auto URI_REGEX = R"(^(http|https):\/\/([a-z0-9._-]+):([0-9]+)$)";
     auto const uri_regex = std::regex(URI_REGEX);
     auto uri_match = std::smatch{};
     auto uri_txt = std::string(uri_);
 
-    if (!std::regex_match(uri_txt, uri_match, uri_regex) || uri_match.size() != 3) {
+    if (!std::regex_match(uri_txt, uri_match, uri_regex) || uri_match.size() != 4) {
         return {};
     }
-    auto host = uri_match[1].str();
-    auto port = parse_port(uri_match[2].str());
+    auto schema = uri_match[1].str() == "https" ? uri::schema_type::https : uri::schema_type::http;
+    auto host = uri_match[2].str();
+    auto port = parse_port(uri_match[3].str());
     if (!port) {
         return {};
     }
-    return {{host, *port}};
+    return {{schema, host, *port}};
 }
 
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
@@ -228,6 +229,8 @@ std::vector<sstring> get_hosts(const std::vector<uri>& primary_uris, const std::
 namespace vector_search {
 
 struct vector_store_client::impl {
+    using invoke_on_others_func = std::function<future<>(std::function<future<>(impl&)>)>;
+
     utils::observer<sstring> _primary_uri_observer;
     utils::observer<sstring> _secondary_uri_observer;
     std::vector<uri> _primary_uris;
@@ -235,11 +238,13 @@ struct vector_store_client::impl {
     dns dns;
     uint64_t dns_refreshes = 0;
     seastar::metrics::metric_groups _metrics;
+    truststore _truststore;
     clients _primary_clients;
     clients _secondary_clients;
 
     impl(utils::config_file::named_value<sstring> primary_uris, utils::config_file::named_value<sstring> secondary_uris,
-            utils::config_file::named_value<uint32_t> read_request_timeout_in_ms)
+            utils::config_file::named_value<uint32_t> read_request_timeout_in_ms,
+            utils::config_file::named_value<utils::config_file::string_map> encryption_options, invoke_on_others_func invoke_on_others)
         : _primary_uri_observer(primary_uris.observe([this](seastar::sstring uris_csv) {
             handle_uris_changed(std::move(uris_csv), _primary_uris, _primary_clients);
         }))
@@ -254,20 +259,25 @@ struct vector_store_client::impl {
                       co_await handle_addresses_changed(addrs);
                   },
                   dns_refreshes)
-
+        , _truststore(vslogger, encryption_options,
+                  [invoke_on_others = std::move(invoke_on_others)](auto func) {
+                      return invoke_on_others([func = std::move(func)](auto& self) {
+                          return func(self._truststore);
+                      });
+                  })
         , _primary_clients(
                   vslogger,
                   [this]() {
                       dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms)
+                  read_request_timeout_in_ms, _truststore)
 
         , _secondary_clients(
                   vslogger,
                   [this]() {
                       dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms) {
+                  read_request_timeout_in_ms, _truststore) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -343,7 +353,12 @@ struct vector_store_client::impl {
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.read_request_timeout_in_ms)) {
+    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.read_request_timeout_in_ms,
+              cfg.vector_store_encryption_options, [this](auto func) {
+                  return container().invoke_on_others([func = std::move(func)](auto& self) {
+                      return func(*self._impl);
+                  });
+              })) {
 }
 
 vector_store_client::~vector_store_client() = default;
@@ -356,6 +371,7 @@ auto vector_store_client::stop() -> future<> {
     co_await _impl->_primary_clients.stop();
     co_await _impl->_secondary_clients.stop();
     co_await _impl->dns.stop();
+    co_await _impl->_truststore.stop();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
