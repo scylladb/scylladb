@@ -120,6 +120,7 @@
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
+#include "schema/compression_initializer.hh"
 
 
 #define P11_KIT_FUTURE_UNSTABLE_API
@@ -822,6 +823,17 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] {
                 notify_set.notify_all(configurable::system_state::stopped).get();
+            });
+
+            // Register schema initializer for default compression settings.
+            // This statement is deliberately positioned here:
+            // * Needs to be done before starting services that use `schema_builder`s
+            //   because registration is not thread-safe (initializer vector is
+            //   not thread-local) and every `schema_builder` must use it.
+            // * Needs to be done after the initialization of the configurables
+            //   because this particular initializer depends on `db::extensions::is_extension_internal_keyspace()`.
+            register_compression_initializer(*cfg, [&feature_service] {
+                return bool(feature_service.local().sstable_compression_dicts);
             });
 
             cfg->setup_directories();
