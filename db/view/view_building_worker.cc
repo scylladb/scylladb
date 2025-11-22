@@ -135,6 +135,10 @@ future<> view_building_worker::init() {
     _mnotifier.register_listener(this);
 }
 
+void view_building_worker::trigger_state_update() {
+    _cv.broadcast();
+}
+
 dht::token_range view_building_worker::get_tablet_token_range(table_id table_id, dht::token last_token) {
     auto& cf = _db.find_column_family(table_id);
     auto& tablet_map = cf.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
@@ -147,6 +151,7 @@ future<> view_building_worker::drain() {
     }
     _staging_sstables_mutex.broken();
     _sstables_to_register_event.broken();
+    _cv.broken();
     if (this_shard_id() == 0) {
         auto sstable_registrator = std::exchange(_staging_sstables_registrator, make_ready_future<>());
         co_await std::move(sstable_registrator);
@@ -197,6 +202,7 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 
 future<> view_building_worker::run_staging_sstables_registrator() {
     while (!_as.abort_requested()) {
+        bool sleep = false;
         try {
             auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
             co_await create_staging_sstable_tasks();
@@ -213,6 +219,18 @@ future<> view_building_worker::run_staging_sstables_registrator() {
             vbw_logger.warn("Got group0_concurrent_modification while creating staging sstable tasks");
         } catch (raft::request_aborted&) {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
+        } catch (...) {
+            vbw_logger.error("Exception while creating staging sstable tasks: {}", std::current_exception());
+            sleep = true;
+        }
+
+        if (sleep && !_as.abort_requested()) {
+            try {
+                vbw_logger.debug("Sleeping after exception.");
+                co_await seastar::sleep_abortable(1s, _as);
+            } catch (...) {
+                vbw_logger.warn("sleep failed: {}", std::current_exception());
+            }
         }
     }
 }
@@ -335,7 +353,7 @@ std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_t
 
 future<> view_building_worker::run_view_building_state_observer() {
     auto abort = _as.subscribe([this] () noexcept {
-        _vb_state_machine.event.broadcast();
+        trigger_state_update();
     });
 
     while (!_as.abort_requested()) {
@@ -354,7 +372,7 @@ future<> view_building_worker::run_view_building_state_observer() {
             // A batch could finished its work while the worker was
             // updating the state. In that case we should do another iteration.
             if (!_state.some_batch_finished) {
-                co_await _vb_state_machine.event.wait();
+                co_await _cv.wait();
             }
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
@@ -684,7 +702,7 @@ void view_building_worker::batch::start() {
     }).finally([this] () {
         state = batch_state::finished;
         _vbw.local()._state.some_batch_finished = true;
-        _vbw.local()._vb_state_machine.event.broadcast();
+        _vbw.local().trigger_state_update();
     });
 }
 
@@ -755,8 +773,6 @@ future<> view_building_worker::batch::do_work() {
             break;
         }
     }
-
-    _vbw.local()._vb_state_machine.event.broadcast();
 }
 
 future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
