@@ -10,6 +10,7 @@
 #include "utils.hh"
 #include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/rjson.hh"
 #include <seastar/http/request.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
@@ -54,10 +55,6 @@ bool is_request_aborted(std::exception_ptr& err) {
     return try_catch<abort_requested_exception>(err) != nullptr;
 }
 
-bool is_server_error(http::reply::status_type status) {
-    return status >= http::reply::status_type::internal_server_error;
-}
-
 future<client::request_error> map_err(std::exception_ptr& err) {
     if (is_server_unavailable(err)) {
         co_return service_unavailable_error{};
@@ -94,14 +91,7 @@ seastar::future<client::request_result> client::request(
         }
         co_return std::unexpected{co_await map_err(err)};
     }
-    auto resp = co_await std::move(f);
-    if (is_server_error(resp.status)) {
-        _logger.warn("client ({}:{}): received HTTP status {}: {}", _endpoint.host, _endpoint.port, static_cast<int>(resp.status),
-                response_content_to_sstring(resp.content));
-        handle_server_unavailable();
-        co_return std::unexpected{service_unavailable_error{}};
-    }
-    co_return resp;
+    co_return co_await std::move(f);
 }
 
 seastar::future<client::response> client::request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
@@ -128,7 +118,8 @@ seastar::future<bool> client::check_status() {
         co_return false;
     }
     auto resp = co_await std::move(f);
-    co_return response_content_to_sstring(resp.content) == "SERVING";
+    auto json = rjson::parse(std::move(resp.content));
+    co_return json.IsString() && json.GetString() == std::string_view("SERVING");
 }
 
 seastar::future<> client::close() {
