@@ -1225,6 +1225,67 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
     }
 
+    // Use this function when you only need to ensure that `affected_nodes`
+    // see the latest `group0` state. No guarantees are made about other nodes.
+    future<> scope_barrier(group0_guard guard,
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        return exec_scoped_command(std::move(guard), raft_topology_cmd::command::barrier,
+            affected_nodes, scoped_exec_reach::scope_nodes, reason).discard_result();
+    }
+
+    // Like `scope_barrier`, but also drains stale requests and sessions on `affected_nodes`.
+    // No guarantees are made about other nodes.
+    future<> scope_barrier_and_drain(group0_guard guard, 
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        return exec_scoped_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain,
+            affected_nodes, scoped_exec_reach::scope_nodes, reason).discard_result();
+    }
+
+    // Like `scope_barrier_and_drain`, but also attempts to apply the barrier_and_drain to other nodes.
+    // Guarantees that either all nodes acknowledge it, or non-affected nodes are fenced out.
+    future<group0_guard> global_barrier_and_fence(group0_guard guard, 
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        if (affected_nodes.empty()) {
+            on_internal_error(rtlogger, "affected_nodes must not be empty");
+        }
+
+        const auto version = _topo_sm._topology.version;
+
+        // Drain all nodes; fail if any affected node fails to drain.
+        const auto drain_reach = co_await exec_scoped_command(std::move(guard),
+            raft_topology_cmd::command::barrier_and_drain,
+            affected_nodes,
+            scoped_exec_reach::all_active_nodes,
+            reason);
+
+        // Set the fence
+        guard = co_await start_operation();
+        auto mut = topology_mutation_builder(guard.write_timestamp())
+            .set_fence_version(version)
+            .build();
+        co_await update_topology_state(std::move(guard), {std::move(mut)},
+            ::format("advance fence version to {}, reason {}", version, reason));
+
+        // Ensure the affected nodes apply the fence if a non-affected node failed the drain.
+        guard = co_await start_operation();
+        if (drain_reach == scoped_exec_reach::scope_nodes) {
+            co_await exec_scoped_command(std::move(guard),
+                raft_topology_cmd::command::barrier,
+                affected_nodes,
+                scoped_exec_reach::all_active_nodes,
+                reason);
+            guard = co_await start_operation();
+        }
+    
+        co_return std::move(guard);
+    }
+
     // Represents a two-state state machine which changes monotonically
     // from "not executed" to "executed successfully". This state
     // machine is transient, lives only on this coordinator.
