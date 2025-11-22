@@ -2163,12 +2163,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::unordered_set<locator::host_id> replica_hosts;
         if (table) {
             collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
-        }
 
-        // Execute a barrier to make sure the nodes we are performing truncate on see the session
-        // and are able to create a topology_guard using the frozen_guard we are sending over RPC
-        // TODO: Exclude nodes which don't contain replicas of the table we are truncating
-        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            // Execute a barrier to make sure the nodes we are performing truncate on see the session
+            // and are able to create a topology_guard using the frozen_guard we are sending over RPC
+            co_await scope_barrier(std::move(guard), replica_hosts, "truncate_table");
+        }
 
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
@@ -2179,7 +2178,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 const sstring& cf_name = table->schema()->cf_name();
 
                 rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
-
 
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
@@ -2235,7 +2233,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (!guard) {
             guard = co_await start_operation();
         }
-        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+
+        co_await scope_barrier_and_drain(std::move(guard), replica_hosts, "finalize_truncate_table");
 
         // Finalize the request
         while (true) {
