@@ -488,6 +488,7 @@ public:
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
 
     named_value<sstring> vector_store_primary_uri;
+    named_value<sstring> vector_store_secondary_uri;
 
     named_value<bool> abort_on_ebadf;
 
