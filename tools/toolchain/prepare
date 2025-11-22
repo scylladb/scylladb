@@ -24,12 +24,12 @@ if (( ! ok )); then
     exit 1
 fi
 
-if ! command -v reg > /dev/null; then
-    echo install the reg command for registry inspection
+if ! command -v skopeo > /dev/null; then
+    echo install the skopeo package for registry inspection
     exit 1
 fi
 
-if reg digest $(<tools/toolchain/image) > /dev/null; then
+if skopeo inspect "docker://$(<tools/toolchain/image)" > /dev/null 2>&1; then
     echo "Toolchain image $(<tools/toolchain/image) exists; select a new name"
     exit 1
 fi
