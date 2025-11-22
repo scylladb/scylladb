@@ -2638,29 +2638,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case node_state::removing: {
                     co_await utils::get_local_injector().inject("delay_node_removal", utils::wait_for_message(std::chrono::minutes(5)));
-                    node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
                 }
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
-                    node_state next_state;
                     utils::chunked_vector<canonical_mutation> muts;
                     muts.reserve(2);
-                    if (node.rs->state == node_state::decommissioning) {
-                        next_state = node.rs->state;
-                        builder.set_transition_state(topology::transition_state::left_token_ring);
-                    } else {
-                        next_state = node_state::left;
-                        builder.del_transition_state();
-                        cleanup_ignored_nodes_on_left(builder, node.id);
-                        muts.push_back(rtbuilder.build());
-                        co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
-                        co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
-                    }
-                    builder.set_version(_topo_sm._topology.version + 1)
+                    // Both decommission and removenode go through left_token_ring state
+                    // to ensure all nodes observe the topology change before completion
+                    builder.set_transition_state(topology::transition_state::left_token_ring)
+                           .set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
-                           .del("tokens")
-                           .set("node_state", next_state);
+                           .set("node_state", node.rs->state);
+                    // Don't delete tokens yet - that will be done in left_token_ring state
+                    // after the node is removed from group0
                     auto str = ::format("{}: read fence completed", node.rs->state);
                     muts.push_back(builder.build());
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
@@ -2736,13 +2727,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     cleanup_ignored_nodes_on_left(builder, node.id);
                     builder.del_transition_state()
                             .with_node(node.id)
+                            .del("tokens")
                             .set("node_state", node_state::left);
                     muts.push_back(builder.build());
                     co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
-                    auto str = node.rs->state == node_state::decommissioning
-                            ? ::format("finished decommissioning node {}", node.id)
-                            : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
+                    sstring str;
+                    if (node.rs->state == node_state::decommissioning) {
+                        str = ::format("finished decommissioning node {}", node.id);
+                    } else if (node.rs->state == node_state::removing) {
+                        str = ::format("finished removing node {}", node.id);
+                    } else {
+                        str = ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
+                    }
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
                 };
 
@@ -2754,7 +2751,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 }
 
-                if (node.id == _raft.id()) {
+                // If we are decommissioning ourselves, step down so that another node can take over coordination.
+                if (node.id == _raft.id() && node.rs->state == node_state::decommissioning) {
                     // Someone else needs to coordinate the rest of the decommission process,
                     // because the decommissioning node is going to shut down in the middle of this state.
                     rtlogger.info("coordinator is decommissioning; giving up leadership");
@@ -2784,14 +2782,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 if (barrier_failed) {
-                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
+                    // If barrier above failed it means there may be unfinished writes to a decommissioned/removed node.
                     // Lets wait for the ring delay for those writes to complete and new topology to propagate
                     // before continuing.
                     co_await sleep_abortable(_ring_delay, _as);
                     node = retake_node(co_await start_operation(), node.id);
                 }
 
-                // Make decommissioning node a non voter before reporting operation completion below.
+                // Make decommissioning/removing node a non voter before reporting operation completion below.
                 // Otherwise the decommissioned node may see the completion and exit before it is removed from
                 // the config at which point the removal from the config will hang if the cluster had only two
                 // nodes before the decommission.
@@ -2803,7 +2801,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring state");
 
-                // Tell the node to shut down.
+                // Tell the decommissioning node to shut down (but not the removed node, which may already be dead).
                 // This is done to improve user experience when there are no failures.
                 // In the next state (`node_state::left`), the node will be banned by the rest of the cluster,
                 // so there's no guarantee that it would learn about entering that state even if it was still
@@ -2814,15 +2812,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // This is fine for the rest of the cluster - we will still remove, ban the node and continue.
                 auto node_id = node.id;
                 bool shutdown_failed = false;
-                try {
-                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::barrier);
-                } catch (...) {
-                    rtlogger.warn("failed to tell node {} to shut down - it may hang."
-                                 " It's safe to shut it down manually now. (Exception: {})",
-                                 node.id, std::current_exception());
-                    shutdown_failed = true;
-                }
-                if (shutdown_failed) {
+                if (node.rs->state == node_state::decommissioning) {
+                    try {
+                        node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::barrier);
+                    } catch (...) {
+                        rtlogger.warn("failed to tell node {} to shut down - it may hang."
+                                      " It's safe to shut it down manually now. (Exception: {})",
+                                node.id, std::current_exception());
+                        shutdown_failed = true;
+                    }
+                    if (shutdown_failed) {
+                        node = retake_node(co_await start_operation(), node_id);
+                    }
+                } else {
+                    // For removenode, the node may already be down, so we don't try to contact it
                     node = retake_node(co_await start_operation(), node_id);
                 }
 
