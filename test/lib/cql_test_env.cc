@@ -47,6 +47,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
+#include "schema/compression_initializer.hh"
 #include "db/view/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
@@ -575,6 +576,17 @@ private:
                 ;
 
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
+
+            auto schema_initializer_checkpoint = schema_builder::capture_schema_initializers_checkpoint();
+            register_compression_initializer(*cfg, [this] {
+                return bool(_feature_service.local().sstable_compression_dicts);
+            });
+
+            // Important to restore schema initializers during shutdown to
+            // support tests that repeatedly create `cql_test_env` instances.
+            auto unregister_schema_initializers = defer_verbose_shutdown("schema initializers", [schema_initializer_checkpoint] {
+                schema_builder::restore_schema_initializers_checkpoint(schema_initializer_checkpoint);
+            });
 
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);
