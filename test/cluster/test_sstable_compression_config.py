@@ -151,7 +151,6 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
     await create_table_and_check_compression(cql, "test_ks", "table_after_upgrade", "LZ4WithDictsCompressor", "after upgrade and feature enabled")
 
 
-@pytest.mark.xfail(reason='issue #26914')
 @pytest.mark.asyncio
 async def test_alternator_tables_respect_compression_config(manager: ManagerClient):
     """
@@ -236,7 +235,6 @@ async def test_alternator_tables_respect_compression_config(manager: ManagerClie
         table.delete()
 
 
-@pytest.mark.xfail(reason='issue #26914')
 @pytest.mark.asyncio
 async def test_cql_tables_respect_compression_config(manager: ManagerClient):
     """
