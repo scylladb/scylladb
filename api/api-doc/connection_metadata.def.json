@@ -1,0 +1,25 @@
+    , "connection_metadata_entry": {
+        "id": "connection_metadata_entry",
+        "summary": "An entry storing connection metadata for a host connection",
+        "properties": {
+            "connection_id": {"type": "string", "format": "uuid"},
+            "host_id": {"type": "string", "format": "uuid"},
+            "address": {"type": "string"},
+            "port": {"type": "integer"},
+            "tls_port": {"type": "integer"},
+            "alternator_port": {"type": "integer"},
+            "alternator_https_port": {"type": "integer"},
+            "rack": {"type": "string"},
+            "datacenter": {"type": "string"}
+        },
+        "required": ["connection_id", "host_id", "address", "rack", "datacenter"]
+    }
+    , "connection_metadata_key": {
+        "id": "connection_metadata_key",
+        "summary": "A subset of connection_metadata_entry",
+        "properties": {
+            "connection_id": {"type": "string", "format": "uuid"},
+            "host_id": {"type": "string", "format": "uuid"}
+        }
+    }
+

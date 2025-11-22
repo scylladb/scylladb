@@ -1288,6 +1288,7 @@ api = ['api/api.cc',
        'api/storage_proxy.cc',
        Json2Code('api/api-doc/cache_service.json'),
        'api/cache_service.cc',
+       Json2Code('api/api-doc/connection_metadata.json'),
        Json2Code('api/api-doc/collectd.json'),
        'api/collectd.cc',
        Json2Code('api/api-doc/endpoint_snitch_info.json'),
@@ -2258,7 +2259,7 @@ def write_build_file(f,
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = {seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
+            command = ./seastar-json2code.py --create-cc -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = ./idl-compiler.py --ns ser -f $in -o $out
@@ -2603,7 +2604,7 @@ def write_build_file(f,
             cc = swagger.sources(gen_dir)[0]
             obj = swagger.objects(gen_dir)[0]
             src = swagger.source
-            f.write('build {} | {} : swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, cc, src, args.seastar_path))
+            f.write('build {} | {} : swagger {} | ./seastar-json2code.py\n'.format(hh, cc, src))
             f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
         for hh in serializers:
             src = serializers[hh]

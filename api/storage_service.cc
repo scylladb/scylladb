@@ -18,6 +18,7 @@
 #include "schema/schema_builder.hh"
 #include "sstables/sstables_manager.hh"
 #include "utils/hash.hh"
+#include <fmt/format.h>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -40,6 +41,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/util/short_streams.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "locator/tablets.hh"
@@ -61,6 +63,8 @@
 #include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
+
+#include "api/api-doc/connection_metadata.json.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -565,6 +569,173 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
             val.value = fmt::to_string(i.second);
             return val;
         }));
+}
+
+static
+future<json::json_return_type>
+rest_set_connection_metadata(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().connection_metadata) {
+        apilog.warn("set_connection_metadata: called before the cluster feature was enabled");
+        throw std::runtime_error("set_connection_metadata requires all nodes to support the CONNECTION_METADATA cluster feature");
+    }
+
+    if (!req->content_stream) {
+        throw bad_param_exception("Missing request body");
+    }
+    auto bufs = co_await util::read_entire_stream(*req->content_stream);
+    size_t total = 0;
+    for (auto& b : bufs) { total += b.size(); }
+    std::string body;
+    body.reserve(total);
+    for (auto& b : bufs) { body.append(b.get(), b.size()); }
+    if (body.empty()) {
+        // Diagnostic: sometimes body may have been already read into req->content by httpd.
+        if (!req->content.empty()) {
+            apilog.warn("set_connection_metadata: content_stream empty but req->content size={} populated", req->content.size());
+            body = req->content;
+        }
+        if (body.empty()) {
+            apilog.warn("set_connection_metadata: received POST with declared Content-Length={} but no bytes read", req->content_length);
+            throw bad_param_exception("Empty body; expected JSON array");
+        }
+    }
+    auto root = rjson::parse(body);
+    if (!root.IsArray()) {
+        throw bad_param_exception("Body must be a JSON array");
+    }
+
+    auto guard = co_await group0_client.start_operation(ss.local().get_abort_source(), service::raft_timeout{});
+    utils::chunked_vector<canonical_mutation> cmuts;
+
+    for (auto& v : root.GetArray()) {
+        if (!v.IsObject()) { throw bad_param_exception("Each element must be object"); }
+
+        // Required string fields
+        for (const auto& name : {"connection_id", "host_id", "address", "rack", "datacenter"}) {
+            if (!v.HasMember(name)) {
+                throw bad_param_exception(fmt::format("Missing '{}'", name));
+            }
+            if (!v[name].IsString()) {
+                throw bad_param_exception(fmt::format("'{}' must be a string", name));
+            }
+        }
+
+        // Optional integer port fields; capture only those provided.
+        std::map<sstring, std::optional<int32_t>> port_map;
+        int provided_ports = 0;
+        for (const auto& name : {"port", "tls_port", "alternator_port", "alternator_https_port"}) {
+            if (v.HasMember(name)) {
+                if (!v[name].IsInt()) {
+                    throw bad_param_exception(fmt::format("'{}' must be an integer", name));
+                }
+                port_map[name] = v[name].GetInt();
+                ++provided_ports;
+            } else {
+                port_map[name] = std::nullopt;
+            }
+        }
+        if (provided_ports == 0) {
+            throw bad_param_exception("At least one port field ('port', 'tls_port', 'alternator_port', 'alternator_https_port') must be specified");
+        }
+
+        db::system_keyspace::connection_metadata_t metadata{
+            utils::UUID{v["connection_id"].GetString()},
+            utils::UUID{v["host_id"].GetString()},
+            sstring(v["address"].GetString()),
+            port_map["port"],
+            port_map["tls_port"],
+            port_map["alternator_port"],
+            port_map["alternator_https_port"],
+            sstring(v["rack"].GetString()),
+            sstring(v["datacenter"].GetString())
+        };
+
+        auto mut = co_await group0_client.sys_ks().make_connection_metadata_mutation(guard.write_timestamp(), metadata);
+        cmuts.emplace_back(std::move(mut));
+    }
+
+    auto cmd = group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create connection metadata");
+    co_await group0_client.add_entry(std::move(cmd), std::move(guard), ss.local().get_abort_source());
+    co_return seastar::json::json_void();
+}
+
+static
+future<json::json_return_type>
+rest_delete_connection_metadata(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().connection_metadata) {
+        apilog.warn("delete_connection_metadata: called before the cluster feature was enabled");
+        throw std::runtime_error("delete_connection_metadata requires all nodes to support the CONNECTION_METADATA cluster feature");
+    }
+    if (!req->content_stream) {
+        throw bad_param_exception("Missing request body");
+    }
+    auto bufs = co_await util::read_entire_stream(*req->content_stream);
+    size_t total = 0;
+    for (auto& b : bufs) { total += b.size(); }
+    std::string body;
+    body.reserve(total);
+    for (auto& b : bufs) { body.append(b.get(), b.size()); }
+    if (body.empty()) {
+        // Diagnostic: sometimes body may have been already read into req->content by httpd.
+        if (!req->content.empty()) {
+            apilog.warn("set_connection_metadata: content_stream empty but req->content size={} populated", req->content.size());
+            body = req->content;
+        }
+        if (body.empty()) {
+            apilog.warn("set_connection_metadata: received POST with declared Content-Length={} but no bytes read", req->content_length);
+            throw bad_param_exception("Empty body; expected JSON array");
+        }
+    }
+    auto root = rjson::parse(body);
+    if (!root.IsArray()) {
+        throw bad_param_exception("Body must be a JSON array");
+    }
+
+    auto guard = co_await group0_client.start_operation(ss.local().get_abort_source(), service::raft_timeout{});
+    utils::chunked_vector<canonical_mutation> cmuts;
+
+    for (auto& v : root.GetArray()) {
+        if (!v.IsObject()) { throw bad_param_exception("Each element must be object"); }
+        if (!v.HasMember("connection_id")) { throw bad_param_exception("Missing 'connection_id'"); }
+        if (!v.HasMember("host_id")) { throw bad_param_exception("Missing 'host_id'"); }
+        if (!v["connection_id"].IsString()) { throw bad_param_exception("'connection_id' must be string"); }
+        if (!v["host_id"].IsString()) { throw bad_param_exception("'connection_id' must be string"); }
+
+        const auto connection_id = utils::UUID{rjson::to_string_view(v["connection_id"])};
+        const auto host_id = utils::UUID{rjson::to_string_view(v["host_id"])};
+
+        auto mut = co_await group0_client.sys_ks().make_delete_connection_metadata_mutation(guard.write_timestamp(), connection_id, host_id);
+
+        cmuts.emplace_back(std::move(mut));
+    }
+
+
+    auto cmd = group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "delete connection metadata");
+    co_await group0_client.add_entry(std::move(cmd), std::move(guard), ss.local().get_abort_source());
+    co_return seastar::json::json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_connection_metadata(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().connection_metadata) {
+        apilog.warn("get_connection_metadata: called before the cluster feature was enabled");
+        throw std::runtime_error("get_connection_metadata requires all nodes to support the CONNECTION_METADATA cluster feature");
+    }
+
+    co_return json::json_return_type(stream_range_as_array(co_await group0_client.sys_ks().get_connection_metadata(), [](const db::system_keyspace::connection_metadata_t & cm){
+        seastar::httpd::connection_metadata_json::connection_metadata_entry obj;
+        obj.connection_id = fmt::to_string(cm.connection_id);
+        obj.host_id = fmt::to_string(cm.host_id);
+        obj.address = cm.address;
+        if (cm.port.has_value()) { obj.port = cm.port.value(); }
+        if (cm.tls_port.has_value()) { obj.tls_port = cm.tls_port.value(); }
+        if (cm.alternator_port.has_value()) { obj.alternator_port = cm.alternator_port.value(); }
+        if (cm.alternator_https_port.has_value()) { obj.alternator_https_port = cm.alternator_https_port.value(); }
+        obj.rack = cm.rack;
+        obj.datacenter = cm.datacenter;
+        return obj;
+    }));
 }
 
 static
@@ -1814,6 +1985,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
     sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
     ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
+
+    seastar::httpd::connection_metadata_json::set_connection_metadata.set(r, rest_bind(rest_set_connection_metadata, ctx, ss, group0_client));
+    seastar::httpd::connection_metadata_json::delete_connection_metadata.set(r, rest_bind(rest_delete_connection_metadata, ctx, ss, group0_client));
+    seastar::httpd::connection_metadata_json::get_connection_metadata.set(r, rest_bind(rest_get_connection_metadata, ctx, ss, group0_client));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1890,6 +2065,10 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
     ss::drop_quarantined_sstables.unset(r);
+
+    seastar::httpd::connection_metadata_json::set_connection_metadata.unset(r);
+    seastar::httpd::connection_metadata_json::delete_connection_metadata.unset(r);
+    seastar::httpd::connection_metadata_json::get_connection_metadata.unset(r);
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {

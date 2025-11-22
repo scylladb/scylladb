@@ -198,6 +198,7 @@ public:
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
+    static constexpr auto CONNECTION_METADATA = "connection_metadata";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -296,6 +297,7 @@ public:
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
     static schema_ptr view_building_tasks();
+    static schema_ptr connection_metadata();
 
     // auth
     static schema_ptr roles();
@@ -545,6 +547,18 @@ public:
         gms::inet_address listen_address;
     };
 
+    struct connection_metadata_t {
+        utils::UUID connection_id;
+        utils::UUID host_id;
+        sstring address;
+        std::optional<int32_t> port;
+        std::optional<int32_t> tls_port;
+        std::optional<int32_t> alternator_port;
+        std::optional<int32_t> alternator_https_port;
+        sstring rack;
+        sstring datacenter;
+    };
+
     future<local_info> load_local_info();
     future<> save_local_info(local_info, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
 public:
@@ -578,6 +592,9 @@ public:
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
     future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, db::view::view_building_task::task_state state);
     future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+    future<mutation> make_delete_connection_metadata_mutation(api::timestamp_type ts, const utils::UUID& connection_id, const utils::UUID& host_id);
+    future<mutation> make_connection_metadata_mutation(api::timestamp_type ts, const connection_metadata_t& cm);
+    future<std::vector<connection_metadata_t>>get_connection_metadata () const;
 
     // system.scylla_local, view_building_processing_base key
     future<std::optional<table_id>> get_view_building_processing_base_id();
