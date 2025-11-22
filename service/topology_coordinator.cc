@@ -2147,29 +2147,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> handle_truncate_table(group0_guard guard) {
+        // The global_request_id and the topology request entry are dropped as the final
+        // step of this function, atomically with clearing the transition_state::truncate_table
+        // topology state. Therefore, if we are still in transition_state::truncate_table,
+        // both of these must still exist.
+        //
+        // The target table may be dropped at any time, so we must also handle the case
+        // where it no longer exists.
+
+        const auto req_id = _topo_sm._topology.global_request_id.value();
+        const auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
+        const auto& table_id = req_entry.truncate_table_id;
+        const auto table = _db.get_tables_metadata().get_table_if_exists(table_id);
+        const auto session = _topo_sm._topology.session;
+        std::unordered_set<locator::host_id> replica_hosts;
+        if (table) {
+            collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
+        }
+
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
-        const utils::UUID& global_request_id = _topo_sm._topology.global_request_id.value();
-        std::optional<sstring> error;
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
-        if (_topo_sm._topology.session) {
-            const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id, true);
-            const table_id& table_id = topology_requests_entry.truncate_table_id;
-            lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(table_id);
-
+        if (session) {
+            std::optional<sstring> error;
             if (table) {
                 const sstring& ks_name = table->schema()->ks_name();
                 const sstring& cf_name = table->schema()->cf_name();
 
                 rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
 
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
 
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
@@ -2184,7 +2194,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                const service::frozen_topology_guard frozen_guard { session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
                     co_await ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
                 });
@@ -2203,7 +2213,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                     .del_session()
                                     .build());
                 if (error) {
-                    updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
+                    updates.push_back(topology_request_tracking_mutation_builder(req_id)
                                         .set("error", *error)
                                         .build());
                 }
@@ -2238,7 +2248,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_global_topology_request()
                                 .del_global_topology_request_id()
                                 .build());
-            updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
+            updates.push_back(topology_request_tracking_mutation_builder(req_id)
                                 .done()
                                 .build());
 
