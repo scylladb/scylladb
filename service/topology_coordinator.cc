@@ -2165,8 +2165,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
 
             // Execute a barrier to make sure the nodes we are performing truncate on see the session
-            // and are able to create a topology_guard using the frozen_guard we are sending over RPC
+            // and are able to create a topology_guard using the frozen_guard we are sending over RPC.
+            // Keep the guard released to avoid blocking group0 while the RPCs are in progress.
             co_await scope_barrier(std::move(guard), replica_hosts, "truncate_table");
+        } else {
+            // Release the guard so that the rest of the function can assume
+            // the guard being released after this point.
+            release_guard(std::move(guard));
         }
 
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
@@ -2178,9 +2183,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 const sstring& cf_name = table->schema()->cf_name();
 
                 rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
-
-                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
-                release_guard(std::move(guard));
 
                 co_await utils::get_local_injector().inject("truncate_table_wait", utils::wait_for_message(std::chrono::minutes(2)));
 
@@ -2195,9 +2197,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             // Clear the session and save the error message
             while (true) {
-                if (!guard) {
-                    guard = co_await start_operation();
-                }
+                guard = co_await start_operation();
 
                 utils::chunked_vector<canonical_mutation> updates;
                 updates.push_back(topology_mutation_builder(guard.write_timestamp())
@@ -2223,17 +2223,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         });
 
         // Execute a barrier to ensure the TRUNCATE RPC can't run on any nodes after this point
-        if (!guard) {
-            guard = co_await start_operation();
-        }
-
+        guard = co_await start_operation();
         co_await scope_barrier_and_drain(std::move(guard), replica_hosts, "finalize_truncate_table");
 
         // Finalize the request
         while (true) {
-            if (!guard) {
-                guard = co_await start_operation();
-            }
+            guard = co_await start_operation();
             utils::chunked_vector<canonical_mutation> updates;
             updates.push_back(topology_mutation_builder(guard.write_timestamp())
                                 .del_transition_state()
