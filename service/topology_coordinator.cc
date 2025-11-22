@@ -2184,13 +2184,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 co_await utils::get_local_injector().inject("truncate_table_wait", utils::wait_for_message(std::chrono::minutes(2)));
 
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform TRUNCATE on table {}.{} because host {} is down", ks_name, cf_name, replica_host));
-                    }
-                }
-
                 // Send the RPC to all replicas
                 const service::frozen_topology_guard frozen_guard { session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
