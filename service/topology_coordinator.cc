@@ -1220,11 +1220,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
-    future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
-        // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
-    }
-
     // Use this function when you only need to ensure that `affected_nodes`
     // see the latest `group0` state. No guarantees are made about other nodes.
     future<> scope_barrier(group0_guard guard,
@@ -1630,7 +1625,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                     break;
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
-                // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
+                // get admitted before global_barrier_and_fence() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: {
                     if (drain) {
