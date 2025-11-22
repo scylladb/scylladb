@@ -48,7 +48,7 @@ public:
             std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
             bool if_not_exists);
 
-    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db) const;
+    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db, locator::token_metadata_ptr tmptr) const;
 
     auto& properties() {
         return _properties;
