@@ -1581,6 +1581,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/query_processor_test.cc',
     'test/boost/reader_concurrency_semaphore_test.cc',
     'test/boost/repair_test.cc',
+    'test/boost/replicator_test.cc',
     'test/boost/restrictions_test.cc',
     'test/boost/role_manager_test.cc',
     'test/boost/row_cache_test.cc',
