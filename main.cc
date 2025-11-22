@@ -122,6 +122,7 @@
 #include "auth/cache.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
+#include "schema/compression_initializer.hh"
 
 
 namespace fs = std::filesystem;
@@ -800,6 +801,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
+
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
             enable_initial_error_injections(*cfg).get();
 #endif
@@ -810,6 +812,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] {
                 notify_set.notify_all(configurable::system_state::stopped).get();
             });
+
+            // Register schema initializer for default compression settings.
+            // This statement is deliberately positioned here:
+            // * Needs to be done before starting services that use `schema_builder`s to make sure that all `schema_builder`s will use it.
+            // * Needs to be done after the initialization of the configurables (this particular initializer depends on `db::extensions::is_extension_internal_keyspace()`).
+            // * Needs to be notified about when `sstable_compression_user_table_options` is properly initialized so that it can start using it.
+            //   This is done via an atomic flag which is set to true once the configuration is ready.
+            std::atomic<bool> compression_config_ready{false};
+            register_compression_initializer(*cfg, &compression_config_ready);
 
             cfg->setup_directories();
 
@@ -2258,6 +2269,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.error("Invalid sstable_compression_user_table_options: {}", e.what());
                 throw bad_configuration_error();
             }
+
+            compression_config_ready.store(true, std::memory_order_release);
 
             dictionary_service dict_service(
                 dict_sampler,
