@@ -423,14 +423,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, raft_topology_cmd cmd) {
+    future<> exec_global_command_helper(auto nodes, raft_topology_cmd cmd, auto&& func) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
-        auto f = co_await coroutine::as_future(
-                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
-            return exec_direct_command_helper(id, cmd_index, cmd);
-        }));
+        auto f = co_await coroutine::as_future(seastar::parallel_for_each(
+            std::move(nodes),
+            [&] (raft::server_id id) { return func(id, cmd_index, cmd); }));
 
         if (f.failed()) {
             co_await coroutine::return_exception(std::runtime_error(
@@ -452,11 +451,54 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }
-        co_await exec_global_command_helper(std::move(nodes), cmd);
+        co_await exec_global_command_helper(std::move(nodes), cmd, 
+            std::bind_front(&topology_coordinator::exec_direct_command_helper, this));
         if (drop_and_retake) {
             guard = co_await start_operation();
         }
         co_return guard;
+    }
+
+    enum class scoped_exec_reach {
+        scope_nodes,
+        all_active_nodes
+    };
+    future<scoped_exec_reach> exec_scoped_command(group0_guard guard, raft_topology_cmd cmd,
+            const std::unordered_set<locator::host_id>& scope_nodes, scoped_exec_reach intended_reach,
+            std::string_view reason)
+    {
+        rtlogger.info("executing scoped topology command {}, ignored nodes: {}, reason: {}",
+            cmd.cmd, _topo_sm._topology.ignored_nodes, reason);
+        auto actual_reach = intended_reach;
+
+        const auto& t = _topo_sm._topology;
+        auto nodes = boost::range::join(t.normal_nodes, t.transition_nodes)
+            | std::views::transform([](const auto& n) {  return n.first; })
+            | std::views::filter([&] (const auto& n) { return !t.ignored_nodes.contains(n); })
+            | std::views::filter([&] (const auto& n) {
+                return intended_reach == scoped_exec_reach::all_active_nodes || 
+                    scope_nodes.contains(to_host_id(n));
+            });
+        release_guard(std::move(guard));
+
+        co_await exec_global_command_helper(std::move(nodes), cmd, 
+            [&](raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) -> future<> {
+                auto f = co_await coroutine::as_future(exec_direct_command_helper(id, cmd_index, cmd));
+                if (!f.failed()) {
+                    co_return;
+                }
+                const auto e = f.get_exception();
+                const auto is_in_scope = scope_nodes.contains(to_host_id(id));
+                rtlogger.log(is_in_scope ? log_level::warn : log_level::debug, 
+                    "command {} with index {} failed on {} node {}, error: {}",
+                    cmd.cmd, cmd_index, is_in_scope ? "scope" : "non-scope", id, e);
+                if (is_in_scope) {
+                    co_await coroutine::exception(e);
+                }
+                actual_reach = scoped_exec_reach::scope_nodes;
+            });
+
+        co_return actual_reach;
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes_for_topology_request(const topology_state_machine::topology_type& topo,
