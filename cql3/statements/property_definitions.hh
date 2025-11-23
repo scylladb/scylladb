@@ -59,6 +59,8 @@ protected:
 public:
     bool has_property(const sstring& name) const;
 
+    value_type extract_property(const sstring& name);
+
     std::optional<value_type> get(const sstring& name) const;
 
     std::optional<extended_map_type> get_extended_map(const sstring& name) const;
