@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 import pytest
 
-from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, highest_supported_sstable_format
+from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, chosen_sstable_format
 from tools.data import create_c1c2_table, insert_c1c2
 from tools.metrics import get_node_metrics
 
@@ -69,7 +69,7 @@ class TestBypassCache(Tester):
             create_c1c2_table(session)
             insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, ks=keyspace_name)
 
-        self.sstable_format = highest_supported_sstable_format(node1)
+        self.sstable_format = chosen_sstable_format(node1)
 
         return session
 
@@ -103,7 +103,7 @@ class TestBypassCache(Tester):
         return metric_errors
 
     def cache_thresh(self):
-        return 800 if not self.tablets else 150
+        return 300 if not self.tablets else 150
 
     def metric_name_for_index_cache_hits(self):
         """

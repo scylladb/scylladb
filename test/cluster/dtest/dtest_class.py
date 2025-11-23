@@ -247,9 +247,9 @@ def is_autocompaction_enabled(node, ks_name, table_name):
     response.raise_for_status()
     return response.json()
 
-def highest_supported_sstable_format(node):
+def chosen_sstable_format(node):
     node_ip = get_ip_from_node(node=node)
-    response = requests.get(f"http://{node_ip}:10000/system/highest_supported_sstable_version")
+    response = requests.get(f"http://{node_ip}:10000/system/chosen_sstable_version")
     response.raise_for_status()
     return response.json()
 
