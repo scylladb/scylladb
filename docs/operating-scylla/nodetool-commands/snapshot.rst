@@ -17,7 +17,7 @@ SYNOPSIS
                    [(-u <username> | --username <username>)] snapshot
                    [(-cf <table> | --column-family <table> | --table <table>)]
                    [(-kc <kclist> | --kc.list <kclist>)]
-                   [(-sf | --skip-flush)] [(-t <tag> | --tag <tag>)] [--] [<keyspaces...>]
+                   [(-sf | --skip-flush)] [--use-sstable-identifier] [(-t <tag> | --tag <tag>)] [--] [<keyspaces...>]
 
 OPTIONS
 .......
@@ -36,6 +36,8 @@ Parameter                                                             Descriptio
 -p <port> / --port <port>                                             The port of the REST API of the ScyllaDB node.
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 -sf / --skip-flush                                                    Do not flush memtables before snapshotting (snapshot will not contain unflushed data)
+--------------------------------------------------------------------  -------------------------------------------------------------------------------------
+--use-sstable-identifier                                              Use the sstable identifier UUID, if available, rather than the sstable generation.
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 -t <tag> / --tag <tag>                                                The name of the snapshot
 ====================================================================  =====================================================================================
