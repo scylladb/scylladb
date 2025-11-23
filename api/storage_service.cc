@@ -2020,8 +2020,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
+        auto usiopt = req->get_query_param("use_sstable_identifier");
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
+            .use_sstable_identifier = strcasecmp(usiopt.c_str(), "true") == 0
         };
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
