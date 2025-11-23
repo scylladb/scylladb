@@ -612,13 +612,13 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
     });
 }
 
-future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
+future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", db::snapshot_options opts = {}) {
     try {
         auto uuid = e.db().local().find_uuid(ks_name, cf_name);
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, opts);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
-                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+                ks_name, cf_name, snapshot_name, opts.skip_flush, std::current_exception());
         throw;
     }
 }
@@ -669,7 +669,8 @@ SEASTAR_TEST_CASE(index_snapshot_works) {
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
+        db::snapshot_options opts = {.skip_flush = true};
+        take_snapshot(e, "ks", "cf", "test", opts).get();
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -1456,7 +1457,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         }
         BOOST_REQUIRE(found);
 
-        co_await take_snapshot(e, "ks", "cf", "test", true /* skip_flush */);
+        co_await take_snapshot(e, "ks", "cf", "test", db::snapshot_options{.skip_flush = true});
 
         testlog.debug("Expected: {}", expected);
 
