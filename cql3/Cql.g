@@ -575,6 +575,15 @@ usingTimeoutServiceLevelClauseObjective[std::unique_ptr<cql3::attributes::raw>& 
     | serviceLevel sl_name=serviceLevelOrRoleName { attrs->service_level = std::move(sl_name); }
     ;
 
+usingTimeoutConcurrencyClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING usingTimeoutConcurrencyClauseObjective[attrs] ( K_AND usingTimeoutConcurrencyClauseObjective[attrs] )*
+    ;
+
+usingTimeoutConcurrencyClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_TIMEOUT to=term { attrs->timeout = std::move(to); }
+    | K_CONCURRENCY c=term { attrs->concurrency = std::move(c); }
+    ;
+
 /**
  * UPDATE <CF>
  * USING TIMESTAMP <long>
@@ -666,7 +675,7 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
     }
-	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingClause[attrs] )?
+	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingTimeoutConcurrencyClause[attrs] )?
 	  {
 	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
 	        return std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -2366,6 +2375,7 @@ K_LIKE:        L I K E;
 
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
+K_CONCURRENCY: C O N C U R R E N C Y;
 
 K_EXECUTE:     E X E C U T E;
 

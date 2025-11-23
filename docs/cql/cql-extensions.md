@@ -135,6 +135,15 @@ which is recommended in order to make the operation less heavyweight
 and allow for running multiple parallel pruning statements for non-overlapping
 token ranges.
 
+By default, the PRUNE MATERIALIZED VIEW statement is relatively slow, only
+performing one base read or write at a time. This can be changed with the
+USING CONCURRENCY clause. If the clause is used, the concurrency of reads
+and writes from the base table will be allowed to increase up to the specified
+value. For example, to run the PRUNE with 100 parallel reads/writes, you can use:
+```cql
+  PRUNE MATERIALIZED VIEW my_view WHERE v = 19 USING CONCURRENCY 100;
+```
+
 ## Synchronous materialized views
 
 Usually, when a table with materialized views is updated, the update to the

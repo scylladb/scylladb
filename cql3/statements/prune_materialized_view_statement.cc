@@ -21,7 +21,7 @@ namespace cql3 {
 namespace statements {
 
 static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, std::vector<query::clustering_range> clustering_bounds, view_ptr view,
-        service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql_stats& stats, db::timeout_clock::duration timeout_duration) {
+        service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql_stats& stats, db::timeout_clock::duration timeout_duration, size_t concurrency) {
     auto key_columns = std::ranges::to<std::vector<const column_definition*>>(
         view->all_columns()
         | std::views::filter([] (const column_definition& cdef) { return cdef.is_primary_key(); })
@@ -35,7 +35,7 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     tracing::trace(state.get_trace_state(), "Deleting ghost rows from partition ranges {}", partition_ranges);
 
     auto p = service::pager::query_pagers::ghost_row_deleting_pager(schema_ptr(view), selection, state,
-            options, std::move(command), std::move(partition_ranges), stats, proxy, timeout_duration);
+            options, std::move(command), std::move(partition_ranges), stats, proxy, timeout_duration, concurrency);
 
     int32_t page_size = std::max(options.get_page_size(), 1000);
     auto now = gc_clock::now();
@@ -62,7 +62,8 @@ future<::shared_ptr<cql_transport::messages::result_message>> prune_materialized
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     dht::partition_range_vector key_ranges = _restrictions->get_partition_key_ranges(options);
     std::vector<query::clustering_range> clustering_bounds = _restrictions->get_clustering_bounds(options);
-    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qp.proxy(), state, options, _stats, timeout_duration).then([] {
+    size_t concurrency = _attrs->is_concurrency_set() ? _attrs->get_concurrency(options).value() : 1;
+    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qp.proxy(), state, options, _stats, timeout_duration, concurrency).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(::make_shared<cql_transport::messages::result_message::void_message>());
     });
 }
