@@ -13,6 +13,7 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
+#include <seastar/core/sharded.hh>
 #include <expected>
 
 class schema;
@@ -32,7 +33,7 @@ class inet_address;
 namespace vector_search {
 
 /// A client with the vector-store service.
-class vector_store_client final {
+class vector_store_client final : public seastar::peering_sharded_service<vector_store_client> {
     struct impl;
     std::unique_ptr<impl> _impl;
 

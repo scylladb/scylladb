@@ -28,6 +28,7 @@
 #include "bytes.hh"
 #include "schema/schema.hh"
 #include "service/tablet_allocator.hh"
+#include "vector_search/vector_store_client.hh"
 
 namespace replica {
 class database;
@@ -208,6 +209,8 @@ public:
     virtual utils::disk_space_monitor& disk_space_monitor() = 0;
 
     virtual db::config& db_config() = 0;
+
+    virtual sharded<vector_search::vector_store_client>& vector_store_client() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});

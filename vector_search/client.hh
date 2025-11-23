@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/common.hh>
+#include <seastar/net/tls.hh>
 #include <optional>
 #include <expected>
 #include <variant>
@@ -39,7 +40,8 @@ public:
     using request_error = std::variant<aborted_error, service_unavailable_error>;
     using request_result = std::expected<response, request_error>;
 
-    explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms);
+    explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms,
+            ::shared_ptr<seastar::tls::certificate_credentials> credentials);
 
     seastar::future<request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as);

@@ -51,7 +51,8 @@ auto make_unexpected(const auto& err) {
 
 } // namespace
 
-clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> request_timeout_in_ms)
+clients::clients(
+        logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> request_timeout_in_ms, truststore& truststore)
     : _producer([&]() -> future<clients_vec> {
         return try_with_gate(_gate, [this] -> future<clients_vec> {
             _trigger_refresh();
@@ -62,7 +63,8 @@ clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refre
     , _trigger_refresh(std::move(trigger_refresh))
     , _timeout(WAIT_FOR_CLIENT_TIMEOUT)
     , _logger(logger)
-    , _request_timeout_in_ms(std::move(request_timeout_in_ms)) {
+    , _request_timeout_in_ms(std::move(request_timeout_in_ms))
+    , _truststore(truststore) {
 }
 
 future<clients::request_result> clients::request(
@@ -120,7 +122,7 @@ future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_a
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
             for (const auto& addr : it->second) {
-                _clients.push_back(make_lw_shared<client>(_logger, client::endpoint_type{uri.host, uri.port, addr}, _request_timeout_in_ms));
+                _clients.push_back(co_await make_client(uri, addr));
             }
         }
     }
@@ -133,7 +135,6 @@ future<> clients::stop() {
     _refresh_cv.signal();
     co_await _gate.close();
     co_await close_clients();
-    co_await close_old_clients();
 }
 
 void clients::clear() {
@@ -145,7 +146,11 @@ future<> clients::close_clients() {
     for (auto& client : _clients) {
         co_await client->close();
     }
+    for (auto& client : _old_clients) {
+        co_await client->close();
+    }
     _clients.clear();
+    _old_clients.clear();
 }
 
 future<> clients::close_old_clients() {
@@ -163,6 +168,12 @@ future<> clients::close_old_clients() {
     std::erase_if(_old_clients, [](auto const& client) {
         return !client;
     });
+}
+
+seastar::future<seastar::lw_shared_ptr<client>> clients::make_client(const uri& uri_, const seastar::net::inet_address& addr_) {
+    auto creds = uri_.schema == uri::schema_type::https ? co_await _truststore.get() : nullptr;
+    auto c = make_lw_shared<client>(_logger, client::endpoint_type{uri_.host, uri_.port, addr_}, _request_timeout_in_ms, creds);
+    co_return c;
 }
 
 } // namespace vector_search

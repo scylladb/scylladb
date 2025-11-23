@@ -13,6 +13,9 @@
 namespace vector_search {
 
 struct uri {
+    enum class schema_type { http, https };
+
+    schema_type schema;
     seastar::sstring host;
     std::uint16_t port;
 };

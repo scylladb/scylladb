@@ -888,7 +888,7 @@ rf_rack_valid_keyspaces: false
 #
 # Vector Store options
 #
-# Only HTTP schema is supported. Port number is mandatory.
+# HTTP and HTTPS schemes are supported. Port number is mandatory.
 # If both `vector_store_primary_uri` and `vector_store_secondary_uri` are unset or empty, vector search is disabled.
 #
 # A comma-separated list of primary vector store node URIs. These nodes are preferred for vector search operations.
@@ -896,6 +896,10 @@ rf_rack_valid_keyspaces: false
 #
 # A comma-separated list of secondary vector store node URIs. These nodes are used as a fallback when all primary nodes are unavailable, and are typically located in a different availability zone for high availability.
 # vector_store_secondary_uri: http://vector-store.dns.name:{port}
+#
+# Options for encrypted connections to the vector store. These options are used for HTTPS URIs in vector_store_primary_uri and vector_store_secondary_uri.
+# vector_store_encryption_options:
+#    truststore: <not set, use system trust>
 
 # 
 # io-streaming rate limiting

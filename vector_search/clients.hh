@@ -10,6 +10,8 @@
 
 #include "client.hh"
 #include "dns.hh"
+#include "truststore.hh"
+#include "seastar/core/future.hh"
 #include "uri.hh"
 #include "utils/sequential_producer.hh"
 #include "vector_search/error.hh"
@@ -34,7 +36,8 @@ public:
     using get_clients_error = std::variant<aborted_error, addr_unavailable_error>;
     using get_clients_result = std::expected<clients_vec, get_clients_error>;
 
-    explicit clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> request_timeout_in_ms);
+    explicit clients(
+            logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> request_timeout_in_ms, truststore& truststore);
 
     seastar::future<request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as);
@@ -54,6 +57,7 @@ public:
 private:
     seastar::future<> close_clients();
     seastar::future<> close_old_clients();
+    seastar::future<seastar::lw_shared_ptr<client>> make_client(const uri& uri_, const seastar::net::inet_address& addr_);
 
     clients_vec _clients;
     sequential_producer<clients_vec> _producer;
@@ -64,6 +68,7 @@ private:
     clients_vec _old_clients;
     logging::logger& _logger;
     utils::updateable_value<uint32_t> _request_timeout_in_ms;
+    truststore& _truststore;
 };
 
 } // namespace vector_search
