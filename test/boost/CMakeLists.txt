@@ -355,6 +355,7 @@ add_scylla_test(combined_tests
     query_processor_test.cc
     reader_concurrency_semaphore_test.cc
     repair_test.cc
+    replicator_test.cc
     role_manager_test.cc
     restrictions_test.cc
     row_cache_test.cc
