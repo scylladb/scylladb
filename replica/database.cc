@@ -546,6 +546,33 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
+void compaction_controller::set_max_shares(float max_shares) {
+    if (max_shares == 0.0f) {
+        // Reset control point to the default values
+        _control_points = default_control_points;
+        return;
+    }
+    if (max_shares < default_control_points.front().output) {
+        dblog.warn("The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}",
+                   max_shares, default_control_points.front().output);
+        max_shares = default_control_points.front().output;
+    }
+
+    std::vector<backlog_controller::control_point> new_control_points;
+    float last_control_point_input = 0.0f;
+    // Generate a new control point set, replacing the output (shares) of the control
+    // point with the largest output, which is not lower than max_shares.
+    for (const auto& control_point : default_control_points) {
+        last_control_point_input = control_point.input;
+        if (control_point.output >= max_shares || control_point.input == default_control_points.back().input) {
+            break;
+        }
+        new_control_points.push_back(control_point);
+    }
+    new_control_points.push_back({last_control_point_input, max_shares});
+    _control_points = std::move(new_control_points);
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");

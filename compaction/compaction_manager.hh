@@ -80,6 +80,7 @@ public:
         scheduling_group maintenance_sched_group;
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
+        utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
     };
@@ -159,6 +160,7 @@ private:
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
+    utils::observer<float> _compaction_max_shares_observer;
     uint64_t _validation_errors = 0;
 
     class strategy_control;
@@ -289,6 +291,10 @@ public:
 
     float static_shares() const noexcept {
         return _cfg.static_shares.get();
+    }
+
+    float max_shares() const noexcept {
+        return _cfg.max_shares.get();
     }
 
     uint32_t throughput_mbs() const noexcept {
