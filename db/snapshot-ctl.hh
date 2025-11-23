@@ -38,10 +38,12 @@ class backup_task_impl;
 
 } // snapshot namespace
 
+struct snapshot_options {
+    bool skip_flush = false;
+};
+
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
-    using skip_flush = bool_class<class skip_flush_tag>;
-
     struct table_snapshot_details {
         int64_t total;
         int64_t live;
@@ -70,8 +72,8 @@ public:
      *
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    future<> take_snapshot(sstring tag, skip_flush sf = skip_flush::no) {
-        return take_snapshot(tag, {}, sf);
+    future<> take_snapshot(sstring tag, snapshot_options opts = {}) {
+        return take_snapshot(tag, {}, opts);
     }
 
     /**
@@ -80,7 +82,7 @@ public:
      * @param tag the tag given to the snapshot; may not be null or empty
      * @param keyspace_names the names of the keyspaces to snapshot; empty means "all"
      */
-    future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
+    future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {});
 
     /**
      * Takes the snapshot of multiple tables. A snapshot name must be specified.
@@ -89,7 +91,7 @@ public:
      * @param tables a vector of tables names to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf = skip_flush::no);
+    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
@@ -127,8 +129,8 @@ private:
 
     friend class snapshot::backup_task_impl;
 
-    future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
-    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf = skip_flush::no);
+    future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
+    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 };
 
 }
