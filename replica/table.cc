@@ -3495,10 +3495,12 @@ static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description s
 
 class local_snapshot_writer : public snapshot_writer {
     std::filesystem::path _dir;
+    db::snapshot_options _opts;
 
 public:
-    local_snapshot_writer(std::filesystem::path dir, sstring name)
+    local_snapshot_writer(std::filesystem::path dir, sstring name, db::snapshot_options opts)
             : _dir(dir / sstables::snapshots_dir / name)
+            , _opts(std::move(opts))
     {}
     future<> init() override {
         co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
@@ -3514,15 +3516,15 @@ public:
 };
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts) {
     auto writer = std::visit(overloaded_functor{
-        [&name] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
+        [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
                 // virtual tables don't have initialized local storage
                 return nullptr;
             }
 
-            return std::make_unique<local_snapshot_writer>(loc.dir, name);
+            return std::make_unique<local_snapshot_writer>(loc.dir, name, opts);
         },
         [] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
             throw std::runtime_error("Snapshotting non-local tables is not implemented");
