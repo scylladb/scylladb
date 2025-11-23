@@ -2535,8 +2535,11 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
-future<> sstable::snapshot(const sstring& dir) const {
-    return _storage->snapshot(*this, dir, storage::absolute_path::yes);
+future<generation_type> sstable::snapshot(const sstring& dir, bool use_sstable_identifier) const {
+    // Use the sstable identifier UUID if available to enable global de-duplication of sstables in backup.
+    generation_type gen = (use_sstable_identifier && _sstable_identifier) ? generation_type(_sstable_identifier->uuid()) : _generation;
+    co_await _storage->snapshot(*this, dir, storage::absolute_path::yes, gen);
+    co_return gen;
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
