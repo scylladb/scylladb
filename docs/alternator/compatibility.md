@@ -428,3 +428,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   that can be used to achieve consistent reads on global (multi-region) tables.
   This table option was added as a preview to DynamoDB in December 2024.
   <https://github.com/scylladb/scylladb/issues/21852>
+
+* Alternator does not support multi-attribute (composite) keys in GSIs.
+  This feature was added to DynamoDB in November 2025.
+  <https://github.com/scylladb/scylladb/issues/27182>
