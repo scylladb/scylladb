@@ -1987,3 +1987,52 @@ async def test_timed_out_reader_after_barrier(manager: ManagerClient):
 
         rows = await cql.run_async(f"SELECT pk from {ks}.test")
         assert len(list(rows)) == 1
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_can_migrate_tablet_when_nonreplica_is_down(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug'
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        servers += await manager.servers_add(2, cmdline=cmdline)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        key = 7  # Whatever
+        tablet_token = 0  # Doesn't matter since there is one tablet
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 0)")
+        rows = await cql.run_async(f"SELECT pk from {ks}.test")
+        assert len(list(rows)) == 1
+
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+        dst_shard = 0
+
+        logger.info("Stop the third server")
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+        logger.info("Migrating the tablet the the first to the second node")
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token)
+
+        logger.info("Start the third server")
+        await manager.server_start(servers[2].server_id)
+
+        logger.info("Reconnect the driver and wait for hosts")
+        cql = await reconnect_driver(manager)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        rows = await cql.run_async(f"SELECT pk, c from {ks}.test", host=hosts[2])
+        assert len(list(rows)) == 1
+        assert rows[0].pk == key
+        assert rows[0].c == 0
