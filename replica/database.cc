@@ -2952,7 +2952,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        auto opts = db::snapshot_options{}; // FIXME: use_sstable_identifier
+        // Use the sstable identifier in snapshot names to allow de-duplication of sstables
+        // at backup time even if they were migrated across shards or nodes and were renamed a given a new generation.
+        // We hard-code that here since we have no way to pass this option to auto-snapshot and
+        // it is always safe to use the sstable identifier for the sstable generation.
+        auto opts = db::snapshot_options{.use_sstable_identifier = true};
         co_await table::snapshot_on_all_shards(sharded_db, table_shards, name, opts);
     }
 
