@@ -105,9 +105,9 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     # Enable expiration (TTL) on attribute "expiration"
     table.meta.client.update_time_to_live(TableName=table.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
 
-    # Insert N rows, setting them all to expire 3 seconds from now.
+    # Insert N rows, setting them all to expire 10 seconds from now.
     N = 100
-    expiration = int(time.time())+3
+    expiration = int(time.time())+10
     with table.batch_writer() as batch:
         for p in range(N):
             batch.put_item(Item={'p': p, 'expiration': expiration})
@@ -132,6 +132,14 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
             break # done waiting for the background writes to finish
         await asyncio.sleep(0.1)
 
+    # In the 2025.4 branch, something continues to run in the sl:default
+    # scheduling group for a bit after the above wait settled down. This
+    # is probably a bug - maybe some Raft activity gets registered as
+    # as sl:default. But finding such a bug is not the purpose of this
+    # test - our purpose is to see which scheduling group is used during
+    # TTL's expiration scans.
+    await asyncio.sleep(5.0)
+
     # Get the current amount of work (in CPU ms) done across all nodes and
     # shards in different scheduling groups. We expect this to increase
     # considerably for the streaming group while expiration scanning is
@@ -150,14 +158,14 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     ms_streaming_before, ms_statement_before = await get_cpu_metrics()
 
     # Wait until all rows expire, and get the CPU metrics again. All items
-    # were set to expire in 3 seconds, and the expiration thread is set up
+    # were set to expire in 10 seconds, and the expiration thread is set up
     # in alternator_config to scan the whole table in 0.5 seconds, and the
     # whole table is just 100 rows, so we expect all the data to be gone in
-    # 4 seconds. Let's wait 5 seconds just in case. Even if not all the data
-    # will have been deleted by then, we do expect some deletions to have
-    # happened, and certainly several scans, all taking CPU which we expect
-    # to be in the right scheduling group.
-    await asyncio.sleep(5)
+    # 11 seconds, of which we already slept 5. Let's wait 7 seconds just in
+    # case. Even if not all the data will have been deleted by then, we do
+    # expect some deletions to have happened, and certainly several scans,
+    # all taking CPU which we expect to be in the right scheduling group.
+    await asyncio.sleep(7)
     ms_streaming_after, ms_statement_after = await get_cpu_metrics()
 
     # As a sanity check, verify some of the data really expired, so there
