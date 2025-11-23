@@ -3268,7 +3268,7 @@ future<> table::write_schema_as_cql(const global_table_ptr& table_shards, sstrin
 }
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
-future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
+future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts) {
     auto* so = std::get_if<storage_options::local>(&table_shards->get_storage_options().value);
     if (so == nullptr) {
         throw std::runtime_error("Snapshotting non-local tables is not implemented");
@@ -3291,7 +3291,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
             file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
-                return table_shards->take_snapshot(jsondir);
+                return table_shards->take_snapshot(jsondir, opts);
             }));
         });
         co_await io_check(sync_directory, jsondir);
@@ -3300,19 +3300,22 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
     });
 }
 
-future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
-    tlogger.trace("take_snapshot {}", jsondir);
+future<table::snapshot_file_set> table::take_snapshot(sstring jsondir, db::snapshot_options opts) {
+    tlogger.trace("take_snapshot {}: use_sstable_identifier={}", jsondir, opts.use_sstable_identifier);
 
     auto sstable_deletion_guard = co_await get_sstable_list_permit();
 
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
 
-    co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
-        table_names->insert(sstable->component_basename(sstables::component_type::Data));
-        return io_check([sstable, &dir = jsondir] {
-            return sstable->snapshot(dir);
+    auto& ks_name = schema()->ks_name();
+    auto& cf_name = schema()->cf_name();
+    co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&, opts] (sstables::shared_sstable sstable) -> future<> {
+        auto gen = co_await io_check([sstable, &dir = jsondir, opts] {
+            return sstable->snapshot(dir, opts.use_sstable_identifier);
         });
+        auto fname = sstable->component_basename(ks_name, cf_name, sstable->get_version(), gen, sstable->get_format(), sstables::component_type::Data);
+        table_names->insert(fname);
     });
     co_return make_foreign(std::move(table_names));
 }
