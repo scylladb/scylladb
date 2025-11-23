@@ -2362,16 +2362,23 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
         params["sf"] = "false";
     }
 
+    if (vm.contains("use-sstable-identifier")) {
+        params["use_sstable_identifier"] = "true";
+    } else {
+        params["use_sstable_identifier"] = "false";
+    }
+
     client.post("/storage_service/snapshots", params);
 
     if (kn_msg.empty()) {
         kn_msg = params["kn"];
     }
 
-    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}}}\n",
+    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skip_flush={}, use_sstable_identifier={}}}\n",
             kn_msg,
             params["tag"],
-            params["sf"]);
+            params["sf"],
+            params["use_sstable_identifier"]);
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
@@ -4598,6 +4605,7 @@ For more information, see: {}
                     typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
                     typed_option<sstring>("tag,t", "The name of the snapshot"),
                     typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
+                    typed_option<>("use-sstable-identifier", "Use the sstable identifier UUID, if available, rather than the sstable generation for the sstable file names within the snapshot dir and the manifest file"),
                 },
                 {
                     typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
