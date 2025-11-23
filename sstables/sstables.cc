@@ -2070,6 +2070,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     sstable_id sid;
+    // Force a random sstable_id for testing purposes
     bool random_sstable_identifier = utils::get_local_injector().is_enabled("random_sstable_identifier");
     if (!random_sstable_identifier && generation().is_uuid_based()) {
         sid = sstable_id(generation().as_uuid());
