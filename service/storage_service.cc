@@ -6036,8 +6036,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 }
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
                     const auto current_version = ss._shared_token_metadata.get()->get_version();
-                    rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
-                        version, current_version);
+                    rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, "
+                        "current version {}, stale versions (version: use_count): {}",
+                        version, current_version, ss._shared_token_metadata.describe_stale_versions());
 
                     // This shouldn't happen under normal operation, it's only plausible
                     // if the topology change coordinator has

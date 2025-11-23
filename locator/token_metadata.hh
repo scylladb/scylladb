@@ -112,6 +112,7 @@ public:
 private:
     utils::phased_barrier::operation _op;
     service::topology::version_t _version;
+    const token_metadata* _tm = nullptr;
     link_type _link;
 
     // When engaged it means the version is no longer latest and should be released soon as to
@@ -120,8 +121,7 @@ private:
     std::chrono::steady_clock::duration _log_threshold;
 public:
     version_tracker() = default;
-    version_tracker(utils::phased_barrier::operation op, service::topology::version_t version)
-        : _op(std::move(op)), _version(version) {}
+    version_tracker(utils::phased_barrier::operation op, const token_metadata& tm);
     version_tracker(version_tracker&&) noexcept = default;
     version_tracker& operator=(version_tracker&& o) noexcept {
         if (this != &o) {
@@ -136,6 +136,8 @@ public:
     service::topology::version_t version() const {
         return _version;
     }
+
+    long version_use_count() const;
 
     void mark_expired(std::chrono::steady_clock::duration log_threshold) {
         if (!_expired_at) {
@@ -172,7 +174,7 @@ private:
     friend class token_metadata_impl;
 };
 
-class token_metadata final {
+class token_metadata final: public enable_lw_shared_from_this<token_metadata> {
     shared_token_metadata* _shared_token_metadata = nullptr;
     std::unique_ptr<token_metadata_impl> _impl;
 private:
@@ -413,7 +415,7 @@ class shared_token_metadata : public peering_sharded_service<shared_token_metada
             boost::intrusive::constant_time_size<false>>;
     version_tracker_list_type _trackers;
 private:
-    version_tracker new_tracker(token_metadata::version_t);
+    version_tracker new_tracker(const token_metadata& tm);
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
@@ -422,7 +424,7 @@ public:
         , _lock_func(std::move(lock_func))
         , _versions_barrier("shared_token_metadata::versions_barrier")
     {
-        _shared->set_version_tracker(new_tracker(_shared->get_version()));
+        _shared->set_version_tracker(new_tracker(*_shared));
     }
 
     shared_token_metadata(const shared_token_metadata& x) = delete;
@@ -448,6 +450,9 @@ public:
     void set_stall_detector_threshold(std::chrono::steady_clock::duration threshold) {
         _stall_detector_threshold = threshold;
     }
+
+    // Returns a map version -> use_count
+    std::unordered_map<service::topology::version_t, int> describe_stale_versions();
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();

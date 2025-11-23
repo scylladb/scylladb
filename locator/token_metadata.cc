@@ -1170,6 +1170,17 @@ token_metadata::set_version_tracker(version_tracker_t tracker) {
     _impl->set_version_tracker(std::move(tracker));
 }
 
+version_tracker::version_tracker(utils::phased_barrier::operation op, const token_metadata& tm)
+    : _op(std::move(op))
+    , _version(tm.get_version())
+    , _tm(&tm)
+{
+}
+
+long version_tracker::version_use_count() const {
+    return _tm->use_count();
+}
+
 version_tracker::~version_tracker() {
     if (_expired_at) {
         auto now = std::chrono::steady_clock::now();
@@ -1181,8 +1192,8 @@ version_tracker::~version_tracker() {
     }
 }
 
-version_tracker shared_token_metadata::new_tracker(token_metadata::version_t version) {
-    auto tracker = version_tracker(_versions_barrier.start(), version);
+version_tracker shared_token_metadata::new_tracker(const token_metadata& tm) {
+    auto tracker = version_tracker(_versions_barrier.start(), tm);
     _trackers.push_front(tracker);
     return tracker;
 }
@@ -1198,6 +1209,18 @@ void shared_token_metadata::clear_and_dispose(std::unique_ptr<token_metadata_imp
     }
 }
 
+std::unordered_map<service::topology::version_t, int> shared_token_metadata::describe_stale_versions() {
+    std::unordered_map<service::topology::version_t, int> result;
+    const auto active_version = _shared.get()->get_version();
+    for (const auto& t: _trackers) {
+        const auto v = t.version();
+        if (v < active_version) {
+            result.emplace(v, t.version_use_count());
+        }
+    }
+    return result;
+}
+
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
         on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing ring_version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
@@ -1211,7 +1234,7 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
 
     tmptr->set_shared_token_metadata(*this);
     _shared = std::move(tmptr);
-    _shared->set_version_tracker(new_tracker(_shared->get_version()));
+    _shared->set_version_tracker(new_tracker(*_shared));
 
     for (auto&& v : _trackers) {
         if (v.version() != _shared->get_version()) {
