@@ -40,6 +40,7 @@ class backup_task_impl;
 
 struct snapshot_options {
     bool skip_flush = false;
+    bool use_sstable_identifier = false;
 };
 
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
