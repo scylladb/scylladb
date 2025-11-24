@@ -67,6 +67,14 @@ using namespace std::chrono_literals;
 
 logging::logger elogger("alternator-executor");
 
+namespace std {
+    template <> struct hash<std::pair<sstring, sstring>> {
+        size_t operator () (const std::pair<sstring, sstring>& p) const {
+            return std::hash<sstring>()(p.first) * 1009 + std::hash<sstring>()(p.second) * 3;
+        }
+    };
+}
+
 namespace alternator {
 
 // Alternator-specific table properties stored as hidden table tags:
@@ -248,6 +256,56 @@ static const rjson::value::Member& get_single_member(const rjson::value& v, cons
     return *(v.MemberBegin());
 }
 
+class executor::describe_table_info_manager : public service::migration_listener::empty_listener {
+    executor &_executor;
+
+    struct table_info {
+        utils::simple_value_with_expiry<std::uint64_t> size_in_bytes;
+    };
+    std::unordered_map<std::pair<sstring, sstring>, table_info> info_for_tables;
+    bool active = false;
+
+public:
+    describe_table_info_manager(executor& executor) : _executor(executor) {
+        _executor._proxy.data_dictionary().real_database_ptr()->get_notifier().register_listener(this);
+        active = true;
+    }
+    describe_table_info_manager(const describe_table_info_manager &) = delete;
+    describe_table_info_manager(describe_table_info_manager&&) = delete;
+    ~describe_table_info_manager() {
+        if (active) {
+            on_fatal_internal_error(elogger, "describe_table_info_manager was not stopped before destruction");
+        }
+    }
+
+    describe_table_info_manager &operator = (const describe_table_info_manager &) = delete;
+    describe_table_info_manager &operator = (describe_table_info_manager&&) = delete;
+
+    static std::chrono::high_resolution_clock::time_point now() {
+        return std::chrono::high_resolution_clock::now();
+    }
+
+    std::optional<std::uint64_t> get_cached_size_in_bytes(const sstring &ks_name, const sstring &cf_name) const {
+        auto it = info_for_tables.find({ks_name, cf_name});
+        if (it != info_for_tables.end()) {
+            return it->second.size_in_bytes.get();
+        }
+        return std::nullopt;
+    }
+    void cache_size_in_bytes(sstring ks_name, sstring cf_name, std::uint64_t size_in_bytes, std::chrono::high_resolution_clock::time_point expiry) {
+        info_for_tables[{std::move(ks_name), std::move(cf_name)}].size_in_bytes.set_if_longer_expiry(size_in_bytes, expiry);
+    }
+    future<> stop() {
+        co_await _executor._proxy.data_dictionary().real_database_ptr()->get_notifier().unregister_listener(this);
+        active = false;
+        co_return;
+    }
+    void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        if (!ks_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) return;
+        info_for_tables.erase({ks_name, cf_name});
+    }
+};
+
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
          service::storage_service& ss,
@@ -270,6 +328,7 @@ executor::executor(gms::gossiper& gossiper,
         _stats))
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
+    _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
     register_metrics(_metrics, _stats);
 }
 
@@ -754,12 +813,44 @@ static future<bool> is_view_built(
 
 }
 
+future<> executor::cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
+    auto expiry = describe_table_info_manager::now() + ttl;
+    return container().invoke_on_all(
+        [schema, size_in_bytes, expiry] (executor& exec) {
+            exec._describe_table_info_manager->cache_size_in_bytes(schema->ks_name(), schema->cf_name(), size_in_bytes, expiry);
+        });
+}
+
+future<> executor::fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting) {
+    auto cached_size = _describe_table_info_manager->get_cached_size_in_bytes(schema->ks_name(), schema->cf_name());
+    std::uint64_t total_size = 0;
+    if (cached_size) {
+        total_size = *cached_size;
+    } else {
+        // there's no point in trying to estimate value of table that is being deleted, as other nodes more often than not might
+        // move forward with deletion faster than we calculate the size
+        if (!deleting) {
+            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+            const auto expiry = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_cache_validity_in_seconds() };
+            // Note: we don't care when the notification of other shards will finish, as long as it will be done
+            // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
+            // the size yet, so it will calculate it again) - this is not a problem, because it will call cache_newly_calculated_size_on_all_shards
+            // with expiry, which is extremely unlikely to be exactly the same as the previous one, all shards will keep the size coming with expiry that is further into the future.
+            // In case of the same expiry, some shards will have different size, which means DescribeTable will return different values depending on the shard
+            // which is also fine, as the specification doesn't give precision guarantees of any kind.
+            co_await cache_newly_calculated_size_on_all_shards(schema, total_size, expiry);
+        }
+    }
+    rjson::add(table_description, "TableSizeBytes", total_size);
+}
+
 future<rjson::value> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
+    co_await fill_table_size(table_description, schema, tbl_status == table_status::deleting);
 
     auto creation_timestamp = get_table_creation_time(*schema);
 
@@ -870,7 +961,6 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
     }
     executor::supplement_table_stream_info(table_description, *schema, _proxy);
 
-    // FIXME: still missing some response fields (issue #5026)
     co_return table_description;
 }
 
@@ -6087,9 +6177,10 @@ future<> executor::start() {
 }
 
 future<> executor::stop() {
+    co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};
-    return _parsed_expression_cache->stop();
+    co_await _parsed_expression_cache->stop();
 }
 
 } // namespace alternator
