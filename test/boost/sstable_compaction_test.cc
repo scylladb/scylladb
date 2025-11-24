@@ -6275,11 +6275,11 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
 
         auto& cm = t->get_compaction_manager();
         auto split_opt = compaction::compaction_type_options::split{classify_fn};
-        auto new_ssts = cm.maybe_split_sstable(input, t.as_compaction_group_view(), split_opt).get();
+        auto new_ssts = cm.maybe_split_new_sstable(input, t.as_compaction_group_view(), split_opt).get();
         BOOST_REQUIRE(new_ssts.size() == expected_output_size);
         for (auto& sst : new_ssts) {
             // split sstables don't require further split.
-            auto ssts = cm.maybe_split_sstable(sst, t.as_compaction_group_view(), split_opt).get();
+            auto ssts = cm.maybe_split_new_sstable(sst, t.as_compaction_group_view(), split_opt).get();
             BOOST_REQUIRE(ssts.size() == 1);
             BOOST_REQUIRE(ssts.front() == sst);
         }
@@ -6291,7 +6291,7 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
             }
             return classify_fn(t);
         };
-        BOOST_REQUIRE_THROW(cm.maybe_split_sstable(input, t.as_compaction_group_view(), compaction::compaction_type_options::split{throwing_classifier}).get(),
+        BOOST_REQUIRE_THROW(cm.maybe_split_new_sstable(input, t.as_compaction_group_view(), compaction::compaction_type_options::split{throwing_classifier}).get(),
                             std::runtime_error);
     });
 }
