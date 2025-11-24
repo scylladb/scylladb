@@ -613,7 +613,7 @@ class TestCQLAudit(AuditTester):
             return self.execute_and_validate_audit_entry(session, query, category, audit_settings, **kwargs)
 
         execute_and_validate_audit_entry(
-            "CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             category="DDL",
         )
         execute_and_validate_audit_entry(
@@ -634,7 +634,7 @@ class TestCQLAudit(AuditTester):
         keyspaces = audit_settings["audit_keyspaces"].split(",") if "audit_keyspaces" in audit_settings else []
         assert "ks2" not in keyspaces
         query_sequence = [
-            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             'USE "ks2"',
             "ALTER KEYSPACE ks2 WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 1 } AND DURABLE_WRITES = false",
             "DROP KEYSPACE ks2",
@@ -747,7 +747,7 @@ class TestCQLAudit(AuditTester):
         keyspaces = audit_settings["audit_keyspaces"].split(",") if "audit_keyspaces" in audit_settings else []
         assert "ks2" not in keyspaces
         query_sequence = [
-            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             f"CREATE TABLE ks2.{first_table} (k int PRIMARY KEY, v1 int)",
             f"ALTER TABLE ks2.{first_table} ADD v2 int",
             f"INSERT INTO ks2.{first_table} (k, v1, v2) VALUES (1, 1, 1)",
@@ -791,7 +791,7 @@ class TestCQLAudit(AuditTester):
 
         session = self.prepare(create_keyspace=False, audit_settings=audit_settings)
 
-        session.execute("CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true")
+        session.execute("CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true")
 
         session.execute("USE ks")
 

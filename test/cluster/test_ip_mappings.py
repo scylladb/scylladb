@@ -18,7 +18,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
     server_a = await manager.server_add()
     server_b = await manager.server_add(start=False)
 
-    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         table = f"{ks}.test"
         await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
         for i in range(100):

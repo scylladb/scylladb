@@ -33,7 +33,7 @@ async def test_maintenance_mode(manager: ManagerClient):
     cluster = cluster_con([server_b.ip_addr])
     cql = cluster.connect()
 
-    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (k int PRIMARY KEY, v int)")
 

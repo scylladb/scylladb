@@ -29,12 +29,12 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
     config = {
         'failure_detector_timeout_in_ms': 2000
     }
-    srvs = await manager.servers_add(3, config=config)
+    srvs = await manager.servers_add(3, config=config, auto_rack_dc="dc")
     cql = manager.get_cql()
 
     # Use RF=2 keyspace and below CL=ALL so that performing an INSERT requires
     # communicating with another node.
-    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
+    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'NetworkTopologyStrategy', 'dc': ['rack1', 'rack2']}")
     await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
     # Pause one of the servers so other nodes mark it as dead and we can remove it.
