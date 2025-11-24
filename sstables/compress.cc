@@ -459,6 +459,119 @@ public:
     }
 };
 
+template <bool check_digest>
+class compressed_raw_file_data_source_impl : public data_source_impl {
+    std::function<future<input_stream<char>>()> _stream_creator;
+    std::optional<input_stream<char>> _input_stream;
+    sstables::compression* _compression_metadata;
+    sstables::compression::segmented_offsets::accessor _offsets;
+    [[no_unique_address]] sstables::digest_members<check_digest> _digests;
+    reader_permit _permit;
+    uint64_t _pos{0};
+    uint64_t _current_chunk_index{0};
+
+private:
+    uint64_t get_chunk_len(uint64_t chunk_index) const {
+        auto chunk_start = _offsets.at(chunk_index);
+        auto chunk_end = (chunk_index + 1 == _compression_metadata->offsets.size())
+                ? _compression_metadata->compressed_file_length()
+                : _offsets.at(chunk_index + 1);
+        auto len = chunk_end - chunk_start;
+        return len;
+    }
+
+public:
+    compressed_raw_file_data_source_impl(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
+                file_input_stream_options options,
+                reader_permit permit, std::optional<uint32_t> digest)
+            : _compression_metadata(cm)
+            , _offsets(_compression_metadata->offsets.get_accessor())
+            , _permit(std::move(permit))
+    {
+        if constexpr (check_digest) {
+            if (!digest) {
+                on_internal_error(sstables::sstlog, "Requested digest check but no digest was provided.");
+            }
+            _digests = {true, *digest, crc32_utils::init_checksum()};
+        }
+
+        _stream_creator = [stream_creator{std::move(stream_creator)}, start = _pos, length = _compression_metadata->compressed_file_length(), options] mutable {
+            return stream_creator(start, length, std::move(options));
+        };
+    }
+
+    virtual future<temporary_buffer<char>> get() override {
+        if (_pos >= _compression_metadata->compressed_file_length()) {
+            co_return temporary_buffer<char>();
+        }
+
+        if (!_input_stream) {
+            _input_stream = co_await _stream_creator();
+        }
+
+        auto chunk_len = get_chunk_len(_current_chunk_index);
+        if (!chunk_len) {
+            throw sstables::malformed_sstable_exception(format("compressed raw reader chunk_len must be greater than zero, pos={}", _pos));
+        }
+
+        auto res_units = co_await _permit.request_memory(chunk_len);
+        auto buf = co_await _input_stream->read_exactly(chunk_len);
+        if (buf.size() != chunk_len) {
+            throw sstables::malformed_sstable_exception(format("compressed raw reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _pos, chunk_len, buf.size()));
+        }
+
+        auto compressed_len = chunk_len - 4;
+        auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
+        auto actual_checksum = crc32_utils::checksum(buf.get(), compressed_len);
+        if (expected_checksum != actual_checksum) {
+            throw sstables::malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", chunk_len, _pos, expected_checksum, actual_checksum));
+        }
+
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest) {
+                _digests.actual_digest = checksum_combine_or_feed<crc32_utils>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
+                uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+                _digests.actual_digest = crc32_utils::checksum(_digests.actual_digest,
+                        reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+            }
+        }
+
+        _current_chunk_index++;
+        _pos += buf.size();
+
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest
+                    && _current_chunk_index == _compression_metadata->offsets.size()
+                    && _digests.expected_digest != _digests.actual_digest) {
+                throw sstables::malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
+            }
+        }
+
+        co_return make_tracked_temporary_buffer(std::move(buf), std::move(res_units));
+    }
+
+    virtual future<> close() override {
+        if (!_input_stream) {
+            return make_ready_future<>();
+        }
+        return _input_stream->close();
+    }
+
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        throw std::runtime_error("compressed raw file data source does not support skip()");
+    }
+};
+
+template <bool check_digest>
+class compressed_raw_file_data_source : public data_source {
+public:
+    compressed_raw_file_data_source(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
+            file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
+        : data_source(std::make_unique<compressed_raw_file_data_source_impl<check_digest>>(
+                std::move(stream_creator), cm, std::move(options), std::move(permit), digest))
+        {}
+};
+
 template <ChecksumUtils ChecksumType, bool check_digest, compressed_checksum_mode mode>
 class compressed_file_data_source : public data_source {
 public:
@@ -611,3 +724,13 @@ output_stream<char> sstables::make_compressed_file_m_format_output_stream(output
             std::move(out), cm, cp, std::move(p));
 }
 
+input_stream<char> sstables::make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
+        file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
+{
+    if (digest) [[unlikely]] {
+        return input_stream<char>(compressed_raw_file_data_source<true>(
+                std::move(stream_creator), cm, std::move(options), std::move(permit), digest));
+    }
+    return input_stream<char>(compressed_raw_file_data_source<false>(
+            std::move(stream_creator), cm, std::move(options), std::move(permit), digest));
+}

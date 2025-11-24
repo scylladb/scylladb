@@ -377,6 +377,11 @@ input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn 
                 class file_input_stream_options options, reader_permit permit,
                 std::optional<uint32_t> digest);
 
+// Raw compressed data stream function that return compressed chunks without decompression
+// while still calculating digests and verifying checksums. Compatible with SSTables version 3.x and later.
+input_stream<char> make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
+        file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest);
+
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 const compression_parameters& cp,
