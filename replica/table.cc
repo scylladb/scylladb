@@ -720,7 +720,7 @@ public:
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
-    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override {
+    future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override {
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
     }
     dht::token_range get_token_range_after_split(const dht::token&) const noexcept override { return dht::token_range(); }
@@ -878,7 +878,7 @@ public:
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
-    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override;
+    future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
         return tablet_map().get_token_range_after_split(token);
     }
@@ -1129,7 +1129,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 }
 
 future<std::vector<sstables::shared_sstable>>
-tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable& sst) {
+tablet_storage_group_manager::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     if (!tablet_map().needs_split()) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
@@ -1137,8 +1137,8 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
     auto& cg = compaction_group_for_sstable(sst);
     auto holder = cg.async_gate().hold();
     auto& view = cg.view_for_sstable(sst);
-    auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_sstable");
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, view, co_await split_compaction_options());
+    auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_new_sstable");
+    co_return co_await _t.get_compaction_manager().maybe_split_new_sstable(sst, view, co_await split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
@@ -1148,7 +1148,7 @@ future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
 
 future<std::vector<sstables::shared_sstable>> table::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     auto holder = async_gate().hold();
-    co_return co_await _sg_manager->maybe_split_sstable(sst);
+    co_return co_await _sg_manager->maybe_split_new_sstable(sst);
 }
 
 dht::token_range table::get_token_range_after_split(const dht::token& token) const noexcept {
