@@ -365,6 +365,7 @@ add_scylla_test(combined_tests
     schema_registry_test.cc
     secondary_index_test.cc
     sessions_test.cc
+    simple_value_with_expiry_test.cc
     sstable_compaction_test.cc
     sstable_compressor_factory_test.cc
     sstable_compression_config_test.cc
