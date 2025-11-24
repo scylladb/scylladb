@@ -2227,6 +2227,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->maintenance_socket() != "ignore") {
                 // Enable role operations now that node joined the cluster
+                maintenance_auth_service.invoke_on(0, [&mm](auth::service& svc) {
+                    return svc.create_legacy_keyspace_if_missing(mm.local());
+                }).get();
                 maintenance_auth_service.invoke_on_all([](auth::service& svc) {
                     auto& rm = dynamic_cast<auth::maintenance_socket_role_manager&>(svc.underlying_role_manager());
                     return rm.enable_role_operations();
