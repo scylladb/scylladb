@@ -321,10 +321,12 @@ future<bool> view_building_coordinator::work_on_view_building(service::group0_gu
 
             auto remote_results_opt = co_await _remote_work[replica].get_future();
             if (remote_results_opt) {
-                auto results_muts = co_await update_state_after_work_is_done(guard, replica, std::move(*remote_results_opt));
-                muts.insert(muts.end(), std::make_move_iterator(results_muts.begin()), std::make_move_iterator(results_muts.end()));
-                // If the replica successfully finished its work, we need to commit mutations generated above before selecting next task
-                skip_work_on_this_replica = !results_muts.empty();
+                auto results_mut_opt = update_state_after_work_is_done(guard, replica, std::move(*remote_results_opt));
+                if (results_mut_opt) {
+                    muts.push_back(std::move(*results_mut_opt));
+                    // If the replica successfully finished its work, we need to commit mutations generated above before selecting next task
+                    skip_work_on_this_replica = true;
+                }
             }
 
             // If there were no mutations for this replica, we can just remove the entry from `_remote_work` map
@@ -353,8 +355,8 @@ future<bool> view_building_coordinator::work_on_view_building(service::group0_gu
         } else if (auto todo_ids = select_tasks_for_replica(replica); !todo_ids.empty()) {
             // If the replica has no started tasks and there are tasks to do, mark them as started.
             // The coordinator will attach itself to the work in next iteration.
-            auto new_mutations = co_await start_tasks(guard, std::move(todo_ids));
-            muts.insert(muts.end(), std::make_move_iterator(new_mutations.begin()), std::make_move_iterator(new_mutations.end()));
+            auto started_tasks_mut = start_tasks(guard, std::move(todo_ids));
+            muts.push_back(std::move(started_tasks_mut));
         } else {
             vbc_logger.debug("Nothing to do for replica {}", replica);
         }
@@ -426,15 +428,14 @@ std::vector<utils::UUID> view_building_coordinator::select_tasks_for_replica(loc
     return {};
 }
 
-future<utils::chunked_vector<mutation>> view_building_coordinator::start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks) {
+mutation view_building_coordinator::start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks) {
     vbc_logger.info("Starting tasks {}", tasks);
 
-    utils::chunked_vector<mutation> muts;
+    view_building_task_mutation_builder builder(guard.write_timestamp());
     for (auto& t: tasks) {
-        auto mut = co_await _sys_ks.make_update_view_building_task_state_mutation(guard.write_timestamp(), t, view_building_task::task_state::started);
-        muts.push_back(std::move(mut));
+        builder.set_state(t, view_building_task::task_state::started);
     }
-    co_return muts;
+    return builder.build();
 }
 
 void view_building_coordinator::attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks) {
@@ -478,10 +479,11 @@ future<std::optional<view_building_coordinator::remote_work_results>> view_build
 
 // Mark finished task as done (remove them from the table).
 // Retry failed tasks if possible (if failed tasks wasn't aborted).
-future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, view_building_coordinator::remote_work_results results) {
+std::optional<mutation> view_building_coordinator::update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, view_building_coordinator::remote_work_results results) {
     vbc_logger.debug("Got results from replica {}: {}", replica, results);
 
-    utils::chunked_vector<mutation> muts;
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+    bool any_mutation = false;
     for (auto& result: results) {
         vbc_logger.info("Task {} was finished with result: {}", result.first, result.second);
 
@@ -497,11 +499,11 @@ future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_
         auto task_opt = _vb_sm.building_state.get_task(*_vb_sm.building_state.currently_processed_base_table, replica, result.first);
         if (task_opt && task_opt->get().state != view_building_task::task_state::aborted) {
             // Otherwise, the task was completed successfully and we can remove it.
-            auto delete_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), result.first);
-            muts.push_back(std::move(delete_mut));
+            builder.del_task(result.first);
+            any_mutation = true;
         }
     }
-    co_return muts;
+    return any_mutation ? std::optional(builder.build()) : std::nullopt;
 }
 
 future<> view_building_coordinator::stop() {
