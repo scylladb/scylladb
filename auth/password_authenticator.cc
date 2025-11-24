@@ -61,7 +61,11 @@ std::string password_authenticator::default_superuser(cql3::query_processor& qp)
         return superuser_name;
     }
 
-    return std::string(DEFAULT_USER_NAME);
+    if (legacy_mode(qp)) {
+        return std::string(DEFAULT_USER_NAME);
+    }
+
+    return std::string();
 }
 
 password_authenticator::~password_authenticator() {
@@ -73,7 +77,6 @@ password_authenticator::password_authenticator(cql3::query_processor& qp, ::serv
     , _migration_manager(mm)
     , _cache(cache)
     , _stopped(make_ready_future<>()) 
-    , _superuser(default_superuser(qp))
 {}
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
@@ -155,7 +158,7 @@ future<> password_authenticator::legacy_create_default_if_missing() {
 future<> password_authenticator::maybe_create_default_password() {
     auto needs_password = [this] () -> future<bool> {
         if (_superuser.empty()) {
-            on_internal_error(plogger, "Default superuser name is empty");
+            co_return false;
         }
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query,
@@ -190,7 +193,7 @@ future<> password_authenticator::maybe_create_default_password() {
     // Set default superuser's password.
     std::string salted_pwd(_qp.db().get_config().auth_superuser_salted_password());
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
+        co_return;
     }
     const auto update_query = update_row_query();
     co_await collect_mutations(_qp, batch, update_query, {std::move(salted_pwd), _superuser});
@@ -220,6 +223,8 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
 
 future<> password_authenticator::start() {
     return once_among_shards([this] {
+        _superuser = default_superuser(_qp);
+
         // Verify that at least one hashing scheme is supported.
         passwords::detail::verify_scheme(_scheme);
         plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(_scheme));
