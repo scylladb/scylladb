@@ -3461,12 +3461,15 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             clogger.debug("Read {} bytes of data ({}, {})", size, pos, rem);
 
             while (rem < size) {
+                const auto initial_size = initial.size_bytes();
+
                 if (eof) {
-                    auto reason = fmt::format("unexpected EOF, rem={}, size={}", rem, size);
+                    auto reason = fmt::format("unexpected EOF, pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                            pos, rem, size, alignment, initial_size);
                     throw segment_truncation(std::move(reason), block_boundry);
                 }
 
-                auto block_size = alignment - initial.size_bytes();
+                auto block_size = alignment - initial_size;
                 // using a stream is perhaps not 100% effective, but we need to 
                 // potentially address data in pages smaller than the current 
                 // disk/fs we are reading from can handle (but please no). 
@@ -3474,8 +3477,9 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
                 if (tmp.size_bytes() == 0) {
                     eof = true;
-                    auto reason = fmt::format("read 0 bytes, while tried to read {} bytes. rem={}, size={}",
-                            block_size, rem, size);
+                    auto reason = fmt::format("read 0 bytes, while tried to read {} bytes. "
+                            "pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                            block_size, pos, rem, size, alignment, initial_size);
                     throw segment_truncation(std::move(reason), block_boundry);
                 }
 
@@ -3511,13 +3515,13 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     auto checksum = crc.checksum();
 
                     if (check != checksum) {
-                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. rem={}, size={}",
-                                check, checksum, rem, size);
+                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                                check, checksum, pos, rem, size, alignment, initial_size);
                         throw segment_data_corruption_error(std::move(reason), alignment);
                     }
                     if (id != this->id) {
-                        auto reason = fmt::format("IDs do not match: {} vs. {}. rem={}, size={}",
-                                id, this->id, rem, size);
+                        auto reason = fmt::format("IDs do not match: {} vs. {}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                                id, this->id, pos, rem, size, alignment, initial_size);
                         throw segment_truncation(std::move(reason), pos + rem);
                     }
                 }
