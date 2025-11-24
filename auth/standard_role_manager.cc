@@ -113,7 +113,6 @@ standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::servic
     , _migration_manager(mm)
     , _cache(cache)
     , _stopped(make_ready_future<>())
-    , _superuser(password_authenticator::default_superuser(qp))
 {}
 
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
@@ -203,7 +202,7 @@ future<> standard_role_manager::legacy_create_default_role_if_missing() {
 
 future<> standard_role_manager::maybe_create_default_role() {
     if (_superuser.empty()) {
-        on_internal_error(log, "Default superuser name is empty");
+        co_return;
     }
     auto has_superuser = [this] () -> future<bool> {
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
@@ -296,6 +295,8 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 
 future<> standard_role_manager::start() {
     return once_among_shards([this] () -> future<> {
+        _superuser = password_authenticator::default_superuser(_qp);
+
         if (legacy_mode(_qp)) {
             co_await create_legacy_metadata_tables_if_missing();
         }
