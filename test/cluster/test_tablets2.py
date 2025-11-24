@@ -1809,6 +1809,110 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
 
         await check(ks)
 
+async def test_update_load_stats_after_rebuild(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+    ])
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    cql = manager.get_cql()
+
+    async def get_tablet_sizes(table):
+        return await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table}")
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+
+        # Wait for the coordinator to refresh load_stats
+        while True:
+            rows = await get_tablet_sizes(table_id)
+            if len(rows) == 1 and len(rows[0].replicas) == 1:
+                replica_host = [str(u) for u in rows[0].replicas.keys()][0]
+                if s0_host_id == replica_host:
+                    break
+
+        # Increase load_stats refresh so that it does not race with the
+        # topology coordinator updating load_stats during end_migration
+        await manager.server_update_config(servers[0].server_id, 'tablet_load_stats_refresh_interval_in_seconds', 3600)
+
+        # Wait for the current load_stats refresh interval to elapse
+        await asyncio.sleep(2)
+
+        # Increase RF to trigger a tablet rebuild
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}")
+
+        # Check that the new tablet size was added to the host in rack3
+        rows = await get_tablet_sizes(table_id)
+        replica_hosts = set([str(u) for u in rows[0].replicas.keys()])
+
+        assert len(replica_hosts) == 2
+        assert s0_host_id in replica_hosts and s1_host_id in replica_hosts, "Tablet size was added to load_stats after rebuild"
+
+async def test_update_load_stats_after_migration(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+    ])
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    cql = manager.get_cql()
+
+    async def get_tablet_sizes(table):
+        return await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table}")
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+
+        # Wait for the coordinator to refresh load_stats
+        while True:
+            rows = await get_tablet_sizes(table_id)
+            if len(rows) == 1:
+                replica_hosts = set([str(u) for u in rows[0].replicas.keys()])
+                if s0_host_id in replica_hosts or s1_host_id in replica_hosts:
+                    break
+
+        # Increase load_stats refresh so that it does not race with the
+        # topology coordinator updating load_stats during end_migration
+        await manager.server_update_config(servers[0].server_id, 'tablet_load_stats_refresh_interval_in_seconds', 3600)
+
+        # Wait for the current load_stats refresh interval to elapse
+        await asyncio.sleep(2)
+
+        # Migrate a tablet between nodes in rack1
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        leaving_replica = replicas[0].replicas[0]
+        pending_replica = (s0_host_id if leaving_replica[0] == s1_host_id else s1_host_id, 0)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", *leaving_replica, *pending_replica, 0)
+
+        # Check that the new tablet size was moved from leaving to pending host
+        rows = await get_tablet_sizes(table_id)
+        replica_hosts = set([str(u) for u in rows[0].replicas.keys()])
+
+        logger.info(f'replica_hosts: {replica_hosts}')
+        assert leaving_replica[0] not in replica_hosts, "Leaving replica tablet size is not in load_stats any more"
+        assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_timed_out_reader_after_cleanup(manager: ManagerClient):

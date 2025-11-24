@@ -375,6 +375,30 @@ Columns:
 * `tablets_allocated` - Number of tablet replicas on the node. Migrating tablets are accounted as if migration already finished.
 * `tablets_allocated_per_shard` - `tablets_allocated` divided by shard count on the node.
 
+## system.tablet_sizes
+
+Contains information about the current tablet disk sizes. Table can contain incomplete data, in which case `missing_replicas`
+will contain the host IDs of replicas for which the tablet size is not known.
+Can be queried on any node, but the data comes from the group0 leader.
+Reads wait for group0 leader to be elected and load balancer stats to become available.
+
+Schema:
+```cql
+CREATE TABLE system.tablet_sizes (
+    table_id uuid,
+    last_token bigint,
+    missing_replicas frozen<set<uuid>>,
+    replicas frozen<map<uuid, bigint>>,
+    PRIMARY KEY (table_id, last_token)
+);
+```
+
+Columns:
+* `table_id` - The table ID of the table for which tablet sizes are reported.
+* `last_token` - The last token owned by the tablet.
+* `missing_replicas` - Set of host IDs for replicas for which a tablet size was not found.
+* `replicas` - A map of replica host IDs and the disk size of the tablet replica, in bytes
+
 ## system.protocol_servers
 
 The list of all the client-facing data-plane protocol servers and listen addresses (if running).
