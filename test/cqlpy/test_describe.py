@@ -65,6 +65,9 @@ def extract_names(desc_result_iter: Iterable[DescRowType]) -> Iterable[str]:
 def extract_create_statements(desc_result_iter: Iterable[DescRowType]) -> Iterable[str]:
     return map(lambda result: result.create_statement, desc_result_iter)
 
+def is_create_index(create_statement: str) -> bool:
+    return create_statement.strip().upper().startswith("CREATE INDEX")
+
 # (`element` refers to keyspace or keyspace's element(table, type, function, aggregate))
 # There are 2 main types of tests:
 # - tests for listings (DESC TABLES/DESC KEYSPACES/DESC TYPES/...)
@@ -258,7 +261,7 @@ def test_desc_table(cql, test_keyspace, random_seed):
 
 # This test compares the content of `system_schema.tables` and `system_schema.columns` tables
 # when providing tablet options to CREATE TABLE.
-def test_desc_table_with_tablet_options(cql, test_keyspace, random_seed):
+def test_desc_table_with_tablet_options(cql, test_keyspace, random_seed, skip_without_tablets):
     tablet_options = {
         'min_tablet_count': '100',
         'min_per_shard_tablet_count': '0.8',   # Verify that a floating point value works for this hint
@@ -1000,7 +1003,10 @@ def test_table_options_quoting(cql, test_keyspace):
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(b) USING 'vector_index'"],
                          ids=["alter", "create_index"])
-def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query):
+def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
+    if is_create_index(cdc_enablement_query) and not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
+
     cdc_table_suffix = "_scylla_cdc_log"
     with new_test_table(cql, test_keyspace, "a int primary key, b vector<float, 3>") as t:
         t_name = t.split('.')[1]
@@ -1050,7 +1056,9 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query):
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
                          ids=["alter", "create_index"])
-def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enablement_query):
+def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
+    if is_create_index(cdc_enablement_query) and not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
         log_table = f"{table}_scylla_cdc_log"
         _, log_table_name = log_table.split(".")
@@ -1078,7 +1086,10 @@ def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enab
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
                          ids=["alter", "create_index"])
-def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace, cdc_enablement_query):
+def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
+    if is_create_index(cdc_enablement_query) and not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
+
     def format_create_statement(stmt: str) -> str:
         stmt = " ".join(stmt.split("\n"))
         stmt = " ".join(stmt.split())
@@ -1139,7 +1150,10 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
                          ids=["alter", "create_index"])
-def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace, cdc_enablement_query):
+def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
+    if is_create_index(cdc_enablement_query) and not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
+
     def test_config(altered_cdc_log_table_opt):
         with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
             log_table = f"{table}_scylla_cdc_log"
@@ -1616,7 +1630,7 @@ class AuthSLContext:
 
     def __enter__(self):
         if self.ks:
-            self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'SimpleStrategy', 'replication_factor': 1 }}")
+            self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
         self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
         return self
 
@@ -2977,7 +2991,6 @@ def test_desc_restore(cql):
         cql.execute(f"CREATE TYPE {ks}.my_type (value int)")
         cql.execute(f"""CREATE TABLE {ks}.some_other_table (c1 frozen<my_type>, c2 double, c3 int, c4 set<int>,
                         PRIMARY KEY ((c1, c2), c3)) WITH comment = 'some comment'""")
-        cql.execute(f"CREATE TABLE {ks}.vector_table (pk int PRIMARY KEY, v vector<float, 3>)")
 
         cql.execute(f"""CREATE MATERIALIZED VIEW {ks}.mv AS
                             SELECT pk FROM {ks}.my_table
@@ -2986,10 +2999,6 @@ def test_desc_restore(cql):
                             WITH comment='some other comment'""")
 
         cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
-
-        # Scylla doesn't support `sai`, while Cassandra doesn't support `vector_index`.
-        vec_class = "vector_index" if is_scylla(cql) else "sai"
-        cql.execute(f"CREATE INDEX custom_index ON {ks}.vector_table (v) USING '{vec_class}'")
 
         # Scylla supports UDFs with Lua. Cassandra supports UDFs with Java.
         if is_scylla(cql):
@@ -3060,6 +3069,47 @@ def test_desc_restore(cql):
 
             # Other test cases might've created keyspaces that would be included in the result
             # of `DESC SCHEMA`, so we need to filter them out.
+            res = list(remove_other_keyspaces(res))
+
+            assert restore_stmts == res
+        finally:
+            cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+def test_desc_restore_vector_index(cql, skip_without_tablets):
+    """
+    Verify that restoring the schema for vector index works correctly.
+    """
+
+    restore_stmts = None
+    ks = "my_ks_vector"
+
+    with AuthSLContext(cql, ks=ks):
+        cql.execute(f"CREATE TABLE {ks}.vector_table (pk int PRIMARY KEY, v vector<float, 3>)")
+
+        # Scylla doesn't support `sai`, while Cassandra doesn't support `vector_index`.
+        vec_class = "vector_index" if is_scylla(cql) else "sai"
+        cql.execute(f"CREATE INDEX custom_index ON {ks}.vector_table (v) USING '{vec_class}'")
+
+        if is_scylla(cql):
+            restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+        else:
+            restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS"))
+
+    def remove_other_keyspaces(rows: Iterable[DescRowType]) -> Iterable[DescRowType]:
+        return filter(lambda row: row.keyspace_name == ks or row.keyspace_name == None, rows)
+
+    restore_stmts = list(remove_other_keyspaces(restore_stmts))
+
+    with AuthSLContext(cql):
+        try:
+            for stmt in extract_create_statements(restore_stmts):
+                cql.execute(stmt)
+
+            if is_scylla(cql):
+                res = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+            else:
+                res = list(cql.execute("DESC SCHEMA WITH INTERNALS"))
+
             res = list(remove_other_keyspaces(res))
 
             assert restore_stmts == res
