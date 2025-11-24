@@ -397,7 +397,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, raft_topology_cmd cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
@@ -413,7 +413,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     };
 
-    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
+    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, raft_topology_cmd cmd) {
         auto id = node.id;
         release_node(std::move(node));
         const auto cmd_index = ++_last_cmd_index;
@@ -423,7 +423,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    future<> exec_global_command_helper(auto nodes, raft_topology_cmd cmd) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
@@ -440,7 +440,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     };
 
     future<group0_guard> exec_global_command(
-            group0_guard guard, const raft_topology_cmd& cmd,
+            group0_guard guard, raft_topology_cmd cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
