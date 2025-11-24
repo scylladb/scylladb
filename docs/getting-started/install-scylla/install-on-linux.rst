@@ -73,23 +73,26 @@ Install ScyllaDB
 
             .. code-block:: console
     
-               apt-get install scylla{,-server,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=<your patch version>
+               apt-get install scylla{,-server,-kernel-conf,-node-exporter,-conf,-python3}=<your patch version>
           
-            The following example shows installing ScyllaDB 5.2.3.
+            The following example shows installing ScyllaDB 2025.3.1.
 
             .. code-block:: console
                :class: hide-copy-button
     
                apt-cache madison scylla
-               scylla | 5.2.3-0.20230608.ea08d409f155-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-5.2 stable/main amd64 Packages
-               scylla | 5.2.2-0.20230521.9dd70a58c3f9-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-5.2 stable/main amd64 Packages
-               scylla | 5.2.1-0.20230508.f1c45553bc29-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-5.2 stable/main amd64 Packages
-               scylla | 5.2.0-0.20230427.429b696bbc1b-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-5.2 stable/main amd64 Packages
-
+               scylla | 2025.3.4-0.20251116.898f193ef677-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.3-0.20251029.0e6381f14db2-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.2-0.20251010.295ed0e9e158-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.1-0.20250907.2bbf3cf669bb-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.0-0.20250827.d9e492a90c2e-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.0~rc2-0.20250730.7164f11b997d-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.0~rc1-0.20250710.f3297824e397-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
+               scylla | 2025.3.0~rc0-0.20250701.e64bb3819ca7-1 | https://downloads.scylladb.com/downloads/scylla/deb/debian-ubuntu/scylladb-2025.3 stable/main arm64 Packages
             .. code-block:: console
                :class: hide-copy-button
-    
-               apt-get install scylla{,-server,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=5.2.3-0.20230608.ea08d409f155-1
+
+               apt-get install scylla{,-server,-kernel-conf,-node-exporter,-conf,-python3,-cqlsh}=2025.3.1-0.20250907.2bbf3cf669bb-1
 
 
         #. (Ubuntu only) Set Java 11.
