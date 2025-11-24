@@ -749,6 +749,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MUTATION_FAILED:
         return 3;
     case messaging_verb::MAPREDUCE_REQUEST:
+    case messaging_verb::REBUILD_MATERIALIZED_VIEW:
         return 4;
     case messaging_verb::LAST:
         return -1; // should never happen

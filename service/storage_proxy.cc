@@ -507,6 +507,34 @@ public:
         }
     }
 
+    future<query::rebuild_materialized_view_result>
+    send_rebuild_materialized_view(query::rebuild_materialized_view_request request, std::chrono::milliseconds timeout_in_ms) {
+        auto s = _sp.local_db().find_schema(request.view_id);
+        auto erm_ptr = s->table().get_effective_replication_map();
+        if (!std::ranges::all_of(erm_ptr->get_token_metadata().get_normal_token_owners(), std::bind_front(&storage_proxy::is_alive, &_sp, std::cref(*erm_ptr)))) {
+            slogger.info("Cannot rebuild view {}, some hosts are down", request.view_id);
+            // Similarly to truncate, rebuild is aggressive and is typically only
+            // invoked by an admin, so we require that all nodes are up to perform the operation.
+            auto live_members = _gossiper.get_live_members().size();
+
+            co_await coroutine::return_exception(exceptions::unavailable_exception(db::consistency_level::ALL,
+                    live_members + _gossiper.get_unreachable_members().size(),
+                    live_members));
+        }
+
+        auto all_endpoints = _gossiper.get_live_token_owners();
+        auto timeout = clock_type::now() + timeout_in_ms;
+
+        query::rebuild_materialized_view_result final_result{.status = query::rebuild_materialized_view_result::command_status::success};
+        co_await coroutine::parallel_for_each(all_endpoints, [&] (auto host) -> future<> {
+            auto result = co_await ser::view_rpc_verbs::send_rebuild_materialized_view(&_ms, host, timeout, request);
+            if (result.status != query::rebuild_materialized_view_result::command_status::success) {
+                slogger.warn("Rebuild materialized view on host {} failed", host);
+                final_result.status = result.status;
+            }
+        });
+        co_return final_result;
+    }
 private:
     future<schema_ptr> get_schema_for_read(table_schema_version v, locator::host_id from, uint32_t from_shard, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
@@ -7062,6 +7090,11 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     } else {
         co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
+}
+
+future<query::rebuild_materialized_view_result> storage_proxy::rebuild_materialized_view(query::rebuild_materialized_view_request request, std::chrono::milliseconds timeout_in_ms) {
+    slogger.debug("Starting a rebuild materialized view operation on view {}", request.view_id);
+    return remote().send_rebuild_materialized_view(std::move(request), timeout_in_ms);
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {

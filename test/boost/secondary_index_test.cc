@@ -1922,6 +1922,95 @@ SEASTAR_TEST_CASE(test_deleting_ghost_rows) {
     });
 }
 
+SEASTAR_TEST_CASE(test_rebuilding_missing_rows) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.ms_listen = true;
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
+        cquery_nofail(e, "CREATE MATERIALIZED VIEW tv AS SELECT v, p, c FROM t WHERE v IS NOT NULL AND c IS NOT NULL PRIMARY KEY (v, p, c);");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (1,1,1)");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (1,2,3)");
+        cquery_nofail(e, "INSERT INTO t (p,c,v) VALUES (2,4,6)");
+
+        auto inject_missing_row = [&e] (int p, int c, int v) {
+            e.db().invoke_on_all([p, c, v] (replica::database& db) {
+                schema_ptr base_schema = db.find_schema("ks", "t");
+                replica::table& base_table = db.find_column_family(base_schema);
+                mutation base_m(base_schema, partition_key::from_singular(*base_schema, p));
+                auto timestamp = api::new_timestamp();
+                auto ck = clustering_key::from_exploded(*base_schema, {int32_type->decompose(c)});
+                auto& base_row = base_m.partition().clustered_row(*base_schema, ck);
+                base_m.set_cell(ck, to_bytes("v"), v, timestamp);
+                base_row.apply(row_marker{timestamp});
+                unsigned base_shard = base_table.shard_for_reads(base_m.token());
+                if (base_shard == this_shard_id()) {
+                    base_table.apply(base_m);
+                }
+            }).get();
+        };
+
+        inject_missing_row(8, 7, 9);
+        eventually([&] {
+            // The missing row exists in the base, but not in the view
+            auto base_msg = cquery_nofail(e, "SELECT * FROM t WHERE p = 8 AND c = 7;");
+            assert_that(base_msg).is_rows().with_size(1);
+            auto view_msg = cquery_nofail(e, "SELECT * FROM tv WHERE v = 9 AND p = 8 AND c = 7;");
+            assert_that(view_msg).is_rows().with_size(0);
+        });
+
+        // Missing row reconstruction is attempted for a single base partition
+        cquery_nofail(e, "REBUILD MATERIALIZED VIEW tv WHERE v = 9 AND p = 8 AND c = 7;");
+        eventually([&] {
+            // The missing row is reconstructed
+            auto msg = cquery_nofail(e, "SELECT * FROM tv WHERE v = 9 AND p = 8 AND c = 7;");
+            assert_that(msg).is_rows().with_size(1);
+        });
+
+        for (int i = 0; i < 4321; ++i) {
+            inject_missing_row(10 + i, 7, 10 + i);
+        }
+        eventually([&] {
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(4);
+            auto base_msg = cquery_nofail(e, "SELECT * FROM t;");
+            assert_that(base_msg).is_rows().with_size(4321 + 4);
+        });
+
+        // Missing row reconstruction is attempted for the whole table
+        cquery_nofail(e, "REBUILD MATERIALIZED VIEW tv;");
+        eventually([&] {
+            // Missing rows are reconstructed
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(4321 + 4);
+        });
+
+        for (int i = 0; i < 2345; ++i) {
+            inject_missing_row(5000 + i, 50 * i, i * (i - 1));
+        }
+        eventually([&] {
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(4321 + 4);
+            auto base_msg = cquery_nofail(e, "SELECT * FROM t;");
+            assert_that(base_msg).is_rows().with_size(4321 + 4 + 2345);
+        });
+
+        // Missing row reconstruction is attempted with a parallelized table scan
+        when_all(
+            e.execute_cql("REBUILD MATERIALIZED VIEW tv WHERE token(p) >= -9223372036854775807 AND token(p) <= 0"),
+            e.execute_cql("REBUILD MATERIALIZED VIEW tv WHERE token(p) > 0 AND token(p) <= 10000000"),
+            e.execute_cql("REBUILD MATERIALIZED VIEW tv WHERE token(p) > 10000000 AND token(p) <= 20000000"),
+            e.execute_cql("REBUILD MATERIALIZED VIEW tv WHERE token(p) > 20000000 AND token(p) <= 30000000"),
+            e.execute_cql("REBUILD MATERIALIZED VIEW tv WHERE token(p) > 30000000 AND token(p) <= 9223372036854775807")
+        ).get();
+        eventually([&] {
+            // Missing rows are reconstructed
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(4321 + 4 + 2345);
+        });
+    }, std::move(cfg));
+}
+
 SEASTAR_TEST_CASE(test_deleting_ghost_rows_with_same_base_pk) {
     return do_with_cql_env_thread([] (auto& e) {
         cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
