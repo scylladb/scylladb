@@ -5951,7 +5951,7 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
-future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
     raft_topology_cmd_result result;
     rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);
 
