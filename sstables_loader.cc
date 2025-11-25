@@ -345,6 +345,10 @@ public:
 
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
                                                                                                  std::vector<tablet_sstable_collection>&& tablets_sstables) {
+    if (sstables.empty() || tablets_sstables.empty()) {
+        co_return std::move(tablets_sstables);
+    }
+
     // sstables are sorted by first key in reverse order.
     auto sstable_it = sstables.rbegin();
 
