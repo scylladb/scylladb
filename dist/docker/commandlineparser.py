@@ -31,4 +31,5 @@ def parse():
     parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="[[deprecated]] IP address of a dead node to replace.")
     parser.add_argument('--dc', default=None, dest='dc', help="The datacenter name for this node, for use with the snitch GossipingPropertyFileSnitch.")
     parser.add_argument('--rack', default=None, dest='rack', help="The rack name for this node, for use with the snitch GossipingPropertyFileSnitch.")
+    parser.add_argument('--blocked-reactor-notify-ms', default='25', dest='blocked_reactor_notify_ms', help="Set the blocked reactor notification timeout in milliseconds. Defaults to 25.")
     return parser.parse_known_args()
