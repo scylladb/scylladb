@@ -7,6 +7,7 @@
  */
 
 #include "locator/tablets.hh"
+#include "locator/topology.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
@@ -669,8 +670,8 @@ class load_balancer {
 
     replica::database& _db;
     token_metadata_ptr _tm;
-    [[maybe_unused]]service::topology* _topology;
-    [[maybe_unused]]db::system_keyspace* _sys_ks;
+    service::topology* _topology;
+    db::system_keyspace* _sys_ks;
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
@@ -774,14 +775,19 @@ public:
         , _skiplist(std::move(skiplist))
     { }
 
+    bool ongoing_rack_list_colocation() const {
+        return _topology != nullptr && _sys_ks != nullptr && !_topology->paused_rf_change_requests.empty();
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
+        auto rack_list_colocation = ongoing_rack_list_colocation();
         if (!utils::get_local_injector().enter("tablet_migration_bypass")) {
             // Prepare plans for each DC separately and combine them to be executed in parallel.
             for (auto&& dc : topo.get_datacenters()) {
-                if (_db.get_config().rf_rack_valid_keyspaces()) {
+                if (_db.get_config().rf_rack_valid_keyspaces() || rack_list_colocation) {
                     for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
                         auto rack_plan = co_await make_plan(dc, rack);
                         auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
@@ -797,6 +803,10 @@ public:
             }
         }
 
+        if (rack_list_colocation) {
+            plan.merge(co_await make_rack_list_colocation_plan(plan));
+        }
+
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
         // Note : Resize plans should be generated before repair plans to avoid scheduling repairs when there is pending resize finalization
         plan.merge_resize_plan(co_await make_resize_plan(plan));
@@ -807,8 +817,8 @@ public:
         }
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
-                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());
+        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s) and {} rack-list colocation(s)",
+                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count(), plan.tablet_rack_list_colocation_count());
         co_return std::move(plan);
     }
 
@@ -875,6 +885,7 @@ public:
     future<> consider_planned_load(node_load_map& nodes, const migration_plan& mplan) {
         const locator::topology& topo = _tm->get_topology();
         auto& tablet_meta = _tm->tablets();
+
         for (const tablet_migration_info& tmi : mplan.migrations()) {
             co_await coroutine::maybe_yield();
             auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
@@ -999,6 +1010,11 @@ public:
         }
 
         co_return ret;
+    }
+
+    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+        migration_plan plan;
+        co_return plan;
     }
 
     // Returns true if a table has replicas of all its sibling tablets co-located.
@@ -3260,7 +3276,7 @@ public:
             plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
         }
 
-        if (_tm->tablets().balancing_enabled() && plan.empty()) {
+        if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
