@@ -55,6 +55,7 @@ debian_base_packages=(
     librapidxml-dev
     libcrypto++-dev
     libxxhash-dev
+    zlib1g-dev
     slapd
     ldap-utils
     libcpp-jwt-dev
@@ -117,6 +118,7 @@ fedora_packages=(
     makeself
     libzstd-static libzstd-devel
     lz4-static lz4-devel
+    zlib-ng-compat-devel
     rpm-build
     devscripts
     debhelper
