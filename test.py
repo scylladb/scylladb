@@ -54,7 +54,19 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search', TEST_DIR / 'vector_search_validator']
+PYTEST_RUNNER_DIRECTORIES = [
+    TEST_DIR / 'boost',
+    TEST_DIR / 'ldap',
+    TEST_DIR / 'raft',
+    TEST_DIR / 'unit',
+    TEST_DIR / 'vector_search',
+    TEST_DIR / 'vector_search_validator',
+    TEST_DIR / 'alternator',
+    TEST_DIR / 'broadcast_tables',
+    TEST_DIR / 'cql',
+    TEST_DIR / 'cqlpy',
+    TEST_DIR / 'rest_api',
+]
 
 launch_time = time.monotonic()
 
@@ -324,6 +336,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
+            '--test-py-init',
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
