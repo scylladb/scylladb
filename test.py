@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import shlex
+import textwrap
 from random import randint
 
 import pytest
@@ -54,7 +55,19 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search', TEST_DIR / 'vector_search_validator']
+PYTEST_RUNNER_DIRECTORIES = [
+    TEST_DIR / 'boost',
+    TEST_DIR / 'ldap',
+    TEST_DIR / 'raft',
+    TEST_DIR / 'unit',
+    TEST_DIR / 'vector_search',
+    TEST_DIR / 'vector_search_validator',
+    TEST_DIR / 'alternator',
+    TEST_DIR / 'broadcast_tables',
+    TEST_DIR / 'cql',
+    TEST_DIR / 'cqlpy',
+    TEST_DIR / 'rest_api',
+]
 
 launch_time = time.monotonic()
 
@@ -129,19 +142,33 @@ def setup_signal_handlers(loop, signaled) -> None:
 
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
+    parser = argparse.ArgumentParser(description='Scylla test runner', formatter_class=argparse.RawTextHelpFormatter)
 
-    parser = argparse.ArgumentParser(description="Scylla test runner")
+    directories = '\n'.join(f" - {str(item.relative_to(TOP_SRC_DIR))}" for item in PYTEST_RUNNER_DIRECTORIES)
+    name_help = textwrap.dedent("""\
+        Can be empty. List of test names or path to test files, to look for.
+        There are two runners: test.py and pytest.
+
+        test.py works in the following way:
+        Each name is used as a substring to look for in the path to test file,
+        e.g. "mem" will run all tests that have "mem" in their name in all
+        suites, "nodetool/test_compact" will only enable tests starting with
+        "test_compact" in "nodetool" suite, and 
+        "nodetool/test_compact::test_all_keyspaces" to narrow down to a 
+        certain test case.
+
+        pytest runner works in the following way:
+        provide the path to the test file for execution or path to the directory
+        to narrow you can use function name 'test/boost/aggregate_fcts_test.cc::test_aggregate_avg'
+
+        Pytest directories are:
+        """) + directories + "\n\nDefault: run all tests in all suites."
+
     parser.add_argument(
         "name",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite, and
-                "boost/memtable_test::test_hash_is_cached" to narrow down to
-                a certain test case. Default: run all tests in all suites.""",
+        help=name_help,
     )
     parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
                         help="Path to temporary test data and log files.  The data is further segregated per build mode.")
@@ -321,6 +348,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
+            '--test-py-init',
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
