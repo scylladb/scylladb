@@ -47,6 +47,11 @@ static shared_ptr<db::config> db_config_with_auth() {
     return config_ptr;
 }
 
+static cql_test_config enable_tablets(cql_test_config cfg) {
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
 //
 // These functions must be called inside Seastar threads.
 //
@@ -379,7 +384,7 @@ SEASTAR_TEST_CASE(select_from_vector_indexed_table) {
                             exception_predicate::message_contains("User bob has no SELECT permission"));
                 });
             },
-            db_config_with_auth());
+            enable_tablets(db_config_with_auth()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
