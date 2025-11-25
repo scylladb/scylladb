@@ -3626,6 +3626,16 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             auto old = pos;
             pos = next_pos(off);
             clogger.trace("Pos {} -> {} ({})", old, pos, off);
+
+            // If we don't do this, we may still attempt reading from
+            // the segment (past its EOF) and hit a segment truncation error.
+            //
+            // For more context, see issue: scylladb/scylladb#24346.
+            if (pos >= file_size) {
+                eof = true;
+                clogger.trace("advance_pos: Reached position {}, which goes beyond the file size ({}). Marking EOF",
+                        pos, file_size);
+            }
         }
 
         future<> read_entry() {
