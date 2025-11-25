@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
-#include <seastar/util/modules.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/format.hh>

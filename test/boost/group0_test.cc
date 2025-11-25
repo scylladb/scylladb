@@ -46,7 +46,7 @@ SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
         auto get_metric_ui64 = [&](sstring name) {
             const auto& value_map = seastar::metrics::impl::get_value_map();
             const auto& metric_family = value_map.at("raft_group0_" + name);
-            const auto& registered_metric = metric_family.at(make_lw_shared<const metrics::impl::labels_type>({{"shard", "0"}}));
+            const auto& registered_metric = metric_family.at(make_lw_shared<const metrics::impl::labels_type>({{"shard", metrics::impl::escaped_string("0")}}));
             return (*registered_metric)().ui();
         };
 
