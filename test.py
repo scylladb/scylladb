@@ -342,7 +342,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         *[f'--mode={mode}' for mode in options.modes],
     ]
     if options.list_tests:
-        args.extend(['--collect-only', '--quiet'])
+        args.extend(['--collect-only', '--quiet', '--no-header'])
     else:
         args.extend([
             "--log-level=DEBUG",  # Capture logs
