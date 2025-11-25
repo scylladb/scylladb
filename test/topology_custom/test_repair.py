@@ -266,3 +266,217 @@ async def test_keyspace_drop_during_data_sync_repair(manager):
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
 
     await manager.server_add(config=cfg)
+<<<<<<< HEAD:test/topology_custom/test_repair.py
+||||||| parent of e97a504775 (repair: Allow min max range to be updated for repair history):test/cluster/test_repair.py
+
+@pytest.mark.asyncio
+async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
+    cfg = {
+        'tablets_mode_for_new_keyspaces': 'disabled',
+    }
+    servers = await manager.servers_add(2, config=cfg)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        keys = dict()
+        cql = manager.get_cql()
+        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        for i in range(100):
+            key = random.randint(-1000000000, 1000000000)
+            await cql.run_async(f"INSERT into {ks}.tbl (pk) VALUES({key})")
+            token = (await cql.run_async(f"SELECT token(pk) from {ks}.tbl WHERE pk = {key}"))[0].system_token_pk
+            keys[key] = token
+
+        res = await manager.api.describe_ring(servers[0].ip_addr, ks)
+        end_tokens = dict()
+        for item in res:
+            end_tokens[int(item['start_token'])] = int(item['end_token'])
+            logger.debug(f"{item=}")
+        logger.debug("Verifying that the describe_ring result covering the full token ring")
+        sorted_tokens = sorted(end_tokens.keys())
+        logger.debug(f"{sorted_tokens=}")
+        for i in range(1, len(sorted_tokens)):
+            assert end_tokens[sorted_tokens[i-1]] == sorted_tokens[i]
+        assert end_tokens[sorted_tokens[-1]] == sorted_tokens[0]
+
+        def get_ring_endpoints(token):
+            for item in res:
+                if int(item['start_token']) < int(item['end_token']):
+                    if int(item['start_token']) < token <= int(item['end_token']):
+                        return item['endpoints']
+                elif token > int(item['start_token']) or token <= int(item['end_token']):
+                    return item['endpoints']
+            pytest.fail(f"Token {token} not found in describe_ring result")
+
+        cql = manager.get_cql()
+        for key, token in keys.items():
+            natural_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, "tbl", key)
+            ring_endpoints = get_ring_endpoints(token)
+            assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
+
+
+@pytest.mark.asyncio
+async def test_repair_timtestamp_difference(manager):
+    cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck UUID, v text, PRIMARY KEY (pk, ck))")
+
+    nodes = [node1, node2]
+    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
+
+    pk = 1
+    ck = uuid.uuid1()
+    v = 'ze-value'
+    original_timestamp = 1000
+    update1_timestamp = 2000
+    update2_timestamp = 3000
+
+    cql.execute(f"INSERT INTO ks.tbl (pk, ck, v) VALUES ({pk}, {ck}, '{v}') USING TIMESTAMP {original_timestamp}")
+
+    async def write(node, timestamp):
+        other_nodes = [n for n in nodes if n != node]
+
+        for other_node in other_nodes:
+            await manager.api.enable_injection(other_node.ip_addr, "database_apply", False, {})
+
+        await manager.driver_connect(node)
+
+        query = f"UPDATE ks.tbl USING TIMESTAMP {timestamp} SET v = '{v}' WHERE pk = {pk} AND ck = {ck}"
+        manager.get_cql().execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE))
+
+        for other_node in other_nodes:
+            await manager.api.disable_injection(other_node.ip_addr, "database_apply")
+
+    await write(node1, update1_timestamp)
+    await write(node2, update2_timestamp)
+
+    async def check(expected_timestamps):
+        for host, expected_timestamp in expected_timestamps.items():
+            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = {pk} AND ck = {ck} ALLOW FILTERING", host=host))
+            assert len(rows) == 1
+            assert json.loads(rows[0].metadata)['v']['timestamp'] == expected_timestamp
+
+    logger.info("Checking timestamps before repair")
+    check({host1: update1_timestamp, host2: update2_timestamp})
+
+    await manager.api.repair(node1.ip_addr, "ks", "tbl")
+
+    logger.info("Checking timestamps after repair")
+    check({host1: update2_timestamp, host2: update2_timestamp})
+=======
+
+@pytest.mark.asyncio
+async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
+    cfg = {
+        'tablets_mode_for_new_keyspaces': 'disabled',
+    }
+    servers = await manager.servers_add(2, config=cfg)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        keys = dict()
+        cql = manager.get_cql()
+        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        for i in range(100):
+            key = random.randint(-1000000000, 1000000000)
+            await cql.run_async(f"INSERT into {ks}.tbl (pk) VALUES({key})")
+            token = (await cql.run_async(f"SELECT token(pk) from {ks}.tbl WHERE pk = {key}"))[0].system_token_pk
+            keys[key] = token
+
+        res = await manager.api.describe_ring(servers[0].ip_addr, ks)
+        end_tokens = dict()
+        for item in res:
+            end_tokens[int(item['start_token'])] = int(item['end_token'])
+            logger.debug(f"{item=}")
+        logger.debug("Verifying that the describe_ring result covering the full token ring")
+        sorted_tokens = sorted(end_tokens.keys())
+        logger.debug(f"{sorted_tokens=}")
+        for i in range(1, len(sorted_tokens)):
+            assert end_tokens[sorted_tokens[i-1]] == sorted_tokens[i]
+        assert end_tokens[sorted_tokens[-1]] == sorted_tokens[0]
+
+        def get_ring_endpoints(token):
+            for item in res:
+                if int(item['start_token']) < int(item['end_token']):
+                    if int(item['start_token']) < token <= int(item['end_token']):
+                        return item['endpoints']
+                elif token > int(item['start_token']) or token <= int(item['end_token']):
+                    return item['endpoints']
+            pytest.fail(f"Token {token} not found in describe_ring result")
+
+        cql = manager.get_cql()
+        for key, token in keys.items():
+            natural_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, "tbl", key)
+            ring_endpoints = get_ring_endpoints(token)
+            assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
+
+
+@pytest.mark.asyncio
+async def test_repair_timtestamp_difference(manager):
+    cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck UUID, v text, PRIMARY KEY (pk, ck))")
+
+    nodes = [node1, node2]
+    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
+
+    pk = 1
+    ck = uuid.uuid1()
+    v = 'ze-value'
+    original_timestamp = 1000
+    update1_timestamp = 2000
+    update2_timestamp = 3000
+
+    cql.execute(f"INSERT INTO ks.tbl (pk, ck, v) VALUES ({pk}, {ck}, '{v}') USING TIMESTAMP {original_timestamp}")
+
+    async def write(node, timestamp):
+        other_nodes = [n for n in nodes if n != node]
+
+        for other_node in other_nodes:
+            await manager.api.enable_injection(other_node.ip_addr, "database_apply", False, {})
+
+        await manager.driver_connect(node)
+
+        query = f"UPDATE ks.tbl USING TIMESTAMP {timestamp} SET v = '{v}' WHERE pk = {pk} AND ck = {ck}"
+        manager.get_cql().execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE))
+
+        for other_node in other_nodes:
+            await manager.api.disable_injection(other_node.ip_addr, "database_apply")
+
+    await write(node1, update1_timestamp)
+    await write(node2, update2_timestamp)
+
+    async def check(expected_timestamps):
+        for host, expected_timestamp in expected_timestamps.items():
+            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = {pk} AND ck = {ck} ALLOW FILTERING", host=host))
+            assert len(rows) == 1
+            assert json.loads(rows[0].metadata)['v']['timestamp'] == expected_timestamp
+
+    logger.info("Checking timestamps before repair")
+    check({host1: update1_timestamp, host2: update2_timestamp})
+
+    await manager.api.repair(node1.ip_addr, "ks", "tbl")
+
+    logger.info("Checking timestamps after repair")
+    check({host1: update2_timestamp, host2: update2_timestamp})
+
+@pytest.mark.asyncio
+async def test_small_table_optimization_repair(manager):
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    await manager.api.repair(servers[0].ip_addr, "ks", "tbl", small_table_optimization=True)
+
+    rows = await cql.run_async(f"SELECT * from system.repair_history")
+    assert len(rows) == 1
+>>>>>>> e97a504775 (repair: Allow min max range to be updated for repair history):test/cluster/test_repair.py
