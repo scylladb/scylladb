@@ -33,6 +33,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/rjson.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -40,6 +41,7 @@
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstable_version.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
@@ -649,6 +651,45 @@ future<std::set<sstring>> collect_files(fs::path path) {
     co_return ret;
 }
 
+static bool is_component(const sstring& fname, const sstring& suffix) {
+    return fname.ends_with(suffix);
+}
+
+static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, const sstring& suffix) {
+    // Verify manifest against the files in the snapshots dir
+    auto pred = [&suffix] (const sstring& fname) {
+        return is_component(fname, suffix);
+    };
+    return std::ranges::filter_view(all_files, pred) | std::ranges::to<std::set<sstring>>();
+}
+
+// Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
+static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir) {
+    sstring suffix = "-Data.db";
+    auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
+    std::set<sstring> sstables_in_manifest;
+    std::set<sstring> non_sstables_in_manifest;
+
+    auto manifest_str = co_await util::read_entire_file_contiguous(snapshot_dir / "manifest.json");
+    testlog.debug("manifest.json: {}", manifest_str);
+    auto manifest_json = rjson::parse(manifest_str);
+    BOOST_REQUIRE(manifest_json.IsObject());
+
+    BOOST_REQUIRE(manifest_json.HasMember("files"));
+    auto& manifest_files = manifest_json["files"];
+    BOOST_REQUIRE(manifest_files.IsArray());
+    for (auto& f : manifest_files.GetArray()) {
+        if (is_component(f.GetString(), suffix)) {
+            sstables_in_manifest.insert(f.GetString());
+        } else {
+            non_sstables_in_manifest.insert(f.GetString());
+        }
+    }
+
+    BOOST_REQUIRE_EQUAL(sstables_in_manifest, sstables_in_snapshot);
+    BOOST_REQUIRE_EQUAL(non_sstables_in_manifest, std::set<sstring>{});
+}
+
 static future<> snapshot_works(const std::string& table_name) {
     return do_with_some_data_in_thread({"cf"}, [table_name] (cql_test_env& e) {
         take_snapshot(e, "ks", table_name).get();
@@ -667,6 +708,8 @@ static future<> snapshot_works(const std::string& table_name) {
         in_table_dir.insert("schema.cql");
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
+
+        validate_manifest(snapshot_dir, in_snapshot_dir).get();
     }, true);
 }
 
