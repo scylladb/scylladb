@@ -242,19 +242,22 @@ struct migration_candidate {
 };
 
 struct colocation_source {
-    global_tablet_id gid;
-    tablet_replica replica;
+    locator::global_tablet_id gid;
+    locator::tablet_replica replica;
 };
 
 using colocation_source_set = utils::chunked_vector<colocation_source>;
-using colocation_sources_by_destination_rack = std::unordered_map<endpoint_dc_rack, colocation_source_set>;
+using colocation_sources_by_destination_rack = std::unordered_map<locator::endpoint_dc_rack, colocation_source_set>;
+using consider_ongoing_transitions = bool_class<struct consider_ongoing_transitions_tag>;
 
 future<colocation_sources_by_destination_rack> find_required_rack_list_colocations(
         replica::database& db,
         token_metadata_ptr tmptr,
         db::system_keyspace* sys_ks,
         const std::unordered_set<utils::UUID>& paused_rf_change_requests,
-        const std::unordered_set<locator::global_tablet_id>& already_planned_migrations) {
+        const std::unordered_set<locator::global_tablet_id>& already_planned_migrations,
+        std::optional<size_t> max_colocations = std::nullopt,
+        consider_ongoing_transitions consider_ongoing_transitions = consider_ongoing_transitions::yes) {
     colocation_sources_by_destination_rack required_colocations;
 
     auto get_node = [&] (locator::host_id host) -> const locator::node& {
@@ -263,6 +266,13 @@ future<colocation_sources_by_destination_rack> find_required_rack_list_colocatio
             on_internal_error(lblogger, format("Node {} not found in topology", host));
         }
         return *node;
+    };
+    auto limit_reached = [&] () {
+        size_t count = 0;
+        for (const auto& [_, srcs] : required_colocations) {
+            count += srcs.size();
+        }
+        return max_colocations.has_value() && count >= *max_colocations;
     };
     for (const auto& request_id : paused_rf_change_requests) {
         auto req_entry = co_await sys_ks->get_topology_request_entry(request_id, true);
@@ -297,19 +307,22 @@ future<colocation_sources_by_destination_rack> find_required_rack_list_colocatio
                     // All racks are used. No need to move replicas.
                     continue;
                 }
-                co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
-                    auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
+                std::optional<tablet_id> tid = tmap.first_tablet();
+                for (const tablet_info& ti : tmap.tablets()) {
+                    auto gid = locator::global_tablet_id{table_or_mv->id(), *tid};
 
                     // Skip tablet that is in transitions.
-                    auto* tti = tmap.get_tablet_transition_info(tid);
-                    if (tti) {
-                        lblogger.debug("Skipped colocation for tablet={} which is already in transition={}", gid, tti->transition);
-                        return make_ready_future<>();
+                    if (consider_ongoing_transitions) {
+                        auto* tti = tmap.get_tablet_transition_info(*tid);
+                        if (tti) {
+                            lblogger.debug("Skipped colocation for tablet={} which is already in transition={}", gid, tti->transition);
+                            continue;
+                        }
                     }
 
                     // Skip tablet that is about to be in transition.
                     if (already_planned_migrations.contains(gid)) {
-                        return make_ready_future<>();
+                        continue;
                     }
 
                     auto tablet_replicas = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
@@ -317,7 +330,7 @@ future<colocation_sources_by_destination_rack> find_required_rack_list_colocatio
                     }) | std::ranges::to<std::unordered_set<tablet_replica>>();
 
                     if (tablet_replicas.empty()) {
-                        return make_ready_future<>();
+                        continue;
                     }
 
                     // Get replicas that are not in the desired racks.
@@ -338,21 +351,34 @@ future<colocation_sources_by_destination_rack> find_required_rack_list_colocatio
                     // The co-location won't fix this.
                     if (src_replicas.size() > dst_racks.size()) {
                         on_internal_error(lblogger, format("Tablet {} has {} source replicas but {} destination racks",
-                                                global_tablet_id{table_or_mv->id(), tid}, src_replicas.size(), dst_racks.size()));
+                                                global_tablet_id{table_or_mv->id(), *tid}, src_replicas.size(), dst_racks.size()));
                     }
 
                     for (auto src_dst : std::views::zip(src_replicas, dst_racks)) {
                         auto src = std::get<0>(src_dst);
                         auto dst = std::get<1>(src_dst);
 
-                        required_colocations[locator::endpoint_dc_rack{dc, dst}].emplace_back(colocation_source{{table_or_mv->id(), tid}, src});
+                        required_colocations[locator::endpoint_dc_rack{dc, dst}].emplace_back(colocation_source{{table_or_mv->id(), *tid}, src});
+                        if (limit_reached()) {
+                            co_return required_colocations;
+                        }
                     }
-                    return make_ready_future<>();
-                });
+                    tid = tmap.next_tablet(*tid);
+                }
             }
         }
     }
     co_return required_colocations;
+}
+
+future<bool> is_rf_change_ready_to_resume(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        utils::UUID request_id) {
+    auto res = co_await find_required_rack_list_colocations(
+                db, tmptr, sys_ks, {request_id}, {}, 1, consider_ongoing_transitions::no);
+    co_return res.empty();
 }
 
 }

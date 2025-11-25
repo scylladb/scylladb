@@ -281,6 +281,12 @@ public:
     void on_leadership_lost();
 };
 
+future<bool> is_rf_change_ready_to_resume(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        utils::UUID request_id);
+
 }
 
 template <>
