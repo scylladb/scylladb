@@ -624,6 +624,10 @@ private:
     mutable std::optional<size_t> _total_reclaimable_memory{0};
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
+
+    // The mutate semaphore is used to serialize operations like rewrite_statistics
+    // with linking or moving the sstable between directories.
+    mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
 public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
