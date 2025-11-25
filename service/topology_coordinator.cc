@@ -1987,14 +1987,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                 }
-                rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
-                if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
-                    rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
-                    co_await sleep_abortable(std::chrono::minutes(1), _as);
+                if (_feature_service.tablet_incremental_repair) {
+                    rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
+                    if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
+                        rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
+                        co_await sleep_abortable(std::chrono::minutes(1), _as);
+                    }
+                    co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
+                        co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
+                    });
                 }
-                co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
-                    co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
-                });
             }
         }
 
