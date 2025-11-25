@@ -5228,7 +5228,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             request_id = _topology_state_machine._topology.global_request_id.value();
         } else if (!_topology_state_machine._topology.global_requests_queue.empty()) {
             request_id = _topology_state_machine._topology.global_requests_queue[0];
-            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id, true);
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
             curr_req = std::get<global_topology_request>(req_entry.request_type);
         } else {
             request_id = utils::UUID{};
