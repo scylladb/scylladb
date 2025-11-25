@@ -354,6 +354,9 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
                                                                                                  std::vector<dht::token_range>&& tablets_ranges) {
     auto tablets_sstables =
         tablets_ranges | std::views::transform([](auto range) { return tablet_sstable_collection{.tablet_range = range}; }) | std::ranges::to<std::vector>();
+    if (sstables.empty() || tablets_sstables.empty()) {
+        co_return std::move(tablets_sstables);
+    }
     // sstables are sorted by first key in reverse order.
     auto sstable_it = sstables.rbegin();
 
