@@ -37,7 +37,7 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR, TESTPY_PREPARED_ENVIRONMENT
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
@@ -46,8 +46,7 @@ from test.pylib.suite.base import (
     init_testsuite_globals,
     output_is_a_tty,
     palette,
-    prepare_dirs,
-    start_3rd_party_services,
+    prepare_environment,
 )
 from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
@@ -277,7 +276,6 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
 
     return args
 
@@ -425,7 +423,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     deadline = time.perf_counter() + options.session_timeout
     try:
-        await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
         result = run_pytest(options)
         total_tests += result[0]
         failed_tests.extend(result[1])
@@ -502,16 +499,23 @@ async def main() -> int:
 
     options = parse_cmd_line()
 
-    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-
-    init_testsuite_globals()
-
     await find_tests(options)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
         run_pytest(options)
         return 0
+
+    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
+    init_testsuite_globals()
+    await prepare_environment(
+        tempdir_base=pathlib.Path(options.tmpdir),
+        modes=options.modes,
+        gather_metrics=options.gather_metrics,
+        save_log_on_success=options.save_log_on_success,
+        toxiproxy_byte_limit=options.byte_limit,
+    )
+    os.environ[TESTPY_PREPARED_ENVIRONMENT] = '1'
 
     if options.manual_execution and TestSuite.test_count() > 1:
         print('--manual-execution only supports running a single test, but multiple selected: {}'.format(
