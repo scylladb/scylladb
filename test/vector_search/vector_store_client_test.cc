@@ -274,9 +274,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     seastar::condition_variable wait_for_abort;
     auto as = abort_source_timeout(milliseconds(10));
     auto vs = vector_store_client{cfg};
+    auto should_wait = true;
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
-        co_await wait_for_abort.when();
+        if (should_wait) {
+            should_wait = false;
+            co_await wait_for_abort.when();
+        }
         co_return inet_address("127.0.0.1");
     });
 
