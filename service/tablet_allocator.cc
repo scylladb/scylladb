@@ -385,6 +385,15 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
     co_return state;
 }
 
+future<bool> requires_rack_list_colocation(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        utils::UUID request_id) {
+    auto res = co_await find_required_rack_list_colocations(db, tmptr, sys_ks, {request_id}, {});
+    co_return res.request_to_resume != request_id;
+}
+
 }
 
 template<>
