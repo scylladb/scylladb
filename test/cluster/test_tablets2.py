@@ -5,6 +5,7 @@
 #
 from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from cassandra.policies import FallthroughRetryPolicy
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
@@ -1851,7 +1852,7 @@ async def test_truncate_during_topology_change(manager: ManagerClient):
         async def truncate_table():
             await asyncio.sleep(10)
             logger.info("Executing truncate during bootstrap")
-            await cql.run_async(f"TRUNCATE {ks}.test USING TIMEOUT 1m")
+            await cql.run_async(SimpleStatement(f"TRUNCATE {ks}.test USING TIMEOUT 4m", retry_policy=FallthroughRetryPolicy()))
 
         truncate_task = asyncio.create_task(truncate_table())
         logger.info("Adding fourth node")
