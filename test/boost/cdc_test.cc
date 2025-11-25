@@ -47,6 +47,16 @@ api::timestamp_type find_timestamp(const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
 }
 
+namespace {
+
+cql_test_config enable_tablets() {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
+} // namespace
+
 BOOST_AUTO_TEST_SUITE(cdc_test)
 
 SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
@@ -199,62 +209,73 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE(!e.local_db().has_schema("ks", "tbl"));
 
-        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, b vector<float, 3>)").get();
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
         // Conflict on ALTER which enables cdc log
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE ks.tbl WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
-
-        // Conflict on CREATE INDEX which enables cdc log for vector search
-        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON ks.tbl (b) USING 'vector_index'").get(), exceptions::invalid_request_exception);
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
+SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_table_when_vector_index_created) {
     do_with_cql_env_thread([] (cql_test_env& e) {
-        auto assert_unauthorized = [&e] (const sstring& stmt) {
-            testlog.info("Must throw unauthorized_exception: {}", stmt);
-            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
-        };
+        // Conflict on CREATE which enables cdc log
+        e.execute_cql("CREATE TABLE ks.tbl_scylla_cdc_log (a int PRIMARY KEY)").get();
 
-        // Allow MODIFY, SELECT, ALTER
-        auto log_table = "ks." + cdc::log_name("tbl");
-        auto stream_id = cdc::log_meta_column_name("stream_id");
-        auto time = cdc::log_meta_column_name("time");
-        auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
-        auto ttl = cdc::log_meta_column_name("ttl");
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, b vector<float, 3>)").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
-        auto cdc_enablement_queries = {
-            "ALTER TABLE ks.tbl WITH cdc = {'enabled': true}",
-            "CREATE INDEX ON ks.tbl (b) USING 'vector_index'",
-        };
+        // Conflict on CREATE INDEX which enables cdc log for vector search
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON ks.tbl (b) USING 'vector_index'").get(), exceptions::invalid_request_exception);
+    }, enable_tablets()).get();
+}
 
-        for (auto& q : cdc_enablement_queries) {
-            e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, b vector<float, 3>)").get();
-            BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
 
-            e.execute_cql(q).get();
-            BOOST_REQUIRE(e.local_db().has_schema("ks", cdc::log_name("tbl")));
+    std::vector<std::pair<sstring, cql_test_config>> cdc_enablement_queries = {
+            {"ALTER TABLE ks.tbl WITH cdc = {'enabled': true}", cql_test_config{}},
+            {"CREATE INDEX ON ks.tbl (b) USING 'vector_index'", enable_tablets()},
+    };
 
-            e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\") VALUES (0x00000000000000000000000000000000, now(), 0)",
-                log_table, stream_id, time, batch_seq_no
-            )).get();
-            e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
-                log_table, ttl, stream_id, time, batch_seq_no
-            )).get();
-            e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
-                log_table, stream_id, time, batch_seq_no
-            )).get();
-            e.execute_cql("SELECT * FROM " + log_table).get();
-            e.execute_cql("ALTER TABLE " + log_table + " WITH comment = 'some not very interesting comment'").get();
+    for (auto& [q, cfg] : cdc_enablement_queries) {
+        do_with_cql_env_thread([&] (cql_test_env& e) {
+            auto assert_unauthorized = [&e] (const sstring& stmt) {
+                testlog.info("Must throw unauthorized_exception: {}", stmt);
+                BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+            };
 
-            // Disallow DROP
-            assert_unauthorized("DROP TABLE " + log_table);
+            // Allow MODIFY, SELECT, ALTER
+            auto log_table = "ks." + cdc::log_name("tbl");
+            auto stream_id = cdc::log_meta_column_name("stream_id");
+            auto time = cdc::log_meta_column_name("time");
+            auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
+            auto ttl = cdc::log_meta_column_name("ttl");
 
-            e.execute_cql("DROP TABLE ks.tbl").get();
-        }
 
-    }).get();
+                e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, b vector<float, 3>)").get();
+                BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
+
+                e.execute_cql(q).get();
+                BOOST_REQUIRE(e.local_db().has_schema("ks", cdc::log_name("tbl")));
+
+                e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\") VALUES (0x00000000000000000000000000000000, now(), 0)",
+                    log_table, stream_id, time, batch_seq_no
+                )).get();
+                e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+                    log_table, ttl, stream_id, time, batch_seq_no
+                )).get();
+                e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+                    log_table, stream_id, time, batch_seq_no
+                )).get();
+                e.execute_cql("SELECT * FROM " + log_table).get();
+                e.execute_cql("ALTER TABLE " + log_table + " WITH comment = 'some not very interesting comment'").get();
+
+                // Disallow DROP
+                assert_unauthorized("DROP TABLE " + log_table);
+
+                e.execute_cql("DROP TABLE ks.tbl").get();
+        }, cfg).get();
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
@@ -312,18 +333,17 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
-    do_with_cql_env_thread([] (cql_test_env& e) {
-        int required_column_count = 0;
+    const auto base_tbl_name = "tbl";
+    std::vector<std::pair<sstring, cql_test_config>> cdc_enablement_queries = {
+            {format("ALTER TABLE {} WITH cdc = {{'enabled': true}}", base_tbl_name), cql_test_config{}},
+            {format("CREATE INDEX ON {} (c_vec) USING 'vector_index'", base_tbl_name), enable_tablets()},
+    };
+    for (auto& [q, cfg] : cdc_enablement_queries) {
+        do_with_cql_env_thread([&] (cql_test_env& e) {
+            int required_column_count = 0;
 
-        const auto base_tbl_name = "tbl";
-        e.execute_cql(format("CREATE TYPE {} (x int)", "typ")).get();
+            e.execute_cql(format("CREATE TYPE {} (x int)", "typ")).get();
 
-        auto cdc_enablement_queries = {
-            format("ALTER TABLE {} WITH cdc = {{'enabled': true}}", base_tbl_name),
-            format("CREATE INDEX ON {} (c_vec) USING 'vector_index'", base_tbl_name),
-        };
-
-        for (auto& q : cdc_enablement_queries) {
             e.execute_cql(format("CREATE TABLE {} (pk int, ck int, s int static, c int, "
                 "c_list list<int>, c_map map<int, int>, c_set set<int>, c_typ typ, c_vec vector<float, 3>,"
                 "PRIMARY KEY (pk, ck))", base_tbl_name)).get();
@@ -410,8 +430,9 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
 
             e.execute_cql("DROP TABLE ks.tbl").get();
             required_column_count = 0;
-        }
-    }).get();
+
+        }, cfg).get();
+    }
 }
 
 } // cdc_test namespace
