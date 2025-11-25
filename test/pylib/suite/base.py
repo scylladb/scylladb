@@ -517,6 +517,11 @@ def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) 
             for p in dirname.glob(pattern):
                 p.unlink()
 
+@universalasync.async_to_sync_wraps
+async def prepare_environment(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool,
+                        toxiproxy_byte_limit: int) -> None:
+    prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
+    await start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
