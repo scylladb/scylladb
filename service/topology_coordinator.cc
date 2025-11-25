@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/ranges.h>
 
@@ -998,6 +999,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
+            bool needs_colocation = false;
             if (_db.has_keyspace(ks_name)) {
                 try {
                     auto& ks = _db.find_keyspace(ks_name);
@@ -1005,12 +1007,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
+                    _db.validate_keyspace_update(*ks_md);
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
+                  auto schedule_migrations = [&] () -> future<> {
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
                     tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+                    if (tables_with_mvs.empty()) {
+                        co_return;
+                    }
+                    auto table = tables_with_mvs.front();
+                    auto tablet_count = tmptr->tablets().get_tablet_map(table->id()).tablet_count();
+                    locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
+                    auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+
+                    auto check_needs_colocation = [&] () -> future<bool> {
+                        const auto& new_replication_strategy_config = new_strategy->get_config_options();
+                        const auto& old_replication_strategy_config = ks.metadata()->strategy_options();
+                        bool rack_list_conversion = false;
+                        for (const auto& [dc, rf_value] : new_replication_strategy_config) {
+                            if (std::holds_alternative<locator::rack_list>(rf_value)) {
+                                auto it = old_replication_strategy_config.find(dc);
+                                if (it != old_replication_strategy_config.end() && std::holds_alternative<sstring>(it->second)) {
+                                    rack_list_conversion = true;
+                                    break;
+                                }
+                            }
+                        }
+                        co_return rack_list_conversion ? co_await requires_rack_list_colocation(_db, tmptr, &_sys_ks, req_id) : false;
+                    };
+                    if (needs_colocation = co_await check_needs_colocation(); needs_colocation) {
+                        co_return;
+                    }
                     for (const auto& table_or_mv : tables_with_mvs) {
                         if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                             // Apply the transition only on base tables.
@@ -1019,8 +1049,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             continue;
                         }
                         auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                        locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count(), ks.metadata()->consistency_option()};
-                        auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
 
                         replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
@@ -1047,6 +1075,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             co_await coroutine::maybe_yield();
                         });
                     }
+                  };
+                    co_await schedule_migrations();
 
                     auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                     for (auto& m: schema_muts) {
@@ -1062,16 +1092,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
             }
 
-            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-                                                         .set_transition_state(topology::transition_state::tablet_migration)
+            bool pause_request = needs_colocation && error.empty();
+            topology_mutation_builder tbuilder(guard.write_timestamp());
+            tbuilder.set_transition_state(topology::transition_state::tablet_migration)
                                                          .set_version(_topo_sm._topology.version + 1)
                                                          .del_global_topology_request()
                                                          .del_global_topology_request_id()
-                                                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
-                                                         .build()));
-            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
+                                                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+            if (pause_request) {
+                rtlogger.info("keyspace_rf_change for keyspace {} postponed for colocation", ks_name);
+                tbuilder.pause_rf_change_request(req_id);
+            } else {
+                updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
+            }
+            updates.push_back(canonical_mutation(tbuilder.build()));
 
             sstring reason = seastar::format("ALTER tablets KEYSPACE called with options: {}", saved_ks_props);
             rtlogger.trace("do update {} reason {}", updates, reason);

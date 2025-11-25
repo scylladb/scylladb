@@ -281,6 +281,12 @@ public:
     void on_leadership_lost();
 };
 
+future<bool> requires_rack_list_colocation(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        utils::UUID request_id);
+
 }
 
 template <>
