@@ -28,7 +28,6 @@ The following assumes that Authentication has already been enabled via the proce
 2. Set your credentials as the `superuser`_
 3. Login to cqlsh as the superuser and set `roles`_ and privileges for your users
 4. Confirm users can `access`_ the client with their new credentials.
-5. `Remove`_ Cassandra default user / passwords 
 
 .. _authorizer:
 
@@ -51,19 +50,11 @@ It is highly recommended to perform this action on a node that is not processing
 
 .. _superuser:
 
-Set a Superuser
+Create a Superuser
 .........................
 
-The default ScyllaDB superuser role is ``cassandra`` with password ``cassandra``. Using the default
-superuser is unsafe and may significantly impact performance. 
-
-If you haven't created a custom superuser while enabling authentication, you should create a custom superuser
-before creating additional roles. 
-See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
-
-.. note::
-   
-   We recommend creating a custom superuser to improve security.
+There is no default superuser in ScyllaDB. You should create a superuser before creating additional roles. 
+See :doc:`Creating a Superuser </operating-scylla/security/create-superuser/>` for instructions.
 
 .. _roles:
 
@@ -110,29 +101,7 @@ The following should be noted:
 
 * When initiating a connection, clients will need to use the user name and password that you assign
 
-* Confirm all clients can connect before removing the Cassandra default password and user.
-
 2. To remove permission from any role or user, see :ref:`REVOKE PERMISSION <revoke-permission-statement>`.
-
-
-.. _remove:
-
-Remove Cassandra Default Password and User
-..........................................
-
-To prevent others from entering with the old superuser password, you can and should delete it. 
-
-.. code-block:: cql
-
-   DROP ROLE [ IF EXISTS ] 'old-username';
-
-For example
-
-.. code-block:: cql
-
-   DROP ROLE [ IF EXISTS ] 'cassandra';
-
-
 
 Additional References
 ---------------------
