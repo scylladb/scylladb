@@ -815,8 +815,16 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
                 throw api_error::resource_not_found(fmt::format("Requested resource not found: Table: {} not found", table_name));
             }
 
+<<<<<<< HEAD
             auto m = co_await service::prepare_column_family_drop_announcement(_proxy, keyspace_name, table_name, group0_guard.write_timestamp(), service::drop_views::yes);
             auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy.local_db(), keyspace_name, group0_guard.write_timestamp());
+||||||| parent of 3c376d1b64 (alternator: use storage_proxy from the correct shard in executor::delete_table)
+            auto m = co_await service::prepare_column_family_drop_announcement(_proxy, keyspace_name, table_name, group0_guard.write_timestamp(), service::drop_views::yes);
+            auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy, keyspace_name, group0_guard.write_timestamp());
+=======
+            auto m = co_await service::prepare_column_family_drop_announcement(p.local(), keyspace_name, table_name, group0_guard.write_timestamp(), service::drop_views::yes);
+            auto m2 = co_await service::prepare_keyspace_drop_announcement(p.local(), keyspace_name, group0_guard.write_timestamp());
+>>>>>>> 3c376d1b64 (alternator: use storage_proxy from the correct shard in executor::delete_table)
 
             std::move(m2.begin(), m2.end(), std::back_inserter(m));
 
