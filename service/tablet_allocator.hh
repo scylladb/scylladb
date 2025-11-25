@@ -281,6 +281,24 @@ public:
     void on_leadership_lost();
 };
 
+struct colocation_source {
+    locator::global_tablet_id gid;
+    locator::tablet_replica replica;
+};
+
+using colocation_source_set = utils::chunked_vector<colocation_source>;
+using colocation_sources_by_destination_rack = std::unordered_map<locator::endpoint_dc_rack, colocation_source_set>;
+using consider_ongoing_transitions = bool_class<struct consider_ongoing_transitions_tag>;
+
+future<colocation_sources_by_destination_rack> find_required_rack_list_colocations(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        const std::unordered_set<utils::UUID>& paused_rf_change_requests,
+        const std::unordered_set<locator::global_tablet_id>& already_planned_migrations,
+        std::optional<size_t> max_colocations = std::nullopt,
+        consider_ongoing_transitions consider_ongoing_transitions = consider_ongoing_transitions::yes);
+
 }
 
 template <>

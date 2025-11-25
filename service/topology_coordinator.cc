@@ -952,9 +952,46 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    struct request_result {
+        utils::UUID request_id;
+        sstring error = "";
+
+        operator bool() const {
+            return bool(request_id);
+        }
+    };
+
+    future<request_result> get_rf_change_ready_to_resume() {
+        if (_topo_sm._topology.paused_rf_change_requests.empty()) {
+            co_return request_result{};
+        }
+
+        for (const auto& request_id : _topo_sm._topology.paused_rf_change_requests) {
+            auto req_entry = co_await _sys_ks.get_topology_request_entry(request_id, true);
+            sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+
+            if (!_db.has_keyspace(ks_name)) {
+                co_return request_result{
+                    .request_id = request_id,
+                    .error = format("Keyspace {} not found", ks_name)
+                };
+            }
+
+            auto res = co_await service::find_required_rack_list_colocations(
+                _db, get_token_metadata_ptr(), &_sys_ks, {request_id}, {}, 1, consider_ongoing_transitions::no);
+
+            if (res.empty()) {
+                co_return request_result{
+                    .request_id = request_id,
+                };
+            }
+        }
+        co_return request_result{};
+    }
+
     // Precondition: there is no node request and no ongoing topology transition
     // (checked under the guard we're holding).
-    future<> handle_global_request(group0_guard guard) {
+    future<> handle_global_request(group0_guard guard, request_result resumed_request) {
         global_topology_request req;
         utils::UUID req_id;
         db::system_keyspace::topology_requests_entry req_entry;
@@ -963,8 +1000,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             req = *_topo_sm._topology.global_request;
             req_id = _topo_sm._topology.global_request_id.value();
         } else {
-            assert(_feature_service.topology_global_request_queue);
-            req_id = _topo_sm._topology.global_requests_queue[0];
+            if (resumed_request) {
+                req_id = resumed_request.request_id;
+            } else {
+                assert(_feature_service.topology_global_request_queue);
+                req_id = _topo_sm._topology.global_requests_queue[0];
+            }
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
             req = std::get<global_topology_request>(req_entry.request_type);
         }
@@ -1018,6 +1059,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
+                  if (!resumed_request) {  // Resumed requests have already applied the tablet mutations.
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
@@ -1081,7 +1123,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             co_await coroutine::maybe_yield();
                         });
                     }
-
+                  }
                     auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                     for (auto& m: schema_muts) {
                         updates.emplace_back(m);
@@ -1107,6 +1149,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtlogger.info("keyspace_rf_change for keyspace {} postponed for colocation", ks_name);
                 tbuilder.pause_rf_change_request(req_id);
             } else {
+                if (resumed_request) {
+                    if (!resumed_request.error.empty()) {
+                        updates.clear();
+                        error = resumed_request.error;
+                    }
+                    tbuilder.resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, resumed_request.request_id);
+                }
                 updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
@@ -2303,8 +2352,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             guard = std::get<group0_guard>(std::move(work));
 
-            if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
-                co_await handle_global_request(std::move(guard));
+            request_result resumed_request;
+            if (_topo_sm._topology.global_request || (resumed_request = co_await get_rf_change_ready_to_resume()) || !_topo_sm._topology.global_requests_queue.empty()) {
+                co_await handle_global_request(std::move(guard), resumed_request);
                 co_return true;
             }
 
