@@ -61,11 +61,11 @@ static future<db::system_keyspace::topology_requests_entries> get_entries(db::sy
 }
 
 future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
-    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(id.uuid(), false);
-    auto started = entry.id;
-    if (!started) {
+    auto entry_opt = co_await _ss._sys_ks.local().get_topology_request_entry_opt(id.uuid());
+    if (!entry_opt) {
         co_return std::nullopt;
     }
+    auto& entry = *entry_opt;
     co_return tasks::task_status{
         .task_id = id,
         .type = request_type_to_task_type(entry.request_type),
@@ -84,7 +84,7 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(task
         .entity = "",
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
-        .children = started ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : utils::chunked_vector<tasks::task_identity>{}
+        .children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()))
     };
 }
 
@@ -106,8 +106,8 @@ future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(
         }
     }
 
-    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(task_id.uuid(), false);
-    co_return bool(entry.id) && std::holds_alternative<service::topology_request>(entry.request_type) ? empty_hint : std::nullopt;
+    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
+    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? empty_hint : std::nullopt;
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint) const {
