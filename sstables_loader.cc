@@ -206,7 +206,10 @@ private:
 
     bool tablet_in_scope(locator::tablet_id) const;
 
-    future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets();
+    // Pay attention, while working with tablet ranges, the `erm` must be held alive as long as we retrieve (and use here) tablet ranges from
+    // the tablet map. This is already done when using `tablet_sstable_streamer` class but tread carefully if you plan to use this method somewhere else.
+    static future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                   std::vector<dht::token_range>&& tablets_ranges);
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
@@ -345,13 +348,12 @@ public:
     }
 };
 
-future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_sstables_for_tablets() {
-    auto tablets_sstables = _tablet_map.tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
-                       return tablet_sstable_collection{.tablet_range = _tablet_map.get_token_range(tid)};
-                   }) | std::ranges::to<std::vector>();
-
+future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                                 std::vector<dht::token_range>&& tablets_ranges) {
+    auto tablets_sstables =
+        tablets_ranges | std::views::transform([](auto range) { return tablet_sstable_collection{.tablet_range = range}; }) | std::ranges::to<std::vector>();
     // sstables are sorted by first key in reverse order.
-    auto sstable_it = _sstables.rbegin();
+    auto sstable_it = sstables.rbegin();
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
         auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
@@ -363,11 +365,11 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
         auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
             return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
         };
-        while (sstable_it != _sstables.rend() && exhausted(*sstable_it)) {
+        while (sstable_it != sstables.rend() && exhausted(*sstable_it)) {
             sstable_it++;
         }
 
-        for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
+        for (auto sst_it = sstable_it; sst_it != sstables.rend(); sst_it++) {
             auto sst_token_range = sstable_token_range(*sst_it);
 
             // sstables are sorted by first key, so should skip this SSTable since it
@@ -397,7 +399,10 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
         progress->start(_tablet_map.tablet_count());
     }
 
-    auto classified_sstables = co_await get_sstables_for_tablets();
+    auto classified_sstables = co_await get_sstables_for_tablets(
+        _sstables, _tablet_map.tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
+                       return _tablet_map.get_token_range(tid);
+                   }) | std::ranges::to<std::vector>());
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : classified_sstables) {
         auto per_tablet_progress = make_shared<per_tablet_stream_progress>(
