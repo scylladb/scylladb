@@ -179,6 +179,19 @@ echo -n "Fetching full name of author $PR_LOGIN... "
 USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
 echo "$USER_NAME"
 
+BASE_BRANCH=$(jq -r .base.ref <<< $PR_DATA)
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+TARGET_BASE="unknown"
+if [[ ${BASE_BRANCH} == master ]]; then
+    TARGET_BASE="next"
+elif [[ ${BASE_BRANCH}  == branch-* ]]; then
+    TARGET_BASE=${BASE_BRANCH//branch/next}
+fi
+if [[ "${CURRENT_BRANCH}" != "${TARGET_BASE}" ]]; then
+    echo "Merging into wrong next, want ${TARGET_BASE}, have ${CURRENT_BRANCH}"
+    exit 1
+fi
+
 git fetch "$REMOTE" pull/$PR_NUM/head
 
 nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
