@@ -25,20 +25,19 @@ Procedure
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Login with the default superuser credentials and create an authenticated user with strong password.
+#. Login over the maintenance socket and create an authenticated user with strong password.
 
-   For example:
+   See :ref:`Setting Up a Superuser Using the Maintenance Socket <create-superuser-using-maintenance-socket>` for instructions.
 
    .. code-block:: cql
 
-       cqlsh -ucassandra -pcassandra
+       cqlsh /path/to/maintenance/socket/cql.m
 
        cassandra@cqlsh> CREATE ROLE scylla WITH PASSWORD = '123456' AND LOGIN = true AND SUPERUSER = true;
        cassandra@cqlsh> LIST ROLES;
 
        name      |super
        ----------+-------
-       cassandra |True
        scylla    |True
 
    Optionally, assign the role to your user. For example:
@@ -46,20 +45,6 @@ Procedure
    .. code-block:: cql
 
       cassandra@cqlsh> GRANT scylla TO myuser
-
-#. Login with the new user created and drop the superuser cassandra.
-
-   .. code-block:: cql
-
-      cqlsh -u scylla -p 123456
-
-      scylla@cqlsh> DROP ROLE cassandra;
-
-      scylla@cqlsh> LIST ROLES;
-
-      name      |super
-      ----------+-------
-      scylla    |True
 
 #. Update the ``authenticator`` parameter in ``scylla.yaml`` for all the nodes in the cluster: Change ``authenticator: com.scylladb.auth.TransitionalAuthenticator`` to ``authenticator: PasswordAuthenticator``.
 
