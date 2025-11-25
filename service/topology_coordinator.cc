@@ -54,6 +54,7 @@
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_coordinator.hh"
 #include "topology_mutation.hh"
+#include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
@@ -1336,12 +1337,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .build());
     }
 
+    void generate_rf_change_resume_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, utils::UUID request_to_resume) {
+        rtlogger.debug("Generating RF change resume for request id {}", request_to_resume);
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .queue_global_topology_request_id(request_to_resume)
+                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, request_to_resume)
+                .build());
+    }
+
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
             for (const tablet_migration_info& mig : plan.migrations()) {
                 co_await coroutine::maybe_yield();
                 generate_migration_update(out, guard, mig);
+            }
+
+            if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
+                generate_rf_change_resume_update(out, guard, request_to_resume);
             }
         }
 
