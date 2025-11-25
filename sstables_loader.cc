@@ -203,8 +203,6 @@ private:
         // FIXME: fully contained sstables can be optimized.
         return stream_sstables(pr, std::move(sstables), std::move(progress));
     }
-
-    bool tablet_in_scope(locator::tablet_id) const;
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
@@ -260,30 +258,30 @@ future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
     co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(progress));
 }
 
-bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
-    if (_stream_scope == stream_scope::all) {
+static bool tablet_in_scope(locator::tablet_id tid, const sstables_loader::stream_scope& scope, locator::effective_replication_map_ptr erm, const locator::tablet_map& tablet_map) {
+    if (scope == sstables_loader::stream_scope::all) {
         return true;
     }
 
-    const auto& topo = _erm->get_topology();
-    for (const auto& r : _tablet_map.get_tablet_info(tid).replicas) {
-        switch (_stream_scope) {
-        case stream_scope::node:
+    const auto& topo = erm->get_topology();
+    for (const auto& r : tablet_map.get_tablet_info(tid).replicas) {
+        switch (scope) {
+        case sstables_loader::stream_scope::node:
             if (topo.is_me(r.host)) {
                 return true;
             }
             break;
-        case stream_scope::rack:
+        case sstables_loader::stream_scope::rack:
             if (topo.get_location(r.host) == topo.get_location()) {
                 return true;
             }
             break;
-        case stream_scope::dc:
+        case sstables_loader::stream_scope::dc:
             if (topo.get_datacenter(r.host) == topo.get_datacenter()) {
                 return true;
             }
             break;
-        case stream_scope::all: // checked above already, but still need it here
+        case sstables_loader::stream_scope::all: // checked above already, but still need it here
             return true;
         }
     }
@@ -351,7 +349,7 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
     // sstables are sorted by first key in reverse order.
     auto sstable_it = _sstables.rbegin();
 
-    for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid); })) {
+    for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid, _stream_scope, _erm, _tablet_map); })) {
         auto tablet_range = _tablet_map.get_token_range(tablet_id);
 
         auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
