@@ -103,6 +103,7 @@ if(BUILD_TESTING)
     add_subdirectory(raft)
     add_subdirectory(resource/wasm)
     add_subdirectory(vector_search)
+    add_subdirectory(vector_search_validator)
 
     if(CMAKE_CONFIGURATION_TYPES)
       foreach(config ${CMAKE_CONFIGURATION_TYPES})

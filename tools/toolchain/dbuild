@@ -255,6 +255,7 @@ docker_common_args+=(
        -v "${XDG_CACHE_HOME}/scylladb:${XDG_CACHE_HOME}/scylladb" \
        -w "$PWD" \
        -e HOME="$HOME" \
+       --env DBUILD_TOOLCHAIN=1 \
        "${docker_args[@]}" \
        "$image" \
        "${args[@]}"

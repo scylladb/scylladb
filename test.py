@@ -55,7 +55,7 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search']
+PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search', TEST_DIR / 'vector_search_validator']
 
 launch_time = time.monotonic()
 
