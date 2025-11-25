@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-
+# clean_ci_run
 import pytest
 
 from test import TEST_RUNNER
