@@ -160,3 +160,6 @@ struct tablet_sstable_collection {
     std::vector<sstables::shared_sstable> sstables_fully_contained;
     std::vector<sstables::shared_sstable> sstables_partially_contained;
 };
+
+future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                                 std::vector<tablet_sstable_collection>&& tablets_sstables);
