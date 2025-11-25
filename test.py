@@ -281,13 +281,12 @@ def parse_cmd_line() -> argparse.Namespace:
 
 
 async def find_tests(options: argparse.Namespace) -> None:
-
-    for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
+    for f in TEST_DIR.glob("*"):
+        config = pathlib.Path(f) / SUITE_CONFIG_FILENAME
+        if config.is_file():
             for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
+                suite = TestSuite.opt_create(config=config, options=options, mode=mode)
                 await suite.add_test_list()
-
 
 def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
