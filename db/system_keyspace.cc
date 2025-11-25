@@ -3609,18 +3609,20 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     return entry;
 }
 
-future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id, bool require_entry) {
+future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id) {
+    auto r = co_await get_topology_request_entry_opt(id);
+    if (!r) {
+        on_internal_error(slogger, format("no entry for request id {}", id));
+    }
+    co_return std::move(*r);
+}
+
+future<std::optional<system_keyspace::topology_requests_entry>> system_keyspace::get_topology_request_entry_opt(utils::UUID id) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
 
     if (!rs || rs->empty()) {
-        if (require_entry) {
-            on_internal_error(slogger, format("no entry for request id {}", id));
-        } else {
-            co_return topology_requests_entry{
-                .id = utils::null_uuid()
-            };
-        }
+        co_return std::nullopt;
     }
 
     const auto& row = rs->one();

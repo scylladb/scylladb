@@ -953,7 +953,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         } else {
             assert(_feature_service.topology_global_request_queue);
             req_id = _topo_sm._topology.global_requests_queue[0];
-            req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
+            req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             req = std::get<global_topology_request>(req_entry.request_type);
         }
         switch (req) {
@@ -2051,7 +2051,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
-            const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id, true);
+            const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
             const table_id& table_id = topology_requests_entry.truncate_table_id;
             lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(table_id);
 
