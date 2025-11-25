@@ -284,3 +284,17 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
             natural_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, "tbl", key)
             ring_endpoints = get_ring_endpoints(token)
             assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
+
+@pytest.mark.asyncio
+async def test_small_table_optimization_repair(manager):
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    await manager.api.repair(servers[0].ip_addr, "ks", "tbl", small_table_optimization=True)
+
+    rows = await cql.run_async(f"SELECT * from system.repair_history")
+    assert len(rows) == 1
