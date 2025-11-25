@@ -2530,7 +2530,7 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         }
     }
     if (req.range.end()) {
-        if (!req.range.end()->is_inclusive()) {
+        if (!req.range.end()->is_inclusive() && req.range.end()->value() != dht::maximum_token()) {
             is_valid_range = false;
         }
     }
