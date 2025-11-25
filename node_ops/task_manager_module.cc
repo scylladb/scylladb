@@ -56,31 +56,14 @@ static tasks::task_manager::task_state get_state(const db::system_keyspace::topo
     }
 }
 
-static std::set<tasks::task_id> get_pending_ids(service::topology& topology) {
-    std::set<tasks::task_id> ids;
-    for (auto& request : topology.requests) {
-        ids.emplace(topology.find(request.first)->second.request_id);
-    }
-    return ids;
-}
-
-static future<db::system_keyspace::topology_requests_entries> get_entries(db::system_keyspace& sys_ks, service::topology& topology, std::chrono::seconds ttl) {
-    // Started requests.
-    auto entries = co_await sys_ks.get_node_ops_request_entries(db_clock::now() - ttl);
-
-    // Pending requests.
-    for (auto& id : get_pending_ids(topology)) {
-        entries.try_emplace(id.uuid(), db::system_keyspace::topology_requests_entry{});
-    }
-
-    co_return entries;
+static future<db::system_keyspace::topology_requests_entries> get_entries(db::system_keyspace& sys_ks, std::chrono::seconds ttl) {
+    return sys_ks.get_node_ops_request_entries(db_clock::now() - ttl);
 }
 
 future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(id.uuid(), false);
     auto started = entry.id;
-    service::topology& topology = _ss._topology_state_machine._topology;
-    if (!started && !get_pending_ids(topology).contains(id)) {
+    if (!started) {
         co_return std::nullopt;
     }
     co_return tasks::task_status{
@@ -147,8 +130,7 @@ future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hin
 
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
-    service::topology& topology = _ss._topology_state_machine._topology;
-    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_user_task_ttl())
+    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, get_task_manager().get_user_task_ttl())
             | std::views::transform([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
