@@ -336,7 +336,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
-        "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
         *[f'--mode={mode}' for mode in options.modes],
