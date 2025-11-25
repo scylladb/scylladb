@@ -205,6 +205,8 @@ private:
     }
 
     bool tablet_in_scope(locator::tablet_id) const;
+
+    future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets();
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
@@ -343,24 +345,19 @@ public:
     }
 };
 
-future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
-    if (progress) {
-        progress->start(_tablet_map.tablet_count());
-    }
+future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_sstables_for_tablets() {
+    auto tablets_sstables = _tablet_map.tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
+                       return tablet_sstable_collection{.tablet_range = _tablet_map.get_token_range(tid)};
+                   }) | std::ranges::to<std::vector>();
 
     // sstables are sorted by first key in reverse order.
     auto sstable_it = _sstables.rbegin();
 
-    for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid); })) {
-        auto tablet_range = _tablet_map.get_token_range(tablet_id);
-
+    for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
         auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
             return dht::token_range(sst->get_first_decorated_key().token(),
                                     sst->get_last_decorated_key().token());
         };
-
-        std::vector<sstables::shared_sstable> sstables_fully_contained;
-        std::vector<sstables::shared_sstable> sstables_partially_contained;
 
         // sstable is exhausted if its last key is before the current tablet range
         auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
@@ -391,7 +388,18 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
             }
             co_await coroutine::maybe_yield();
         }
+    }
+    co_return std::move(tablets_sstables);
+}
 
+future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
+    if (progress) {
+        progress->start(_tablet_map.tablet_count());
+    }
+
+    auto classified_sstables = co_await get_sstables_for_tablets();
+
+    for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : classified_sstables) {
         auto per_tablet_progress = make_shared<per_tablet_stream_progress>(
             progress,
             sstables_fully_contained.size() + sstables_partially_contained.size());
