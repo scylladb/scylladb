@@ -1382,6 +1382,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await coroutine::maybe_yield();
                 generate_migration_update(out, guard, mig);
             }
+
+            for (const tablet_migration_info& mig : plan.rack_list_colocation_plan().colocations()) {
+                co_await coroutine::maybe_yield();
+                generate_migration_update(out, guard, mig);
+            }
         }
 
         auto sched_time = db_clock::now();
