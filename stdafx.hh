@@ -315,7 +315,6 @@
 #include <seastar/util/log.hh>
 #include <seastar/util/log-impl.hh>
 #include <seastar/util/memory_diagnostics.hh>
-#include <seastar/util/modules.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/optimized_optional.hh>
 #include <seastar/util/process.hh>
