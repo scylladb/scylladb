@@ -76,7 +76,7 @@ static future<db::system_keyspace::topology_requests_entries> get_entries(db::sy
     co_return entries;
 }
 
-future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint) const {
+future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(id.uuid(), false);
     auto started = entry.id;
     service::topology& topology = _ss._topology_state_machine._topology;
@@ -131,18 +131,14 @@ future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_t
     return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
 }
 
-future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
-    return get_status_helper(id, std::move(hint));
-}
-
 future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
-    auto entry = co_await get_status_helper(id, hint);
+    auto entry = co_await get_status(id, hint);
     if (!entry) {
         co_return std::nullopt;
     }
 
     co_await _ss.wait_for_topology_request_completion(id.uuid(), false);
-    co_return co_await get_status_helper(id, std::move(hint));
+    co_return co_await get_status(id, std::move(hint));
 }
 
 future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
