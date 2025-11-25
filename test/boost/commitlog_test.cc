@@ -2106,5 +2106,78 @@ SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
     });
 }
 
+// Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
+SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
+    static auto replay_segment = [] (sstring path) -> future<> {
+        co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            auto&& [buf, rp] = buf_rp;
+            auto linearization_buffer = bytes_ostream();
+            auto in = buf.get_istream();
+            auto str = to_string_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
+            BOOST_CHECK_LE(str.size(), 512);
+            BOOST_CHECK_EQUAL(str, std::string(str.size(), '1'));
+            co_return;
+        });
+    };
+
+    constexpr size_t file_size_in_mb = 1;
+    constexpr size_t file_size = 1024*1024;
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = file_size_in_mb;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        rp_set set;
+        auto uuid = make_table_id();
+
+        // write small entries until we reach the guaranteed last sector of the segment
+        for (;;) {
+            size_t size = 64;
+            auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            });
+
+            auto rp = h.rp();
+            set.put(std::move(h));
+
+            auto rem = file_size - rp.pos;
+            if (rem < 512) {
+                // Sector will be 512 or larger, so we now we are now at the end stretch, and can calculate the 
+                // size to write to reach exact EOF.
+                // Adjust for size written, entry overhead (of prev and next) and sector overhead.
+                size = rem - 2*2*sizeof(uint32_t) /*entry overhead*/ - 3*sizeof(uint32_t) /* sector overhead */ - size;
+
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    dst.fill('1', size);
+                });
+
+                auto new_rp = h.rp();
+                set.put(std::move(h));
+
+                BOOST_CHECK_EQUAL(rp.id, new_rp.id);
+                break;
+            }
+        }
+
+        // Now get us our segment and replay.
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(segments.size() >= 1);
+
+        auto ids = set.usage() | std::views::keys | std::ranges::to<std::vector>();
+        std::sort(ids.begin(), ids.end());
+        auto id = ids.front();
+        auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
+            commitlog::descriptor desc(filename, db::commitlog::descriptor::FILENAME_PREFIX);
+            return desc.id == id;
+        });
+        if (i == segments.end()) {
+            throw std::runtime_error("Did not find expected log file");
+        }
+        sstring segment_path = *i;
+
+        co_await log.sync_all_segments();
+        // Without the fix, this will throw.
+        co_await replay_segment(segment_path);
+    });
+}
 
 BOOST_AUTO_TEST_SUITE_END()

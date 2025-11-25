@@ -3620,6 +3620,10 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             auto old = pos;
             pos = next_pos(off);
             clogger.trace("Pos {} -> {} ({})", old, pos, off);
+            // #24346 check eof status whenever we move file pos.
+            if (pos >= file_size) {
+                eof = true;
+            }
         }
 
         future<> read_entry() {
