@@ -76,6 +76,7 @@ public:
          endpoint_dc_rack dc_rack,
          state state,
          shard_id shard_count = 0,
+         bool excluded = false,
          this_node is_this_node = this_node::no,
          idx_type idx = -1);
 
@@ -171,6 +172,7 @@ private:
                             endpoint_dc_rack dc_rack,
                             state state,
                             shard_id shard_count = 0,
+                            bool excluded = false,
                             node::this_node is_this_node = this_node::no,
                             idx_type idx = -1);
     node_holder clone() const;
