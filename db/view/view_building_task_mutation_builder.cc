@@ -25,8 +25,8 @@ view_building_task_mutation_builder& view_building_task_mutation_builder::set_ty
     _m.set_clustered_cell(get_ck(id), "type", data_value(task_type_to_sstring(type)), _ts);
     return *this;
 }
-view_building_task_mutation_builder& view_building_task_mutation_builder::set_state(utils::UUID id, db::view::view_building_task::task_state state) {
-    _m.set_clustered_cell(get_ck(id), "state", data_value(task_state_to_sstring(state)), _ts);
+view_building_task_mutation_builder& view_building_task_mutation_builder::set_aborted(utils::UUID id, bool aborted) {
+    _m.set_clustered_cell(get_ck(id), "aborted", data_value(aborted), _ts);
     return *this;
 }
 view_building_task_mutation_builder& view_building_task_mutation_builder::set_base_id(utils::UUID id, table_id base_id) {

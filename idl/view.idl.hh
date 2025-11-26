@@ -15,15 +15,7 @@ class update_backlog {
     size_t get_max_bytes();
 };
 
-struct view_task_result {
-    enum class command_status: uint8_t {
-        success,
-        abort,
-    };
-    db::view::view_task_result::command_status status;
-};
-
 }
 }
 
-verb [[cancellable]] work_on_view_building_tasks(std::vector<utils::UUID> tasks_ids) -> std::vector<db::view::view_task_result>
+verb [[cancellable]] work_on_view_building_tasks(raft::term_t term, shard_id shard, std::vector<utils::UUID> tasks_ids) -> std::vector<utils::UUID>
