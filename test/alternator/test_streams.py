@@ -693,7 +693,7 @@ def compare_events(expected_events, output, mode, expected_region):
         assert event['awsRegion'] == expected_region
         # Reproduces #6931.
         assert 'eventVersion' in event
-        assert event['eventVersion'] in ['1.0', '1.1']
+        assert event['eventVersion'] == '1.1'
         # Check that eventID appears, but can't check much on what it is.
         assert 'eventID' in event
         op = event['eventName']
