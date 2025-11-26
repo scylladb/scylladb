@@ -8,6 +8,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/replicator.hh"
 #include "gms/inet_address.hh"
 #include "gms/generation-number.hh"
 
@@ -42,13 +43,12 @@ class address_map_t : public peering_sharded_service<address_map_t<Clock>> {
 
     class expiring_entry_ptr;
 
-    // An `inet_address` optionally equipped with a pointer to an entry
-    // in LRU list of 'expiring entries'. If the pointer is set, it means that this
-    // `timestamped_entry` is expiring; the corresponding LRU list entry contains
-    // the last access time and we periodically delete elements from the LRU list
-    // when they become too old.
-    struct timestamped_entry {
-        std::optional<gms::inet_address> _addr;
+public:
+    // Represents a change intent to a host mapping.
+    // Associative, but not commutative.
+    // Not all updates provide a generation, so we must merge updates in order.
+    // Expiry changes are not resolved using generation number, they rely on order.
+    struct entry_mutation {
         // The address map's source of IP addresses is gossip,
         // which can reorder events it delivers. It is therefore
         // possible that we get an outdated IP address after
@@ -60,12 +60,46 @@ class address_map_t : public peering_sharded_service<address_map_t<Clock>> {
         // there is no generation available - e.g. it's set when
         // we load the persisted map state from system.peers at
         // boot.
-        gms::generation_type _generation_number;
+        // The generation is only used to resolve addr changes.
+        gms::generation_type generation;
+        std::optional<gms::inet_address> addr;
+
+        // If engaged, indicates that this mutation changes the "expiring" status of the entry.
+        // If disengaged, the "expiring" status is not changed by the update.
+        // Updates of "expiring" status are always applied in order, last update wins.
+        std::optional<bool> expiring;
+
+        explicit operator bool() const {
+            return addr.has_value() || expiring.has_value();
+        }
+
+        // We rely on this to never throw for exception safety.
+        void apply(const entry_mutation& m) noexcept {
+            if (m.addr && (m.generation >= generation || !addr)) {
+                generation = m.generation;
+                addr = m.addr;
+            }
+            if (m.expiring) {
+                expiring = m.expiring;
+            }
+        }
+    };
+
+    using host_mutation = std::pair<locator::host_id, entry_mutation>;
+    using cluster_mutation = std::unordered_map<locator::host_id, entry_mutation>;
+
+private:
+    // An `inet_address` optionally equipped with a pointer to an entry
+    // in LRU list of 'expiring entries'. If the pointer is set, it means that this
+    // `timestamped_entry` is expiring; the corresponding LRU list entry contains
+    // the last access time and we periodically delete elements from the LRU list
+    // when they become too old.
+    struct timestamped_entry {
+        entry_mutation _m;
         std::unique_ptr<expiring_entry_ptr> _lru_entry;
 
-        explicit timestamped_entry(gms::generation_type generation_number,
-            std::optional<gms::inet_address> addr)
-            : _addr(std::move(addr)), _generation_number(generation_number), _lru_entry(nullptr)
+        explicit timestamped_entry(entry_mutation m)
+            : _m(std::move(m)), _lru_entry(nullptr)
         {
         }
 
@@ -153,7 +187,10 @@ class address_map_t : public peering_sharded_service<address_map_t<Clock>> {
     seastar::timer<Clock> _timer;
     clock_duration _expiry_period;
 
-    std::optional<future<>> _replication_fiber{make_ready_future<>()};
+    struct replicator_impl;
+
+    // Engaged on shard 0
+    std::unique_ptr<replicator_impl> _replicator;
 
     void drop_expired_entries(bool force = false) {
         auto list_it = _expiring_list.rbegin();
@@ -181,102 +218,83 @@ class address_map_t : public peering_sharded_service<address_map_t<Clock>> {
         }
     }
 
-    template <std::invocable<address_map_t&> F>
-    void replicate(F f, seastar::compat::source_location l = seastar::compat::source_location::current()) {
-        if (this_shard_id() != 0) {
-            auto msg = format("address_map::{}() called on shard {} != 0",
-                l.function_name(), this_shard_id());
-            on_internal_error(rslog, msg);
+    void apply_to_all(locator::host_id id, entry_mutation m, seastar::compat::source_location l = seastar::compat::source_location::current());
+
+public: // Used by replicator
+    static void prepare_apply(cluster_mutation& map, const host_mutation& mf) {
+        map.try_emplace(mf.first, entry_mutation{});
+    }
+
+    // Applies mf to map.
+    // Must not throw when called after prepare_apply(map, mf).
+    static void apply(cluster_mutation& map, const host_mutation& mf) {
+        auto [it, emplaced] = map.try_emplace(mf.first, mf.second);
+        if (!emplaced) {
+            it->second.apply(mf.second);
         }
-        if (!_replication_fiber) {
+    }
+
+    static void apply(cluster_mutation& dst, const cluster_mutation& src) {
+        for (auto&& e : src) {
+            apply(dst, e);
+        }
+    }
+
+    void on_replication_failed(std::exception_ptr e) {
+        rslog.warn("address map replication failed: {}", e);
+    }
+
+    // Strong exception guarantees: no side effects on exception.
+    void apply_locally(const host_mutation& mf, bool update_if_exists = true) {
+        auto&& [id, m]  = mf;
+        if (!m) {
             return;
         }
 
-        _replication_fiber = _replication_fiber->then([this, f = std::move(f), l] () -> future<> {
-            try {
-                co_await this->container().invoke_on_others([f] (address_map_t& self) {
-                    f(self);
-                });
-            } catch (...) {
-                rslog.error("address_map_t::replicate (called from {}) failed: {}",
-                            l.function_name(), std::current_exception());
-            }
-        });
-    }
-
-    void replicate_set_nonexpiring(const locator::host_id& id) {
-        replicate([id] (address_map_t& self) {
-            self.handle_set_nonexpiring(id);
-        });
-    }
-
-    void replicate_set_expiring(const locator::host_id& id) {
-        replicate([id] (address_map_t& self) {
-            self.handle_set_expiring(id);
-        });
-    }
-
-    void replicate_add_or_update_entry(const locator::host_id& id,
-            gms::generation_type generation_number, const gms::inet_address& ip_addr,
-            bool update_if_exists) {
-        replicate([id, generation_number, ip_addr, update_if_exists] (address_map_t& self) {
-            self.handle_add_or_update_entry(id, generation_number, ip_addr, update_if_exists);
-        });
-    }
-
-    void handle_set_nonexpiring(const locator::host_id& id) {
-        auto [it, _] = _map.try_emplace(id, timestamped_entry{gms::generation_type{}, std::nullopt});
+        auto [it, emplaced] = _map.try_emplace(id, timestamped_entry{m});
         auto& entry = it->second;
 
-        if (entry.expiring()) {
-            entry._lru_entry = nullptr;
-        }
-    }
-
-    void handle_set_expiring(const locator::host_id& id) {
-        auto it = _map.find(id);
-        if (it == _map.end()) {
-            return;
-        }
-        auto& entry = it->second;
-        if (entry.expiring()) {
-            return;
-        }
-        add_expiring_entry(it->first, entry);
-    }
-
-    void handle_add_or_update_entry(const locator::host_id& id,
-            gms::generation_type generation_number, const gms::inet_address& ip_addr,
-            bool update_if_exists) {
-        auto [it, emplaced] = _map.try_emplace(id, timestamped_entry{generation_number, ip_addr});
-        auto& entry = it->second;
         if (emplaced) {
-            add_expiring_entry(it->first, entry);
-        } else if ((update_if_exists && generation_number >= entry._generation_number) || !entry._addr) {
-            entry._addr = ip_addr;
-            entry._generation_number = generation_number;
+            if (!m.expiring || *m.expiring) {
+                try {
+                    add_expiring_entry(it->first, entry);
+                } catch (...) {
+                    _map.erase(it);
+                    throw;
+                }
+            }
+        } else if (update_if_exists) {
+            if (m.expiring) {
+                if (*m.expiring) {
+                    // Do first, so that we don't leave side effects on exception
+                    if (!entry.expiring()) {
+                        add_expiring_entry(it->first, entry);
+                    }
+                } else {
+                    entry._lru_entry = nullptr;
+                }
+            }
+            entry._m.apply(m);
             if (entry.expiring()) {
-                entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
+                entry._lru_entry->touch();
             }
         }
     }
 
+    // Weak exception guarantees: It's allowed to partially apply m.
+    void apply_locally(const cluster_mutation& m) {
+        for (auto&& e : m) {
+            apply_locally(e);
+        }
+    }
 
 public:
-    address_map_t()
-        : _map(initial_buckets_count),
-        _timer([this] { drop_expired_entries(); }),
-        _expiry_period(default_expiry_period)
-    {}
+    address_map_t();
+    future<> stop();
 
-    future<> stop() {
-        SCYLLA_ASSERT(_replication_fiber);
-        co_await *std::exchange(_replication_fiber, std::nullopt);
-    }
-
-    ~address_map_t() {
-        SCYLLA_ASSERT(!_replication_fiber);
-    }
+    // Resolves when all local updates replicate everywhere.
+    // Call on shard 0 only.
+    future<> barrier();
 
     // Find a mapping with a given id.
     //
@@ -291,7 +309,7 @@ public:
             // Touch the entry to update it's access timestamp and move it to the front of LRU list
             entry._lru_entry->touch();
         }
-        return entry._addr;
+        return entry._m.addr;
     }
 
     // Same as find() above but expects mapping to exist
@@ -316,7 +334,9 @@ public:
         if (addr == gms::inet_address{}) {
             on_internal_error(rslog, "address_map::find_by_addr: called with an empty address");
         }
-        auto it = std::find_if(_map.begin(), _map.end(), [&](auto&& mapping) { return mapping.second._addr == addr; });
+        auto it = std::find_if(_map.begin(), _map.end(), [&](auto&& mapping) {
+            return mapping.second._m.addr.value_or(gms::inet_address{}) == addr;
+        });
         if (it == _map.end()) {
             return std::nullopt;
         }
@@ -336,8 +356,7 @@ public:
     // Can only be called on shard 0.
     // The expiring state is replicated to other shards.
     void set_nonexpiring(locator::host_id id) {
-        handle_set_nonexpiring(id);
-        replicate_set_nonexpiring(id);
+        apply_to_all(id, entry_mutation{ .expiring = false });
     }
 
     // Convert a non-expiring entry to an expiring one,
@@ -346,8 +365,7 @@ public:
     // Can be called only on shard 0.
     // The expiring state is replicated to other shards.
     void set_expiring(locator::host_id id) {
-        handle_set_expiring(id);
-        replicate_set_expiring(id);
+        apply_to_all(id, entry_mutation{ .expiring = true });
     }
     // Insert a new mapping with an IP address if it doesn't
     // exist yet. Creates a mapping only on the current shard. Doesn't
@@ -360,7 +378,7 @@ public:
         if (addr == gms::inet_address{}) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
-        handle_add_or_update_entry(id, gms::generation_type{}, addr, false);
+        apply_locally(std::make_pair(id, entry_mutation{ .addr = addr }), false);
     }
     // Insert or update entry with a new IP address on all shards.
     // Used when we get a gossip notification about a node IP
@@ -374,8 +392,10 @@ public:
         if (addr == gms::inet_address{}) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
-        handle_add_or_update_entry(id, generation_number, addr, true);
-        replicate_add_or_update_entry(id, generation_number, addr, true);
+        apply_to_all(id, entry_mutation{
+            .generation = generation_number,
+            .addr = addr,
+        });
     }
 
     // Drop all expiring entries immediately, without waiting for expiry.
@@ -384,5 +404,44 @@ public:
         drop_expired_entries(true);
     }
 };
+
+template <typename Clock>
+struct address_map_t<Clock>::replicator_impl : public replicator<typename address_map_t<Clock>::cluster_mutation, address_map_t<Clock>> {
+    using replicator<typename address_map_t<Clock>::cluster_mutation, address_map_t<Clock>>::replicator;
+};
+
+template <typename Clock>
+address_map_t<Clock>::address_map_t()
+    : _map(initial_buckets_count)
+    , _timer([this] { drop_expired_entries(); })
+    , _expiry_period(default_expiry_period)
+{
+    if (this_shard_id() == 0) {
+        _replicator = std::make_unique<replicator_impl>(*this);
+    }
+}
+
+template <typename Clock>
+future<> address_map_t<Clock>::stop() {
+    if (_replicator) {
+        co_await _replicator->stop();
+    }
+}
+
+template <typename Clock>
+future<> address_map_t<Clock>::barrier() {
+    if (this_shard_id() != 0) {
+        on_internal_error(rslog, "barrier() must be called on shard 0");
+    }
+    return _replicator->barrier();
+}
+
+template <typename Clock>
+void address_map_t<Clock>::apply_to_all(locator::host_id id, entry_mutation m, seastar::compat::source_location l) {
+    if (this_shard_id() != 0) {
+        on_internal_error(rslog, format("address_map::{}() called on shard {} != 0", l.function_name(), this_shard_id()));
+    }
+    _replicator->apply_to_all(std::make_pair(id, m));
+}
 
 } // end of namespace service
