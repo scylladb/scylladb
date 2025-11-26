@@ -3344,6 +3344,30 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/abort_paused_rf_change/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Abort paused replication factor change for a keyspace",
+               "type":"void",
+               "nickname":"abort_paused_rf_change",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{

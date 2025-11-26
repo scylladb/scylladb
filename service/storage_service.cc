@@ -5008,6 +5008,50 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+future<> storage_service::abort_paused_rf_change(sstring ks) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_paused_rf_change(std::move(ks));
+        });
+    }
+
+    if (!_feature_service.rack_list_rf) {
+        throw std::runtime_error("The RACK_LIST_RF feature is not enabled on the cluster yet");
+    }
+
+    auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+    utils::UUID request_id;
+    for (auto req_id : _topology_state_machine._topology.paused_rf_change_requests) {
+        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(req_id, true);
+        if (req_entry.new_keyspace_rf_change_ks_name.value() == ks) {
+            request_id = req_id;
+            break;
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    if (!request_id) {
+        throw std::runtime_error(::format("There is no paused RF change request for keyspace '{}'", ks));
+    }
+
+    utils::chunked_vector<canonical_mutation> updates;
+    updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                            .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
+    updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                                .done("Aborted by user request")
+                                                .build()));
+
+    topology_change change{std::move(updates)};
+    group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+            format("aborting rf change request {}", request_id));
+
+    co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+}
+
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
