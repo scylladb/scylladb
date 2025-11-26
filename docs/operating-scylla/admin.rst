@@ -217,7 +217,7 @@ For example:
 * `ScyllaDB Java Driver <https://github.com/scylladb/java-driver/tree/3.7.1-scylla/manual/compression>`_
 * `Go Driver <https://godoc.org/github.com/gocql/gocql#Compressor>`_
 
-Refer to the :doc:`Drivers Page </using-scylla/drivers/index>` for more drivers.
+Refer to `ScyllaDB Drivers <https://docs.scylladb.com/stable/drivers/index.html>`_ for more drivers.
 
 .. _internode-compression:
 
