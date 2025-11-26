@@ -35,7 +35,7 @@ Documentation Highlights
 * :doc:`Cluster Management Procedures </operating-scylla/procedures/cluster-management/index>`
 * :doc:`Upgrade ScyllaDB </upgrade/index>`
 * :doc:`CQL Reference </cql/index>`
-* :doc:`ScyllaDB Drivers </using-scylla/drivers/index>`
+* `ScyllaDB Drivers <https://docs.scylladb.com/stable/drivers/index.html>`_
 * :doc:`Features </features/index>`
 
 ScyllaDB Support
