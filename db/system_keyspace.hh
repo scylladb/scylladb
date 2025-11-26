@@ -590,6 +590,9 @@ public:
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
     future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, db::view::view_building_task::task_state state);
     future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+    future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, std::string_view connection_id, const utils::UUID& host_id);
+    future<mutation> make_update_client_route_mutation(api::timestamp_type ts, const client_route& cm);
+    future<std::vector<client_route>> get_client_routes() const;
 
     // system.scylla_local, view_building_processing_base key
     future<std::optional<table_id>> get_view_building_processing_base_id();
