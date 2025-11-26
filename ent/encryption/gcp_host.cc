@@ -36,6 +36,7 @@
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
 #include "utils.hh"
+#include "utils/exponential_backoff_retry.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
@@ -251,23 +252,35 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
 
     auto& creds = i->second;
 
-    int retries = 0;
+    static constexpr auto max_retries = 10;
 
-    for (;;) {
-        try {
-            co_await creds.refresh(KMS_SCOPE, _certs);
-        } catch (...) {
-            std::throw_with_nested(permission_error("Error refreshing credentials"));
+    exponential_backoff_retry exr(10ms, 10000ms);
+
+    for (int retry = 0; ; ++retry) {
+        if (retry) {
+            co_await exr.retry();
         }
 
+        bool refreshing = true;
+
         try {
+            co_await creds.refresh(KMS_SCOPE, _certs);
+            refreshing = false;
+
             auto res = co_await send_request(uri, _certs, body, httpd::operation_type::POST, key_values({
                 { utils::gcp::AUTHORIZATION, utils::gcp::format_bearer(creds.token) },
             }));
             co_return res;
         } catch (httpd::unexpected_status_error& e) {
             gcp_log.debug("{}: Got unexpected response: {}", uri, e.status());
-            if (e.status() == http::reply::status_type::unauthorized && retries++ < 3) {
+            if (e.status() == httpclient::reply_status::service_unavailable && retry < max_retries) {
+                // service unavailable -> retry
+                continue;
+            } 
+            if (refreshing) {
+                std::throw_with_nested(permission_error("Error refreshing credentials"));
+            }
+            if (e.status() == http::reply::status_type::unauthorized && retry < max_retries) {
                 // refresh access token and retry.
                 continue;
             }
