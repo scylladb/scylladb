@@ -20,7 +20,7 @@ public:
     {}
 
     prepended_data_source_impl(prepended_data_source_impl&&) = default;
-    prepended_data_source_impl& operator=(prepended_data_source_impl&&) = default;
+    prepended_data_source_impl& operator=(prepended_data_source_impl&&) = delete;
 
     virtual future<temporary_buffer<char>> get() override {
         if (_buf) {
