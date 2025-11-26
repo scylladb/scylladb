@@ -61,7 +61,7 @@ expand_to_racks(const locator::token_metadata& tm,
 
     // Handle ALTER:
     // ([]|0) -> numeric is allowed, there are no existing replicas
-    // numeric -> numeric' is not supported. User should convert RF to rack list of equal count first.
+    // numeric -> numeric' is not supported unless numeric == numeric'. User should convert RF to rack list of equal count first.
     // rack_list -> len(rack_list) is allowed (no-op)
     // rack_list -> numeric is not allowed
     if (old_options.contains(dc)) {
@@ -75,6 +75,8 @@ expand_to_racks(const locator::token_metadata& tm,
                         "Cannot change replication factor for '{}' from {} to numeric {}, use rack list instead",
                         dc, old_rf_val, data.count()));
             }
+        } else if (old_rf.count() == data.count()) {
+            return rf;
         } else if (old_rf.count() > 0) {
             throw exceptions::configuration_exception(fmt::format(
                     "Cannot change replication factor for '{}' from {} to {}, only rack list is allowed",
@@ -153,6 +155,8 @@ static locator::replication_strategy_config_options prepare_options(
     }
 
     // Validate options.
+    bool numeric_to_rack_list_transition = false;
+    bool rf_change = false;
     for (auto&& [dc, opt] : options) {
         locator::replication_factor_data rf(opt);
 
@@ -162,6 +166,7 @@ static locator::replication_strategy_config_options prepare_options(
             old_rf = locator::replication_factor_data(i->second);
         }
 
+        rf_change = rf_change || (old_rf && old_rf->count() != rf.count()) || (!old_rf && rf.count() != 0);
         if (!rf.is_rack_based()) {
             if (old_rf && old_rf->is_rack_based() && rf.count() != 0) {
                 if (old_rf->count() != rf.count()) {
@@ -187,12 +192,11 @@ static locator::replication_strategy_config_options prepare_options(
             throw exceptions::configuration_exception(fmt::format(
                     "Rack list for '{}' contains duplicate entries", dc));
         }
-        if (old_rf && !old_rf->is_rack_based() && old_rf->count() != 0) {
-            // FIXME: Allow this if replicas already conform to the given rack list.
-            // FIXME: Implement automatic colocation to allow transition to rack list.
-            throw exceptions::configuration_exception(fmt::format(
-                    "Cannot change replication factor from numeric to rack list for '{}'", dc));
-        }
+        numeric_to_rack_list_transition = numeric_to_rack_list_transition || (old_rf && !old_rf->is_rack_based() && old_rf->count() != 0);
+    }
+
+    if (numeric_to_rack_list_transition && rf_change) {
+        throw exceptions::configuration_exception("Cannot change replication factor from numeric to rack list and rf value at the same time");
     }
 
     if (!rf && options.empty() && old_options.empty()) {

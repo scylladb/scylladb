@@ -1055,14 +1055,16 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
         BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at(loc.dc)).count(), 1);
         BOOST_REQUIRE(describe(e, "test2").contains(fmt::format("'{}': '1'", loc.dc)));
 
-        // When feature is enabled, rack list is accepted.
-        e.get_feature_service().local().rack_list_rf.enable();
-        e.execute_cql(create_stmt).get();
-
-        // Altering numeric RF to rack list is not supported yet.
+        // Altering to rack list is not allowed when feature is disabled.
         BOOST_REQUIRE_THROW(e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
                                                       " '{}': ['{}']}}", loc.dc, loc.rack)).get(),
                             exceptions::configuration_exception);
+
+        // When feature is enabled, rack list is accepted.
+        e.get_feature_service().local().rack_list_rf.enable();
+        e.execute_cql(create_stmt).get();
+        e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                                                      " '{}': ['{}']}}", loc.dc, loc.rack)).get();
     }, cfg);
 }
 
