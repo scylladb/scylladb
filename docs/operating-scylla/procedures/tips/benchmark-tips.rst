@@ -206,7 +206,7 @@ This is 19% of the latency compared to no batching.
 Driver Guidelines
 -----------------
 
-Use the :doc:`ScyllaDB drivers </using-scylla/drivers/index>` that are available for Java, Python, Go, and C/C++.
+Use the `ScyllaDB drivers <https://docs.scylladb.com/stable/drivers/index.html>`_ that are available for Java, Python, Go, and C/C++.
 They provide much better performance than third-party drivers because they are shard aware &emdash; they can route requests to the right CPU core (shard).
 When the driver starts, it gets the topology of the cluster and therefore it knows exactly which CPU core should get a request.
 Our latest shard-aware drivers also improve the efficiency of our Change Data Capture (CDC) feature.
