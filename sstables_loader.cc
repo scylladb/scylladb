@@ -756,17 +756,68 @@ future<> sstables_loader::download_task_impl::run() {
         erms[this_shard_id()] = co_await loader.await_topology_quiesced_and_get_erm(table_id);
     });
 
-    std::vector<seastar::abort_source> shard_aborts(smp::count);
-    // FIXME
-    auto sstable_names = _sstables | std::views::transform([] (const sstable_to_restore& s) { return s.identification; })
+    std::vector<sstring> sstables_to_download;
+    // Do an initial filtering of SSTables before downloading them, but only if there is token range info
+    // available. If not, we have to download all SSTables and let the tablet_sstable_streamer do the filtering
+    // based on token ranges from sstables metadata.
+    if (!_sstables.empty() && _sstables[0].token_range != std::nullopt) {
+        auto& tablet_map = erms[this_shard_id()]->get_token_metadata().tablets().get_tablet_map(table_id);
+
+        // Tablet ranges are disjoint and sorted.
+        // We go over each sstable and do a binary search over the tablet ranges to find
+        // the tablet that has the biggest start token which is <= sstable's start token.
+        // Then we check if the sstable range overlaps with the tablet range that we found. If it doesn't
+        // then the sstable falls in-between the found tablet and the next one.
+        // We also check if the sstable overlaps with the next tablet range, it could be that the start token of
+        // the sstable falls in-between the two tablets, but it overlaps to the right with the next tablet range.
+        // If std::upper_bound returns begin(), it means the sstable's start token is before the first tablet range,
+        // so we only need to check for overlap with the first tablet range.
+        // If std::upper_bound returns end(), it means the sstable's start token falls after the last tablet's start token,
+        // we only need to check for overlap with this last tablet range.
+        auto tablet_ranges_in_scope = tablet_map.tablet_ids()
+            | std::views::filter([this, &erms, &tablet_map] (auto tid) { return tablet_in_scope(tid, _scope, erms[this_shard_id()], tablet_map); })
+            | std::views::transform([&tablet_map] (const locator::tablet_id& tid) {
+                if (utils::get_local_injector().is_enabled("hardcoded_tablet_range")) {
+                    return dht::token_range(dht::token::from_int64(0), dht::token::from_int64(0));
+                }
+                return tablet_map.get_token_range(tid);
+            })
             | std::ranges::to<std::vector>();
-    auto [ _, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, sstable_names, _endpoint, _bucket, _prefix, cfg, [&] {
-        return &shard_aborts[this_shard_id()];
-    });
-    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+        for (auto sst_it = _sstables.begin(); sst_it != _sstables.end(); sst_it++) {
+            auto it = std::upper_bound(tablet_ranges_in_scope.begin(), tablet_ranges_in_scope.end(), sst_it->token_range.value(),
+                [](const dht::token_range& sst_tr, const dht::token_range& tablet_tr) {
+                    if (!tablet_tr.start().has_value()) {
+                        return false;
+                    }
+                    return sst_tr.start()->value() < tablet_tr.start()->value();
+                });
+            if (it != tablet_ranges_in_scope.end() && it->overlaps(sst_it->token_range.value(), dht::token_comparator{})) {
+                sstables_to_download.push_back(sst_it->identification);
+            } else if (it != tablet_ranges_in_scope.begin()) {
+                it = std::prev(it);
+                if (it->overlaps(sst_it->token_range.value(), dht::token_comparator{})) {
+                    sstables_to_download.push_back(sst_it->identification);
+                }
+            }
+        }
+        llog.debug("Filtered candidate SSTables to download from {} SSTables to {} SSTables based on passed token ranges and streaming scope",
+            _sstables.size(), sstables_to_download.size());
+    } else {
+        sstables_to_download = _sstables | std::views::transform([] (const sstable_to_restore& sst) {
+            return sst.identification;
+        }) | std::ranges::to<std::vector>();
+    }
+    std::vector<seastar::abort_source> shard_aborts(smp::count);
+
     std::exception_ptr ex;
     named_gate g("sstables_loader::download_task_impl");
+    std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
     try {
+        std::tie(std::ignore, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, sstables_to_download, _endpoint, _bucket, _prefix, cfg, [&] {
+            return &shard_aborts[this_shard_id()];
+        });
+        llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+
         _as.check();
 
         auto s = _as.subscribe([&]() noexcept {
