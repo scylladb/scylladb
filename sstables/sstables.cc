@@ -566,6 +566,16 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     s.positions.pop_back();
 }
 
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, scylla_metadata& metadata) {
+    co_await parse(s, v, in, metadata.data);
+    auto it = metadata.data.get<scylla_metadata_type::ComponentsDigests, scylla_metadata::components_digests>();
+    // if metadata contains component digests, also parse its own digest
+    if (it) {
+        metadata.digest.emplace();
+        co_await parse(s, v, in, metadata.digest.value());
+    }
+}
+
 inline void write(sstable_version_types v, file_writer& out, const summary_entry& entry) {
     // FIXME: summary entry is supposedly written in memory order, but that
     // would prevent portability of summary file between machines of different
@@ -588,6 +598,11 @@ inline void write(sstable_version_types v, file_writer& out, const summary& s) {
     }
     write(v, out, s.entries);
     write(v, out, s.first_key, s.last_key);
+}
+
+inline void write(sstable_version_types v, file_writer& out, const scylla_metadata& s) {
+    write(v, out, s.data);
+    write(v, out, s.digest.value());
 }
 
 future<summary_entry&> sstable::read_summary_entry(size_t i) {
@@ -983,10 +998,10 @@ void sstable::open_sstable(const sstring& origin) {
     _storage->open(*this);
 }
 
-void sstable::write_toc(file_writer w) {
+void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
-    do_write_simple(w, [&] (version_types v, file_writer& w) {
+    do_write_simple(*w, [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
@@ -994,6 +1009,8 @@ void sstable::write_toc(file_writer w) {
             write(v, w, b);
         }
     });
+
+    _components_digests.map[component_type::TOC] = w->full_checksum();
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1010,6 +1027,7 @@ void sstable::write_digest(uint32_t full_checksum) {
         auto digest = to_sstring<bytes>(full_checksum);
         write(v, w, digest);
     }, buffer_size);
+    _components_digests.map[component_type::Data] = full_checksum;
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1133,7 +1151,8 @@ void sstable::write_compression() {
         return;
     }
 
-    write_simple<component_type::CompressionInfo>(_components->compression);
+    auto digest = write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
+    _components_digests.map[component_type::CompressionInfo] = digest;
 }
 
 void sstable::validate_partitioner() {
@@ -1358,11 +1377,27 @@ future<> sstable::read_partitions_db_footer() {
 }
 
 void sstable::write_statistics() {
-    write_simple<component_type::Statistics>(_components->statistics);
+    auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
+    _components_digests.map[component_type::Statistics] = digest;
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
     being_repaired = id;
+}
+
+std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
+    if (c == component_type::Scylla) {
+        return _components->scylla_metadata->digest;
+    }
+    const auto* cd = _components->scylla_metadata->get_components_digests();
+    if (!cd) {
+        return std::nullopt;
+    }
+    auto it = cd->map.find(c);
+    if (it == cd->map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
@@ -1391,14 +1426,18 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 // This efficiently creates a modified SSTable without copying all files.
 // 1. Create a new SSTable object with a new generation number
 //    - The creator function determines the new generation
-// 2. Hard-link all components EXCEPT the one being rewritten and optionally the Scylla component (if update_sstable_id is true)
+// 2. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
 //    - The component being rewritten will be written fresh (not linked)
-// 3. Copy in-memory components from the source SSTable
+//    - Scylla metadata must be rewritten to include the new component's digest
+// 3. Copy in-memory component metadata from the source SSTable
 //    - This doesn't deep copy _components, just copies the foreign_ptr
 // 4. Apply the modifier function to the new SSTable's components
-// 5. If update_sstable_id is true, read scylla metadata and change sstable_id
-// 6. Write the component being rewritten (and optionally the Scylla component if update_sstable_id is true) to the new SSTable
-// 7. Finalize the new SSTable
+// 5. Re-read the Scylla metadata from disk
+//    - Ensures we have the latest on-disk metadata (not potentially modified in-memory state)
+// 6. If update_sstable_id is true, update the Scylla metadata's sstable identifier to a new value
+// 7. Write the component with updated Scylla metadata
+//    - Uses write_component_with_metadata() which handles digest calculation and metadata updates
+// 8. Finalize the new SSTable
 //    - Copy sharding information, seal the SSTable, and open data files
 future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
         component_type component,
@@ -1421,26 +1460,20 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
 
-        std::unordered_set<component_type> excluded_components = {component};
-        if (update_sstable_id) {
-            excluded_components.insert(component_type::Scylla);
-        }
-
-        _storage->link_with_excluded_components(*this, generation, excluded_components).get();
+        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
 
+        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+        // If unchanged, reuse the existing _components->scylla_metadata instead.
+        scylla_metadata metadata;
+        read_simple<component_type::Scylla>(metadata).get();
         if (update_sstable_id) {
-            // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
-            // If unchanged, reuse the existing _components->scylla_metadata instead.
-            scylla_metadata metadata;
-            read_simple<component_type::Scylla>(metadata).get();
             metadata.set_sstable_identifier();
-            new_sst->write_component_with_metadata(component, std::move(metadata));
-        } else {
-            new_sst->write_component(component);
         }
+
+        new_sst->write_component_with_metadata(component, std::move(metadata));
 
         new_sst->_shards = this->_shards;
         new_sst->seal_sstable(backup).get();
@@ -1451,12 +1484,24 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     });
 }
 
+// Rewrites a single SSTable component along with updated Scylla metadata.
+// This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
+// 1. Write the component file (e.g., Statistics-*.db)
+//    - This calculates and stores the component's digest in _components_digests.map[type]
+// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 3. Calculate the Scylla metadata's own digest based on its updated data
+// 4. Write the Scylla metadata component file
+// 5. Set the in-memory Scylla metadata to the new metadata
 void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
     if (!is_component_rewrite_supported(type)) {
         on_internal_error(sstlog, "Only Statistics component can be rewritten.");
     }
 
     write_component(type);
+
+    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    metadata.digest = serialized_checksum(_version, metadata.data);
+
     write_simple<component_type::Scylla>(metadata);
 
     _components->scylla_metadata = std::move(metadata);
@@ -1651,7 +1696,8 @@ void sstable::write_filter() {
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    write_simple<component_type::Filter>(filter_ref);
+    auto digest = write_simple_with_digest<component_type::Filter>(filter_ref);
+    _components_digests.map[component_type::Filter] = digest;
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
@@ -2130,6 +2176,7 @@ sstable::read_scylla_metadata() noexcept {
         }
         return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] {
             _features = _components->scylla_metadata->get_features();
+            _components->digest = get_component_digest(component_type::Data);
         });
     });
 }
@@ -2219,6 +2266,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+
+    _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
