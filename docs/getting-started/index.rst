@@ -37,7 +37,7 @@ Getting Started
   :id: "getting-started"
   :class: my-panel
 
-  * :doc:`ScyllaDB Drivers</using-scylla/drivers/index>`
+  * `ScyllaDB Drivers <https://docs.scylladb.com/stable/drivers/index.html>`_
   * `Get Started Lesson on ScyllaDB University <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/quick-wins-install-and-run-scylla/>`_    
   * :doc:`CQL Reference </cql/index>`
   * :doc:`cqlsh - the CQL shell </cql/cqlsh/>`
