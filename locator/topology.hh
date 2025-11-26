@@ -486,13 +486,14 @@ struct fmt::formatter<locator::node> : fmt::formatter<string_view> {
         if (!verbose) {
             return fmt::format_to(ctx.out(), "{}", node.host_id());
         } else {
-            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} this_node={}",
+            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} excluded={} this_node={}",
                     node.idx(),
                     node.host_id(),
                     node.dc_rack().dc,
                     node.dc_rack().rack,
                     locator::node::to_string(node.get_state()),
                     node.get_shard_count(),
+                    node.is_excluded(),
                     bool(node.is_this_node()));
         }
     }
