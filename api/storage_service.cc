@@ -512,9 +512,52 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         if (!parsed.IsArray()) {
             throw httpd::bad_param_exception("malformatted sstables in body");
         }
-        auto sstables = parsed.GetArray() |
-            std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
-            std::ranges::to<std::vector>();
+        std::vector<sstable_to_restore> sstables;
+        sstables.reserve(parsed.GetArray().Size());
+        for (auto& s : parsed.GetArray()) {
+            // Support the previous format where body contains an array of TOC names until
+            // Scylla Manager will be updated to send the new format.
+            if (s.IsString()) {
+                auto id = sstring(rjson::to_string_view(s));
+                sstables.emplace_back(id);
+                continue;
+            }
+
+            if (!s.HasMember("identification")) {
+                throw httpd::bad_param_exception("malformatted sstables in body: missing identification field");
+            }
+            if (!s["identification"].IsObject()) {
+                throw httpd::bad_param_exception("malformatted sstables in body: identification field is not an object");
+            }
+            if (!s["identification"].HasMember("toc_filename")) {
+                throw httpd::bad_param_exception("malformatted sstables in body: identification field missing toc_filename");
+            }
+
+            sstables.emplace_back(s["identification"]["toc_filename"].GetString());
+            if (!s.HasMember("tokens")) {
+                continue;
+            }
+
+            if(!s["tokens"].IsObject()) {
+                throw httpd::bad_param_exception("malformatted sstables in body: tokens field is not an object");
+            }
+            if(!s["tokens"].HasMember("token_min") || !s["tokens"]["token_min"].GetStringLength()) {
+                throw httpd::bad_param_exception(fmt::format("malformatted sstables in body: missing token_min for sstable {}",
+                                                                rjson::to_string_view(s["identification"]["toc_filename"])));
+            }
+            if(!s["tokens"].HasMember("token_max") || !s["tokens"]["token_max"].GetStringLength()) {
+                throw httpd::bad_param_exception(fmt::format("malformatted sstables in body: missing token_max for sstable {}",
+                                                                rjson::to_string_view(s["identification"]["toc_filename"])));
+            }
+
+            dht::token token_min = dht::token::from_int64(validate_int(s["tokens"]["token_min"].GetString()));
+            dht::token token_max = dht::token::from_int64(validate_int(s["tokens"]["token_max"].GetString()));
+            if (token_min > token_max) {
+                throw httpd::bad_param_exception(fmt::format("malformatted sstables in body: token_min > token_max for sstable {}",
+                                                                rjson::to_string_view(s["identification"]["toc_filename"])));
+            }
+            sstables.back().token_range.emplace(token_min, token_max);
+        }
         auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope, primary_replica_only);
         co_return json::json_return_type(fmt::to_string(task_id));
     });

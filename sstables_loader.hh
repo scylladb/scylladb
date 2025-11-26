@@ -59,6 +59,16 @@ struct stream_progress {
     }
 };
 
+struct sstable_to_restore {
+    sstring identification;
+    std::optional<dht::token_range> token_range;
+
+    sstable_to_restore() = delete;
+
+    explicit sstable_to_restore(const sstring& id)
+        : identification(id) {}
+};
+
 // The handler of the 'storage_service/load_new_ss_tables' endpoint which, in
 // turn, is the target of the 'nodetool refresh' command.
 // Gets sstables from the upload directory and makes them available in the
@@ -130,7 +140,7 @@ public:
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::vector<sstable_to_restore> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     class download_task_impl;

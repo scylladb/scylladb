@@ -647,7 +647,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _cf;
     sstring _prefix;
     sstables_loader::stream_scope _scope;
-    std::vector<sstring> _sstables;
+    std::vector<sstable_to_restore> _sstables;
     const primary_replica_only _primary_replica;
     struct progress_holder {
         // Wrap stream_progress in a smart pointer to enable polymorphism.
@@ -672,7 +672,7 @@ protected:
 
 public:
     download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
-            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables,
+            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstable_to_restore> sstables,
             sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
@@ -757,7 +757,10 @@ future<> sstables_loader::download_task_impl::run() {
     });
 
     std::vector<seastar::abort_source> shard_aborts(smp::count);
-    auto [ _, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
+    // FIXME
+    auto sstable_names = _sstables | std::views::transform([] (const sstable_to_restore& s) { return s.identification; })
+            | std::ranges::to<std::vector>();
+    auto [ _, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, sstable_names, _endpoint, _bucket, _prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
@@ -828,7 +831,7 @@ future<> sstables_loader::stop() {
 }
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::vector<sstable_to_restore> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
