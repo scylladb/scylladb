@@ -15,6 +15,7 @@
 #include <cmath>
 
 #include "seastarx.hh"
+#include "backlog_controller_fwd.hh"
 
 // Simple proportional controller to adjust shares for processes for which a backlog can be clearly
 // defined.
@@ -128,11 +129,21 @@ public:
     static constexpr unsigned normalization_factor = 30;
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::chrono::milliseconds interval, std::function<float()> current_backlog)
+    static inline const std::vector<backlog_controller::control_point> default_control_points = {
+            backlog_controller::control_point{0.0, 50}, {1.5, 100}, {normalization_factor, default_compaction_maximum_shares}};
+    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
+        std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), std::move(interval),
-          std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
+          default_control_points,
           std::move(current_backlog),
           static_shares
         )
-    {}
+    {
+        if (max_shares) {
+            set_max_shares(*max_shares);
+        }
+    }
+
+    // Updates the maximum output value for control points.
+    void set_max_shares(float max_shares);
 };

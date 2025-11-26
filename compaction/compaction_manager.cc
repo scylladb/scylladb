@@ -867,8 +867,8 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
 
 namespace compaction {
 
-inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
-    return compaction_controller(csg, static_shares, 250ms, std::move(fn));
+inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::optional<float> max_shares, std::function<double()> fn) {
+    return compaction_controller(csg, static_shares, max_shares, 250ms, std::move(fn));
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1014,7 +1014,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
+    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), _cfg.max_shares.get(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
         // This means we are using an unimplemented strategy
@@ -1033,6 +1033,10 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _compaction_max_shares_observer(_cfg.max_shares.observe([this] (const float& max_shares) {
+        cmlog.info("Updating max shares to {}", max_shares);
+        _compaction_controller.set_max_shares(max_shares);
+    }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
@@ -1051,11 +1055,12 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
+    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
