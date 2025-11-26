@@ -112,6 +112,7 @@ public:
         // Each virtual task needs to have its group.
         topology_change_group,
         tablets_group,
+        global_topology_change_group,
     };
 
     class task : public enable_lw_shared_from_this<task> {
