@@ -597,6 +597,11 @@ public:
     future<mutation> make_view_building_processing_base_id_mutation(api::timestamp_type ts, table_id base_id);
     future<mutation> make_remove_view_building_processing_base_id_mutation(api::timestamp_type ts);
 
+    // system.client_routes
+    future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, std::string_view connection_id, const utils::UUID& host_id);
+    future<mutation> make_update_client_route_mutation(api::timestamp_type ts, const client_route& cm);
+    future<std::vector<client_route>> get_client_routes() const;
+
     // CDC related functions
 
     /*
