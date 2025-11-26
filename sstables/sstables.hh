@@ -636,6 +636,8 @@ private:
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
     std::optional<sstring> _cloned_to_sstable_filename;
+    // Used only for writing sstable.
+    scylla_metadata::components_digests _components_digests;
 public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -711,7 +713,8 @@ private:
     future<> read_summary() noexcept;
 
     void write_summary() {
-        write_simple<component_type::Summary>(_components->summary);
+        auto digest = write_simple_with_digest<component_type::Summary>(_components->summary);
+        _components_digests.map[component_type::Summary] = digest;
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -760,6 +763,7 @@ private:
     void disable_component_memory_reload();
 
     static bool is_component_rewrite_supported(component_type type);
+    // Must be called in a seastar thread
     void write_component(component_type type);
 public:
     // Finds first position_in_partition in a given partition.
@@ -840,7 +844,7 @@ private:
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
     // runs in async context (called from storage::open)
-    void write_toc(file_writer w);
+    void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
     static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
 public:
@@ -1030,6 +1034,13 @@ public:
     std::optional<uint32_t> get_digest() const {
         return _components->digest;
     }
+
+    // Used only for writing sstable.
+    scylla_metadata::components_digests& get_components_digests() {
+        return _components_digests;
+    }
+
+    std::optional<uint32_t> get_component_digest(component_type c) const;
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which

@@ -1333,6 +1333,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
         case sstables::scylla_metadata_type::Schema: return "schema";
+        case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
     }
     std::abort();
 }
@@ -1389,6 +1390,14 @@ public:
             _writer.EndObject();
         }
         _writer.EndArray();
+    }
+    void operator()(const sstables::scylla_metadata::components_digests& val) const {
+        _writer.StartObject();
+        for (const auto& [k, v] : val.map) {
+            _writer.Key(fmt::format("{}", k));
+            _writer.Uint(v);
+        }
+        _writer.EndObject();
     }
     void operator()(const sstables::sstable_enabled_features& val) const {
         std::pair<sstables::sstable_feature, const char*> all_features[] = {
@@ -1526,6 +1535,10 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
         }
         for (const auto& [k, v] : m->data.data) {
             std::visit(scylla_metadata_visitor(writer), v);
+        }
+        if (m->digest.has_value()) {
+            writer.Key("digest");
+            writer.Uint(m->digest.value());
         }
         writer.EndObject();
     }
