@@ -696,7 +696,7 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
     }
 
     auto rs = generate_replication_strategy(ksm);
-    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata(), false));
     b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 
     /**

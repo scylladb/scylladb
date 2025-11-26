@@ -55,8 +55,29 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     auto schema_extensions = _properties->make_schema_extensions(db.extensions());
     _properties->validate(db, keyspace(), schema_extensions);
 
+    bool is_colocated = [&] {
+        if (!db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        auto base_schema = db.find_schema(schema->view_info()->base_id());
+        if (!base_schema) {
+            return false;
+        }
+        return std::ranges::equal(
+            schema->partition_key_columns(),
+            base_schema->partition_key_columns(),
+            [](const column_definition& a, const column_definition& b) { return a.name() == b.name(); });
+    }();
+
+    if (is_colocated) {
+        auto gc_opts = _properties->get_tombstone_gc_options(schema_extensions);
+        if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
+            throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables.");
+        }
+    }
+
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
+    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), !is_colocated);
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(

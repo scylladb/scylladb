@@ -26,6 +26,7 @@
 #include "db/view/view.hh"
 #include "types/concrete_types.hh"
 #include "db/tags/extension.hh"
+#include "tombstone_gc_extension.hh"
 #include "utils/histogram_metrics_helper.hh"
 
 seastar::metrics::label idx{"idx"};
@@ -234,7 +235,7 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
+view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im, const data_dictionary::database& db) const {
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), index_table_name(im.name())};
@@ -318,6 +319,17 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         format("{} IS NOT NULL", index_target->name_as_cql_string()) :
         "";
     builder.with_view_info(schema, false, where_clause);
+
+    bool is_colocated = [&] {
+        if (!db.find_keyspace(schema->ks_name()).get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        return im.local();
+    }();
+
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name(), !is_colocated));
+    builder.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
+
     // A local secondary index should be backed by a *synchronous* view,
     // see #16371. A view is marked synchronous with a tag. Non-local indexes
     // do not need the tags schema extension at all.
