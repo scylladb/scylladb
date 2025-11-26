@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <ranges>
@@ -386,6 +387,26 @@ static std::expected<void, sstring> apply_option_overrides(session_options& opti
     return {};
 }
 
+static std::expected<void, sstring> add_option_to_json(std::string_view option, const session_options& options, rjson::value& out) {
+    if (option == "consistency") {
+        rjson::add(out, "consistency", rjson::from_string(fmt::to_string(options.consistency)));
+    } else if (option == "expand") {
+        rjson::add(out, "expand", options.expand);
+    } else if (option == "output format") {
+        rjson::add(out, "output_format", rjson::from_string(to_upper(to_string(options.output_format))));
+    } else if (option == "paging") {
+        rjson::add(out, "page_size", options.page_size);
+    } else if (option == "serial consistency") {
+        rjson::add(out, "serial_consistency", rjson::from_string(fmt::to_string(options.serial_consistency)));
+    } else if (option == "tracing") {
+        rjson::add(out, "tracing", options.tracing);
+    } else {
+        return std::unexpected(seastar::format("Unrecognized option: {}", option));
+    }
+
+    return {};
+}
+
 class session {
 public:
     const session_id id;
@@ -510,6 +531,16 @@ public:
             }
 
             co_return co_await futurize_invoke(std::move(f), local_this, session_ptr.get());
+        });
+    }
+
+    template <std::invocable<session_manager&, session&> F>
+    auto invoke_on(session_id session_id, F f) {
+        return invoke_on_unchecked(session_id, [f = std::move(f)] (session_manager& local_this, session* session_opt) mutable {
+            if (!session_opt) {
+                throw unauthorized_access("Session not found");
+            }
+            return f(local_this, *session_opt);
         });
     }
 
@@ -743,6 +774,26 @@ std::unique_ptr<reply> write_response(std::unique_ptr<reply> rep, reply::status_
         co_await out.write("{\"response\": ");
 
         co_await out.write(rjson::quote_json_string(response));
+
+        co_await out.write("}");
+
+        co_await out.flush();
+        co_await out.close();
+    });
+    return rep;
+}
+
+// Like write_response(), but response is already-serialized JSON, which is
+// embedded verbatim instead of being quoted as a string. Used by /option, which
+// reports option values as a JSON object.
+std::unique_ptr<reply> write_json_response(std::unique_ptr<reply> rep, reply::status_type status, sstring response) {
+    rep->set_status(status);
+    rep->write_body("json", [response = std::move(response)] (output_stream<char>&& out_) -> future<> {
+        auto out = std::move(out_);
+
+        co_await out.write("{\"response\": ");
+
+        co_await out.write(response);
 
         co_await out.write("}");
 
@@ -1464,10 +1515,189 @@ protected:
     }
 };
 
+/// Handle session options
+///
+/// Implements a subset of CQLSH options:
+/// * CONSISTENCY [<level>] - set default consistency level for queries, with no args show current setting>
+/// * EXPAND [ON|OFF] - enable/disable expanded (vertical) output, with no args show current setting.
+/// * PAGING [ON|OFF|<number>] - enable/disable/limit result paging, with no args show current setting.
+/// * SERIAL CONSISTENCY [<level>] - set default serial consistency level for queries, with no args show current setting.
+/// * TRACING [ON|OFF] - enable/disable query tracing, with no args show current setting.
+///
+/// Extra options (not in CQLSH):
+/// * OUTPUT FORMAT [<format>] - set output format, supported formats are TEXT and JSON, with no args show current setting.
+///
+/// This endpoint only changes options; reading them is GET /option, see
+/// option_query_handler. Either way the response is a JSON object of option
+/// values, never prose - wording those values for a human is left to the client.
 class option_handler : public gated_handler {
     session_manager& _session_manager;
 
+    // The apply_*() functions below validate the arguments of one option and
+    // apply them to options, returning the message for the first argument they
+    // reject. They are never called with an empty args - an option with no
+    // arguments is a query of its current value, not a change.
+
+    static std::expected<void, sstring> apply_consistency(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1) {
+            return std::unexpected("Invalid CONSISTENCY option, expected 'CONSISTENCY [<consistency_level>]'.");
+        }
+
+        auto cl = parse_consistency_level(args[0], consistency_levels(), "CONSISTENCY");
+        if (!cl) {
+            return std::unexpected(std::move(cl.error()));
+        }
+        options.consistency = *cl;
+        return {};
+    }
+
+    static std::expected<void, sstring> apply_expand(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1) {
+            return std::unexpected("Invalid EXPAND option, expected 'EXPAND [ON|OFF]'.");
+        }
+
+        if (args[0] == "on") {
+            options.expand = true;
+        } else if (args[0] == "off") {
+            options.expand = false;
+        } else {
+            return std::unexpected("Invalid EXPAND argument, expected ON or OFF.");
+        }
+
+        return {};
+    }
+
+    static std::expected<void, sstring> apply_output_format(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1) {
+            return std::unexpected("Invalid OUTPUT FORMAT option, expected 'OUTPUT FORMAT [TEXT|JSON]'.");
+        }
+
+        auto out_format = parse_output_format(args[0], "OUTPUT FORMAT");
+        if (!out_format) {
+            return std::unexpected(std::move(out_format.error()));
+        }
+        options.output_format = *out_format;
+        return {};
+    }
+
+    static std::expected<void, sstring> apply_paging(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1) {
+            return std::unexpected("Invalid PAGING option, expected 'PAGING [ON|OFF|<number>]'.");
+        }
+
+        if (args[0] == "off") {
+            options.page_size = 0;
+        } else if (args[0] == "on") {
+            options.page_size = 100; // default page size
+        } else {
+            // std::stoi reports what it cannot convert by throwing; the two
+            // failures are told apart to name which of them happened.
+            try {
+                options.page_size = std::stoi(args[0]);
+            } catch (std::invalid_argument&) {
+                return std::unexpected("Page size must be a number.");
+            } catch (std::out_of_range&) {
+                return std::unexpected("Page size must be a 32 bit integer.");
+            }
+        }
+
+        return {};
+    }
+
+    static std::expected<void, sstring> apply_serial_consistency(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1){
+            return std::unexpected("Invalid SERIAL CONSISTENCY option, expected 'SERIAL CONSISTENCY [<serial_consistency_level>]'.");
+        }
+
+        auto cl = parse_consistency_level(args[0], serial_consistency_levels(), "SERIAL CONSISTENCY");
+        if (!cl) {
+            return std::unexpected(std::move(cl.error()));
+        }
+        options.serial_consistency = *cl;
+        return {};
+    }
+
+    static std::expected<void, sstring> apply_tracing(const std::vector<sstring>& args, session_options& options) {
+        if (args.size() > 1) {
+            return std::unexpected("Invalid TRACING option, expected 'TRACING [ON|OFF]'.");
+        }
+
+        if (args[0] == "off") {
+            options.tracing = false;
+        } else if (args[0] == "on") {
+            options.tracing = true;
+        } else {
+            return std::unexpected("Invalid TRACING option, expected 'TRACING [ON|OFF]'.");
+        }
+
+        return {};
+    }
+
+    using applier = std::expected<void, sstring> (*)(const std::vector<sstring>&, session_options&);
+
+    // All the options, in the order the report of all of them lists them. Also
+    // the list of recognized option names - add_option_to_json() knows the same
+    // names and has to be kept in step with this.
+    static const std::array<std::pair<std::string_view, applier>, 6>& option_appliers() {
+        static const std::array<std::pair<std::string_view, applier>, 6> appliers {{
+            {"consistency", apply_consistency},
+            {"expand", apply_expand},
+            {"output format", apply_output_format},
+            {"paging", apply_paging},
+            {"serial consistency", apply_serial_consistency},
+            {"tracing", apply_tracing},
+        }};
+        return appliers;
+    }
+
 public:
+    /// Change one option and report its new value, as a serialized JSON object.
+    ///
+    /// The new value is reported because the request does not always determine
+    /// it: PAGING ON, for one, resolves to a server-side default page size that
+    /// the client would otherwise have to guess.
+    ///
+    /// Returns the message for an unrecognized option or invalid arguments.
+    static std::expected<sstring, sstring> apply_option(std::string_view option, const std::vector<sstring>& args, session_options& options) {
+        const auto& appliers = option_appliers();
+        const auto it = std::ranges::find_if(appliers, [option] (const auto& applier) { return applier.first == option; });
+        if (it == appliers.end()) {
+            return std::unexpected(seastar::format("Unrecognized option: {}", option));
+        }
+
+        if (auto applied = it->second(args, options); !applied) {
+            return std::unexpected(std::move(applied.error()));
+        }
+
+        auto response = rjson::empty_object();
+        if (auto added = add_option_to_json(option, options, response); !added) {
+            return std::unexpected(std::move(added.error()));
+        }
+        return sstring(fmt::to_string(response));
+    }
+
+    /// Report the value of one option, or of all of them if option is empty, as
+    /// a serialized JSON object.
+    ///
+    /// Returns the message for an unrecognized option.
+    static std::expected<sstring, sstring> report_options(std::string_view option, const session_options& options) {
+        auto response = rjson::empty_object();
+
+        if (option.empty()) {
+            for (const auto& applier : option_appliers()) {
+                // Every name in option_appliers() is one add_option_to_json()
+                // recognizes, so this cannot fail.
+                add_option_to_json(applier.first, options, response).value();
+            }
+        } else {
+            if (auto added = add_option_to_json(option, options, response); !added) {
+                return std::unexpected(std::move(added.error()));
+            }
+        }
+
+        return sstring(fmt::to_string(response));
+    }
+
     option_handler(request_control& request_control, session_manager& session_manager, bool is_https)
         : gated_handler("option", request_control, is_https)
         , _session_manager(session_manager)
@@ -1475,11 +1705,53 @@ public:
 
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), is_https(), *req, *rep);
+        const session_id session_id = get_session_id(cookies);
+
+        auto option_and_args = rjson::parse_and_validate(
+                co_await util::read_entire_stream_contiguous(*req->content_stream) | std::views::transform([] (char c) { return std::tolower(c); }) | std::ranges::to<sstring>(),
+                rjs::object({
+                    {"option", rjs::scalar::string()},
+                    {"arguments", rjs::array(rjs::scalar::string())}
+                }));
+        if (!option_and_args) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request, option_and_args.error());
+        }
+
+        const auto option = sstring(rjson::to_string_view((*option_and_args)["option"]));
+        std::vector<sstring> arguments;
+        for (const auto& arg : (*option_and_args)["arguments"].GetArray()) {
+            arguments.emplace_back(rjson::to_string_view(arg));
+        }
+
+        // Changing an option is all this endpoint does; reading one is a GET.
+        if (arguments.empty()) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request,
+                    format("No arguments given for option {}. Use GET /option to query the current value.", option));
+        }
+
+        auto response = co_await _session_manager.invoke_on(session_id, [&option, &arguments] (session_manager& session_manager, session& session) {
+            auto reported = apply_option(option, arguments, session.options);
+            session.refresh(session_manager.config().session_ttl);
+            return make_ready_future<std::expected<sstring, sstring>>(std::move(reported));
+        });
+        if (!response) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request, std::move(response.error()));
+        }
+
+        co_return write_json_response(std::move(rep), reply::status_type::ok, std::move(*response));
     }
 };
 
+/// Report session options
+///
+/// The read half of the session options, split off from POST /option so that
+/// each method does one thing: this one never changes anything.
+///
+/// * GET /option - report every option.
+/// * GET /option?option=<name> - report just that one. The name is the same one
+///   POST /option takes, so it can contain a space ("serial consistency"), which
+///   has to be encoded as "%20" or "+".
 class option_query_handler : public gated_handler {
     session_manager& _session_manager;
 
@@ -1491,8 +1763,22 @@ public:
 
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), is_https(), *req, *rep);
+        const session_id session_id = get_session_id(cookies);
+
+        // Option names are lower case, as they are in the body of POST /option.
+        const auto option = to_lower(req->get_query_param("option"));
+
+        auto response = co_await _session_manager.invoke_on(session_id, [&option] (session_manager& session_manager, session& session) {
+            auto reported = option_handler::report_options(option, session.options);
+            session.refresh(session_manager.config().session_ttl);
+            return make_ready_future<std::expected<sstring, sstring>>(std::move(reported));
+        });
+        if (!response) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request, std::move(response.error()));
+        }
+
+        co_return write_json_response(std::move(rep), reply::status_type::ok, std::move(*response));
     }
 };
 
