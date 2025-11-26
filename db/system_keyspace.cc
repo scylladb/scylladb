@@ -3146,6 +3146,52 @@ future<mutation> system_keyspace::make_remove_view_building_task_mutation(api::t
 
 static constexpr auto VIEW_BUILDING_PROCESSING_BASE_ID_KEY = "view_building_processing_base_id";
 
+future<mutation> system_keyspace::make_remove_client_route_mutation(api::timestamp_type ts, std::string_view connection_id, const utils::UUID& host_id) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE connection_id = ? and host_id = ?", NAME, CLIENT_ROUTES);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {connection_id, host_id});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_update_client_route_mutation(api::timestamp_type ts, const client_route& route) {
+    static const sstring stmt = format("INSERT INTO {}.{} (connection_id, host_id, address, port, tls_port, alternator_port, alternator_https_port) VALUES (?, ?, ?, ?, ?, ?, ?)", NAME, CLIENT_ROUTES);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {
+        route.connection_id,
+        route.host_id,
+        route.address,
+        route.port,
+        route.tls_port,
+        route.alternator_port,
+        route.alternator_https_port
+    });
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::vector<system_keyspace::client_route>> system_keyspace::get_client_routes() const {
+    std::vector<system_keyspace::client_route> result;
+    static const sstring query = format("SELECT * from {}.{}", NAME, CLIENT_ROUTES);
+    auto rs = co_await _qp.execute_internal(query, cql3::query_processor::cache_internal::yes);
+    for (const auto& row : *rs) {
+        result.emplace_back(
+            row.get_as<sstring>("connection_id"),
+            row.get_as<utils::UUID>("host_id"),
+            row.get_as<sstring>("address"),
+            row.get_opt<int32_t>("port"),
+            row.get_opt<int32_t>("tls_port"),
+            row.get_opt<int32_t>("alternator_port"),
+            row.get_opt<int32_t>("alternator_https_port")
+        );
+    }
+    co_return result;
+}
+
 future<std::optional<table_id>> system_keyspace::get_view_building_processing_base_id() {
     auto value = co_await get_scylla_local_param(VIEW_BUILDING_PROCESSING_BASE_ID_KEY);
     co_return value.transform([] (sstring uuid) {
