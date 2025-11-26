@@ -12,6 +12,7 @@
 #include "service/storage_service.hh"
 #include "repair/row_level.hh"
 #include "service/task_manager_module.hh"
+#include "service/topology_state_machine.hh"
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include <seastar/coroutine/maybe_yield.hh>
@@ -321,5 +322,117 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
 std::set<locator::host_id> task_manager_module::get_nodes() const {
     return get_task_manager().get_nodes(_ss);
 }
+
+namespace topo {
+
+static tasks::task_manager::task_state get_state(const db::system_keyspace::topology_requests_entry& entry) {
+    if (!entry.id) {
+        return tasks::task_manager::task_state::created;
+    } else if (!entry.done) {
+        return tasks::task_manager::task_state::running;
+    } else if (entry.error == "") {
+        return tasks::task_manager::task_state::done;
+    } else {
+        return tasks::task_manager::task_state::failed;
+    }
+}
+
+tasks::task_manager::task_group global_topology_request_virtual_task::get_group() const noexcept {
+    return tasks::task_manager::task_group::global_topology_change_group;
+}
+
+future<std::optional<tasks::virtual_task_hint>> global_topology_request_virtual_task::contains(tasks::task_id task_id) const {
+    if (!task_id.uuid().is_timestamp()) {
+        // Task id of node ops operation is always a timestamp.
+        co_return std::nullopt;
+    }
+
+    auto hint = std::make_optional<tasks::virtual_task_hint>({});
+    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
+    if (entry.has_value() && std::holds_alternative<service::global_topology_request>(entry->request_type) &&
+            std::get<service::global_topology_request>(entry->request_type) == global_topology_request::keyspace_rf_change) {
+        co_return hint;
+    }
+    co_return std::nullopt;
+}
+
+future<tasks::is_abortable> global_topology_request_virtual_task::is_abortable(tasks::virtual_task_hint) const {
+    return make_ready_future<tasks::is_abortable>(tasks::is_abortable::yes);
+}
+
+static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requests_entry& entry) {
+    return tasks::task_stats{
+        .task_id = tasks::task_id{entry.id},
+        .type = fmt::to_string(entry.request_type),
+        .kind = tasks::task_kind::cluster,
+        .scope = "keyspace",
+        .state = get_state(entry),
+        .sequence_number = 0,
+        .keyspace = entry.new_keyspace_rf_change_ks_name.value_or(""),
+        .table = "",
+        .entity = "",
+        .shard = 0,
+        .start_time = entry.start_time,
+        .end_time = entry.end_time,
+    };
+}
+
+future<std::optional<tasks::task_status>> global_topology_request_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(id.uuid());
+    if (!entry.has_value()) {
+        co_return std::nullopt;
+    }
+    auto task_stats = get_task_stats(*entry);
+    co_return tasks::task_status{
+        .task_id = task_stats.task_id,
+        .type = task_stats.type,
+        .kind = task_stats.kind,
+        .scope = task_stats.scope,
+        .state = task_stats.state,
+        .is_abortable = co_await is_abortable(std::move(hint)),
+        .start_time = task_stats.start_time,
+        .end_time = task_stats.end_time,
+        .error = entry->error,
+        .parent_id = tasks::task_id::create_null_id(),
+        .sequence_number = task_stats.sequence_number,
+        .shard = task_stats.shard,
+        .keyspace = task_stats.keyspace,
+        .table = task_stats.table,
+        .entity = task_stats.entity,
+        .progress_units = "",
+        .progress = tasks::task_manager::task::progress{},
+        .children = utils::chunked_vector<tasks::task_identity>{},
+    };
+}
+
+future<std::optional<tasks::task_status>> global_topology_request_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto entry = co_await get_status(id, hint);
+    if (!entry) {
+        co_return std::nullopt;
+    }
+
+    co_await _ss.wait_for_topology_request_completion(id.uuid(), false);
+    co_return co_await get_status(id, std::move(hint));
+}
+
+future<> global_topology_request_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
+    return _ss.abort_paused_rf_change(id.uuid());
+}
+
+future<std::vector<tasks::task_stats>> global_topology_request_virtual_task::get_stats() {
+    db::system_keyspace& sys_ks = _ss._sys_ks.local();
+    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await sys_ks.get_topology_request_entries({global_topology_request::keyspace_rf_change}, db_clock::now() - get_task_manager().get_user_task_ttl())
+            | std::views::transform([] (const auto& e) {
+        auto& entry = e.second;
+        return get_task_stats(entry);
+    }));
+}
+
+task_manager_module::task_manager_module(tasks::task_manager& tm) noexcept
+    : tasks::task_manager::module(tm, "global_topology_requests")
+{}
+
+}
+
 
 }

@@ -3636,17 +3636,23 @@ future<std::optional<system_keyspace::topology_requests_entry>> system_keyspace:
     co_return topology_request_row_to_entry(id, row);
 }
 
-future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops_request_entries(db_clock::time_point end_time_limit) {
+future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries(std::vector<std::variant<service::topology_request, service::global_topology_request>> request_types, db_clock::time_point end_time_limit) {
+    sstring request_types_str = "";
+    bool first = true;
+    for (const auto& rt : request_types) {
+        if (!std::exchange(first, false)) {
+            request_types_str += ", ";
+        }
+        request_types_str += std::visit([] (auto&& arg) { return fmt::format("'{}'", arg); }, rt);
+    }
+
     // Running requests.
     auto rs_running = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE done = false AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS,
-            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove));
-
+        format("SELECT * FROM system.{} WHERE done = false AND request_type IN ({}) ALLOW FILTERING", TOPOLOGY_REQUESTS, request_types_str));
 
     // Requests which finished after end_time_limit.
     auto rs_done = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE end_time > {} AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count(),
-            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove));
+        format("SELECT * FROM system.{} WHERE end_time > {} AND request_type IN ({}) ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count(), request_types_str));
 
     topology_requests_entries m;
     for (const auto& row: *rs_done) {
@@ -3662,6 +3668,16 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops
     }
 
     co_return m;
+}
+
+future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops_request_entries(db_clock::time_point end_time_limit) {
+    return get_topology_request_entries({
+        service::topology_request::join,
+        service::topology_request::replace,
+        service::topology_request::rebuild,
+        service::topology_request::leave,
+        service::topology_request::remove
+    }, end_time_limit);
 }
 
 future<mutation> system_keyspace::get_insert_dict_mutation(

@@ -691,6 +691,7 @@ public:
     topology_requests_entry topology_request_row_to_entry(utils::UUID id, const cql3::untyped_result_set_row& row);
     future<topology_requests_entry> get_topology_request_entry(utils::UUID id);
     future<std::optional<topology_requests_entry>> get_topology_request_entry_opt(utils::UUID id);
+    future<system_keyspace::topology_requests_entries> get_topology_request_entries(std::vector<std::variant<service::topology_request, service::global_topology_request>> request_types, db_clock::time_point end_time_limit);
     future<topology_requests_entries> get_node_ops_request_entries(db_clock::time_point end_time_limit);
 
 public:
