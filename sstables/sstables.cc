@@ -566,6 +566,16 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     s.positions.pop_back();
 }
 
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, scylla_metadata& metadata) {
+    co_await parse(s, v, in, metadata.data);
+    auto it = metadata.data.get<scylla_metadata_type::ComponentsDigests, scylla_metadata::components_digests>();
+    // if metadata contains component digests, also parse its own digest
+    if (it) {
+        metadata.digest.emplace();
+        co_await parse(s, v, in, metadata.digest.value());
+    }
+}
+
 inline void write(sstable_version_types v, file_writer& out, const summary_entry& entry) {
     // FIXME: summary entry is supposedly written in memory order, but that
     // would prevent portability of summary file between machines of different
@@ -588,6 +598,11 @@ inline void write(sstable_version_types v, file_writer& out, const summary& s) {
     }
     write(v, out, s.entries);
     write(v, out, s.first_key, s.last_key);
+}
+
+inline void write(sstable_version_types v, file_writer& out, const scylla_metadata& s) {
+    write(v, out, s.data);
+    write(v, out, s.digest.value());
 }
 
 future<summary_entry&> sstable::read_summary_entry(size_t i) {
@@ -983,10 +998,10 @@ void sstable::open_sstable(const sstring& origin) {
     _storage->open(*this);
 }
 
-void sstable::write_toc(file_writer w) {
+void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
-    do_write_simple(w, [&] (version_types v, file_writer& w) {
+    do_write_simple(*w, [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
@@ -994,6 +1009,8 @@ void sstable::write_toc(file_writer w) {
             write(v, w, b);
         }
     });
+
+    _components_digests.map[component_type::TOC] = w->full_checksum();
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1010,6 +1027,7 @@ void sstable::write_digest(uint32_t full_checksum) {
         auto digest = to_sstring<bytes>(full_checksum);
         write(v, w, digest);
     }, buffer_size);
+    _components_digests.map[component_type::Data] = full_checksum;
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1133,7 +1151,8 @@ void sstable::write_compression() {
         return;
     }
 
-    write_simple<component_type::CompressionInfo>(_components->compression);
+    auto digest = write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
+    _components_digests.map[component_type::CompressionInfo] = digest;
 }
 
 void sstable::validate_partitioner() {
@@ -1358,11 +1377,27 @@ future<> sstable::read_partitions_db_footer() {
 }
 
 void sstable::write_statistics() {
-    write_simple<component_type::Statistics>(_components->statistics);
+    auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
+    _components_digests.map[component_type::Statistics] = digest;
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
     being_repaired = id;
+}
+
+std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
+    if (c == component_type::Scylla) {
+        return _components->scylla_metadata->digest;
+    }
+    const auto* cd = _components->scylla_metadata->get_components_digests();
+    if (!cd) {
+        return std::nullopt;
+    }
+    auto it = cd->map.find(c);
+    if (it == cd->map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
@@ -1581,7 +1616,8 @@ void sstable::write_filter() {
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    write_simple<component_type::Filter>(filter_ref);
+    auto digest = write_simple_with_digest<component_type::Filter>(filter_ref);
+    _components_digests.map[component_type::Filter] = digest;
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
@@ -2040,6 +2076,7 @@ sstable::read_scylla_metadata() noexcept {
         }
         return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] {
             _features = _components->scylla_metadata->get_features();
+            _components->digest = get_component_digest(component_type::Data);
         });
     });
 }
@@ -2129,6 +2166,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+
+    _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
