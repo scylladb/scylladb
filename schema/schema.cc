@@ -1306,6 +1306,12 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
+
+    // Needs to run in the constructor, after _raw is initialized and before
+    // any setters are called.
+    for (const auto& c : schema_initializers()) {
+        c(*this);
+    }
 }
 
 schema_builder::schema_builder(const schema_ptr s)
@@ -1690,6 +1696,28 @@ auto schema_builder::static_configurators() -> std::vector<static_configurator>&
 int schema_builder::register_static_configurator(static_configurator&& configurator) {
     static_configurators().push_back(std::move(configurator));
     return 0;
+}
+
+auto schema_builder::schema_initializers() -> std::vector<schema_initializer>& {
+    static std::vector<schema_initializer> result{};
+    return result;
+}
+
+int schema_builder::register_schema_initializer(schema_initializer&& initializer) {
+    schema_initializers().push_back(std::move(initializer));
+    return 0;
+}
+
+auto schema_builder::capture_schema_initializers_checkpoint() -> schema_initializers_checkpoint {
+    return schema_initializers_checkpoint{schema_initializers().size()};
+}
+
+void schema_builder::restore_schema_initializers_checkpoint(schema_initializers_checkpoint checkpoint) {
+    auto& initializers = schema_initializers();
+    if (checkpoint.size > initializers.size()) {
+        throw std::logic_error("Invalid schema initializer checkpoint");
+    }
+    initializers.resize(checkpoint.size);
 }
 
 void schema_builder::set_properties(schema::user_properties props) {

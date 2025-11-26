@@ -22,7 +22,26 @@ class per_partition_rate_limit_options;
 struct schema_builder {
 public:
     enum class compact_storage { no, yes };
+    // "static configurator" - Allows to customize the static properties of a table schema.
+    // For example, it allows setting certain system tables to use the null-sharder.
+    // Formulates a global rule that is applied to all schemas being built and
+    // can adjust behavior based on keyspace and table name.
+    // The static properties are defined in `schema_static_props` and represent
+    // properties that are NOT stored in schema mutations.
     using static_configurator = noncopyable_function<void(const sstring& ks_name, const sstring& cf_name, schema_static_props&)>;
+    // "schema initializer" - Allows to customize initial/default values for schema properties.
+    // For example, it allows setting different default compression parameters
+    // for system tables and user tables.
+    // As with static configurators, it formulates a global rule that is applied
+    // to all schemas being built.
+    // It differs from the static configurator in that it is called when constructing
+    // a `schema_builder`, not when building the schema (`schema_builder::build()`).
+    // The latter stage is too late for adjusting defaults because it is not
+    // known if a property has been assigned a value or not.
+    using schema_initializer = noncopyable_function<void(schema_builder&)>;
+    struct schema_initializers_checkpoint {
+        size_t size;
+    };
 private:
     struct from_hash {};
     struct from_time {};
@@ -35,6 +54,7 @@ private:
     std::optional<schema_ptr> _cdc_schema;
     schema_builder(const schema::raw_schema&);
     static std::vector<static_configurator>& static_configurators();
+    static std::vector<schema_initializer>& schema_initializers();
 public:
     schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<table_id> = { },
@@ -52,6 +72,18 @@ public:
     schema_builder(const schema_ptr);
 
     static int register_static_configurator(static_configurator&& configurator);
+    static int register_schema_initializer(schema_initializer&& initializer);
+    // (For unit testing)
+    // Checkpoint/Restore for the global schema-initializer list.
+    // Captures the current list size; restoring truncates the list back to
+    // that size. Useful when some initializer depends on runtime state that
+    // needs to be reset for the purposes of a test.
+    // Typical usage:
+    //   auto cp = capture_schema_initializers_checkpoint();
+    //   register_schema_initializer(...);
+    //   restore_schema_initializers_checkpoint(cp);
+    static schema_initializers_checkpoint capture_schema_initializers_checkpoint();
+    static void restore_schema_initializers_checkpoint(schema_initializers_checkpoint checkpoint);
 
     void set_properties(schema::user_properties);
 
