@@ -24,6 +24,7 @@
 #include <seastar/util/short_streams.hh>
 
 #include "utils/rest/client.hh"
+#include "utils/exponential_backoff_retry.hh"
 #include "utils/http.hh"
 #include "utils/overloaded_functor.hh"
 
@@ -289,34 +290,47 @@ utils::gcp::storage::storage_error::storage_error(int status, const std::string&
 using namespace seastar::http;
 using namespace std::chrono_literals;
 
-static constexpr auto max_retries = 4;
-
-static future<> backoff(int n) {
-    // exponential backoff
-    return seastar::sleep((1 << (std::max(n, 1) - 1)) * 300ms);
-}
-
 /**
  * Performs a REST post/put/get with credential refresh/retry.
  */
 future<> 
 utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
-    int retries = 0;
+    static constexpr auto max_retries = 10;
+
+    exponential_backoff_retry exr(10ms, 10000ms);
     bool do_backoff = false;
 
-    for (;;) {
+    for (int retry = 0; ; ++retry) {
+        if (std::exchange(do_backoff, false)) {
+            co_await (as ? exr.retry(*as) : exr.retry());
+        }
+
         rest::request_wrapper req(_endpoint);
         req.target(path);
         req.method(op);
 
-        if (do_backoff) {
-            co_await backoff(retries++);
-        }
-
         if (_credentials) {
             try {
-                co_await _credentials->refresh(scope, &storage_scope_implies, _certs);
-                req.add_header(utils::gcp::AUTHORIZATION, format_bearer(_credentials->token));
+                try {
+                    co_await _credentials->refresh(scope, &storage_scope_implies, _certs);
+                    req.add_header(utils::gcp::AUTHORIZATION, format_bearer(_credentials->token));
+                } catch (httpd::unexpected_status_error& e) {
+                    switch (e.status()) {
+                    case status_type::request_timeout:
+                    default:
+                        if (reply::classify_status(e.status()) != reply::status_class::server_error) {
+                            break;
+                        }
+                        if (retry < max_retries) {
+                            gcp_storage.debug("Got {}: {}", e.status(), std::current_exception());
+                            // service unavailable etc -> retry
+                            do_backoff = true;
+                            continue;
+                        }
+                        break;
+                    }
+                    throw;
+                }
             } catch (...) {
                 gcp_storage.error("Error refreshing credentials: {}", std::current_exception());
                 std::throw_with_nested(permission_error("Error refreshing credentials"));
@@ -354,7 +368,6 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         } catch (storage_error& e) {
             gcp_storage.debug("{}: Got unexpected response: {}", _endpoint, e.what());
             auto s = status_type(e.status());
-            do_backoff = false;
             switch (s) {
             default:
                 if (reply::classify_status(s) != reply::status_class::server_error) {
@@ -365,7 +378,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 do_backoff = true;
                 [[fallthrough]];
             case status_type::unauthorized:
-                if (retries++ < max_retries) {
+                if (retry < max_retries) {
                     continue; // retry loop. 
                 }
                 break;
