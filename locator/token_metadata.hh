@@ -123,7 +123,13 @@ public:
     version_tracker(utils::phased_barrier::operation op, service::topology::version_t version)
         : _op(std::move(op)), _version(version) {}
     version_tracker(version_tracker&&) noexcept = default;
-    version_tracker& operator=(version_tracker&&) noexcept = default;
+    version_tracker& operator=(version_tracker&& o) noexcept {
+        if (this != &o) {
+            std::destroy_at(this);
+            new (this) version_tracker(std::move(o));
+        }
+        return *this;
+    };
     version_tracker(const version_tracker&) = delete;
     ~version_tracker();
 
