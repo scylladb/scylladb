@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "cql3/statements/ks_prop_defs.hh"
+#include "db/system_keyspace.hh"
 #include "locator/tablets.hh"
 #include "locator/topology.hh"
 #include "replica/tablets.hh"
@@ -23,6 +25,7 @@
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
 #include <iterator>
+#include <ranges>
 #include <utility>
 #include <fmt/ranges.h>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -237,6 +240,120 @@ struct migration_candidate {
     tablet_replica dst;
     migration_badness badness;
 };
+
+struct colocation_source {
+    global_tablet_id gid;
+    tablet_replica replica;
+};
+
+using colocation_source_set = utils::chunked_vector<colocation_source>;
+using colocation_sources_by_destination_rack = std::unordered_map<endpoint_dc_rack, colocation_source_set>;
+
+future<colocation_sources_by_destination_rack> find_required_rack_list_colocations(
+        replica::database& db,
+        token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        const std::unordered_set<utils::UUID>& paused_rf_change_requests,
+        const std::unordered_set<locator::global_tablet_id>& already_planned_migrations) {
+    colocation_sources_by_destination_rack required_colocations;
+
+    auto get_node = [&] (locator::host_id host) -> const locator::node& {
+        auto* node = tmptr->get_topology().find_node(host);
+        if (!node) {
+            on_internal_error(lblogger, format("Node {} not found in topology", host));
+        }
+        return *node;
+    };
+    for (const auto& request_id : paused_rf_change_requests) {
+        auto req_entry = co_await sys_ks->get_topology_request_entry(request_id, true);
+        sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+
+        if (!db.has_keyspace(ks_name)) {
+            continue;
+        }
+        auto& ks = db.find_keyspace(ks_name);
+        std::unordered_map<sstring, sstring> saved_ks_props = *req_entry.new_keyspace_rf_change_data;
+        cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
+        auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, db.features(), db.get_config());
+
+        auto tables_with_mvs = ks.metadata()->tables();
+        auto views = ks.metadata()->views();
+        tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+        for (const auto& table_or_mv : tables_with_mvs) {
+            if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
+                continue;
+            }
+            auto tmap = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+            locator::replication_strategy_params params{ks_md->strategy_options(), tmap.tablet_count(), ks.metadata()->consistency_option()};
+            auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+            auto new_replication_strategy_config = new_strategy->get_config_options();
+            for (auto& [dc, rf_value] : new_replication_strategy_config) {
+                if (!std::holds_alternative<rack_list>(rf_value)) {
+                    continue;
+                }
+
+                auto racks = std::get<rack_list>(rf_value) | std::ranges::to<std::unordered_set<sstring>>();
+                if (tmptr->get_topology().get_datacenter_racks().at(dc).size() == racks.size()) {
+                    // All racks are used. No need to move replicas.
+                    continue;
+                }
+                co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                    auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
+
+                    // Skip tablet that is in transitions.
+                    auto* tti = tmap.get_tablet_transition_info(tid);
+                    if (tti) {
+                        lblogger.debug("Skipped colocation for tablet={} which is already in transition={}", gid, tti->transition);
+                        return make_ready_future<>();
+                    }
+
+                    // Skip tablet that is about to be in transition.
+                    if (already_planned_migrations.contains(gid)) {
+                        return make_ready_future<>();
+                    }
+
+                    auto tablet_replicas = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
+                        return get_node(r.host).dc_rack().dc == dc;
+                    }) | std::ranges::to<std::unordered_set<tablet_replica>>();
+
+                    if (tablet_replicas.empty()) {
+                        return make_ready_future<>();
+                    }
+
+                    // Get replicas that are not in the desired racks.
+                    auto src_replicas = tablet_replicas | std::views::filter([&] (const tablet_replica& r) {
+                        return !racks.contains(get_node(r.host).dc_rack().rack);
+                    }) | std::ranges::to<std::unordered_set<tablet_replica>>();
+
+                    // Get racks that do not have replicas yet.
+                    auto dst_racks = racks | std::views::filter([&] (const sstring& rack) {
+                        return std::none_of(tablet_replicas.begin(), tablet_replicas.end(), [&] (const tablet_replica& r) {
+                            return get_node(r.host).dc_rack().rack == rack;
+                        });
+                    }) | std::ranges::to<std::unordered_set<sstring>>();
+
+                    // It should be true that src_replicas.size() == dst_racks.size(),
+                    // but due to https://github.com/scylladb/scylladb/issues/24062,
+                    // it is possible that some tablets have fewer replicas.
+                    // The co-location won't fix this.
+                    if (src_replicas.size() > dst_racks.size()) {
+                        on_internal_error(lblogger, format("Tablet {} has {} source replicas but {} destination racks",
+                                                global_tablet_id{table_or_mv->id(), tid}, src_replicas.size(), dst_racks.size()));
+                    }
+
+                    for (auto src_dst : std::views::zip(src_replicas, dst_racks)) {
+                        auto src = std::get<0>(src_dst);
+                        auto dst = std::get<1>(src_dst);
+
+                        required_colocations[locator::endpoint_dc_rack{dc, dst}].emplace_back(colocation_source{{table_or_mv->id(), tid}, src});
+                    }
+                    return make_ready_future<>();
+                });
+            }
+        }
+    }
+    co_return required_colocations;
+}
 
 }
 
@@ -1007,8 +1124,100 @@ public:
     }
 
     future<tablet_rack_list_colocation_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_rack_list_colocation_plan");
+
         tablet_rack_list_colocation_plan plan;
-        co_return plan;
+        if (!ongoing_rack_list_colocation()) {
+            co_return plan;
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+
+        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
+        colocation_sources_by_destination_rack dst_dc_rack_to_tablets = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
+            _topology->paused_rf_change_requests, std::move(migration_tablet_ids));
+
+        node_load_map nodes;
+        topo.for_each_node([&] (const locator::node& node) {
+            if (node.get_state() == locator::node::state::normal && !node.is_excluded()) {
+                ensure_node(nodes, node.host_id(), false);
+            }
+        });
+
+        // Consider load that is already scheduled.
+        co_await consider_scheduled_load(nodes);
+
+        // Consider load that is about to be scheduled.
+        co_await consider_planned_load(nodes, mplan);
+
+        std::unordered_set<global_tablet_id> colocation_tablet_ids;
+        for (auto& [dc_rack, colocation_sources] : dst_dc_rack_to_tablets) {
+            node_load_map rack_nodes = nodes | std::views::filter([&] (const auto& host_load) {
+                auto& [host, load] = host_load;
+                auto& node = *load.node;
+                return node.dc_rack().dc == dc_rack.dc && node.dc_rack().rack == dc_rack.rack;
+            }) | std::ranges::to<node_load_map>();
+
+            if (rack_nodes.empty()) {
+                lblogger.debug("No target nodes available for RF change colocation plan in dc {}, rack {}", dc_rack.dc, dc_rack.rack);
+                continue;
+            }
+
+            auto nodes_cmp = nodes_by_load_cmp(nodes);
+            auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
+                return nodes_cmp(b, a);
+            };
+
+            // Ascending load heap of candidate target nodes.
+            auto nodes_by_load_dst = rack_nodes | std::views::keys | std::ranges::to<std::vector<host_id>>();
+            std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+
+            const tablet_metadata& tmeta = _tm->tablets();
+            for (colocation_source& source : colocation_sources) {
+                if (colocation_tablet_ids.contains(source.gid)) {
+                    lblogger.debug("Skipped colocation of replica {} of tablet={}, another replica of which is about to be colocated", source.replica, source.gid);
+                    continue;
+                }
+
+                // Pick the least loaded node as target.
+                std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+                auto target = nodes_by_load_dst.back();
+                auto& target_info = nodes[target];
+                auto push_back_target_node = seastar::defer([&] {
+                    std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+                });
+
+                lblogger.debug("target node: {}, avg_load={}", target, target_info.avg_load);
+
+                auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+
+                lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
+                            target_info.shards[dst.shard].tablet_count,
+                            target_info.shard_load(dst.shard, _target_tablet_size));
+
+                tablet_transition_kind kind = tablet_transition_kind::migration;
+                migration_tablet_set source_tablets {
+                    .tablet_s = source.gid,     // Ignore the merge co-location.
+                };
+                auto src = source.replica;
+                auto mig = get_migration_info(source_tablets, kind, src, dst);
+                auto& tmap = tmeta.get_tablet_map(source_tablets.table());
+                auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
+                pick(*_load_sketch, dst.host, dst.shard, source_tablets);
+                if (can_accept_load(nodes, mig_streaming_info)) {
+                    apply_load(nodes, mig_streaming_info);
+                    lblogger.debug("Adding migration: {}", mig);
+                    mark_as_scheduled(mig);
+                    for (auto& m : mig) {
+                        plan.add_colocation(std::move(m));
+                        colocation_tablet_ids.insert(m.tablet);
+                    }
+                }
+                erase_candidates(nodes, tmap, source_tablets);
+                update_node_load_on_migration(nodes, src, dst, source_tablets);
+            }
+        }
+        co_return std::move(plan);
     }
 
     // Returns true if a table has replicas of all its sibling tablets co-located.
