@@ -27,13 +27,26 @@ from tools.data import create_c1c2_table, insert_c1c2, query_c1c2, rows_to_list
 logger = logging.getLogger(__name__)
 
 class TestSchemaManagement(Tester):
-    def test_prepared_statements_work_after_node_restart_after_altering_schema_without_changing_columns(self):
-        ring_delay_sec = 5
-        self.cluster.set_configuration_options(values={"ring_delay_ms": ring_delay_sec * 1000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+    def prepare(self, racks_num: int, has_config: bool = True):
+        cluster = self.cluster
+        cluster_topology = generate_cluster_topology(rack_num=racks_num)
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        if has_config:
+            config = {
+                "ring_delay_ms": 5000,
+            }
+            cluster.set_configuration_options(values=config)
+
+        cluster.populate(cluster_topology)
+        cluster.start(wait_other_notice=True)
+
+        return cluster
+
+
+    def test_prepared_statements_work_after_node_restart_after_altering_schema_without_changing_columns(self):
+        cluster = self.prepare(racks_num=3)
+
+        [node1, node2, node3] = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
 
@@ -80,10 +93,9 @@ class TestSchemaManagement(Tester):
         """
         Exploits https://github.com/scylladb/scylla/issues/1484
         """
-        self.cluster.populate(generate_cluster_topology())
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=1, has_config=False)
 
-        node1 = self.cluster.nodelist()[0]
+        node1 = cluster.nodelist()[0]
         session = self.patient_cql_connection(node1)
 
         session.execute("CREATE KEYSPACE testxyz WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
@@ -91,7 +103,7 @@ class TestSchemaManagement(Tester):
             session.execute(f"CREATE TABLE testxyz.test_{i} (k int, c int, PRIMARY KEY (k),)")
         session.execute("drop keyspace testxyz")
 
-        for node in self.cluster.nodelist():
+        for node in cluster.nodelist():
             s = self.patient_cql_connection(node)
             s.execute("CREATE KEYSPACE testxyz WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
             s.execute("drop keyspace testxyz")
@@ -105,10 +117,8 @@ class TestSchemaManagement(Tester):
         """
         logger.debug("1. Create a cluster of 3 nodes")
         nodes_count = 3
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=nodes_count))
-        self.cluster.start(wait_other_notice=True)
-        sessions = [self.patient_exclusive_cql_connection(node) for node in self.cluster.nodelist()]
+        cluster = self.prepare(racks_num=nodes_count)
+        sessions = [self.patient_exclusive_cql_connection(node) for node in cluster.nodelist()]
         ks = "ks"
         create_ks(sessions[0], ks, nodes_count)
 
@@ -152,12 +162,10 @@ class TestSchemaManagement(Tester):
         3. Alter table while inserts are running
         """
         logger.debug("1. Create a cluster of 3 nodes and populate a table")
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=3)
         col_number = 20
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        [node1, node2, node3] = cluster.nodelist()
         session = self.patient_exclusive_cql_connection(node1)
 
         def alter_table():
@@ -214,11 +222,9 @@ class TestSchemaManagement(Tester):
         """
 
         logger.debug("1. Create a cluster and insert data")
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=3)
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        [node1, node2, node3] = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
 
@@ -295,11 +301,9 @@ class TestSchemaManagement(Tester):
         """
 
         logger.debug("1. Create a cluster and insert data")
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=3)
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        [node1, node2, node3] = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
 
@@ -335,11 +339,9 @@ class TestSchemaManagement(Tester):
             query_c1c2(session=session, key=key, consistency=ConsistencyLevel.ALL)
 
     def test_reads_schema_recreated_while_node_down(self):
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=3)
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        [node1, node2, node3] = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
 
@@ -366,11 +368,9 @@ class TestSchemaManagement(Tester):
         assert rows_to_list(rows) == [], f"Expected an empty result set, got {rows}"
 
     def test_writes_schema_recreated_while_node_down(self):
-        self.cluster.set_configuration_options(values={"ring_delay_ms": 5000})
-        self.cluster.populate(generate_cluster_topology(rack_num=3))
-        self.cluster.start(wait_other_notice=True)
+        cluster = self.prepare(racks_num=3)
 
-        [node1, node2, node3] = self.cluster.nodelist()
+        [node1, node2, node3] = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
 
