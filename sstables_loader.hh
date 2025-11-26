@@ -13,6 +13,7 @@
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 using namespace seastar;
 
@@ -91,7 +92,7 @@ private:
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
             bool_class<struct primary_replica_only_tag> primary_replica_only, bool unlink_sstables, stream_scope scope,
-            shared_ptr<stream_progress> progress);
+            shared_ptr<stream_progress> progress, locator::effective_replication_map_ptr erm);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
 public:

@@ -570,11 +570,7 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
-        shared_ptr<stream_progress> progress) {
-    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
-    // throughout its lifetime.
-    auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
-
+        shared_ptr<stream_progress> progress, locator::effective_replication_map_ptr erm) {
     auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
                                           _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
                                           primary, unlink_sstables(unlink), scope);
@@ -623,7 +619,10 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             };
             std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name, cfg);
             co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary, scope] (sstables_loader& loader) mutable -> future<> {
-                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only(primary), true, scope, {});
+                // streamer guarantees topology stability, for correctness, by holding effective_replication_map
+                // throughout its lifetime.
+                auto erm = co_await loader.await_topology_quiesced_and_get_erm(table_id);
+                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only(primary), true, scope, {}, erm);
             });
         } else {
             co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, _view_building_worker, ks_name, cf_name, skip_cleanup, skip_reshape);
@@ -749,8 +748,16 @@ future<> sstables_loader::download_task_impl::run() {
     };
     llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
 
+    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
+    // throughout its lifetime.
+    auto table_id = _loader.local()._db.local().find_uuid(_ks, _cf);
+    std::vector<locator::effective_replication_map_ptr> erms(smp::count);
+    co_await _loader.invoke_on_all([table_id, &erms] (sstables_loader& loader) mutable -> future<> {
+        erms[this_shard_id()] = co_await loader.await_topology_quiesced_and_get_erm(table_id);
+    });
+
     std::vector<seastar::abort_source> shard_aborts(smp::count);
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
+    auto [ _, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
@@ -770,9 +777,9 @@ future<> sstables_loader::download_task_impl::run() {
         });
         co_await _progress_per_shard.start();
         _progress_state = progress_state::initialized;
-        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
+        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id, &erms] (sstables_loader& loader) mutable -> future<> {
             co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
-                                            _progress_per_shard.local().progress);
+                                            _progress_per_shard.local().progress, std::move(erms[this_shard_id()]));
         });
     } catch (...) {
         ex = std::current_exception();
@@ -787,8 +794,10 @@ future<> sstables_loader::download_task_impl::run() {
     }
 
     if (ex) {
-        co_await _loader.invoke_on_all([&sstables_on_shards] (sstables_loader&) {
-            sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
+        co_await _loader.invoke_on_all([&sstables_on_shards, &erms] (sstables_loader&) {
+            // clear on correct shard
+            sstables_on_shards[this_shard_id()] = {};
+            erms[this_shard_id()] = {};
         });
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
