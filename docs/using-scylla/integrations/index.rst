@@ -28,7 +28,7 @@ ScyllaDB Integrations and Connectors
   :class: my-panel
 
 
-  ScyllaDB is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with ScyllaDB (more :doc:`here </using-scylla/drivers/index>`). 
+  ScyllaDB is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with ScyllaDB. See `ScyllaDB Drivers <https://docs.scylladb.com/stable/drivers/index.html>`_.
   Any application which uses a CQL driver will work with ScyllaDB.
 
   The list below contains links to integration projects using ScyllaDB with third-party projects. 
