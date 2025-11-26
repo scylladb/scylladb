@@ -17,7 +17,7 @@ from test.cluster.object_store.conftest import format_tuples
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from concurrent.futures import ThreadPoolExecutor
-from test.pylib.rest_client import read_barrier
+from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_for_first_completed
 from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
 from collections import defaultdict
@@ -1052,3 +1052,128 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
         streamed_to = set([ r[1].group(1) for r in res ])
         logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
         assert len(streamed_to) == 2
+
+async def test_restore_check_format(manager: ManagerClient, object_storage):
+    '''Check that restoring of a cluster with sstable tokens works'''
+    sstables = ['sstable1-TOC.txt']
+
+    topology = topo(rf = 1, nodes = 1, racks = 1, dcs = 1)
+    servers, _ = await create_cluster(topology, True, manager, logger, object_storage)
+
+    async def check_restore_failure(s, toc_names, reason):
+        with pytest.raises(HTTPError, match=reason):
+            await manager.api.restore(s.ip_addr, "ks", "cf", object_storage.address, object_storage.bucket_name, "prefix", toc_names, "rack")
+
+    sstables_bad_format = [{"some_field": "field"} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing identification")
+
+    sstables_bad_format = [{"identification": "string"} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "not an object")
+
+    sstables_bad_format = [{"identification": {"some_field": "field"}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing toc_filename")
+
+    sstables_bad_format = [{"identification": {"toc_filename": 123}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "IsString")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": "string"} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "not an object")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"some_field": "field"}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing token_min")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": 123}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "IsString")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": ""}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing token_min")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": "min"}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing token_max")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": "min", "token_max": 123}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "IsString")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": "min", "token_max": ""}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "missing token_max")
+
+    sstables_bad_format = [{"identification": {"toc_filename": "some_toc"}, "tokens": {"token_min": "123", "token_max": "122"}} for toc in sstables]
+    await check_restore_failure(servers[0], sstables_bad_format, "token_min > token_max")
+
+async def test_restore_ranges_api_no_tokens(manager: ManagerClient, object_storage):
+    '''Check that restoring of a cluster with sstable tokens works'''
+
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    ks = 'ks'
+    cf = 'cf'
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    scope,r_servers = compute_scope(topology, servers)
+
+    sstables_ranges_api = [{"identification": {"toc_filename": toc}} for toc in sstables]
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables_ranges_api, scope, prefix, object_storage, manager, logger) for s in r_servers))
+
+
+    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope)
+
+async def test_restore_ranges_api_with_tokens(manager: ManagerClient, object_storage):
+    '''Check that restoring of a cluster with sstable tokens works'''
+
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    ks = 'ks'
+    cf = 'cf'
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    scope,r_servers = compute_scope(topology, servers)
+
+
+    for s in r_servers:
+        await manager.api.enable_injection(s.ip_addr, "hardcoded_tablet_range", one_shot=True)
+
+    token_min = "-1"
+    token_max = "-1"
+    sstables_ranges_api = [{"identification": {"toc_filename": toc}, "tokens": {"token_min": token_min, "token_max": token_max}} for toc in sstables]
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables_ranges_api, scope, prefix, object_storage, manager, logger) for s in r_servers))
+
+    for s in r_servers:
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r"DEBUG.*sstables_loader - Filtered candidate SSTables to download from ([0-9a-z-]+) SSTables to ([0-9]+)")
+        assert len(res) == 1
+        num_sstables = int(res[0][1].group(1))
+        assert num_sstables == len(sstables), f"The number of candidate sstables to download should be equal to total sstables, got {num_sstables}"
+        num_filtered_sstables = int(res[0][1].group(2))
+        assert num_filtered_sstables == 0
