@@ -76,6 +76,7 @@ public:
          endpoint_dc_rack dc_rack,
          state state,
          shard_id shard_count = 0,
+         bool excluded = false,
          this_node is_this_node = this_node::no,
          idx_type idx = -1);
 
@@ -171,6 +172,7 @@ private:
                             endpoint_dc_rack dc_rack,
                             state state,
                             shard_id shard_count = 0,
+                            bool excluded = false,
                             node::this_node is_this_node = this_node::no,
                             idx_type idx = -1);
     node_holder clone() const;
@@ -486,13 +488,14 @@ struct fmt::formatter<locator::node> : fmt::formatter<string_view> {
         if (!verbose) {
             return fmt::format_to(ctx.out(), "{}", node.host_id());
         } else {
-            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} this_node={}",
+            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} excluded={} this_node={}",
                     node.idx(),
                     node.host_id(),
                     node.dc_rack().dc,
                     node.dc_rack().rack,
                     locator::node::to_string(node.get_state()),
                     node.get_shard_count(),
+                    node.is_excluded(),
                     bool(node.is_this_node()));
         }
     }
