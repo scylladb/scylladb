@@ -63,6 +63,7 @@ future<service::group0_guard> view_building_coordinator::start_operation() {
 }
 
 future<> view_building_coordinator::await_event() {
+    co_await utils::get_local_injector().inject("view_building_coordinator_pause_before_await_event", 500ms);
     if (_remote_work_finished) {
         co_return;
     }
