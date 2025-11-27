@@ -971,3 +971,29 @@ async def test_tablet_merge_during_view_building(manager: ManagerClient):
 
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
+
+# Reproduces scylladb/scylladb#27298
+@pytest.mark.asyncio
+async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 4}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        # Firstly block Scylla on processing view building task, so the coordinator starts its work normally
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        # Once the coordinator started its work, enable injection to sleep before awaiting on the CV
+        # and unpause worker.
+        # With the sleep before waiting on CV, the coordinator should miss CV broadcast triggered by finished RPC,
+        # which reproduces scylladb/scylladb#27298.
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+        await manager.api.enable_injection(servers[0].ip_addr, "view_building_coordinator_pause_before_await_event", one_shot=False)
+        await unpause_view_building_tasks(manager)
+
+        await wait_for_view(cql, 'mv_cf_view', node_count)
