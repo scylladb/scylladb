@@ -30,6 +30,9 @@ namespace db {
 
 namespace service {
 
+class raft_group0;
+class group0_guard;
+
 enum class node_state: uint16_t {
     none,                // the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
     bootstrapping,       // the node is currently in the process of streaming its part of the ring
@@ -269,6 +272,11 @@ struct topology_state_machine {
                                         const group0_guard& guard,
                                         raft::server_id node,
                                         sstring reason);
+
+    // Initiates abort of a topology request with a given ID.
+    // Returns a failed future if request is not abortable.
+    // Doesn't wait until request is done. Use wait_for_request_completion() for that.
+    future<> abort_request(raft_group0&, abort_source&, gms::feature_service&, utils::UUID request_id);
 };
 
 // Raft leader uses this command to drive bootstrap process on other nodes

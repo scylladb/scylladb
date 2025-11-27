@@ -12,6 +12,9 @@
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
 #include "locator/tablets.hh"
+#include "topology_mutation.hh"
+#include "raft/raft_group0_client.hh"
+#include "raft/raft_group0.hh"
 
 namespace service {
 
@@ -334,6 +337,56 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
     topology_request_tracking_mutation_builder rtbuilder(request_id);
     rtbuilder.done(std::move(reason));
     muts.emplace_back(rtbuilder.build());
+}
+
+future<> topology_state_machine::abort_request(service::raft_group0& group0,
+                                               abort_source& as,
+                                               gms::feature_service& features,
+                                               utils::UUID request_id) {
+    while (true) {
+        auto guard = co_await group0.client().start_operation(as, raft_timeout{});
+
+        utils::chunked_vector<canonical_mutation> muts;
+
+        for (auto& [node, rs] : _topology.transition_nodes) {
+            if (rs.request_id == request_id) {
+                throw std::runtime_error(format("request {} for node {} is already running and cannot be aborted", request_id, node));
+            }
+        }
+
+        for (auto& [node, req] : _topology.requests) {
+            auto *server_rs = _topology.find(node);
+            if (!server_rs || server_rs->second.request_id != request_id) {
+                continue;
+            }
+
+            if (req == topology_request::join || req == topology_request::replace) {
+                // Only topology coordinator can abort join requests. It sends reject RPC.
+                throw std::runtime_error(format("cannot abort {} request for node {}", req, node));
+            }
+
+            tsmlogger.info("aborting {} request {} for node {}", req, request_id, node);
+            generate_cancel_request_update(muts, features, guard, node, "aborted on user request");
+            break;
+        }
+
+        if (muts.empty()) {
+            // FIXME: Handle global requests.
+            throw std::runtime_error(format("Don't know how to abort {}", request_id));
+        }
+
+        topology_change change{std::move(muts)};
+        group0_command cmd = group0.client().prepare_command(std::move(change), guard,
+                                                              ::format("aborting topology request {}", request_id));
+
+        try {
+            co_await group0.client().add_entry(std::move(cmd), std::move(guard), as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            tsmlogger.info("aborting request {}: concurrent modification, retrying.", request_id);
+            continue;
+        }
+        break;
+    }
 }
 
 }
