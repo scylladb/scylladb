@@ -256,7 +256,7 @@ SEASTAR_THREAD_TEST_CASE(test_combined_reader_range_tombstone_change_merging) {
     struct output {
         std::vector<range_tombstone_change> rtcs;
     };
-    auto check = [&] (const char* desc, std::vector<input> in, output out, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    auto check = [&] (const char* desc, std::vector<input> in, output out, std::source_location sl = std::source_location::current()) {
         testlog.info("check() {} @ {}:{}", desc, sl.file_name(), sl.line());
         std::vector<mutation_reader> readers;
         for (auto& i : in) {
@@ -1375,7 +1375,7 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
             .build();
 
     const auto check = [](std::vector<range> ranges, key key, std::vector<range> output_ranges, schema_ptr schema,
-            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+            std::source_location sl = std::source_location::current()) {
         auto actual_ranges = ranges | std::views::transform(
                     [&] (const range& r) { return r.to_clustering_range(*schema); })
             | std::ranges::to<query::clustering_row_ranges>();
@@ -1395,12 +1395,12 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
     };
 
     auto check_forward = [schema, &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges,
-            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+            std::source_location sl = std::source_location::current()) {
         return check(std::move(ranges), std::move(key), std::move(output_ranges), std::move(schema), sl);
     };
 
     auto check_reversed = [schema = schema->make_reversed(), &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges,
-            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+            std::source_location sl = std::source_location::current()) {
         return check(std::move(ranges), std::move(key), std::move(output_ranges), std::move(schema), sl);
     };
 
@@ -4457,7 +4457,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
         };
 
         auto run_test = [&] (size_t buffer_size, multishard_reader_buffer_hint buffer_hint,
-                seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+                std::source_location sl = std::source_location::current()) {
             testlog.info("run_test(): buffer_size: {}, buffer_hint: {} @ {}:{}", buffer_size, bool(buffer_hint), sl.file_name(), sl.line());
 
             auto reader = make_multishard_combining_reader_for_tests(

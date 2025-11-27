@@ -846,7 +846,7 @@ future<> gossiper::do_status_check() {
     }
 }
 
-gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, locator::host_id addr, seastar::compat::source_location caller) noexcept
+gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, locator::host_id addr, std::source_location caller) noexcept
     : _ptr(std::move(ptr))
     , _permit_id(_ptr->pid)
     , _addr(std::move(addr))
@@ -892,7 +892,7 @@ gossiper::endpoint_lock_entry::endpoint_lock_entry() noexcept
     , pid(permit_id::create_null_id())
 {}
 
-future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, permit_id pid, seastar::compat::source_location l) {
+future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, permit_id pid, std::source_location l) {
     if (current_scheduling_group() != _gcfg.gossip_scheduling_group) {
         logger.warn("Incorrect scheduling group used for gossiper::lock_endpoint: {}, should be {}, backtrace {}", current_scheduling_group().name(), _gcfg.gossip_scheduling_group.name(), current_backtrace());
     }
@@ -931,10 +931,10 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
 
             // If we didn't rethrow above, the abort had to come from `abort_on_expiry`'s timer.
 
-            static constexpr auto fmt_loc = [] (const seastar::compat::source_location& l) {
+            static constexpr auto fmt_loc = [] (const std::source_location& l) {
                 return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
             };
-            static constexpr auto fmt_loc_opt = [] (const std::optional<seastar::compat::source_location>& l) {
+            static constexpr auto fmt_loc_opt = [] (const std::optional<std::source_location>& l) {
                 if (!l) {
                     return "null"s;
                 }

@@ -21,7 +21,7 @@ namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
-using sloc = seastar::compat::source_location;
+using sloc = std::source_location;
 
 static constexpr size_t append_entries_semaphore_limit_bytes = 10_MiB;
 

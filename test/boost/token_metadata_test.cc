@@ -239,7 +239,7 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
 
     auto check_endpoints = [](mutable_static_erm_ptr erm, int64_t t,
         host_id_vector_replica_set expected_replicas,
-        seastar::compat::source_location sl = seastar::compat::source_location::current())
+        std::source_location sl = std::source_location::current())
     {
         BOOST_TEST_INFO("line: " << sl.line());
         const auto expected_set = std::unordered_set<locator::host_id>(expected_replicas.begin(),
@@ -251,7 +251,7 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     };
 
     auto check_no_endpoints = [](mutable_static_erm_ptr erm, int64_t t,
-        seastar::compat::source_location sl = seastar::compat::source_location::current())
+        std::source_location sl = std::source_location::current())
     {
         BOOST_TEST_INFO("line: " << sl.line());
         BOOST_REQUIRE_EQUAL(erm->get_replicas_for_reading(dht::token::from_int64(t)),

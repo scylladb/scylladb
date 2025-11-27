@@ -290,7 +290,7 @@ struct timeout_error : public error {
 };
 
 struct state_machine_error: public error {
-    state_machine_error(seastar::compat::source_location l = seastar::compat::source_location::current())
+    state_machine_error(std::source_location l = std::source_location::current())
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
 };
 
@@ -305,7 +305,7 @@ struct transport_error: public error {
 struct destination_not_alive_error: public transport_error {
     server_id destination;
 
-    destination_not_alive_error(server_id destination, seastar::compat::source_location l = seastar::compat::source_location::current())
+    destination_not_alive_error(server_id destination, std::source_location l = std::source_location::current())
             : transport_error(fmt::format("Failed to send {} to {}: node is not seen as alive by the failure detector", l.function_name(), destination)) {}
 };
 
