@@ -351,15 +351,15 @@ rjson::value parse(chunked_content&& content, size_t max_nested_level) {
     return std::move(v);
 }
 
-std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level) {
+std::expected<rjson::value, sstring> try_parse(std::string_view str, size_t max_nested_level) {
     guarded_yieldable_json_handler<document, false> d(max_nested_level);
     try {
         d.Parse(str.data(), str.size());
-    } catch (const rjson::error&) {
-        return std::nullopt;
+    } catch (const rjson::error& e) {
+        return std::unexpected(format("Parsing JSON failed: {}", e.what()));
     }
     if (d.HasParseError()) {
-        return std::nullopt;    
+        return std::unexpected(format("Parsing JSON failed: {} at {}", GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
     return std::move(v);
