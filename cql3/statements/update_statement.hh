@@ -45,7 +45,7 @@ private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
 
 public:
-    virtual ::shared_ptr<strongly_consistent_modification_statement> prepare_for_broadcast_tables() const override;
+    virtual ::shared_ptr<broadcast_modification_statement> prepare_for_broadcast_tables() const override;
 };
 
 /*

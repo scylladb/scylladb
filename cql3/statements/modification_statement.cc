@@ -11,7 +11,7 @@
 #include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/statements/broadcast_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -546,7 +546,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
     }
 }
 
-::shared_ptr<strongly_consistent_modification_statement>
+::shared_ptr<broadcast_modification_statement>
 modification_statement::prepare_for_broadcast_tables() const {
     // FIXME: implement for every type of `modification_statement`.
     throw service::broadcast_tables::unsupported_operation_error{};
