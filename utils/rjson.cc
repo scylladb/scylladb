@@ -539,12 +539,12 @@ static inline bool is_control_char(char c) {
     return c >= 0 && c <= 0x1F;
 }
 
-static inline bool needs_escaping(const sstring& s) {
+static inline bool needs_escaping(std::string_view s) {
     return std::any_of(s.begin(), s.end(), [](char c) {return is_control_char(c) || c == '"' || c == '\\';});
 }
 
 
-sstring quote_json_string(const sstring& value) {
+sstring quote_json_string(std::string_view value) {
     if (!needs_escaping(value)) {
         return format("\"{}\"", value);
     }
