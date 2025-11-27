@@ -754,6 +754,10 @@ class ScyllaServer:
         env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
 
+        # Reopen log file if it was closed (e.g., after a previous stop)
+        if self.log_file is None or self.log_file.closed:
+            self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
+
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
@@ -943,6 +947,7 @@ class ScyllaServer:
         except FileNotFoundError:
             pass
         self.log_filename.unlink(missing_ok=True)
+        self.log_file = None
 
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""
@@ -1037,6 +1042,10 @@ class ScyllaCluster:
         self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
         await gather_safely(*(srv.uninstall() for srv in self.stopped.values()))
+        # Close API client to release connector resources
+        if self.api is not None:
+            self.api.close()
+            self.api = None
         await gather_safely(*(self.host_registry.release_host(Host(ip))
                                for ip in self.leased_ips))
 
@@ -1291,6 +1300,8 @@ class ScyllaCluster:
                                    f"the test must drop all keyspaces it creates.")
         for server in itertools.chain(self.running.values(), self.stopped.values()):
             server.write_log_marker(f"------ Ending test {name} ------\n")
+            if not server.log_file.closed:
+                server.log_file.close()
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
         """Stop a server. No-op if already stopped."""
