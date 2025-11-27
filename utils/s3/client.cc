@@ -232,6 +232,8 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
         sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
                 sm::description("Total number of bytes requested from object"), {ep_label, sg_label}),
+        sm::make_counter("chunked_sources_count", [this] { return chunked_sources_count; },
+                sm::description("Total number chunked sources in flight"), {ep_label, sg_label}),
          sm::make_counter("downloads_blocked_on_memory",
                           [this] { return downloads_blocked_on_memory; },
                           sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
@@ -1337,6 +1339,11 @@ public:
         : _client(std::move(cln)), _object_name(std::move(object_name)), _as(as), _range(range) {
         s3l.trace("Constructing chunked_download_source for object '{}'", _object_name);
         _filling_fiber = make_filling_fiber();
+        _client->find_or_create_client().chunked_sources_count += 1;
+    }
+
+    ~chunked_download_source() {
+        _client->find_or_create_client().chunked_sources_count -= 1;
     }
 
     future<temporary_buffer<char>> get() override {
