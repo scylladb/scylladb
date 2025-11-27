@@ -105,9 +105,9 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     # Enable expiration (TTL) on attribute "expiration"
     table.meta.client.update_time_to_live(TableName=table.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
 
-    # Insert N rows, setting them all to expire 3 seconds from now.
+    # Insert N rows, setting them all to expire 10 seconds from now.
     N = 100
-    expiration = int(time.time())+3
+    expiration = int(time.time())+10
     with table.batch_writer() as batch:
         for p in range(N):
             batch.put_item(Item={'p': p, 'expiration': expiration})
@@ -132,6 +132,14 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
             break # done waiting for the background writes to finish
         await asyncio.sleep(0.1)
 
+    # In the 2025.4 branch, something continues to run in the sl:default
+    # scheduling group for a bit after the above wait settled down. This
+    # is probably a bug - maybe some Raft activity gets registered as
+    # as sl:default. But finding such a bug is not the purpose of this
+    # test - our purpose is to see which scheduling group is used during
+    # TTL's expiration scans.
+    await asyncio.sleep(5.0)
+
     # Get the current amount of work (in CPU ms) done across all nodes and
     # shards in different scheduling groups. We expect this to increase
     # considerably for the streaming group while expiration scanning is
@@ -150,14 +158,14 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     ms_streaming_before, ms_statement_before = await get_cpu_metrics()
 
     # Wait until all rows expire, and get the CPU metrics again. All items
-    # were set to expire in 3 seconds, and the expiration thread is set up
+    # were set to expire in 10 seconds, and the expiration thread is set up
     # in alternator_config to scan the whole table in 0.5 seconds, and the
     # whole table is just 100 rows, so we expect all the data to be gone in
-    # 4 seconds. Let's wait 5 seconds just in case. Even if not all the data
-    # will have been deleted by then, we do expect some deletions to have
-    # happened, and certainly several scans, all taking CPU which we expect
-    # to be in the right scheduling group.
-    await asyncio.sleep(5)
+    # 11 seconds, of which we already slept 5. Let's wait 7 seconds just in
+    # case. Even if not all the data will have been deleted by then, we do
+    # expect some deletions to have happened, and certainly several scans,
+    # all taking CPU which we expect to be in the right scheduling group.
+    await asyncio.sleep(7)
     ms_streaming_after, ms_statement_after = await get_cpu_metrics()
 
     # As a sanity check, verify some of the data really expired, so there
@@ -608,7 +616,7 @@ async def test_concurrent_createtable(manager: ManagerClient):
        concurrent CreateTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     # In boto3, "resources", the object returned by get_alternator(), are
     # not thread-safe. However, we will create 3 threads each will write to
     # a different alternators[i], so we're fine.
@@ -674,7 +682,7 @@ async def test_concurrent_deletetable(manager: ManagerClient):
        concurrent DeleteTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -723,7 +731,7 @@ async def test_concurrent_updatetable(manager: ManagerClient):
        concurrent UpdateTable operations shouldn't fail "due to concurrent
        "modification".
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -778,7 +786,7 @@ async def test_concurrent_modify_tags(manager: ManagerClient, op):
        The name of this test is named after db::modify_tags(), which all
        three of these operations use to implement the change to the table.
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()
     barrier = threading.Barrier(len(servers), timeout=120)
@@ -861,9 +869,9 @@ async def test_zero_token_node_load_balancer(manager, tablets):
        versions - tablets=True and tablets=False.
     """
     if tablets:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': '0'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': '0'}]
     else:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
     # the assignment of data (tablets or vnodes) to nodes isn't trivial,
     # which will allow us to check that non-trivial request forwarding works.

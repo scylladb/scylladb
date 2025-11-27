@@ -920,11 +920,7 @@ def test_rbac_tagresource(dynamodb, cql):
 def test_rbac_updatetimetolive(dynamodb, cql):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
-        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }],
-        # Work around issue #16567 that Alternator TTL doesn't work with
-        # tablets. When that issue is solved, the following Tags should be
-        # removed.
-        Tags=[{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }]
     ) as table:
         with new_role(cql) as (role, key):
             with new_dynamodb(dynamodb, role, key) as d:
@@ -993,7 +989,7 @@ def test_rbac_streams(dynamodb, cql):
         # Work around issue #16137 that Alternator Streams doesn't work with
         # tablets. When that issue is solved, the following Tags should be
         # removed.
-        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     with new_test_table(dynamodb, **schema) as table:
         with new_role(cql) as (role, key):
@@ -1033,7 +1029,7 @@ def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
         # Work around issue #16137 that Alternator Streams doesn't work with
         # tablets. When that issue is solved, the following Tags should be
         # removed.
-        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     enable_stream = {'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}}
     if during_creation:
@@ -1069,7 +1065,7 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
         # Work around issue #16137 that Alternator Streams doesn't work with
         # tablets. When that issue is solved, the following Tags should be
         # removed.
-        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     table_name = unique_table_name()
     with new_role(cql) as (role1, key1), new_role(cql) as (role2, key2):
