@@ -13,10 +13,10 @@ namespace db {
 
 namespace view {
 
-view_building_task::view_building_task(utils::UUID id, task_type type, task_state state, table_id base_id, std::optional<table_id> view_id, locator::tablet_replica replica, dht::token last_token)
+view_building_task::view_building_task(utils::UUID id, task_type type, bool aborted, table_id base_id, std::optional<table_id> view_id, locator::tablet_replica replica, dht::token last_token)
         : id(id)
         , type(type)
-        , state(state)
+        , aborted(aborted)
         , base_id(base_id)
         , view_id(view_id)
         , replica(replica)
@@ -46,30 +46,6 @@ seastar::sstring task_type_to_sstring(view_building_task::task_type type) {
         return "BUILD_RANGE";
     case view_building_task::task_type::process_staging:
         return "PROCESS_STAGING";
-    }
-}
-
-view_building_task::task_state task_state_from_string(std::string_view str) {
-    if (str == "IDLE") {
-        return view_building_task::task_state::idle;
-    }
-    if (str == "STARTED") {
-        return view_building_task::task_state::started;
-    }
-    if (str == "ABORTED") {
-        return view_building_task::task_state::aborted;
-    }
-    throw std::runtime_error(fmt::format("Unknown view building task state: {}", str));
-}
-
-seastar::sstring task_state_to_sstring(view_building_task::task_state state) {
-    switch (state) {
-    case view_building_task::task_state::idle:
-        return "IDLE";
-    case view_building_task::task_state::started:
-        return "STARTED";
-    case view_building_task::task_state::aborted:
-        return "ABORTED";
     }
 }
 
@@ -149,46 +125,6 @@ std::map<dht::token, std::vector<view_building_task>> view_building_state::colle
         tasks[task.last_token].push_back(task);
     }
     return tasks;
-}
-
-// Returns all tasks for `_vb_sm.building_state.currently_processed_base_table` and `replica` with `STARTED` state.
-std::vector<utils::UUID> view_building_state::get_started_tasks(table_id base_table_id, locator::tablet_replica replica) const {   
-    if (!tasks_state.contains(base_table_id) || !tasks_state.at(base_table_id).contains(replica)) {
-        // No tasks for this replica
-        return {};
-    }
-
-    std::vector<view_building_task> tasks;
-    auto& replica_tasks = tasks_state.at(base_table_id).at(replica);
-    for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
-        for (auto& [_, task]: view_tasks) {
-            if (task.state == view_building_task::task_state::started) {
-                tasks.push_back(task);
-            }
-        }
-    }
-    for (auto& [_, task]: replica_tasks.staging_tasks) {
-        if (task.state == view_building_task::task_state::started) {
-            tasks.push_back(task);
-        }
-    }
-
-    // All collected tasks should have the same: type, base_id and last_token,
-    // so they can be executed in the same view_building_worker::batch.
-#ifdef SEASTAR_DEBUG
-    if (!tasks.empty()) {
-        auto& task = tasks.front();
-        for (auto& t: tasks) {
-            SCYLLA_ASSERT(task.type == t.type);
-            SCYLLA_ASSERT(task.base_id == t.base_id);
-            SCYLLA_ASSERT(task.last_token == t.last_token);
-        }
-    }
-#endif
-
-    return tasks | std::views::transform([] (const view_building_task& t) {
-        return t.id;
-    }) | std::ranges::to<std::vector>();
 }
 
 }
