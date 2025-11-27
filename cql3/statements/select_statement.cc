@@ -16,7 +16,7 @@
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
-#include "cql3/statements/strongly_consistent_select_statement.hh"
+#include "cql3/statements/broadcast_select_statement.hh"
 
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
@@ -2424,7 +2424,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             std::move(prepared_attrs)
         );
     } else if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
-        stmt = ::make_shared<cql3::statements::strongly_consistent_select_statement>(
+        stmt = ::make_shared<cql3::statements::broadcast_select_statement>(
                 schema,
                 ctx.bound_variables_size(),
                 _parameters,
