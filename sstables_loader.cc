@@ -224,7 +224,7 @@ private:
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
             auto& db = _db.local();
             llog.info("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size(), db.get_version());
-            llog.info("Memory diagnostic before download\n{}", memory::generate_memory_diagnostics_report());
+            // llog.info("Memory diagnostic before download\n{}", memory::generate_memory_diagnostics_report());
             return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
                 auto dwnld_ssts = std::move(downloaded_ssts);
 
@@ -306,9 +306,9 @@ private:
                     std::rethrow_exception(eptr);
                 }
                 if (auto sst = co_await sstable_sink->close_and_seal()) {
-                    llog.info("Memory diagnostic before load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
+                    // llog.info("Memory diagnostic before load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     co_await sst->load_owner_shards(sharder);
-                    llog.info("Memory diagnostic right after load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
+                    // llog.info("Memory diagnostic right after load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
                     SCYLLA_ASSERT(shards.size() == 1);
                     llog.debug("SSTable shards {}", fmt::join(shards, ", "));
@@ -316,7 +316,7 @@ private:
                         sst_classification_info::minimal_sst_info{._generation = gen, ._version = descriptor.version, ._format = descriptor.format});
                     co_await sst->destroy();
                     sst = {};
-                    llog.info("Memory diagnostic right after destroying sst instance\n{}", memory::generate_memory_diagnostics_report());
+                    // llog.info("Memory diagnostic right after destroying sst instance\n{}", memory::generate_memory_diagnostics_report());
                 }
             }
             if (progress) {

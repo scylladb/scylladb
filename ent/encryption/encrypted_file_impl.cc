@@ -167,12 +167,13 @@ static future<uint64_t> calculate_file_length(const file& f, size_t key_block_si
         return s;
     });
 }
-
+static seastar::logger logg{"encryption_impl"};
 future<> encrypted_file_impl::verify_file_length() {
     if (_file_length) {
         return make_ready_future();
     }
     return calculate_file_length(_file, _key->block_size()).then([this](uint64_t s) {
+        logg.info("Verified encrypted file length: {}" ,s);
         _file_length = s;
     });
 }
@@ -422,6 +423,7 @@ future<struct stat> encrypted_file_impl::stat() {
 
 future<uint64_t> encrypted_file_impl::size() {
     return  verify_file_length().then([this] {
+        logg.info("Verified encrypted file length returned by sixe(): {}" ,*_file_length);
         return *_file_length;
     });
 }

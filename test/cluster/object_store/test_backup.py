@@ -469,7 +469,7 @@ async def get_snapshot_files(manager, server, keyspace, snapshot_name):
     ]
 
 
-async def do_direct_restore(manager: ManagerClient, s3_storage):
+async def do_direct_restore(manager: ManagerClient, s3_storage, tmpdir):
     # This test creates multiple SSTables and resizes the number of tablets in the table, triggering
     # a split. As a result, some SSTables will be partially contained while others will be fully
     # contained within a tablet. When restoring at the node scope, this setup enables direct SSTable
@@ -492,6 +492,12 @@ async def do_direct_restore(manager: ManagerClient, s3_storage):
         'object_storage_endpoints': objconf,
         'experimental_features': ['keyspace-storage-options'],
         'task_ttl_in_seconds': 300,
+    }
+    d = tmpdir / "system_keys"
+    d.mkdir()
+    config = config | {
+        'system_key_directory': str(d),
+        'user_info_encryption': { 'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory' }
     }
     cmd = ['--smp', '16','-m','32G', '--logger-log-level', 'sstables_loader=info:sstable=info']
     servers = await manager.servers_add(servers_num=3, config=config, cmdline=cmd, auto_rack_dc="dc1")
@@ -579,8 +585,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage):
 
 
 @pytest.mark.asyncio
-async def test_direct_restore(manager: ManagerClient, s3_storage):
-    await do_direct_restore(manager, s3_storage)
+async def test_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
+    await do_direct_restore(manager, s3_storage, tmp_path)
 
 
 async def do_abort_restore(manager: ManagerClient, object_storage):
@@ -726,7 +732,7 @@ async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_stora
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="skip for now")
+# @pytest.mark.skip(reason="skip for now")
 async def test_simple_backup_and_restore_with_encryption(manager: ManagerClient, object_storage, tmp_path):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
     await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, True, False)

@@ -13,6 +13,8 @@
 #include <seastar/core/format.hh>
 
 #include "sstables/component_type.hh"
+#include <seastar/util/backtrace.hh>
+#include "utils/assert.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -44,8 +46,9 @@ inline void parse_assert(bool condition, std::optional<component_name> filename 
 
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
-    {}
+        malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}\n{}", size, expected, seastar::current_backtrace())) {
+        SCYLLA_ASSERT(size == expected);
+    }
 };
 
 }
