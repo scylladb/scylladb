@@ -1175,6 +1175,9 @@ private:
         bool full = is_incremental_repair_using_all_sstables();
         auto& tinfo = tmap.get_tablet_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
+        // When the topology coordinator loses leadership, the tablet might skip transitioning
+        // to end_repair, leaving session locks unreleased and causing new repair attempts to hang.
+        _rs._repair_compaction_locks.erase(_frozen_topology_guard);
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
