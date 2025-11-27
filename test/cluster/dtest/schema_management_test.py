@@ -482,8 +482,9 @@ class TestLargePartitionAlterSchema(Tester):
         logger.debug(f"Drop {column_name} column")
         session.execute(f"ALTER TABLE lp_table DROP {column_name}")
 
-    def large_partition_with_add_column_test(self):
-        session = self.prepare(nodes=1)
+    def test_large_partition_with_add_column(self):
+        cluster_topology = generate_cluster_topology()
+        session = self.prepare(cluster_topology, rf=1)
         data = self.populate(session=session, data=[], ck_start=0, ck_end=10)
 
         threads = []
@@ -500,8 +501,10 @@ class TestLargePartitionAlterSchema(Tester):
             self.cluster.nodelist()[0].flush()
 
             for future in futures.as_completed(threads, timeout=300):
-                with pytest.raises(Exception):
-                    _ = future.result()
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001
+                    pytest.fail(f"Generated an exception: {exc}")
 
         for i, _ in enumerate(data):
             data[i].append(None)
