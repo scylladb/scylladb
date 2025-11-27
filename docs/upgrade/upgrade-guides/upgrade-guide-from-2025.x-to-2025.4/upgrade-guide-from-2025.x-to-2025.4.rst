@@ -1,13 +1,13 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 2025.2
-.. |NEW_VERSION| replace:: 2025.3
+.. |SRC_VERSION| replace:: 2025.x
+.. |NEW_VERSION| replace:: 2025.4
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.2 to 2025.3
-.. _SCYLLA_METRICS: ../metric-update-2025.2-to-2025.3
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.x to 2025.4
+.. _SCYLLA_METRICS: ../metric-update-2025.x-to-2025.4
 
 =======================================================================================
 Upgrade from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
@@ -27,9 +27,9 @@ Before You Upgrade ScyllaDB
 
 **Upgrade Your Driver**
 
-If you're using a :doc:`ScyllaDB driver </using-scylla/drivers/cql-drivers/index>`, 
+If you're using a `ScyllaDB driver <https://docs.scylladb.com/stable/drivers/index.html>`_, 
 upgrade the driver before upgrading ScyllaDB. The latest two versions of each driver 
-are supported.
+are supported. See `Driver Support <https://docs.scylladb.com/stable/versioning/driver-support.html>`_.
 
 **Upgrade ScyllaDB Monitoring Stack**
 
@@ -42,7 +42,7 @@ We recommend upgrading the Monitoring Stack to the latest version.
 **Check Feature Updates**
 
 See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
-at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
+at the `ScyllaDB Community Forum <https://forum.scylladb.com/c/scylladb-release-notes/>`_.
 
 Upgrade Procedure
 =================
@@ -150,7 +150,7 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
             .. code-block:: console
 
-               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.3.list
+               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.4.list
 
         #. Install the new ScyllaDB version:
 
@@ -168,7 +168,7 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
             .. code-block:: console
 
-               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.3.repo
+               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.4.repo
 
         #. Install the new ScyllaDB version:
 
@@ -234,8 +234,8 @@ Rollback Procedure
    point, the only way to restore a cluster to |SRC_VERSION| is by restoring it 
    from backup.
 
-The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION|.x to 
-|SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to 
+The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION| to 
+|SRC_VERSION|. Apply this procedure if an upgrade from |SRC_VERSION| to 
 |NEW_VERSION| fails before completing on all nodes. 
 
 * Use this procedure only on the nodes you upgraded to |NEW_VERSION|.
