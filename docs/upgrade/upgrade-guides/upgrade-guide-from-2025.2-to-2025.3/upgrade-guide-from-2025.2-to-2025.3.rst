@@ -27,7 +27,7 @@ Before You Upgrade ScyllaDB
 
 **Upgrade Your Driver**
 
-If you're using a :doc:`ScyllaDB driver </using-scylla/drivers/cql-drivers/index>`, 
+If you're using a `ScyllaDB driver <https://docs.scylladb.com/stable/drivers/index.html>`_, 
 upgrade the driver before upgrading ScyllaDB. The latest two versions of each driver 
 are supported.
 
