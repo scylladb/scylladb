@@ -9,7 +9,7 @@
  */
 
 
-#include "cql3/statements/strongly_consistent_select_statement.hh"
+#include "cql3/statements/broadcast_select_statement.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -24,7 +24,7 @@ namespace cql3 {
 
 namespace statements {
 
-static logging::logger logger("strongly_consistent_select_statement");
+static logging::logger logger("broadcast_select_statement");
 
 static
 expr::expression get_key(const cql3::expr::expression& partition_key_restrictions) {
@@ -58,7 +58,7 @@ bool is_selecting_only_value(const cql3::selection::selection& selection) {
            selection.get_columns()[0]->name() == "value";
 }
 
-strongly_consistent_select_statement::strongly_consistent_select_statement(schema_ptr schema, uint32_t bound_terms,
+broadcast_select_statement::broadcast_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                                            lw_shared_ptr<const parameters> parameters,
                                                                            ::shared_ptr<selection::selection> selection,
                                                                            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
@@ -73,7 +73,7 @@ strongly_consistent_select_statement::strongly_consistent_select_statement(schem
       _query{prepare_query()}
 { }
 
-broadcast_tables::prepared_select strongly_consistent_select_statement::prepare_query() const {
+broadcast_tables::prepared_select broadcast_select_statement::prepare_query() const {
     if (!is_selecting_only_value(*_selection)) {
         throw service::broadcast_tables::unsupported_operation_error("only 'value' selector is allowed");
     }
@@ -94,7 +94,7 @@ evaluate_prepared(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
+broadcast_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
