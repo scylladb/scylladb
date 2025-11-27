@@ -67,3 +67,82 @@ BOOST_AUTO_TEST_CASE(test_try_parse) {
         BOOST_REQUIRE_MESSAGE(!res.error().empty(), fmt::format("expected an error message for '{}'", bad));
     }
 }
+
+namespace rjs = rjson::schema;
+
+static void check_valid(const rjs::schema& schema, std::string_view json) {
+    auto res = rjson::parse_and_validate(json, schema);
+    BOOST_REQUIRE_MESSAGE(res, fmt::format("expected '{}' to be valid, got: {}", json, res ? sstring() : res.error()));
+}
+
+// Check that json fails validation and that the error message contains error_fragment.
+static void check_invalid(const rjs::schema& schema, std::string_view json, std::string_view error_fragment) {
+    auto res = rjson::parse_and_validate(json, schema);
+    BOOST_REQUIRE_MESSAGE(!res, fmt::format("expected '{}' to be invalid", json));
+    BOOST_REQUIRE_MESSAGE(res.error().find(error_fragment) != sstring::npos,
+            fmt::format("expected error for '{}' to contain '{}', got: {}", json, error_fragment, res.error()));
+}
+
+BOOST_AUTO_TEST_CASE(test_schema_scalar) {
+    check_valid(rjs::scalar::string(), R"("abc")");
+    check_invalid(rjs::scalar::string(), "1", "Expected string at $root");
+    check_invalid(rjs::scalar::string(), "null", "Expected string at $root");
+
+    check_valid(rjs::scalar::integer(), "-12");
+    check_invalid(rjs::scalar::integer(), "1.5", "Expected integer at $root");
+    check_invalid(rjs::scalar::integer(), R"("1")", "Expected integer at $root");
+    check_invalid(rjs::scalar::integer(), "4294967296", "Expected integer at $root");
+
+    check_valid(rjs::scalar::boolean(), "true");
+    check_valid(rjs::scalar::boolean(), "false");
+    check_invalid(rjs::scalar::boolean(), "0", "Expected boolean at $root");
+}
+
+BOOST_AUTO_TEST_CASE(test_schema_optional) {
+    const auto schema = rjs::schema(rjs::optional(rjs::scalar::integer()));
+    check_valid(schema, "null");
+    check_valid(schema, "1");
+    check_invalid(schema, R"("a")", "Expected integer at $root");
+}
+
+BOOST_AUTO_TEST_CASE(test_schema_array) {
+    const auto schema = rjs::schema(rjs::array(rjs::scalar::integer(), 1, 2));
+    check_valid(schema, "[1]");
+    check_valid(schema, "[1, 2]");
+    check_invalid(schema, "[]", "Expected size of $root to be in interval [1, 2]");
+    check_invalid(schema, "[1, 2, 3]", "Expected size of $root to be in interval [1, 2]");
+    check_invalid(schema, R"([1, "a"])", "Expected integer at $root[1]");
+    check_invalid(schema, "{}", "Expected array at $root");
+
+    check_valid(rjs::array(rjs::scalar::string()), "[]");
+}
+
+BOOST_AUTO_TEST_CASE(test_schema_object) {
+    const auto schema = rjs::schema(rjs::object({
+        {"name", rjs::scalar::string()},
+        {"count", rjs::optional(rjs::scalar::integer())},
+        {"tags", rjs::optional(rjs::array(rjs::object({{"key", rjs::scalar::string()}})))},
+    }));
+
+    check_valid(schema, R"({"name": "a"})");
+    check_valid(schema, R"({"name": "a", "count": null})");
+    check_valid(schema, R"({"name": "a", "count": 3, "tags": [{"key": "k1"}, {"key": "k2"}]})");
+
+    check_invalid(schema, "[]", "Expected object at $root");
+    check_invalid(schema, "{}", "Required member $root.name is missing or null");
+    check_invalid(schema, R"({"name": null})", "Expected string at $root.name");
+    check_invalid(schema, R"({"name": 1})", "Expected string at $root.name");
+    check_invalid(schema, R"({"name": "a", "count": "3"})", "Expected integer at $root.count");
+    check_invalid(schema, R"({"name": "a", "tags": [{"key": "k1"}, {}]})", "Required member $root.tags[1].key is missing or null");
+    check_invalid(schema, R"({"name": "a", "extra": 1})", "Unknown member $root.extra");
+    check_invalid(schema, R"({"name": "a", "tags": [{"key": "k", "value": "v"}]})", "Unknown member $root.tags[0].value");
+
+    const auto lenient_schema = rjs::schema(rjs::object({{"name", rjs::scalar::string()}}, rjs::object::unknown_members::allow));
+    check_valid(lenient_schema, R"({"name": "a", "extra": 1})");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_and_validate_parse_error) {
+    auto res = rjson::parse_and_validate("{", rjs::object({}));
+    BOOST_REQUIRE(!res);
+    BOOST_REQUIRE(!res.error().empty());
+}
