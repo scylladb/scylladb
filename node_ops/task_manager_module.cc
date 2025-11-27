@@ -98,20 +98,22 @@ future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(
         co_return std::nullopt;
     }
 
-    auto empty_hint = std::make_optional<tasks::virtual_task_hint>({});
+    auto hint = std::make_optional<tasks::virtual_task_hint>({});
     service::topology& topology = _ss._topology_state_machine._topology;
     for (auto& request : topology.requests) {
         if (topology.find(request.first)->second.request_id == task_id.uuid()) {
-            co_return empty_hint;
+            hint->node_id = locator::host_id(request.first.uuid());
+            co_return hint;
         }
     }
 
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
-    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? empty_hint : std::nullopt;
+    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? hint : std::nullopt;
 }
 
-future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint) const {
-    return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
+future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
+    // Currently, only node operations are supported by abort_topology_request().
+    return make_ready_future<tasks::is_abortable>(tasks::is_abortable(hint.node_id.has_value()));
 }
 
 future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
@@ -124,8 +126,8 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::tas
     co_return co_await get_status(id, std::move(hint));
 }
 
-future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
-    return make_ready_future();
+future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
+    co_await _ss.abort_topology_request(id.uuid());
 }
 
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
