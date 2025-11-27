@@ -33,6 +33,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
 
+static logging::logger elogger("alternator-streams");
+
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
  * for types that are ostreamable/string constructible/castable.
@@ -428,33 +430,8 @@ using namespace std::chrono_literals;
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 
-future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.describe_stream++;
-
-    auto limit = rjson::get_opt<int>(request, "Limit").value_or(100); // according to spec
-    auto ret = rjson::empty_object();
-    auto stream_desc = rjson::empty_object();
-    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
-    // I.e. unparsable arn -> error. 
-    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
-
-    schema_ptr schema, bs;
+future<> executor::describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
     auto db = _proxy.data_dictionary();
-
-    try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
-        bs = cdc::get_base_table(db.real_database(), *schema);
-    } catch (...) {        
-    }
- 
-    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found("Invalid StreamArn");
-    }
-
-    if (limit < 1) {
-        throw api_error::validation("Limit must be 1 or more");
-    }
 
     std::optional<shard_id> shard_start;
     try {
@@ -465,45 +442,12 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         limit = 0;
     }
 
-    auto& opts = bs->cdc_options();
-
-    auto status = "DISABLED";
-
-    if (opts.enabled()) {
-        if (!_cdc_metadata.streams_available()) {
-            status = "ENABLING";
-        } else {
-            status = "ENABLED";
-        }
-    }
-
-    auto ttl = std::chrono::seconds(opts.ttl());
-
-    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
-
-    stream_view_type type = cdc_options_to_steam_view_type(opts);
-
-    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
-    rjson::add(stream_desc, "StreamViewType", type);
-    rjson::add(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
-
-    describe_key_schema(stream_desc, *bs);
-
-    if (!opts.enabled()) {
-        rjson::add(ret, "StreamDescription", std::move(stream_desc));
-        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
-    }
-
-    // TODO: label
-    // TODO: creation time
-
     auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
 
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
 
-    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
-
+    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, &stream_desc] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
         auto e = topologies.end();
         auto prev = e;
         auto shards = rjson::empty_array();
@@ -615,10 +559,70 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         }
 
         rjson::add(stream_desc, "Shards", std::move(shards));
-        rjson::add(ret, "StreamDescription", std::move(stream_desc));
-            
-        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
     });
+}
+
+future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.describe_stream++;
+    auto ret = rjson::empty_object();
+
+    auto limit = rjson::get_opt<int>(request, "Limit").value_or(100); // according to spec
+    if (limit < 1) {
+        throw api_error::validation("Limit must be 1 or more");
+    }
+
+    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
+    // I.e. unparsable arn -> error. 
+    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
+
+    schema_ptr schema, bs;
+    try {
+        auto cf = _proxy.data_dictionary().find_column_family(table_id(stream_arn));
+        schema = cf.schema();
+        bs = cdc::get_base_table(_proxy.data_dictionary().real_database(), *schema);
+    } catch (...) {        
+    }
+ 
+    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
+        throw api_error::resource_not_found("Invalid StreamArn");
+    }
+
+    auto stream_desc = rjson::empty_object();
+    auto& opts = bs->cdc_options();
+
+    auto status = "DISABLED";
+    if (opts.enabled()) {
+        if (!_cdc_metadata.streams_available()) {
+            status = "ENABLING";
+        } else {
+            status = "ENABLED";
+        }
+    }
+
+    auto ttl = std::chrono::seconds(opts.ttl());
+
+    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
+
+    stream_view_type type = cdc_options_to_steam_view_type(opts);
+
+    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
+    rjson::add(stream_desc, "StreamViewType", type);
+    rjson::add(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
+
+    describe_key_schema(stream_desc, *bs);
+
+    if (!opts.enabled()) {
+        rjson::add(ret, "StreamDescription", std::move(stream_desc));
+        co_return rjson::print(std::move(ret));
+    }
+
+    // TODO: label
+    // TODO: creation time
+
+    co_await describe_stream_for_vnodes(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+
+    rjson::add(ret, "StreamDescription", std::move(stream_desc));
+    co_return rjson::print(std::move(ret));
 }
 
 enum class shard_iterator_type {
