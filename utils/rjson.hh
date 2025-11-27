@@ -373,8 +373,7 @@ Map parse_to_map(std::string_view raw) {
 // This function exists for historical reasons as well.
 rjson::value from_string_map(const std::map<sstring, sstring>& map);
 
-// The function operates on sstrings for historical reasons.
-sstring quote_json_string(const sstring& value);
+sstring quote_json_string(std::string_view value);
 
 inline bytes base64_decode(const value& v) {
     return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
