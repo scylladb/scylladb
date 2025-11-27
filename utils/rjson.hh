@@ -443,6 +443,118 @@ inline bool is_leaf(const rjson::value& value) {
 
 future<> destroy_gently(rjson::value&& value);
 
+namespace schema {
+
+/// Defines a schema for validating JSON values.
+///
+/// The schema is composable recursively, allowing to define the schema for
+/// entire document structures.
+///
+/// Example:
+///
+/// For the following JSON document:
+///     {"entries": [{"id": 100, "keyspace": "my_keyspace", "table": "my_table", "rows_merged": 10}, ...]}
+///
+/// One can define the schema as:
+///
+///     namespace rjs = rjson::schema;
+///     auto json_schema = rjs::object({
+///         {"entries", rjs::array(
+///             rjs::object({
+///                 {"id", rjs::scalar::integer()},
+///                 {"keyspace", rjs::scalar::string()},
+///                 {"table", rjs::scalar::string()},
+///                 {"rows_merged", rjs::optional(rjs::scalar::integer())},
+///             }))
+///         }
+///     });
+///
+class schema {
+public:
+    class impl {
+    public:
+        virtual ~impl() = default;
+        virtual std::expected<void, sstring> operator()(const rjson::value& v, sstring path) const = 0;
+    };
+
+private:
+    // to allow cheap copies
+    shared_ptr<impl> _impl;
+
+public:
+    template <typename Impl>
+    requires std::is_base_of_v<impl, Impl>
+    schema(Impl impl) : _impl(make_shared<Impl>(std::move(impl))) {}
+
+    /// Validate the given JSON value against the schema.
+    /// Returns std::unexpected with an error message if validation fails.
+    /// The error message will contain the path to the field which caused the
+    /// validation failure. Validation stop on the first failure.
+    std::expected<void, sstring> operator()(const rjson::value& v, sstring path = "$root") const {
+        return _impl->operator()(v, std::move(path));
+    }
+};
+
+/// Validate that the value is an object with the given members.
+/// Wrap members' schemas in schema::optional if they are not required.
+/// For such fields, both a null value, or a missing member will be accepted.
+class object : public schema::impl {
+    std::vector<std::pair<sstring, schema>> _members;
+
+    virtual std::expected<void, sstring> operator()(const rjson::value& v, sstring path) const override;
+public:
+    explicit object(std::vector<std::pair<sstring, schema>> members)
+        : _members(std::move(members))
+    {}
+};
+
+/// Validate that the value is an array with items conforming to the given schema.
+/// Optionally, the minimum and maximum number of items can be specified.
+class array : public schema::impl {
+    schema _items;
+    size_t _min_items;
+    size_t _max_items;
+
+    virtual std::expected<void, sstring> operator()(const rjson::value& v, sstring path) const override;
+public:
+    explicit array(schema items, size_t min_items = 0, size_t max_items = std::numeric_limits<size_t>::max())
+        : _items(std::move(items)), _min_items(min_items), _max_items(max_items)
+    {}
+};
+
+/// Validate that the value is a scalar of the given type.
+class scalar : public schema::impl {
+    enum class type : uint8_t { string, integer, boolean };
+    type _type;
+
+    scalar(type t) : _type(t) {}
+
+    virtual std::expected<void, sstring> operator()(const rjson::value& v, sstring path) const override;
+public:
+    static scalar string() { return scalar(type::string); }
+    static scalar integer() { return scalar(type::integer); }
+    static scalar boolean() { return scalar(type::boolean); }
+};
+
+/// Validate that the value is an optional item conforming to the given schema.
+/// For optionals, a null value is also accepted.
+class optional : public schema::impl {
+    schema _item;
+
+    virtual std::expected<void, sstring> operator()(const rjson::value& v, sstring path) const override;
+public:
+    explicit optional(schema item)
+        : _item(std::move(item))
+    {}
+};
+
+} // end namespace schema
+
+/// Like try_parse(), but also validate the resulting JSON against the provided schema.
+/// To validate an already parsed rjson::value, use rjson::schema::schema::operator()().
+std::expected<rjson::value, sstring>
+parse_and_validate(std::string_view raw, const rjson::schema::schema& schema);
+
 } // end namespace rjson
 
 template <> struct fmt::formatter<rjson::value> {
