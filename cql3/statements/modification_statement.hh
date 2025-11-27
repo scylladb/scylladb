@@ -30,7 +30,7 @@ class operation;
 
 namespace statements {
 
-class strongly_consistent_modification_statement;
+class broadcast_modification_statement;
 
 namespace raw { class modification_statement; }
 
@@ -256,7 +256,7 @@ public:
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
-    virtual ::shared_ptr<strongly_consistent_modification_statement> prepare_for_broadcast_tables() const;
+    virtual ::shared_ptr<broadcast_modification_statement> prepare_for_broadcast_tables() const;
 
 protected:
     /**

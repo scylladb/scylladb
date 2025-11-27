@@ -9,7 +9,7 @@
  */
 
 
-#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/statements/broadcast_modification_statement.hh"
 
 #include <optional>
 
@@ -28,11 +28,11 @@
 
 namespace cql3 {
 
-static logging::logger logger("strongly_consistent_modification_statement");
+static logging::logger logger("broadcast_modification_statement");
 
 namespace statements {
 
-strongly_consistent_modification_statement::strongly_consistent_modification_statement(
+broadcast_modification_statement::broadcast_modification_statement(
     uint32_t bound_terms,
     schema_ptr schema,
     broadcast_tables::prepared_update query)
@@ -43,7 +43,7 @@ strongly_consistent_modification_statement::strongly_consistent_modification_sta
 { }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
+broadcast_modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     return execute_without_checking_exception_message(qp, qs, options, std::move(guard))
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
@@ -63,7 +63,7 @@ evaluate_prepared(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
+broadcast_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
@@ -103,11 +103,11 @@ strongly_consistent_modification_statement::execute_without_checking_exception_m
     ), result);
 }
 
-uint32_t strongly_consistent_modification_statement::get_bound_terms() const {
+uint32_t broadcast_modification_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
-future<> strongly_consistent_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> broadcast_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
     auto f = state.has_column_family_access(_schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
     if (_query.value_condition.has_value()) {
         f = f.then([this, &state] {
@@ -117,7 +117,7 @@ future<> strongly_consistent_modification_statement::check_access(query_processo
     return f;
 }
 
-bool strongly_consistent_modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
+bool broadcast_modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return _schema->ks_name() == ks_name && (!cf_name || _schema->cf_name() == *cf_name);
 }
 
