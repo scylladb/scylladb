@@ -280,7 +280,6 @@ private:
         void handle_error(future<>&& f) override;
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
-        void update_scheduling_group_v1();
         void update_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
@@ -360,7 +359,10 @@ private:
                 tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
-
+        
+        void update_scheduling_group_v1();
+        void update_scheduling_group_v2();
+        
         friend event_notifier;
     };
 
