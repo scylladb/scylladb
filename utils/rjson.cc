@@ -628,4 +628,81 @@ future<> destroy_gently(rjson::value&& value) {
     }
 }
 
+namespace schema {
+
+std::expected<void, sstring> object::operator()(const rjson::value& v, sstring path) const {
+    if (!v.IsObject()) {
+        return std::unexpected(format("Expected object at {}", path));
+    }
+    for (const auto& [name, schema] : _members) {
+        auto sub_path = format("{}.{}", path, name);
+        auto it = v.FindMember(name);
+        if (it == v.MemberEnd()) {
+            // If the value is optional (validate will accept null), we allow it to be missing
+            if (schema(rjson::null_value(), sub_path)) {
+                continue;
+            }
+            return std::unexpected(format("Required member {} is missing or null", sub_path));
+        }
+        if (auto res = schema(it->value, sub_path); !res) {
+            return res;
+        }
+    }
+    return {};
+}
+
+std::expected<void, sstring> array::operator()(const rjson::value& v, sstring path) const {
+    if (!v.IsArray()) {
+        return std::unexpected(format("Expected array at {}", path));
+    }
+    const auto size = v.Size();
+    if (size < _min_items || size > _max_items) {
+        return std::unexpected(format("Expected size of {} to be in interval [{}, {}]", path, _min_items, _max_items));
+    }
+    size_t index = 0;
+    for (const auto& item : v.GetArray()) {
+        if (auto res = _items(item, format("{}[{}]", path, index++)); !res) {
+            return res;
+        }
+    }
+    return {};
+}
+
+std::expected<void, sstring> scalar::operator()(const rjson::value& v, sstring path) const {
+    auto check = [&path] (bool cond, const char* expected_type) -> std::expected<void, sstring> {
+        if (cond) {
+            return {};
+        } else {
+            return std::unexpected(format("Expected {} at {}", expected_type, path));
+        }
+    };
+    switch (_type) {
+        case type::string:
+            return check(v.IsString(), "string");
+        case type::integer:
+            return check(v.IsInt(), "integer");
+        case type::boolean:
+            return check(v.IsBool(), "boolean");
+    }
+    throw std::runtime_error(format("scalar::operator(): unexpected _type: {}", static_cast<int>(_type)));
+}
+
+std::expected<void, sstring> optional::operator()(const rjson::value& v, sstring path) const {
+    if (v.IsNull()) {
+        return {};
+    }
+    return _item(v, std::move(path));
+}
+
+} // end namespace schema
+
+std::expected<rjson::value, sstring>
+parse_and_validate(std::string_view raw, const rjson::schema::schema& schema) {
+    return rjson::try_parse(raw).and_then([&schema] (rjson::value root) -> std::expected<rjson::value, sstring> {
+        return schema(root).transform([root = std::move(root)] () mutable  {
+            return std::move(root);
+        });
+    });
+}
+
 } // end namespace rjson
