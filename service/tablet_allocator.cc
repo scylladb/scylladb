@@ -968,8 +968,8 @@ public:
                 return ret;
             };
 
-            auto migrating = [] (const tablet_desc& t) {
-                return bool(t.transition);
+            auto migrating = [this, table] (const tablet_desc& t) {
+                return bool(t.transition) || _scheduled_tablets.contains(global_tablet_id{table, t.tid});
             };
             auto rack_of = [&topo = _tm->get_topology()] (tablet_replica tr) -> const sstring& {
                 return topo.get_rack(tr.host);
