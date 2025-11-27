@@ -54,6 +54,7 @@ class view_building_coordinator : public service::endpoint_lifecycle_subscriber 
     const raft::term_t _term;
     abort_source& _as;
 
+    bool _remote_work_finished;
     std::unordered_map<locator::tablet_replica, shared_future<std::optional<std::vector<utils::UUID>>>> _remote_work;
     shared_mutex _mutex; // guards `_finished_tasks` field
     std::unordered_map<locator::tablet_replica, std::unordered_set<utils::UUID>> _finished_tasks;
