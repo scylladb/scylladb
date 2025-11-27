@@ -9,9 +9,12 @@ To ensure a successful upgrade, follow
 the :doc:`documented upgrade procedures <upgrade-guides/index>` tested by
 ScyllaDB. This means that:
 
-* You should perform the upgrades consecutively - to each successive X.Y
-  version, **without skipping any major or minor version**, unless there is
-  a documented upgrade procedure to bypass a version.
+* You should perform the upgrades consecutively across major versions - to each
+  successive X.Y version. Within the same major version you may upgrade from
+  any earlier minor release to a later minor release of that same major.
+  For example, you can upgrade to 2025.4 from 2025.1, 2025.2, or 2025.3.
+  Do not skip major Scylla versions unless there is a documented upgrade
+  procedure that explicitly allows it.
 * Before you upgrade to the next version, the whole cluster (each node) must
   be upgraded to the previous version.
 * You cannot perform an upgrade by replacing the nodes in the cluster with new
