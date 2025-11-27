@@ -268,6 +268,11 @@ future<> service::stop() {
         return make_ready_future<>();
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
+    }).then([this] {
+        if (_used_by_maintenance_socket) {
+            return _role_manager->stop();
+        }
+        return make_ready_future<>();
     });
 }
 
