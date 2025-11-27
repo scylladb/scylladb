@@ -63,6 +63,12 @@ future<service::group0_guard> view_building_coordinator::start_operation() {
 }
 
 future<> view_building_coordinator::await_event() {
+    if (_remote_work_finished) {
+        // If any remote work (`view_building_coordinator::work_on_tasks()`) was finished,
+        // we cannot wait for an event becuase it was already broadcasted.
+        co_return;
+    }
+
     _as.check();
     vbc_logger.debug("waiting for view building state machine event");
     co_await _vb_sm.event.when();
@@ -114,6 +120,7 @@ future<> view_building_coordinator::run() {
         }
 
         bool sleep = false;
+        _remote_work_finished = false;
         try {
             auto guard_opt = co_await update_state(co_await start_operation());
             if (!guard_opt) {
@@ -497,6 +504,8 @@ future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_
 
     if (rpc_failed) {
         co_await seastar::sleep(backoff_duration);
+        // Set `_remote_work_finished` to true in case the coordinator isn't waiting on the CV yet...
+        _remote_work_finished = true;
         _vb_sm.event.broadcast();
         co_return std::nullopt;
     }
@@ -507,6 +516,8 @@ future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_
     auto lock = co_await get_shared_lock(_mutex);
     _finished_tasks.at(replica).insert_range(remote_results);
 
+    // ... and set it also here for the same reason.
+    _remote_work_finished = true;
     _vb_sm.event.broadcast();
     co_return remote_results;
 }
