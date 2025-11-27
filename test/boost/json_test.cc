@@ -54,3 +54,16 @@ BOOST_AUTO_TEST_CASE(test_parsing_map_from_null) {
     BOOST_REQUIRE(map1 == map2);
     BOOST_REQUIRE(map1 == empty_map);
 }
+
+BOOST_AUTO_TEST_CASE(test_try_parse) {
+    auto ok = rjson::try_parse(R"({"a": [1, 2, 3]})");
+    BOOST_REQUIRE(ok);
+    BOOST_REQUIRE(ok->IsObject());
+    BOOST_REQUIRE_EQUAL((*ok)["a"].Size(), 3);
+
+    for (const std::string_view bad : {"", "{", "{\"a\": }", "[1, 2", "nul", "{} {}"}) {
+        auto res = rjson::try_parse(bad);
+        BOOST_REQUIRE_MESSAGE(!res, fmt::format("expected parse failure for '{}'", bad));
+        BOOST_REQUIRE_MESSAGE(!res.error().empty(), fmt::format("expected an error message for '{}'", bad));
+    }
+}
