@@ -149,6 +149,11 @@ class TCPRESTClient(RESTClient):
         self.connector = None
         self.default_port: int = port
 
+    def close(self):
+        """Close the connector and release resources"""
+        if self.connector is not None:
+            self.connector.close()
+            self.connector = None
 
 @universalasync_typed_wrap
 class ScyllaRESTAPIClient:
@@ -562,6 +567,10 @@ class ScyllaRESTAPIClient:
         if table:
             params['cf'] = table
         return await self.client.get_json('/storage_service/tokens_endpoint', host=node_ip, params=params)
+
+    def close(self):
+        """Close the client and release resources (connectors, file descriptors)"""
+        self.client.close()
 
 
 class ScyllaMetricsLine:
