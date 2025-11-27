@@ -410,7 +410,7 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 raft_group_registry::~raft_group_registry() = default;
 
 namespace {
-    auto fmt_loc(const seastar::compat::source_location& l) {
+    auto fmt_loc(const std::source_location& l) {
         return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
     };
 }

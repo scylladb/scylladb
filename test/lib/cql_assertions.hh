@@ -118,25 +118,25 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
         cql_test_env& env,
         std::string_view query,
         std::unique_ptr<cql3::query_options>&& qo = nullptr,
-        const seastar::compat::source_location& loc = seastar::compat::source_location::current());
+        const std::source_location& loc = std::source_location::current());
 
 /// Asserts that cquery_nofail(e, qstr) contains expected rows, in any order.
 void require_rows(cql_test_env& e,
                   std::string_view qstr,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const seastar::compat::source_location& loc = seastar::compat::source_location::current());
+                  const std::source_location& loc = std::source_location::current());
 
 /// Like require_rows, but wraps assertions in \c eventually.
 void eventually_require_rows(
         cql_test_env& e, std::string_view qstr, const std::vector<std::vector<bytes_opt>>& expected,
-        const seastar::compat::source_location& loc = seastar::compat::source_location::current());
+        const std::source_location& loc = std::source_location::current());
 
 /// Asserts that e.execute_prepared(id, values) contains expected rows, in any order.
 void require_rows(cql_test_env& e,
                   cql3::prepared_cache_key_type id,
                   const std::vector<cql3::raw_value>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const seastar::compat::source_location& loc = seastar::compat::source_location::current());
+                  const std::source_location& loc = std::source_location::current());
 
 /// Asserts that a cell at the given table.partition.row.column position contains expected data
 future<> require_column_has_value(cql_test_env&, const sstring& table_name,

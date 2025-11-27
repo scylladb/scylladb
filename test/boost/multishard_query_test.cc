@@ -175,7 +175,7 @@ static uint64_t aggregate_querier_cache_stat(sharded<replica::database>& db, uin
 }
 
 static void check_cache_population(sharded<replica::database>& db, size_t queriers,
-        seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+        std::source_location sl = std::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     parallel_for_each(std::views::iota(0u, smp::count), [queriers, &db] (unsigned shard) {
@@ -187,7 +187,7 @@ static void check_cache_population(sharded<replica::database>& db, size_t querie
 }
 
 static void require_eventually_empty_caches(sharded<replica::database>& db,
-        seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+        std::source_location sl = std::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     auto aggregated_population_is_zero = [&] () mutable {
@@ -750,7 +750,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
             const auto new_lookups = aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::lookups);
             if (page) {
-                tests::require(std::cmp_greater(new_lookups, lookups), seastar::compat::source_location::current());
+                tests::require(std::cmp_greater(new_lookups, lookups), std::source_location::current());
             }
             lookups = new_lookups;
 
@@ -764,8 +764,8 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
                 }
             }
 
-            tests::require(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::misses) >= page, seastar::compat::source_location::current());
-            tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::drops), 0u, seastar::compat::source_location::current());
+            tests::require(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::misses) >= page, std::source_location::current());
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::drops), 0u, std::source_location::current());
         });
 
         check_results_are_equal(results1, results2);

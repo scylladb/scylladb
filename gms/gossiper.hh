@@ -158,10 +158,10 @@ public:
         permit_id pid;
         semaphore_units<> units;
         size_t holders = 0;
-        std::optional<seastar::compat::source_location> first_holder;
+        std::optional<std::source_location> first_holder;
         // last_holder is the caller of endpoint_permit who last took this entry,
         // it might not be a current holder (the permit might've been destroyed)
-        std::optional<seastar::compat::source_location> last_holder;
+        std::optional<std::source_location> last_holder;
 
         endpoint_lock_entry() noexcept;
     };
@@ -170,16 +170,16 @@ public:
         endpoint_locks_map::entry_ptr _ptr;
         permit_id _permit_id;
         locator::host_id _addr;
-        seastar::compat::source_location _caller;
+        std::source_location _caller;
     public:
-        endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, locator::host_id addr, seastar::compat::source_location caller) noexcept;
+        endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, locator::host_id addr, std::source_location caller) noexcept;
         endpoint_permit(endpoint_permit&&) noexcept;
         ~endpoint_permit();
         bool release() noexcept;
         const permit_id& id() const noexcept { return _permit_id; }
     };
     // Must be called on shard 0
-    future<endpoint_permit> lock_endpoint(locator::host_id, permit_id pid, seastar::compat::source_location l = seastar::compat::source_location::current());
+    future<endpoint_permit> lock_endpoint(locator::host_id, permit_id pid, std::source_location l = std::source_location::current());
 
 private:
     void permit_internal_error(const locator::host_id& addr, permit_id pid);

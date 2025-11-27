@@ -323,7 +323,6 @@
 #include <seastar/util/sampler.hh>
 #include <seastar/util/shared_token_bucket.hh>
 #include <seastar/util/short_streams.hh>
-#include <seastar/util/source_location-compat.hh>
 #include <seastar/util/spinlock.hh>
 #include <seastar/util/std-compat.hh>
 #include <seastar/util/string_utils.hh>

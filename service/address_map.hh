@@ -218,7 +218,7 @@ private:
         }
     }
 
-    void apply_to_all(locator::host_id id, entry_mutation m, seastar::compat::source_location l = seastar::compat::source_location::current());
+    void apply_to_all(locator::host_id id, entry_mutation m, std::source_location l = std::source_location::current());
 
 public: // Used by replicator
     static void prepare_apply(cluster_mutation& map, const host_mutation& mf) {
@@ -437,7 +437,7 @@ future<> address_map_t<Clock>::barrier() {
 }
 
 template <typename Clock>
-void address_map_t<Clock>::apply_to_all(locator::host_id id, entry_mutation m, seastar::compat::source_location l) {
+void address_map_t<Clock>::apply_to_all(locator::host_id id, entry_mutation m, std::source_location l) {
     if (this_shard_id() != 0) {
         on_internal_error(rslog, format("address_map::{}() called on shard {} != 0", l.function_name(), this_shard_id()));
     }

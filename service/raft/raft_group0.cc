@@ -1284,7 +1284,7 @@ struct sleep_with_exponential_backoff {
     std::chrono::seconds _retry_period{1};
     static constexpr std::chrono::seconds _max_retry_period{16};
     future<> operator()(abort_source& as,
-                        seastar::compat::source_location loc = seastar::compat::source_location::current()) {
+                        std::source_location loc = std::source_location::current()) {
         upgrade_log.info("{}: sleeping for {} seconds before retrying...", loc.function_name(), _retry_period);
         co_await sleep_abortable(_retry_period, as);
         _retry_period = std::min(_retry_period * 2, _max_retry_period);

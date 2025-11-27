@@ -13,7 +13,7 @@
 namespace service {
 
 struct raft_timeout {
-    seastar::compat::source_location loc = seastar::compat::source_location::current();
+    std::source_location loc = std::source_location::current();
     std::optional<lowres_clock::time_point> value;
 };
 

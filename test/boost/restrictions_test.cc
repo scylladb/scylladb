@@ -27,7 +27,7 @@ BOOST_AUTO_TEST_SUITE(restrictions_test)
 
 namespace {
 
-using seastar::compat::source_location;
+using std::source_location;
 
 std::unique_ptr<cql3::query_options> to_options(
         const cql3::cql_config& cfg,
@@ -46,7 +46,7 @@ void require_rows(cql_test_env& e,
                   std::optional<std::vector<std::string_view>> names,
                   const std::vector<bytes_opt>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const seastar::compat::source_location& loc = source_location::current()) {
+                  const std::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
     const auto rvals = values | std::views::transform([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
     cql3::cql_config cfg(cql3::cql_config::default_tag{});
