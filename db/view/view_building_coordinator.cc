@@ -63,6 +63,11 @@ future<service::group0_guard> view_building_coordinator::start_operation() {
 }
 
 future<> view_building_coordinator::await_event() {
+    // This injection is enabled by `view_building_coordinator_wait_before_await_event_after_starting_tasks` injection in `view_building_coordinator::work_on_view_building()`
+    co_await utils::get_local_injector().inject("view_building_coordinator_wait_before_await_event", [&] (auto& handler) -> future<> {
+        vbc_logger.info("await_event: paused, waiting for message");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + 5min);
+    });
     if (_remote_work_finished) {
         // If any remote work (`view_building_coordinator::work_on_tasks()`) was finished,
         // we cannot wait for an event becuase it was already broadcasted.
@@ -400,6 +405,11 @@ future<> view_building_coordinator::work_on_view_building(service::group0_guard 
         } else {
             vbc_logger.debug("Nothing to do for replica {}", replica);
         }
+    }
+
+    if (utils::get_local_injector().enter("view_building_coordinator_wait_before_await_event_after_starting_tasks")) {
+        // `view_building_coordinator_wait_before_await_event` injection waits for a message before processing `view_building_coordinator::await_event()`
+        utils::get_local_injector().enable("view_building_coordinator_wait_before_await_event");
     }
 }
 
