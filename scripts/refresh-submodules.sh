@@ -41,7 +41,7 @@ for ent in "${@:-${submodules[@]}}"; do
     # create a summary using the output format of "git submodule summary"
     SUMMARY="
 * ${submodule} ${head_ref}...${branch_ref} (${count}):
-$(git log --pretty='format: %H %s' --first-parent HEAD..${bump_to} | while IFS= read -r line; do
+$(git log --pretty='tformat: %H %s' --first-parent HEAD..${bump_to} | while IFS= read -r line; do
         SUBJECT=$(echo $line | cut -d' ' -f2-)
         echo "  > ${SUBJECT}"
         if [[ "$SUBJECT" == "Merge "* ]]; then
