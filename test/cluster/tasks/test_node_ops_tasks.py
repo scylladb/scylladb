@@ -57,7 +57,6 @@ def check_virtual_task_status(virtual_task: TaskStatus, expected_state: str, exp
     assert virtual_task.type == expected_type or virtual_task.type == ""
     assert virtual_task.kind == "cluster"
     assert virtual_task.scope == "cluster"
-    assert not virtual_task.is_abortable
     assert virtual_task.parent_id == "none"
     assert len(virtual_task.children_ids) == expected_children_num
 

@@ -5128,6 +5128,12 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
+future<> storage_service::abort_topology_request(utils::UUID request_id) {
+    co_await container().invoke_on(0, [request_id, this] (storage_service& ss) {
+        return _topology_state_machine.abort_request(*ss._group0, ss._group0_as, ss._feature_service, request_id);
+    });
+}
+
 future<> storage_service::wait_for_topology_not_busy() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     while (_topology_state_machine._topology.is_busy()) {

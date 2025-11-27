@@ -1071,6 +1071,13 @@ public:
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
+
+    // Initiates abort of a topology request with a given ID.
+    // May have no effect if the request is not in an abortable state.
+    // Doesn't wait until request is done. Use wait_for_topology_request_completion().
+    // Must be called on shard 0.
+    future<> abort_topology_request(utils::UUID request_id);
+
     future<> wait_for_topology_not_busy();
 
     future<> abort_paused_rf_change(utils::UUID request_id);
