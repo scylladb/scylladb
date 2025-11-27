@@ -7,8 +7,12 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/test/tools/output_test_stream.hpp>
+#include <chrono>
 #include <fmt/ranges.h>
 #include <seastar/util/closeable.hh>
+#include "seastar/core/future.hh"
+#include "seastar/core/sleep.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"
@@ -295,4 +299,35 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     BOOST_REQUIRE_EQUAL(erm->get_natural_replicas(dht::token::from_int64(1)),
         host_id_vector_replica_set{e1_id1});
     BOOST_REQUIRE_EQUAL(token_metadata->get_endpoint(t1), e1_id1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_stale_version_notification) {
+    const auto e1_id = gen_id(1);
+
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+    stm.set_stall_detector_threshold(std::chrono::steady_clock::duration(std::chrono::milliseconds(10)));
+
+    // hold the first version
+    auto tm = stm.get();
+    auto token_metadata = stm.make_token_metadata_ptr();
+    stm.mutate_token_metadata([] (auto& md) {
+        md.set_version(service::topology::version_t{42});
+        return make_ready_future();
+    }).get();
+
+    seastar::sleep(std::chrono::milliseconds(20)).get(); // wait for the notification task to run
+
+    boost::test_tools::output_test_stream my_stream;
+    std::streambuf* oldCerr = std::cerr.rdbuf();
+    std::cerr.rdbuf(my_stream.rdbuf());
+
+    // free expired version
+    tm = stm.get();
+
+    std::cerr.rdbuf(oldCerr);
+
+    BOOST_TEST(my_stream.str().find("topology version 0 held for") != std::string::npos);
 }
