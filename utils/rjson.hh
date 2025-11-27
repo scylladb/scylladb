@@ -26,6 +26,7 @@
  * or calling Size() on a non-array value.
  */
 
+#include <expected>
 #include <iostream>
 #include <map>
 #include <string>
@@ -212,10 +213,9 @@ public:
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
 rjson::value parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
-// Parses a JSON value returns a disengaged optional on failure.
-// NOTICE: any error context will be lost, so this function should
-// be used only if one does not care why parsing failed.
-std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
+// Parses a JSON value returns a std::unexpected on failure.
+// NOTE: internally this method might still use exceptions for error handling, we have no control over rjson internals.
+std::expected<rjson::value, sstring> try_parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
 // Needs to be run in thread context
 rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = default_max_nested_level);
 
