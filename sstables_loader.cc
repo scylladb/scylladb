@@ -308,12 +308,15 @@ private:
                 if (auto sst = co_await sstable_sink->close_and_seal()) {
                     llog.info("Memory diagnostic before load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     co_await sst->load_owner_shards(sharder);
+                    llog.info("Memory diagnostic right after load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
+                    SCYLLA_ASSERT(shards.size() == 1);
                     llog.debug("SSTable shards {}", fmt::join(shards, ", "));
                     downloaded_sstables[shards.front()]._ssts.emplace_back(
                         sst_classification_info::minimal_sst_info{._generation = gen, ._version = descriptor.version, ._format = descriptor.format});
                     co_await sst->destroy();
                     sst = {};
+                    llog.info("Memory diagnostic right after destroying sst instance\n{}", memory::generate_memory_diagnostics_report());
                 }
             }
             if (progress) {
