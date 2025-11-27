@@ -1910,8 +1910,8 @@ SEASTAR_TEST_CASE(test_slicing_mutation) {
 
     test_slicing(query::clustering_row_ranges {
             query::clustering_range {
-                { },
-                { },
+                std::nullopt,
+                std::nullopt,
             },
         },
         std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7 });
