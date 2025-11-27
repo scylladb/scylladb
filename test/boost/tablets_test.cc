@@ -1896,6 +1896,99 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_migrations_in_the_plan) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocation) {
+    // 1. The cluster has two racks, RackA and RackB, and the plan is per-rack.
+    // 2. Two sibling tablets, T1 and T2, are marked for merge.
+    // 3. In RackA, the replicas of T1 and T2 are co-located on an overloaded node,
+    //    making them a candidate for inter-node migration to achieve load balancing.
+    // 4. In RackB, the replicas of T1 and T2 are on the same node but on different
+    //    shards, making them a candidate for intra-node migration to fix merge co-location.
+    //
+    // Verify that the load balancer's plan does not include conflicting migrations.
+    // If the tablets T1 and T2 were chosen to be migrated between node in RackA, the merge
+    // co-location plan should not generate migrations in RackB for the same tablets.
+
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        topology_builder topo(e);
+
+        // RackA: NodeA (overloaded), NodeB (underloaded)
+        // RackB: NodeC (balanced, with intra-node misalignment for co-location)
+        auto rackA = topo.rack();
+        auto hostA = topo.add_node(node_state::normal, 2, rackA);
+        auto hostB = topo.add_node(node_state::normal, 2, rackA);
+
+        auto rackB = topo.start_new_rack();
+        auto hostC = topo.add_node(node_state::normal, 2, rackB);
+
+        // Create a table with 2 tablets that will be marked for merge.
+        auto ks_name = add_keyspace_racks(e, {{topo.dc(), {rackA.rack, rackB.rack}}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+        // Add more tables to create a clear load imbalance that can be resolved.
+        auto table_for_load_1 = add_table(e, ks_name).get();
+        auto table_for_load_2 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap_merge(2);
+            auto t1 = tmap_merge.first_tablet();
+            auto t2 = *tmap_merge.next_tablet(t1);
+
+            tmap_merge.set_tablet(t1, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{hostA, 0}, // RackA
+                    tablet_replica{hostC, 0}, // RackB
+                }
+            });
+            tmap_merge.set_tablet(t2, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{hostA, 0}, // RackA
+                    tablet_replica{hostC, 1}, // RackB
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap_merge));
+
+            // Add more tablets to hostA to make it clearly overloaded.
+            // Total load on hostA will be 4, hostB is 0. Avg is 2.
+            // Moving the {t1,t2} set (load 2) from A->B makes loads {2, 2}, which is balanced.
+            tablet_map tmap_load(1);
+            tmap_load.set_tablet(tmap_load.first_tablet(), tablet_info{tablet_replica_set{tablet_replica{hostA, 0}}});
+
+            tablet_map tmap_load_clone = co_await tmap_load.clone_gently();
+            tmeta.set_tablet_map(table_for_load_1, std::move(tmap_load));
+            tmeta.set_tablet_map(table_for_load_2, std::move(tmap_load_clone));
+            co_return;
+        });
+
+        // Mark the tablets for merge to create a co-location plan.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) {
+            return tmeta.mutate_tablet_map_async(table1, [] (tablet_map& tmap) {
+                locator::resize_decision decision;
+                decision.way = locator::resize_decision::merge{};
+                decision.sequence_number = tmap.resize_decision().sequence_number + 1;
+                tmap.set_resize_decision(std::move(decision));
+                return make_ready_future<>();
+            });
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        migration_plan plan = talloc.balance_tablets(stm.get()).get();
+
+        // The plan should contain non-conflicting migrations.
+        BOOST_REQUIRE(!plan.empty());
+        std::set<global_tablet_id> tablets;
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE(!tablets.contains(mig.tablet));
+            tablets.insert(mig.tablet);
+        }
+
+    }, cfg).get();
+}
+
 // Throws if tablets have more than 1 replica in a given rack.
 // Run in seastar thread.
 void check_no_rack_overload(const token_metadata& tm) {
