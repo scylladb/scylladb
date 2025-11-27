@@ -1805,6 +1805,7 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
         sstlog.trace("{}: shards={}", get_filename(), _shards);
         co_return;
     }
+    sstlog.debug("Reading metadata");
     co_await read_scylla_metadata();
 
     auto has_valid_sharding_metadata = std::invoke([this] {
@@ -1819,13 +1820,16 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
         return sm && sm->token_ranges.elements.size();
     });
     // Statistics is needed for SSTable loading validation and possible Summary regeneration.
+    sstlog.debug("Reading statistics");
     co_await read_statistics();
 
     // If sharding metadata is not available, we must load first and last keys from summary
     // for sstable::compute_shards_for_this_sstable() to operate on them.
     if (!has_valid_sharding_metadata) {
         sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
+        sstlog.debug("Reading summary");
         co_await read_summary();
+        sstlog.debug("Reading partitions db footer");
         co_await read_partitions_db_footer();
         set_first_and_last_keys();
     }
@@ -3584,7 +3588,8 @@ sstable::sstable(schema_ptr schema,
     , _schema(std::move(schema))
     , _generation(generation)
     , _state(state)
-    , _storage(make_storage(manager, storage, _state))
+    , _storage_options(storage)
+    , _storage(make_storage(manager, _storage_options, _state))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
@@ -3878,7 +3883,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                         : _bufs(std::move(bufs))
                     {}
                     buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = delete;
 
                     future<temporary_buffer<char>> get() override {
                         if (_index < _bufs.size()) {
