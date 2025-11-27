@@ -8,16 +8,16 @@
 import functools
 import logging
 import string
+import threading
 import time
 from concurrent import futures
 from typing import NamedTuple
 
 import pytest
 from cassandra import AlreadyExists, ConsistencyLevel, InvalidRequest
-from cassandra.cluster import ThreadPoolExecutor
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement, dict_factory
-from ccmlib.scylla_cluster import ScyllaCluster
+from concurrent.futures import ThreadPoolExecutor
 
 from dtest_class import Tester, create_cf, create_ks, read_barrier
 from tools.assertions import assert_all, assert_invalid
@@ -153,7 +153,7 @@ class TestSchemaManagement(Tester):
         rows = sessions[0].execute(SimpleStatement(f"SELECT * FROM {ks}.{step3_table}", consistency_level=ConsistencyLevel.ALL))
         assert len(rows_to_list(rows)) == 1, f"Expected 1 row but got rows:{rows} instead"
 
-    @pytest.mark.parametrize("case", ("write", "read", "read_and_write"))
+    @pytest.mark.parametrize("case", ("write", "read", "mixed"))
     def test_alter_table_in_parallel_to_read_and_write(self, case):
         """
         Create a table and write into while altering the table
@@ -168,31 +168,23 @@ class TestSchemaManagement(Tester):
         [node1, node2, node3] = cluster.nodelist()
         session = self.patient_exclusive_cql_connection(node1)
 
-        def alter_table():
-            alter_statement = f'ALTER TABLE keyspace1.standard1 DROP ("C{col_number - 1}", "C{col_number - 2}")'
-            logger.debug(f"alter_statement {alter_statement}")
-            return session.execute(alter_statement)
-
-        def cs_run(stress_type, col=col_number - 2):
+        def run_stress(stress_type, col=col_number - 2):
             node2.stress_object([stress_type, "n=10000", "cl=QUORUM", "-schema", "replication(factor=3)", "-col", f"n=FIXED({col})", "-rate", "threads=1"])
 
         logger.debug("Populate")
-        cs_run("write", col_number)
+        run_stress("write", col_number)
 
-        case_map = {
-            "read": functools.partial(cs_run, "read"),
-            "write": functools.partial(cs_run, "write"),
-            "read_and_write": functools.partial(cs_run, "mixed"),
-        }
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             logger.debug(f"2. Run {case} statement in a loop")
-            statement_future = executor.submit(case_map[case])
+            statement_future = executor.submit(functools.partial(run_stress, case))
 
             logger.debug(f"let's {case} statement work some time")
             time.sleep(2)
 
             logger.debug("3. Alter table while inserts are running")
-            alter_result = alter_table()
+            alter_statement = f'ALTER TABLE keyspace1.standard1 DROP ("C{col_number - 1}", "C{col_number - 2}")'
+            logger.debug(f"alter_statement {alter_statement}")
+            alter_result = session.execute(alter_statement)
             logger.debug(alter_result.all())
 
             logger.debug(f"wait till {case} statement finished")
@@ -201,8 +193,8 @@ class TestSchemaManagement(Tester):
         rows = session.execute(SimpleStatement("SELECT * FROM keyspace1.standard1 LIMIT 1;", consistency_level=ConsistencyLevel.ALL))
         assert len(rows_to_list(rows)[0]) == col_number - 1, f"Expected {col_number - 1} columns but got rows:{rows} instead"
 
-        logger.debug("reade and check data")
-        cs_run("read")
+        logger.debug("read and check data")
+        run_stress("read")
 
     @pytest.mark.skip("unimplemented")
     def commitlog_replays_after_schema_change(self):
@@ -262,7 +254,7 @@ class TestSchemaManagement(Tester):
             "alter_table": alter_table_case,
             "drop_table": drop_table_case,
         }
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             logger.debug(f"2. kill node during {case}")
             kill_node_future = executor.submit(node2.stop, gently=False, wait_other_notice=True)
             case_map[case]()
@@ -449,29 +441,46 @@ class TestLargePartitionAlterSchema(Tester):
         """
         )
 
-    def populate(self, session, data, ck_start, ck_end):
-        logger.debug(f"Start populate DB: {self.PARTITIONS} partitions with {ck_end - ck_start} records in each partition")
+    def populate(self, session, data, ck_start, ck_end=None, stop_populating: threading.Event = None):
+        ck = ck_start
+        def _populate_loop():
+            nonlocal ck
+            while True:
+                if stop_populating is not None and stop_populating.is_set():
+                    return
+                if ck_end is not None and ck >= ck_end:
+                    return
+                for pk in range(self.PARTITIONS):
+                    row = [pk, ck, self.STRING_VALUE, self.STRING_VALUE]
+                    data.append(row)
+                    yield tuple(row)
+                ck += 1
 
-        ck_rows = [ck_start, ck_end]
+        records_written = ck - ck_start
+
+        logger.debug(f"Start populate DB: {self.PARTITIONS} partitions with {ck_end - ck_start if ck_end else 'infinite'} records in each partition")
+
+        parameters = _populate_loop()
 
         stmt = session.prepare("INSERT INTO lp_table (pk, ck1, val1, val2) VALUES (?, ?, ?, ?)")
 
-        for pk in range(self.PARTITIONS):
-            for ck in range(ck_rows[0], ck_rows[1]):
-                data.append([pk, ck, self.STRING_VALUE, self.STRING_VALUE])
-
-        execute_concurrent_with_args(session=session, statement=stmt, parameters=data)
-        logger.debug(f"Finish populate DB: {self.PARTITIONS} partitions with {ck_end - ck_start} records in each partition")
+        execute_concurrent_with_args(session=session, statement=stmt, parameters=parameters, concurrency=100)
+        logger.debug(f"Finish populate DB: {self.PARTITIONS} partitions with {records_written} records in each partition")
         return data
 
-    def read(self, session, ck_max):
-        logger.debug(f"Start reading..")
-
-        for _ in range(2):
-            for pk in range(self.PARTITIONS):
+    def read(self, session, ck_max, stop_reading: threading.Event = None):
+        def _read_loop():
+            while True:
                 for ck in range(ck_max):
-                    session.execute(f"select * from lp_table where pk = {pk} and ck1 = {ck}")
+                    for pk in range(self.PARTITIONS):
+                        if stop_reading is not None and stop_reading.is_set():
+                            return
+                        session.execute(f"select * from lp_table where pk = {pk} and ck1 = {ck}")
+                if stop_reading is None:
+                    return
 
+        logger.debug(f"Start reading..")
+        _read_loop()
         logger.debug(f"Finish reading..")
 
     def add_column(self, session, column_name, column_type):
@@ -488,10 +497,17 @@ class TestLargePartitionAlterSchema(Tester):
         data = self.populate(session=session, data=[], ck_start=0, ck_end=10)
 
         threads = []
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        timeout = 300
+        ck_end = 5000
+        if self.cluster.scylla_mode == "debug":
+            timeout = 900
+            ck_end = 500
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stop_populating = threading.Event()
+            stop_reading = threading.Event()
             # Insert new rows in background
-            threads.append(executor.submit(self.populate, session=session, data=data, ck_start=10, ck_end=1500))
-            threads.append(executor.submit(self.read, session=session, ck_max=1500))
+            threads.append(executor.submit(self.populate, session=session, data=data, ck_start=10, ck_end=None, stop_populating=stop_populating))
+            threads.append(executor.submit(self.read, session=session, ck_max=ck_end, stop_reading=stop_reading))
             # Wait for running load
             time.sleep(10)
             self.add_column(session, "new_clmn", "int")
@@ -500,12 +516,19 @@ class TestLargePartitionAlterSchema(Tester):
             logger.debug("Flush data")
             self.cluster.nodelist()[0].flush()
 
-            for future in futures.as_completed(threads, timeout=300):
+            # Stop populating and reading soon after flush
+            time.sleep(1)
+            logger.debug("Stop populating and reading")
+            stop_populating.set()
+            stop_reading.set()
+
+            for future in futures.as_completed(threads, timeout=timeout):
                 try:
                     future.result()
                 except Exception as exc:  # noqa: BLE001
                     pytest.fail(f"Generated an exception: {exc}")
 
+        # Add 'null' values for the new column `new_clmn` in the expected data
         for i, _ in enumerate(data):
             data[i].append(None)
 
@@ -518,14 +541,16 @@ class TestLargePartitionAlterSchema(Tester):
 
         threads = []
         timeout = 300
-        ck_end = 1500
-        if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode == "debug":
+        ck_end = 5000
+        if self.cluster.scylla_mode == "debug":
             timeout = 900
-            ck_end = 150
-        with ThreadPoolExecutor(max_workers=5) as executor:
+            ck_end = 500
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stop_populating = threading.Event()
+            stop_reading = threading.Event()
             # Insert new rows in background
-            threads.append(executor.submit(self.populate, session=session, data=data, ck_start=10, ck_end=ck_end))
-            threads.append(executor.submit(self.read, session=session, ck_max=ck_end))
+            threads.append(executor.submit(self.populate, session=session, data=data, ck_start=10, ck_end=None, stop_populating=stop_populating))
+            threads.append(executor.submit(self.read, session=session, ck_max=ck_end, stop_reading=stop_reading))
             # Wait for running load
             time.sleep(10)
             self.drop_column(session=session, column_name="val1")
@@ -533,6 +558,12 @@ class TestLargePartitionAlterSchema(Tester):
             # Memtable flush has to happen after a schema alter concurrently with a read
             logger.debug("Flush data")
             self.cluster.nodelist()[0].flush()
+
+            # Stop populating and reading soon after flush
+            time.sleep(1)
+            logger.debug("Stop populating and reading")
+            stop_populating.set()
+            stop_reading.set()
 
             result = []
             for future in futures.as_completed(threads, timeout=timeout):
@@ -585,13 +616,20 @@ class HistoryVerifier:
 
             query = f"select * from system.scylla_table_schema_history WHERE cf_id={cf_id}"
             res = session.execute(query).current_rows
-            new_versions = list(set(filter(lambda uuid: str(uuid) not in self.versions, map(lambda entry: entry["schema_version"], res))))
+            new_versions = list({
+                entry["schema_version"]
+                for entry in res
+                if str(entry["schema_version"]) not in self.versions
+            })
             msg = f"Expect 1, got len(new_versions)={len(new_versions)}"
             assert len(new_versions) == 1, msg
             current_version = str(new_versions[0])
             logger.debug(f"New schema_version {current_version} after executing '{self.query}'")
-            regular_entries = filter(lambda entry: entry["kind"] == "regular" and current_version == str(entry["schema_version"]), res)
-            columns_list = map(lambda entry: {"column_name": entry["column_name"], "type": entry["type"]}, regular_entries)
+            columns_list = (
+                {"column_name": entry["column_name"], "type": entry["type"]}
+                for entry in res
+                if entry["kind"] == "regular" and current_version == str(entry["schema_version"])
+            )
             self.versions_dict[current_version] = {}
             for item in columns_list:
                 self.versions_dict[current_version][item["column_name"]] = item["type"]
