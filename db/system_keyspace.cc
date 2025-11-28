@@ -110,6 +110,8 @@ namespace {
             system_keyspace::v3::CDC_LOCAL,
             system_keyspace::DICTS,
             system_keyspace::VIEW_BUILDING_TASKS,
+            system_keyspace::CLIENT_ROUTES,
+
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -137,6 +139,7 @@ namespace {
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
                 system_keyspace::VIEW_BUILDING_TASKS,
+                system_keyspace::CLIENT_ROUTES,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -1676,6 +1679,23 @@ schema_ptr system_keyspace::view_building_tasks() {
     return schema;
 }
 
+schema_ptr system_keyspace::client_routes() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CLIENT_ROUTES);
+        return schema_builder(NAME, CLIENT_ROUTES, std::make_optional(id))
+                .with_column("connection_id", utf8_type, column_kind::partition_key)
+                .with_column("host_id", uuid_type, column_kind::clustering_key)
+                .with_column("address", utf8_type)
+                .with_column("port", int32_type)
+                .with_column("tls_port", int32_type)
+                .with_column("alternator_port", int32_type)
+                .with_column("alternator_https_port", int32_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
     auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
@@ -2603,7 +2623,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -3125,6 +3145,52 @@ future<mutation> system_keyspace::make_remove_view_building_task_mutation(api::t
 }
 
 static constexpr auto VIEW_BUILDING_PROCESSING_BASE_ID_KEY = "view_building_processing_base_id";
+
+future<mutation> system_keyspace::make_remove_client_route_mutation(api::timestamp_type ts, std::string_view connection_id, const utils::UUID& host_id) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE connection_id = ? and host_id = ?", NAME, CLIENT_ROUTES);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {connection_id, host_id});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_update_client_route_mutation(api::timestamp_type ts, const client_route& route) {
+    static const sstring stmt = format("INSERT INTO {}.{} (connection_id, host_id, address, port, tls_port, alternator_port, alternator_https_port) VALUES (?, ?, ?, ?, ?, ?, ?)", NAME, CLIENT_ROUTES);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {
+        route.connection_id,
+        route.host_id,
+        route.address,
+        route.port,
+        route.tls_port,
+        route.alternator_port,
+        route.alternator_https_port
+    });
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::vector<system_keyspace::client_route>> system_keyspace::get_client_routes() const {
+    std::vector<system_keyspace::client_route> result;
+    static const sstring query = format("SELECT * from {}.{}", NAME, CLIENT_ROUTES);
+    auto rs = co_await _qp.execute_internal(query, cql3::query_processor::cache_internal::yes);
+    for (const auto& row : *rs) {
+        result.emplace_back(
+            row.get_as<sstring>("connection_id"),
+            row.get_as<utils::UUID>("host_id"),
+            row.get_as<sstring>("address"),
+            row.get_opt<int32_t>("port"),
+            row.get_opt<int32_t>("tls_port"),
+            row.get_opt<int32_t>("alternator_port"),
+            row.get_opt<int32_t>("alternator_https_port")
+        );
+    }
+    co_return result;
+}
 
 future<std::optional<table_id>> system_keyspace::get_view_building_processing_base_id() {
     auto value = co_await get_scylla_local_param(VIEW_BUILDING_PROCESSING_BASE_ID_KEY);
