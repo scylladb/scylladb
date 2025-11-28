@@ -469,16 +469,21 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
     return true;
 }
 
-tablet_map::tablet_map(size_t tablet_count)
+tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
         : _log2_tablets(log2ceil(tablet_count)) {
     if (tablet_count != 1ul << _log2_tablets) {
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets.resize(tablet_count);
+    if (with_raft_info) {
+        _raft_info.emplace();
+        _raft_info->resize(tablet_count);
+    }
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, _repair_scheduler_config);
+    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, 
+        _repair_scheduler_config, _raft_info);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -496,7 +501,17 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info, _repair_scheduler_config);
+    std::optional<raft_info_container> raft_info;
+    if (_raft_info) {
+        raft_info.emplace();
+        for (const auto& i: *_raft_info) {
+            raft_info->emplace_back(i);
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, 
+        _resize_task_info, _repair_scheduler_config, std::move(raft_info));
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -688,6 +703,22 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
         return nullptr;
     }
     return &i->second;
+}
+
+const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {
+    check_tablet_id(id);
+    if (!_raft_info.has_value()) {
+        on_internal_error(tablet_logger, "Tablet map doesn't have raft info");
+    }
+    return (*_raft_info)[size_t(id)];
+}
+
+void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) {
+    check_tablet_id(id);
+    if (!_raft_info) {
+        on_internal_error(tablet_logger, "Tablet map doesn't have raft info");
+    }
+    (*_raft_info)[size_t(id)] = std::move(raft_info);
 }
 
 // The names are persisted in system tables so should not be changed.

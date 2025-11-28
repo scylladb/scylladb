@@ -66,6 +66,7 @@ schema_ptr make_tablets_schema() {
             .with_column("table_name", utf8_type, column_kind::static_column)
             .with_column("last_token", long_type, column_kind::clustering_key)
             .with_column("replicas", replica_set_type)
+            .with_column("raft_group_id", uuid_type)
             .with_column("new_replicas", replica_set_type)
             .with_column("stage", utf8_type)
             .with_column("transition", utf8_type)
@@ -192,6 +193,12 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
                 m.set_clustered_cell(ck, "session", data_value(tr_info->session_id.uuid()), ts);
             }
         }
+
+        if (tablets.has_raft_info()) {
+            const auto& raft_info = tablets.get_tablet_raft_info(tid);
+            m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
+        }
+
         tid = *tablets.next_tablet(tid);
     }
     co_await process_mutation(std::move(m));
@@ -636,6 +643,21 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
     map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
 
+    if (db->features().strongly_consistent_tables) {
+        if (row.has("raft_group_id")) {
+            if (!map.has_raft_info()) {
+                throw std::runtime_error(fmt::format("Unexpected raft group id for tablet {} of table {}",
+                    tid, table));
+            }
+            map.set_tablet_raft_info(tid, {
+                .group_id = raft::group_id(row.get_as<utils::UUID>("raft_group_id"))
+            });
+        } else if (map.has_raft_info()) {
+            throw std::runtime_error(fmt::format("Raft group id is not set for tablet {} of table {}",
+                                            tid, table));
+        }
+    }
+
     if (update_repair_time && db) {
         auto myid = db->get_token_metadata().get_my_id();
         auto range = map.get_token_range(tid);
@@ -690,7 +712,8 @@ struct tablet_metadata_builder {
                 current = {};
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
-                auto tmap = tablet_map(tablet_count);
+                auto with_raft_info = db->features().strongly_consistent_tables && row.has("raft_group_id");
+                auto tmap = tablet_map(tablet_count, with_raft_info);
                 auto first_tablet = tmap.first_tablet();
                 current = active_tablet_map{table, std::move(tmap), first_tablet};
             }
