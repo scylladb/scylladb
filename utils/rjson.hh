@@ -236,6 +236,11 @@ rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = defaul
 rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
+// Counterintuitively rapidjson's GetString method is not good for string conversion
+// because it needs to scan the string unnecessarily and GetStringLength could be used
+// to avoid that. This simple helper combines both.
+sstring to_sstring(const rjson::value& str);
+
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, std::string_view name);
 const rjson::value* find(const rjson::value& value, std::string_view name);
