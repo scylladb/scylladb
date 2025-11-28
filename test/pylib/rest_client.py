@@ -122,9 +122,9 @@ class RESTClient(metaclass=ABCMeta):
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
                      port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                     json: Optional[Mapping] = None) -> None:
+                     json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
         await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
-                          json = json)
+                          json = json, timeout = timeout)
 
 
 class UnixRESTClient(RESTClient):
