@@ -869,6 +869,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.warn("Ignoring unused features found in config: {}", unused_features);
             }
 
+            // Enable Raft-related columns in system.tablets if the experimental feature is enabled.
+            replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
+            ));
+
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg);
 
