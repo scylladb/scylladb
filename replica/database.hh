@@ -1460,7 +1460,7 @@ public:
 
     using ks_cf_t = std::pair<sstring, sstring>;
     using ks_cf_to_uuid_t =
-        flat_hash_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
+        std::unordered_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
     class tables_metadata {
         rwlock _cf_lock;
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
