@@ -4292,6 +4292,13 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 }
 
 future<> storage_service::mark_excluded(const std::vector<locator::host_id>& hosts) {
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.mark_excluded(hosts);
+        });
+    }
+
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
