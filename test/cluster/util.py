@@ -203,11 +203,14 @@ async def wait_until_topology_upgrade_finishes(manager: ManagerClient, ip_addr: 
         return status == "done" or None
     await wait_for(check, deadline=deadline, period=1.0)
 
-async def wait_until_driver_service_level_created(cql: Session, deadline: float):
+async def wait_until_driver_service_level_created(manager: ManagerClient, deadline: float):
+    cql = manager.get_cql()
     async def check():
         service_levels = await cql.run_async("LIST ALL SERVICE_LEVELS")
         return ("driver" in [sl.service_level for sl in service_levels]) or None
     await wait_for(check, deadline=deadline, period=1.0)
+    # sync driver service level on all nodes
+    await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in await manager.running_servers()))
 
 async def delete_raft_topology_state(cql: Session, host: Host):
     await cql.run_async("truncate table system.topology", host=host)
