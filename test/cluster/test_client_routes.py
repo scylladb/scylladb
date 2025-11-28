@@ -161,3 +161,134 @@ async def test_client_routes_lost_quorum(request, manager: ManagerClient):
 
     await asyncio.gather(fail_req(manager.api.client.post), fail_req(manager.api.client.delete))
     await wait_for_expected_client_routes_size(cql, 1)
+
+def setup_events_test(cql, received_events, monkeypatch):
+    # scylla-driver >= 3.29.6  supports CLIENT_ROUTES_CHANGE events.
+    # For older python driver, monkeypatching is necessary
+    if CLIENT_ROUTES_CHANGE_EVENT_NAME not in cassandra.protocol.known_event_types:
+        def _recv_client_routes_change(f, arg):
+            logger.info(f"monkeypatch_driver recv_client_routes_change, f={f} arg={arg}")
+            change_type = cassandra.protocol.read_string(f)
+            connection_ids = [cassandra.protocol.read_string(f) for _ in range(cassandra.protocol.read_short(f))]
+            host_ids = [cassandra.protocol.read_string(f) for _ in range(cassandra.protocol.read_short(f))]
+            return {
+                "change_type": change_type,
+                "connection_ids": connection_ids,
+                "host_ids": host_ids
+            }
+        monkeypatch.setattr(cassandra.protocol, "known_event_types", cassandra.protocol.known_event_types.union([CLIENT_ROUTES_CHANGE_EVENT_NAME]), raising=True)
+        monkeypatch.setattr(EventMessage, "recv_client_routes_change", _recv_client_routes_change, raising=False)
+
+    def on_event(event):
+        logger.info(f"Received an event: {event}")
+        if len(received_events) > 0 and received_events[-1] == event:
+            logger.info(f"The received event is a duplicate: {event}")
+        else:
+            received_events.append(event)
+
+    cql.cluster.control_connection._connection.register_watchers({CLIENT_ROUTES_CHANGE_EVENT_NAME: on_event})
+
+async def wait_for_expected_event_num(expected_num, received_events):
+    async def expected_event_num(num):
+        logger.info(f"Checking if number of events is equal expected_num={expected_num}, events={received_events}")
+        if len(received_events) == num:
+            return num
+        return None
+    await wait_for(lambda: expected_event_num(expected_num), time.time() + 10)
+
+@pytest.mark.asyncio
+async def test_events(request, manager: ManagerClient, monkeypatch):
+    """
+    This test verifies client routes change events in the following steps:
+      1. Add one new entry to client_routes.
+      2. Verify that the driver received one new event.
+      3. Add two new entries to client_routes using one POST request.
+      4. Verify that the driver received one new event with two updates.
+      5. Delete an entry, and verify that the driver received the event.
+    """
+
+    servers = await manager.servers_add(2, cmdline=['--smp=2'])
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    received_events = []
+    setup_events_test(cql, received_events, monkeypatch)
+
+    await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)])
+
+    await wait_for_expected_event_num(1, received_events)
+    assert received_events[0]["change_type"] == "UPDATE_NODES"
+    assert received_events[0]["connection_ids"] == [generate_connection_id(0)]
+    assert received_events[0]["host_ids"] == [generate_host_id(0)]
+
+    await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[
+        generate_client_routes_entry(1),
+        generate_client_routes_entry(2),
+    ])
+    await wait_for_expected_event_num(2, received_events)
+    assert received_events[1]["change_type"] == "UPDATE_NODES"
+    assert received_events[1]["connection_ids"] == [generate_connection_id(1), generate_connection_id(2)]
+    assert received_events[1]["host_ids"] == [generate_host_id(1), generate_host_id(2)]
+
+    await manager.api.client.delete("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)])
+    await wait_for_expected_event_num(3, received_events)
+    assert received_events[2]["change_type"] == "UPDATE_NODES"
+    assert received_events[2]["connection_ids"] == [generate_connection_id(0)]
+    assert received_events[2]["host_ids"] == [generate_host_id(0)]
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, monkeypatch):
+    """
+    This test verifies that client routes change events are sent when client_routes
+    data is propagated via snapshot transfer:
+      1. Create a 3-node cluster.
+      2. Enable `block_group0_transfer_snapshot` error injection on one node, and stop it.
+      3. Change client routes with a POST request on other nodes, and trigger a snapshot.
+      4. Start the stopped node, and send a message to stop waiting on `block_group0_transfer_snapshot`.
+      5. Verify that an event was sent.
+    """
+    servers = await manager.servers_add(3, cmdline=['--smp=2'])
+    cql, hosts = await manager.get_ready_cql(servers)
+    server_to_restart = servers[2]
+    error_to_inject = "block_group0_transfer_snapshot"
+
+    await manager.server_update_config(server_to_restart.server_id, "error_injections_at_startup", [error_to_inject])
+    await manager.server_stop(server_to_restart.server_id)
+
+    await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(1)])
+    await wait_for_expected_client_routes_size(cql, 1)
+    await trigger_snapshot(manager, servers[0])
+
+    await manager.server_start(server_to_restart.server_id)
+    log = await manager.server_open_log(server_to_restart.server_id)
+    await log.wait_for("block_group0_transfer_snapshot: waiting for message")
+    cql = await manager.get_cql_exclusive(server_to_restart)
+    await wait_for_expected_client_routes_size(cql, 0)
+
+    received_events = []
+    setup_events_test(cql, received_events, monkeypatch)
+
+    await manager.api.message_injection(server_to_restart.ip_addr, error_to_inject)
+    await wait_for_expected_client_routes_size(cql, 1)
+    await wait_for_expected_event_num(1, received_events)
+    assert received_events[0]["change_type"] == "UPDATE_NODES"
+    assert received_events[0]["connection_ids"] == [generate_connection_id(1)]
+    assert received_events[0]["host_ids"] == [generate_host_id(1)]
+    await log.wait_for("transfer snapshot: raft snapshot includes client_routes mutation")
+
+@pytest.mark.asyncio
+async def test_huge_event(request, manager: ManagerClient, monkeypatch):
+    """
+    This test verifies that an event can be sent to the driver even when it contains many host_ids and connection_ids.
+    """
+    servers = await manager.servers_add(2, cmdline=['--smp=2'])
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    received_events = []
+    setup_events_test(cql, received_events, monkeypatch)
+
+    await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(i) for i in range(1000)])
+
+    await wait_for_expected_event_num(1, received_events)
+    assert set(received_events[0]["connection_ids"]) == set([generate_connection_id(i) for i in range(1000)])
+    assert set(received_events[0]["host_ids"]) == set([generate_host_id(i) for i in range(1000)])
