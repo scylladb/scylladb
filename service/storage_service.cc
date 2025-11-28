@@ -512,6 +512,17 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
                 sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
             }
         break;
+        case node_state::replacing:
+            // Save the mapping just like for bootstrap above, but only in the case of replace with different IP, so
+            // that we don't have to delete the row of the node being replaced. For replace with the same IP, the
+            // mapping is recovered on restart based on the state of the topology state machine and system.peers.
+            if (!is_me(ip)) {
+                auto replaced_id = std::get<replace_param>(t.req_param.at(raft_id)).replaced_id;
+                if (const auto it = host_id_to_ip_map.find(locator::host_id(replaced_id.uuid())); it == host_id_to_ip_map.end() || it->second != ip) {
+                    sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
+                }
+            }
+        break;
         default:
         break;
     }
@@ -3074,6 +3085,22 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
     set_mode(mode::STARTING);
 
     std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints = co_await _sys_ks.local().load_endpoint_state();
+    if (_group0->joined_group0() && raft_topology_change_enabled()) {
+        // Recover the endpoint state of the node replacing with the same IP. Its IP mapping is not in system.peers.
+        const auto& topo = _topology_state_machine._topology;
+        for (const auto& [id, replica_state]: topo.transition_nodes) {
+            auto host_id = locator::host_id(id.uuid());
+            if (replica_state.state == node_state::replacing && !loaded_endpoints.contains(host_id)) {
+                auto replaced_id = std::get<replace_param>(topo.req_param.at(id)).replaced_id;
+                if (const auto it = loaded_endpoints.find(locator::host_id(replaced_id.uuid())); it != loaded_endpoints.end()) {
+                    auto ip = it->second.endpoint;
+                    slogger.info("Adding node {}/{} that is replacing {}/{} to loaded_endpoints", host_id, ip, replaced_id, ip);
+                    gms::loaded_endpoint_state st{.endpoint = ip};
+                    loaded_endpoints.emplace(host_id, std::move(st));
+                }
+            }
+        }
+    }
 
     // Seeds are now only used as the initial contact point nodes. If the
     // loaded_endpoints are empty which means this node is a completely new
