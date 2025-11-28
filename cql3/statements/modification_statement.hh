@@ -113,15 +113,15 @@ public:
 
     virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const = 0;
 
-    virtual uint32_t get_bound_terms() const override;
+    uint32_t get_bound_terms() const override;
 
-    virtual const sstring& keyspace() const;
+    const sstring& keyspace() const;
 
-    virtual const sstring& column_family() const;
+    const sstring& column_family() const;
 
-    virtual bool is_counter() const;
+    bool is_counter() const;
 
-    virtual bool is_view() const;
+    bool is_view() const;
 
     int64_t get_timestamp(int64_t now, const query_options& options) const;
 
@@ -129,12 +129,12 @@ public:
 
     std::optional<gc_clock::duration> get_time_to_live(const query_options& options) const;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
     void validate(query_processor&, const service::client_state& state) const override;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     void add_operation(::shared_ptr<operation> op);
 
@@ -264,7 +264,7 @@ protected:
      * processed to check that they are compatible.
      * @throws InvalidRequestException
      */
-    virtual void validate_where_clause_for_conditions() const;
+    void validate_where_clause_for_conditions() const;
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
