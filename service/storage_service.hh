@@ -963,6 +963,11 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
+    // Sends a read barrier request to all normal nodes to ensure they have applied
+    // the latest topology changes. This is used after removenode to ensure all nodes
+    // see the updated topology before the operation returns.
+    future<> global_topology_barrier();
+
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);

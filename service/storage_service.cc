@@ -4288,6 +4288,11 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         throw std::runtime_error(err);
     }
 
+    // Ensure all nodes have applied the topology changes before returning.
+    // This prevents issues where subsequent operations might be routed to nodes
+    // that haven't yet seen the removed node's departure from the ring.
+    co_await global_topology_barrier();
+
     rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
 }
 
@@ -5949,6 +5954,58 @@ future<> storage_service::snitch_reconfigured() {
     if (_gossiper.is_enabled()) {
         co_await _gossiper.add_local_application_state(snitch->get_app_states());
     }
+}
+
+future<> storage_service::global_topology_barrier() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [](storage_service& ss) {
+            return ss.global_topology_barrier();
+        });
+    }
+
+    auto& raft_server = _group0->group0_server();
+    auto term = raft_server.get_current_term();
+    auto my_id = raft_server.id();
+
+    // Get the list of all normal nodes (excluding ourselves)
+    auto nodes = _topology_state_machine._topology.normal_nodes | std::views::keys | std::views::filter([my_id](raft::server_id id) {
+        return id != my_id;
+    }) | std::ranges::to<std::vector>();
+
+    if (nodes.empty()) {
+        // No other nodes to synchronize with
+        co_return;
+    }
+
+    rtlogger.info("global_topology_barrier: sending barrier to {} nodes", nodes.size());
+
+    // Use a simple counter for cmd_index - this is just for deduplication and doesn't
+    // need to be globally coordinated since we're not the coordinator
+    static thread_local uint64_t barrier_cmd_index = 0;
+    auto cmd_index = ++barrier_cmd_index;
+
+    // Send barrier to all nodes in parallel
+    // Note: The barrier RPC handler does read_barrier() first, before checking the term.
+    // Even if the term validation fails (e.g., if leadership changed), the read_barrier
+    // effect has already happened on the target node, which is what we care about.
+    co_await coroutine::parallel_for_each(nodes, [this, term, cmd_index](raft::server_id id) -> future<> {
+        try {
+            auto host_id = locator::host_id(id.uuid());
+            auto result = co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
+                    &_messaging.local(), host_id, id, term, cmd_index, raft_topology_cmd{raft_topology_cmd::command::barrier});
+            if (result.status != raft_topology_cmd_result::command_status::success) {
+                // The barrier effect still happened due to the read_barrier at the start of the handler
+                rtlogger.debug("global_topology_barrier: node {} returned non-success status (barrier effect still applied)", id);
+            }
+        } catch (...) {
+            // Log but continue - we try best effort to synchronize all nodes
+            rtlogger.warn("global_topology_barrier: failed to send barrier to node {}: {}", id, std::current_exception());
+        }
+    });
+
+    rtlogger.info("global_topology_barrier: completed");
 }
 
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
