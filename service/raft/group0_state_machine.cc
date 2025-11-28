@@ -420,6 +420,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {
   try {
+    co_await utils::get_local_injector().inject("block_group0_transfer_snapshot", utils::wait_for_message(300s));
     // Note that this may bring newer state than the group0 state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
@@ -485,6 +486,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             for (auto& canonical_mut : raft_snp->mutations) {
                 if (canonical_mut.column_family_id() == s_client_routes->id()) {
                     auto mut = co_await to_mutation_gently(canonical_mut, s_client_routes);
+                    slogger.trace("transfer snapshot: raft snapshot includes client_routes mutation");
                     collect_client_routes_update(mut, client_routes_update);
                 }
             }
