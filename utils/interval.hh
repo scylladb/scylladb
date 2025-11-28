@@ -768,7 +768,7 @@ public:
     interval(T value)
         : _interval(std::move(value))
     { }
-    constexpr interval() : interval({}, {}) { }
+    constexpr interval() : interval(std::nullopt, std::nullopt) { }
     // Can only be called if start <= end. IDL ctor.
     interval(optional<bound> start, optional<bound> end, bool singular = false)
         : _interval(std::move(start), std::move(end), singular)
@@ -780,6 +780,9 @@ public:
     // Can only be called if !r.is_wrap_around().
     explicit interval(const wrapping_interval<T>& r)
         : _interval(r)
+    { }
+    explicit interval(const T& start, const T& end, bool start_inclusive = true, bool end_inclusive = true, bool singular = false)
+        : _interval(bound(start, start_inclusive), bound(end, end_inclusive), singular)
     { }
     operator wrapping_interval<T>() const & {
         return _interval;
@@ -818,7 +821,7 @@ public:
         return interval({std::move(start)}, {std::move(end)});
     }
     static constexpr interval make_open_ended_both_sides() {
-        return {{}, {}};
+        return {std::nullopt, std::nullopt};
     }
     static interval make_singular(T value) {
         return {std::move(value)};
