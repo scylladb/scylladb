@@ -554,24 +554,22 @@ modification_statement::prepare_for_broadcast_tables() const {
 
 namespace raw {
 
-::shared_ptr<cql_statement_opt_metadata>
-modification_statement::prepare_statement(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) {
-    ::shared_ptr<cql3::statements::modification_statement> statement = prepare(db, ctx, stats);
-
-    if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
-        return statement->prepare_for_broadcast_tables();
-    } else {
-        return statement;
-    }
-}
-
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
-    auto statement = prepare_statement(db, meta, stats);
+
+    auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
+        auto result = prepare(db, meta, stats);
+        if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+            return result->prepare_for_broadcast_tables();
+        }
+        return result;
+    });
+
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
+        std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
