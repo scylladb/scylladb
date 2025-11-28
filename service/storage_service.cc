@@ -497,6 +497,17 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
                 sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
             }
         break;
+        case node_state::replacing:
+            // Save the mapping just like for bootstrap above, but only in the case of replace with different IP, so
+            // that we don't have to delete the row of the node being replaced. For replace with the same IP, the
+            // mapping is recovered on restart based on the state of the topology state machine and system.peers.
+            if (!is_me(ip)) {
+                auto replaced_id = std::get<replace_param>(t.req_param.at(raft_id)).replaced_id;
+                if (const auto it = host_id_to_ip_map.find(locator::host_id(replaced_id.uuid())); it == host_id_to_ip_map.end() || it->second != ip) {
+                    sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
+                }
+            }
+        break;
         default:
         break;
     }
