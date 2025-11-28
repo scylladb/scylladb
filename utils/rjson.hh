@@ -236,6 +236,27 @@ rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = defaul
 rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
+// Returns a string_view to the string held in a JSON value (which is
+// assumed to hold a string, i.e., v.IsString() == true). This is a view
+// to the existing data - no copying is done.
+inline std::string_view to_string_view(const rjson::value& v) {
+    return std::string_view(v.GetString(), v.GetStringLength());
+}
+
+// Those functions must be called on json string object.
+// They make a copy of underlying data so it's safe to destroy
+// rjson::value afterwards.
+//
+// Rapidjson's GetString method alone is not good enough
+// for string conversion because it needs to scan the string
+// unnecessarily and GetStringLength could be used to avoid that.
+inline sstring to_sstring(const rjson::value& str) {
+    return sstring(str.GetString(), str.GetStringLength());
+}
+inline std::string to_string(const rjson::value& str) {
+    return std::string(str.GetString(), str.GetStringLength());
+}
+
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, std::string_view name);
 const rjson::value* find(const rjson::value& value, std::string_view name);
