@@ -836,6 +836,7 @@ public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
     future<> update_fence_version(token_metadata::version_t version);
+    future<> notify_client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids);
 
 private:
     std::unordered_set<locator::host_id> _normal_state_handled_on_boot;
