@@ -5087,13 +5087,15 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     auto pos = paging_state.get_position_in_partition();
     if (pos.has_key()) {
-        auto exploded_ck = pos.key().explode();
-        auto exploded_ck_it = exploded_ck.begin();
-        for (const column_definition& cdef : schema.clustering_key_columns()) {
-            rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
-            rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
-            rjson::add_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
-            ++exploded_ck_it;
+        // Alternator itself allows at most one column in clustering key, but 
+        // user can use Alternator api to access system tables which might have
+        // multiple clustering key columns. So we need to handle that case here.
+        auto cdef_it = schema.clustering_key_columns().begin();        
+        for(const auto &exploded_ck : pos.key().explode()) {
+            rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef_it->name_as_text()), rjson::empty_object());
+            rjson::value& key_entry = last_evaluated_key[cdef_it->name_as_text()];
+            rjson::add_with_string_name(key_entry, type_to_string(cdef_it->type), json_key_column_value(exploded_ck, *cdef_it));
+            ++cdef_it;
         }
     }
     // To avoid possible conflicts (and thus having to reserve these names) we
