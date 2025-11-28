@@ -38,7 +38,7 @@ class standard_role_manager final : public role_manager {
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     abort_source _as;
-    std::string _superuser;
+    std::optional<std::string> _superuser;
     shared_promise<> _superuser_created_promise;
 
 public:

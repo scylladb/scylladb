@@ -666,6 +666,9 @@ future<std::vector<cql3::description>> service::describe_auth(bool with_hashed_p
 //
 
 future<bool> has_superuser(const service& ser, const authenticated_user& u) {
+    if (ser.is_used_by_maintenance_socket()) {
+        return make_ready_future<bool>(true);
+    }
     if (is_anonymous(u)) {
         return make_ready_future<bool>(false);
     }

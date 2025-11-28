@@ -25,6 +25,39 @@ static const class_registrator<
         ::service::raft_group0_client&,
         ::service::migration_manager&> registration(sstring{maintenance_socket_role_manager_name});
 
+future<> maintenance_socket_role_manager::enable_role_operations() {
+    if (_is_maintenance_mode) {
+        return make_exception_future<>(std::runtime_error(
+            "role manager: enabling role operations not allowed in maintenance mode"));
+    }
+
+    if (_std_mgr.has_value()) {
+        return make_ready_future<>();
+    }
+
+    _std_mgr.emplace(_qp, _group0_client, _migration_manager);
+    return _std_mgr->start();
+}
+
+bool maintenance_socket_role_manager::is_maintenance_mode() const {
+    return _is_maintenance_mode;
+}
+
+void maintenance_socket_role_manager::set_maintenance_mode() {
+    SCYLLA_ASSERT(!_std_mgr.has_value() && "Cannot enable maintenance mode after role operations have been enabled");
+    _is_maintenance_mode = true;
+}
+
+maintenance_socket_role_manager::maintenance_socket_role_manager(
+        cql3::query_processor& qp,
+        ::service::raft_group0_client& rg0c,
+        ::service::migration_manager& mm)
+    : _qp(qp)
+    , _group0_client(rg0c)
+    , _migration_manager(mm)
+    , _std_mgr(std::nullopt)
+    , _is_maintenance_mode(false) {
+}
 
 std::string_view maintenance_socket_role_manager::qualified_java_name() const noexcept {
     return maintenance_socket_role_manager_name;
@@ -41,7 +74,7 @@ future<> maintenance_socket_role_manager::start() {
 }
 
 future<> maintenance_socket_role_manager::stop() {
-    return make_ready_future<>();
+    return _std_mgr ? _std_mgr->stop() : make_ready_future<>();
 }
 
 future<> maintenance_socket_role_manager::ensure_superuser_is_created() {
@@ -54,16 +87,46 @@ future<T> operation_not_supported_exception(std::string_view operation) {
         std::runtime_error(fmt::format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
-future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::group0_batch&) {
-    return operation_not_supported_exception("CREATE");
+template<typename T = void>
+future<T> operation_not_available_in_maintenance_mode_exception(std::string_view operation) {
+    return make_exception_future<T>(
+        std::runtime_error(fmt::format("role manager: {} operation not available through maintenance socket in maintenance mode", operation)));
+}
+
+template<typename T = void>
+future<T> operation_not_ready_exception(std::string_view operation) {
+    return make_exception_future<T>(
+        std::runtime_error(fmt::format("role manager: {} operation not available yet (role operations not enabled)", operation)));
+}
+
+future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config& config, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("CREATE");
+    }
+    if (!_std_mgr) {
+        return operation_not_ready_exception("CREATE");
+    }
+    return _std_mgr->create(role_name, config, mc);
 }
 
 future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
-    return operation_not_supported_exception("DROP");
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("DROP");
+    }
+    if (!_std_mgr) {
+        return operation_not_ready_exception("DROP");
+    }
+    return _std_mgr->drop(role_name, mc);
 }
 
-future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&, ::service::group0_batch&) {
-    return operation_not_supported_exception("ALTER");
+future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update& config_update, ::service::group0_batch& mc) {
+    if (_is_maintenance_mode) {
+        return operation_not_available_in_maintenance_mode_exception("ALTER");
+    }
+    if (!_std_mgr) {
+        return operation_not_ready_exception("ALTER");
+    }
+    return _std_mgr->alter(role_name, config_update, mc);
 }
 
 future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {

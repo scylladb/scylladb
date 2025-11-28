@@ -43,7 +43,7 @@ class password_authenticator : public authenticator {
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     abort_source _as;
-    std::string _superuser; // default superuser name from the config (may or may not be present in roles table)
+    std::optional<std::string> _superuser; // default superuser name from the config (may or may not be present in roles table)
     shared_promise<> _superuser_created_promise;
     // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
@@ -51,7 +51,7 @@ class password_authenticator : public authenticator {
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
-    static std::string default_superuser(const db::config&);
+    static std::optional<std::string> default_superuser(cql3::query_processor& qp);
 
     password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&);
 

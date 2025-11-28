@@ -126,7 +126,7 @@ standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::servic
     , _group0_client(g0)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>())
-    , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
+    , _superuser(password_authenticator::default_superuser(qp))
 {}
 
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
@@ -189,8 +189,9 @@ future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const
 }
 
 future<> standard_role_manager::legacy_create_default_role_if_missing() {
+    SCYLLA_ASSERT(_superuser);
     try {
-        const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_can_login, _superuser);
+        const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_can_login, *_superuser);
         if (exists) {
             co_return;
         }
@@ -202,9 +203,9 @@ future<> standard_role_manager::legacy_create_default_role_if_missing() {
                 query,
                 db::consistency_level::QUORUM,
                 internal_distributed_query_state(),
-                {_superuser},
+                {*_superuser},
                 cql3::query_processor::cache_internal::no).discard_result();
-        log.info("Created default superuser role '{}'.", _superuser);
+        log.info("Created default superuser role '{}'.", *_superuser);
     } catch(const exceptions::unavailable_exception& e) {
         log.warn("Skipped default role setup: some nodes were not ready; will retry");
         throw e;
@@ -212,6 +213,9 @@ future<> standard_role_manager::legacy_create_default_role_if_missing() {
 }
 
 future<> standard_role_manager::maybe_create_default_role() {
+    if (!_superuser) {
+        co_return;
+    }
     auto has_superuser = [this] () -> future<bool> {
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query, db::consistency_level::LOCAL_ONE,
@@ -240,9 +244,9 @@ future<> standard_role_manager::maybe_create_default_role() {
             get_auth_ks_name(_qp),
             meta::roles_table::name,
             meta::roles_table::role_col_name);
-    co_await collect_mutations(_qp, batch, insert_query, {_superuser});
+    co_await collect_mutations(_qp, batch, insert_query, {*_superuser});
     co_await std::move(batch).commit(_group0_client, _as, get_raft_timeout());
-    log.info("Created default superuser role '{}'.", _superuser);
+    log.info("Created default superuser role '{}'.", *_superuser);
 }
 
 future<> standard_role_manager::maybe_create_default_role_with_retries() {
