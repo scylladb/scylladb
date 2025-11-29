@@ -1778,6 +1778,14 @@ rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_servi
     co_return json_void();
 }
 
+static
+future<json::json_return_type>
+rest_abort_paused_rf_change(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto keyspace = validate_keyspace(ctx, req);
+    co_await ss.local().abort_paused_rf_change(keyspace);
+    co_return json_void();
+}
+
 // Disambiguate between a function that returns a future and a function that returns a plain value, also
 // add std::ref() as a courtesy. Also handles ks_cf_func signatures.
 template <typename FuncType, typename... BindArgs>
@@ -1876,6 +1884,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
     sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
     ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
+    ss::abort_paused_rf_change.set(r, rest_bind(rest_abort_paused_rf_change, ctx, ss));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {

@@ -1062,6 +1062,8 @@ public:
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
 
+    future<> abort_paused_rf_change(sstring ks);
+
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};
     // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
