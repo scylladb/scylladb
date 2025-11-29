@@ -122,7 +122,6 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-housekeeping
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
-/opt/scylladb/share/p11-kit/modules/*
 /opt/scylladb/share/doc/scylla/*
 %{_unitdir}/scylla-fstrim.service
 %{_unitdir}/scylla-housekeeping-daily.service
