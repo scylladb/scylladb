@@ -115,7 +115,7 @@ def compact_keyspace(cql, ks, flush_memtables=True):
         args.extend([ks, cf])
         run_nodetool(cql, "compact", *args)
 
-def take_snapshot(cql, table, tag, skip_flush):
+def take_snapshot(cql, table, tag, skip_flush, use_sstable_identifier=False):
     ks, cf = table.split('.')
     if has_rest_api(cql):
         requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params={'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush})
@@ -123,6 +123,8 @@ def take_snapshot(cql, table, tag, skip_flush):
         args = ['--tag', tag, '--table', cf]
         if skip_flush:
             args.append('--skip-flush')
+        if use_sstable_identifier:
+            args.append('--use-sstable-identifier')
         args.append(ks)
         run_nodetool(cql, "snapshot", *args)
 
