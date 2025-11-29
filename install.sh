@@ -157,6 +157,7 @@ adjust_bin() {
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
+${p11_trust_paths:+export SCYLLA_P11_TRUST_PATHS="$p11_trust_paths"}
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
     chmod 755 "$root/$prefix/bin/$bin"
@@ -330,7 +331,6 @@ if ! $nonroot; then
     rsysconfdir=$(realpath -m "$root/$sysconfdir")
     rusr=$(realpath -m "$root/usr")
     rsystemd=$(realpath -m "$rusr/lib/systemd/system")
-    rshare="$rprefix/share"
     rdoc="$rprefix/share/doc"
     rdata=$(realpath -m "$root/var/lib/scylla")
     rhkdata=$(realpath -m "$root/var/lib/scylla-housekeeping")
@@ -338,7 +338,6 @@ else
     retc="$rprefix/etc"
     rsysconfdir="$rprefix/$sysconfdir"
     rsystemd="$HOME/.config/systemd/user"
-    rshare="$rprefix/share"
     rdoc="$rprefix/share/doc"
     rdata="$rprefix"
 fi
@@ -521,16 +520,6 @@ cat << EOS > "$rprefix"/scripts/scylla_product.py
 PRODUCT="$product"
 EOS
 chmod 644 "$rprefix"/scripts/scylla_product.py
-
-install -d -m755 "$rshare"/p11-kit/modules
-cat << EOS > "$rshare"/p11-kit/modules/p11-kit-trust.module
-module: $prefix/libreloc/pkcs11/p11-kit-trust.so
-priority: 1
-trust-policy: yes
-x-trust-lookup: pkcs11:library-description=PKCS%2311%20Kit%20Trust%20Module
-disable-in: p11-kit-proxy
-x-init-reserved: paths=$p11_trust_paths
-EOS
 
 if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d

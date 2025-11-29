@@ -10,6 +10,8 @@
 #include <functional>
 #include <fmt/ranges.h>
 
+#include <gnutls/pkcs11.h>
+
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
 #include "db/view/view_building_worker.hh"
@@ -121,11 +123,6 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 
-
-#define P11_KIT_FUTURE_UNSTABLE_API
-extern "C" {
-#include <p11-kit/p11-kit.h>
-}
 
 namespace fs = std::filesystem;
 #include <seastar/core/metrics_api.hh>
@@ -707,14 +704,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
         print_starting_message(ac, av, parsed_opts);
     }
-
-    // We have to override p11-kit config path before p11-kit initialization.
-    // And the initialization will invoke on seastar initialization, so it has to
-    // be before app.run()
-    auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe"));
-    auto p11_modules = scylla_path.parent_path().parent_path().append("share/p11-kit/modules");
-    auto p11_modules_str = p11_modules.string<char>();
-    ::p11_kit_override_system_files(NULL, NULL, p11_modules_str.c_str(), NULL, NULL);
 
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
@@ -2687,13 +2676,15 @@ int main(int ac, char** av) {
     // #3583 - need to potentially ensure this for tools as well, since at least
     // sstable* might need crypto libraries.
     auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe")); // could just be argv[0] I guess...
-    auto p11_modules = scylla_path.parent_path().parent_path().append("share/p11-kit/modules");
-    // Note: must be in scope for application lifetime. p11_kit_override_system_files does _not_
-    // copy input strings.
-    auto p11_modules_str = p11_modules.string<char>();
-    // #3392 only do this if we are actually packaged and the path exists.
-    if (fs::exists(p11_modules)) {
-        ::p11_kit_override_system_files(NULL, NULL, p11_modules_str.c_str(), NULL, NULL);
+    auto p11_trust_paths_from_env = std::getenv("SCYLLA_P11_TRUST_PATHS");
+    auto trust_module_path = scylla_path.parent_path().parent_path().append("libreloc/pkcs11/p11-kit-trust.so");
+    if (fs::exists(trust_module_path) && p11_trust_paths_from_env) {
+        gnutls_pkcs11_init(GNUTLS_PKCS11_FLAG_MANUAL, nullptr);
+        auto trust_config = fmt::format("p11-kit:paths={} trusted=yes", p11_trust_paths_from_env);
+        auto ret = gnutls_pkcs11_add_provider(trust_module_path.string().c_str(), trust_config.c_str());
+        if (ret != GNUTLS_E_SUCCESS) {
+            startlog.warn("Could not initialize p11-kit trust module: {}\n", gnutls_strerror(ret));
+        }
     }
 
     return main_func(ac, av);
