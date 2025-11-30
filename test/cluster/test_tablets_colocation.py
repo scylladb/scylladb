@@ -9,14 +9,13 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.conftest import skip_mode
-from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
+from test.cluster.util import new_test_keyspace
 import time
 import pytest
 import logging
 import asyncio
 import random
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest, Unauthorized
 
 logger = logging.getLogger(__name__)
 
@@ -447,58 +446,3 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
             rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level=ConsistencyLevel.ONE))
             pks = set(row.pk for row in rows)
             assert pk in pks
-
-# Verify the default tombstone GC mode for colocated tables is 'timeout',
-# and that altering it to 'repair' is not allowed.
-@pytest.mark.asyncio
-async def test_colocated_tables_gc_mode(manager: ManagerClient):
-    servers = await manager.servers_add(3, auto_rack_dc="dc1")
-    cql = manager.get_cql()
-
-    def check_tombstone_gc_mode_timeout(cql, table):
-        s = list(cql.execute(f"DESC {table}"))[0].create_statement
-        assert "'mode': 'timeout'" in s or "mode" not in s # default is timeout
-
-    async with new_test_keyspace(manager, "WITH replication = {'dc1': 3 }") as ks:
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
-            async with new_materialized_view(manager, table, "*", "pk, v", "pk IS NOT NULL AND v IS NOT NULL") as mv:
-                check_tombstone_gc_mode_timeout(cql, mv)
-
-                with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                    await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'repair'}}")
-
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv2 AS SELECT * FROM {table} WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v) WITH tombstone_gc = {{'mode': 'repair'}}")
-
-            # a not colocated view with 'repair' mode - should succeed
-            async with new_materialized_view(manager, table, "*", "v, pk", "pk IS NOT NULL AND v IS NOT NULL", "WITH tombstone_gc = {'mode': 'repair'}") as mv:
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'timeout'}}")
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'repair'}}")
-
-            await cql.run_async(f"CREATE INDEX ON {table}((pk),v)")
-            view_name = cql.execute("SELECT view_name FROM system_schema.views").one().view_name
-            check_tombstone_gc_mode_timeout(cql, f"{ks}.{view_name}")
-
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {ks}.{view_name} WITH tombstone_gc = {{'mode': 'repair'}}")
-
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int", " WITH cdc={'enabled': true}") as table:
-            check_tombstone_gc_mode_timeout(cql, f"{table}_scylla_cdc_log")
-
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on CDC log tables."):
-                await cql.run_async(f"ALTER TABLE {table}_scylla_cdc_log WITH tombstone_gc = {{'mode': 'repair'}}")
-
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
-            await cql.run_async(f"INSERT INTO {table}(pk, v) VALUES(0, 0)")
-            await cql.run_async(f"UPDATE {table} SET v = 1 WHERE pk = 0 IF v = 0")
-
-            # ensure paxos state table is created on all nodes
-            await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
-
-            ks_name, cf_name = table.split('.')
-            table_name = f"{ks_name}.\"{cf_name}$paxos\""
-            check_tombstone_gc_mode_timeout(cql, table_name)
-
-            # paxos table is not allowed to be altered, even not by a superuser.
-            with pytest.raises(Unauthorized):
-                await cql.run_async(f"ALTER TABLE {table_name} WITH tombstone_gc = {{'mode': 'repair'}}")
