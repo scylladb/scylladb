@@ -211,6 +211,8 @@ public:
     virtual db::config& db_config() = 0;
 
     virtual sharded<vector_search::vector_store_client>& vector_store_client() = 0;
+
+    virtual sharded<auth::cache>& auth_cache() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});

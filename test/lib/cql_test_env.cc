@@ -41,6 +41,7 @@
 #include "service/mapreduce_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
+#include "auth/cache.hh"
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
@@ -141,6 +142,7 @@ private:
     sharded<service::paxos::paxos_store> _paxos_store;
     sharded<cql3::query_processor> _qp;
     sharded<auth::service> _auth_service;
+    sharded<auth::cache> _auth_cache;
     sharded<db::view::view_builder> _view_builder;
     sharded<db::view::view_building_worker> _view_building_worker;
     sharded<db::view::view_update_generator> _view_update_generator;
@@ -939,6 +941,9 @@ private:
             _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
+            _auth_cache.start(std::ref(_qp)).get();
+            auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -955,6 +960,7 @@ private:
                 std::ref(_view_builder), std::ref(_view_building_worker),
                 std::ref(_qp),
                 std::ref(_sl_controller),
+                std::ref(_auth_cache),
                 std::ref(_topology_state_machine),
                 std::ref(_view_building_state_machine),
                 std::ref(_task_manager),
@@ -1126,7 +1132,7 @@ private:
 
             const uint64_t niceness = 19;
             auto hashing_worker = utils::alien_worker(startlog, niceness, "pwd-hash");
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache), std::ref(hashing_worker)).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
             }).get();
@@ -1247,6 +1253,10 @@ public:
 
     db::config& db_config() override {
         return *_db_config;
+    }
+
+    sharded<auth::cache>& auth_cache() override {
+        return _auth_cache;
     }
 };
 

@@ -48,6 +48,10 @@ extern constinit const std::string_view AUTH_PACKAGE_NAME;
 
 } // namespace meta
 
+constexpr std::string_view PERMISSIONS_CF = "role_permissions";
+constexpr std::string_view ROLE_MEMBERS_CF = "role_members";
+constexpr std::string_view ROLE_ATTRIBUTES_CF = "role_attributes";
+
 // This is a helper to check whether auth-v2 is on.
 bool legacy_mode(cql3::query_processor& qp);
 

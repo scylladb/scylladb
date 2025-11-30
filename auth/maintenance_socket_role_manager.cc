@@ -11,6 +11,7 @@
 #include <seastar/core/future.hh>
 #include <stdexcept>
 #include <string_view>
+#include "auth/cache.hh"
 #include "cql3/description.hh"
 #include "utils/class_registrator.hh"
 
@@ -23,7 +24,8 @@ static const class_registrator<
         maintenance_socket_role_manager,
         cql3::query_processor&,
         ::service::raft_group0_client&,
-        ::service::migration_manager&> registration(sstring{maintenance_socket_role_manager_name});
+        ::service::migration_manager&,
+        cache&> registration(sstring{maintenance_socket_role_manager_name});
 
 
 std::string_view maintenance_socket_role_manager::qualified_java_name() const noexcept {

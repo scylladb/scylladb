@@ -114,6 +114,8 @@ namespace replica {
 class tablet_mutation_builder;
 }
 
+namespace auth { class cache; }
+
 namespace utils {
 class disk_space_monitor;
 }
@@ -199,6 +201,7 @@ private:
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
     sharded<qos::service_level_controller>& _sl_controller;
+    auth::cache& _auth_cache;
 
     // Engaged on shard 0 before `join_cluster`.
     service::raft_group0* _group0;
@@ -265,6 +268,7 @@ public:
         sharded<db::view::view_building_worker>& view_building_worker,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
+        auth::cache& auth_cache,
         topology_state_machine& topology_state_machine,
         db::view::view_building_state_machine& view_building_state_machine,
         tasks::task_manager& tm,
@@ -997,6 +1001,8 @@ public:
     // update_both_cache_levels::yes - updates both levels of the cache
     // update_both_cache_levels::no  - update only effective service levels cache
     future<> update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache = qos::update_both_cache_levels::yes, qos::query_context ctx = qos::query_context::unspecified);
+
+    auth::cache& auth_cache() noexcept;
 
     // Should be called whenever new compression dictionaries are published to system.dicts.
     // This is an arbitrary callback passed through the constructor,
