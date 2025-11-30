@@ -584,8 +584,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         load_and_stream_desc = "auto-enabled-for-tablets";
     }
 
-    llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}",
-            ks_name, cf_name, load_and_stream_desc, primary_replica_only);
+    llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, scope={}",
+            ks_name, cf_name, load_and_stream_desc, primary_replica_only, scope);
     try {
         if (load_and_stream) {
             ::table_id table_id;
@@ -789,7 +789,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
-    llog.info("Restore sstables from {}({}) to {}", endpoint, prefix, ks_name);
+    llog.info("Restore sstables from {}({}) to {}.{} using scope={}", endpoint, prefix, ks_name, cf_name, scope);
 
     auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstables), scope);
     co_return task->id();

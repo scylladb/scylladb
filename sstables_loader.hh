@@ -127,3 +127,21 @@ public:
 
     class download_task_impl;
 };
+
+template <>
+struct fmt::formatter<sstables_loader::stream_scope> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const sstables_loader::stream_scope a, FormatContext& ctx) const {
+        using enum sstables_loader::stream_scope;
+        switch (a) {
+        case all:
+            return formatter<string_view>::format("all", ctx);
+        case dc:
+            return formatter<string_view>::format("dc", ctx);
+        case rack:
+            return formatter<string_view>::format("rack", ctx);
+        case node:
+            return formatter<string_view>::format("node", ctx);
+        }
+    }
+};
