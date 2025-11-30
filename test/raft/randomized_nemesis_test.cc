@@ -1064,7 +1064,7 @@ public:
     }
 
     // Can be called on any shard.
-    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override {
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) override {
         try {
             co_await invoke_abortable_on(0, [this, id] (abort_source& as) {
                 return _rpc.ping(raft::server_id{id}, as);
@@ -1125,6 +1125,10 @@ public:
         } catch (abort_requested_exception&) {
             throw sleep_aborted{};
         }
+    }
+
+    virtual std::chrono::milliseconds to_milliseconds(timepoint_t tp) const override {
+        throw std::logic_error("to_milliseconds is not implemented");
     }
 };
 
