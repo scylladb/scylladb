@@ -6,12 +6,15 @@
 
 import os
 import time
+import boto3
 import pytest
 import asyncio
 import logging
+import botocore
 
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.pylib.manager_client import ManagerClient, ScyllaVersionDescription
+from test.cluster.test_alternator import alternator_config, get_alternator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -146,3 +149,138 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
     await asyncio.gather(*(wait_for_feature("SSTABLE_COMPRESSION_DICTS", cql, host, time.time() + 60) for host in hosts))
 
     await create_table_and_check_compression(cql, "test_ks", "table_after_upgrade", "LZ4WithDictsCompressor", "after upgrade and feature enabled")
+
+
+@pytest.mark.asyncio
+async def test_alternator_tables_respect_compression_config(manager: ManagerClient):
+    """
+    Check that Scylla applies sstable_compression_user_table_options to all
+    Alternator tables (base tables and auxiliary tables for GSIs, LSIs and Streams).
+
+    A reproducer for #26914 - all Alternator tables have their default compression
+    algorithm hardcoded to LZ4Compressor.
+    """
+    # Start Scylla with custom compression options
+    compression_config = {
+        'sstable_compression_user_table_options': {
+            'sstable_compression': 'ZstdCompressor',
+            'chunk_length_in_kb': 64,
+        }
+    }
+    server = await manager.server_add(config=compression_config | alternator_config)
+
+    # Connect to Alternator and CQL
+    alternator = get_alternator(server.ip_addr)
+    cql = manager.get_cql()
+
+    # Create a table with GSI, LSI and Streams
+    table = alternator.create_table(TableName='base',
+        BillingMode='PAY_PER_REQUEST',
+        Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi_name',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_name',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        StreamSpecification={
+            'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'
+        }
+    )
+
+    try:
+        def check_compression(result):
+            assert len(result) == 1
+            compression = result[0].compression
+            assert compression.get("sstable_compression") == "org.apache.cassandra.io.compress.ZstdCompressor"
+            assert int(compression.get("chunk_length_in_kb", 0)) == 64
+
+        ks = f"alternator_{table.name}"
+        base_table = table.name
+        gsi_table = f"{table.name}:gsi_name"
+        lsi_table = f"{table.name}!:lsi_name"
+        cdc_table = f"{table.name}_scylla_cdc_log"
+
+        # Base table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{base_table}'")
+        check_compression(result)
+        # GSI table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{gsi_table}'")
+        check_compression(result)
+        # LSI table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{lsi_table}'")
+        check_compression(result)
+        # CDC log table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cdc_table}'")
+        check_compression(result)
+    finally:
+        table.delete()
+
+
+@pytest.mark.asyncio
+async def test_cql_tables_respect_compression_config(manager: ManagerClient):
+    """
+    Check that Scylla applies sstable_compression_user_table_options to all
+    CQL tables (base tables and auxiliary tables for secondary indexes, materialized views and CDC logs).
+
+    A reproducer for #26914 - all auxiliary tables have their default compression
+    algorithm hardcoded to LZ4Compressor.
+    """
+    compression_config = {
+        'sstable_compression_user_table_options': {
+            'sstable_compression': 'ZstdCompressor',
+            'chunk_length_in_kb': 64,
+        },
+    }
+    await manager.server_add(config=compression_config)
+    cql = manager.get_cql()
+    ks = f"cql_aux_test_{int(time.time())}"
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+
+    await cql.run_async(f"CREATE TABLE {ks}.base (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.base WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)")
+    await cql.run_async(f"CREATE INDEX ON {ks}.base(v)")
+    await cql.run_async(f"ALTER TABLE {ks}.base WITH cdc = {{'enabled': true}}")
+
+    try:
+        def check_compression(result):
+            assert len(result) == 1
+            compression = result[0].compression
+            assert compression.get("sstable_compression") == "org.apache.cassandra.io.compress.ZstdCompressor"
+            assert int(compression.get("chunk_length_in_kb", 0)) == 64
+
+        # Base table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'base'")
+        check_compression(result)
+
+        # Materialized view
+        result = await cql.run_async(f"SELECT compression FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = 'mv'")
+        check_compression(result)
+
+        # Secondary index
+        result = await cql.run_async(f"SELECT compression FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = 'base_v_idx_index'")
+        check_compression(result)
+
+        # CDC log table
+        result = await cql.run_async(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'base_scylla_cdc_log'")
+        check_compression(result)
+    finally:
+        await cql.run_async(f"DROP KEYSPACE {ks}")
