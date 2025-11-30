@@ -13,6 +13,7 @@
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include "seastarx.hh"
@@ -32,6 +33,7 @@
 #include "utils/aws_sigv4.hh"
 #include "client_data.hh"
 #include "utils/updateable_value.hh"
+#include <zlib.h>
 
 static logging::logger slogger("alternator-server");
 
@@ -551,6 +553,106 @@ read_entire_stream(input_stream<char>& inp, size_t length_limit) {
     co_return ret;
 }
 
+// safe_gzip_stream is an exception-safe wrapper for zlib's z_stream.
+// The "z_stream" struct is used by zlib to hold state while decompressing a
+// stream of data. It allocates memory which must be freed with inflateEnd(),
+// which the destructor of this class does.
+class safe_gzip_zstream {
+    z_stream _zs;
+public:
+    safe_gzip_zstream() {
+        memset(&_zs, 0, sizeof(_zs));
+        // The strange 16 + WMAX_BITS tells zlib to expect and decode
+        // a gzip header, not a zlib header.
+        if (inflateInit2(&_zs, 16 + MAX_WBITS) != Z_OK) {
+            // Should only happen if memory allocation fails
+            throw std::bad_alloc();
+        }
+    }
+    ~safe_gzip_zstream() {
+        inflateEnd(&_zs);
+    }
+    z_stream* operator->() {
+        return &_zs;
+    }
+    z_stream* get() {
+        return &_zs;
+    }
+    void reset() {
+        inflateReset(&_zs);
+    }
+};
+
+// ungzip() takes a chunked_content with a gzip-compressed request body,
+// uncompresses it, and returns the uncompressed content as a chunked_content.
+// If the uncompressed content exceeds length_limit, an error is thrown.
+static future<chunked_content>
+ungzip(chunked_content&& compressed_body, size_t length_limit) {
+    chunked_content ret;
+    // output_buf can be any size - when uncompressing input_buf, it doesn't
+    // need to fit in a single output_buf, we'll use multiple output_buf for
+    // a single input_buf if needed.
+    constexpr size_t OUTPUT_BUF_SIZE = 4096;
+    temporary_buffer<char> output_buf;
+    safe_gzip_zstream strm;
+    bool complete_stream = false; // empty input is not a valid gzip
+    size_t total_out_bytes = 0;
+    for (const temporary_buffer<char>& input_buf : compressed_body) {
+        if (input_buf.empty()) {
+            continue;
+        }
+        complete_stream = false;
+        strm->next_in = (Bytef*) input_buf.get();
+        strm->avail_in = (uInt) input_buf.size();
+        do {
+            co_await coroutine::maybe_yield();
+            if (output_buf.empty()) {
+                output_buf = temporary_buffer<char>(OUTPUT_BUF_SIZE);
+            }
+            strm->next_out = (Bytef*) output_buf.get();
+            strm->avail_out = OUTPUT_BUF_SIZE;
+            int e = inflate(strm.get(), Z_NO_FLUSH);
+            size_t out_bytes = OUTPUT_BUF_SIZE - strm->avail_out;
+            if (out_bytes > 0) {
+                // If output_buf is nearly full, we save it as-is in ret. But
+                // if it only has little data, better copy to a small buffer.
+                if (out_bytes > OUTPUT_BUF_SIZE/2) {
+                    ret.push_back(std::move(output_buf).prefix(out_bytes));
+                    // output_buf is now empty. if this loop finds more input,
+                    // we'll allocate a new output buffer.
+                } else {
+                    ret.push_back(temporary_buffer<char>(output_buf.get(), out_bytes));
+                }
+                total_out_bytes += out_bytes;
+                if (total_out_bytes > length_limit) {
+                    throw api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", length_limit));
+                }
+            }
+            if (e == Z_STREAM_END) {
+                // There may be more input after the first gzip stream - in
+                // either this input_buf or the next one. The additional input
+                // should be a second concatenated gzip. We need to allow that
+                // by resetting the gzip stream and continuing the input loop
+                // until there's no more input.
+                strm.reset();
+                if (strm->avail_in == 0) {
+                    complete_stream = true;
+                    break;
+                }
+            } else if (e != Z_OK && e != Z_BUF_ERROR) {
+                // DynamoDB returns an InternalServerError when given a bad
+                // gzip request body. See test test_broken_gzip_content
+                throw api_error::internal("Error during gzip decompression of request body");
+            }
+        } while (strm->avail_in > 0 || strm->avail_out == 0);
+    }
+    if (!complete_stream) {
+        // The gzip stream was not properly finished with Z_STREAM_END
+        throw api_error::internal("Truncated gzip in request body");
+    }
+    co_return ret;
+}
+
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
@@ -588,6 +690,21 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         units.return_units(mem_estimate - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
+    // If the request is compressed, uncompress it now, after we checked
+    // the signature (the signature is computed on the compressed content).
+    // We apply the request_content_length_limit again to the uncompressed
+    // content - we don't want to allow a tiny compressed request to
+    // expand to a huge uncompressed request.
+    sstring content_encoding = req->get_header("Content-Encoding");
+    if (content_encoding == "gzip") {
+        content = co_await ungzip(std::move(content), request_content_length_limit);
+    } else if (!content_encoding.empty()) {
+        // DynamoDB returns a 500 error for unsupported Content-Encoding.
+        // I'm not sure if this is the best error code, but let's do it too.
+        // See the test test_garbage_content_encoding confirming this case.
+        co_return api_error::internal("Unsupported Content-Encoding");
+    }
+
     // As long as the system_clients_entry object is alive, this request will
     // be visible in the "system.clients" virtual table. When requested, this
     // entry will be formatted by server::ongoing_request::make_client_data().
