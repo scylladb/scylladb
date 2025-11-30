@@ -5,10 +5,11 @@
 # Tests for the Scan operation
 
 import pytest
+import time
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
-from test.alternator.util import random_bytes, full_scan, full_scan_and_count, multiset, new_test_table
+from test.alternator.util import random_string, random_bytes, full_scan, full_scan_and_count, multiset, new_test_table, scylla_config_read
 
 
 # Test that scanning works fine with/without pagination
@@ -293,12 +294,7 @@ def test_scan_paging_bytes(test_table_b):
 # against Scylla.
 @pytest.fixture(scope="module")
 def query_tombstone_page_limit(dynamodb, scylla_only):
-    config_table = dynamodb.Table('.scylla.alternator.system.config')
-    return int(config_table.query(
-            KeyConditionExpression='#key=:val',
-            ExpressionAttributeNames={'#key': 'name'},
-            ExpressionAttributeValues={':val': 'query_tombstone_page_limit'}
-        )['Items'][0]['value'])
+    return int(scylla_config_read(dynamodb, 'query_tombstone_page_limit'))
 
 # The following two tests reproduced issue #7933, where a scan encounters a
 # long string of row/partition tombstones, and because it is expected to
