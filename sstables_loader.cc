@@ -366,8 +366,8 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
                                     sst->get_last_decorated_key().token());
         };
 
-        for (auto sst_it = reversed_sstables.cbegin(); sst_it != reversed_sstables.cend(); sst_it++) {
-            auto sst_token_range = sstable_token_range(*sst_it);
+        for (const auto& sst : reversed_sstables) {
+            auto sst_token_range = sstable_token_range(sst);
 
             // sstables are sorted by first key, so should skip this SSTable since it
             // doesn't overlap with the current tablet range.
@@ -381,9 +381,9 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
             }
 
             if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(*sst_it);
+                sstables_fully_contained.push_back(sst);
             } else {
-                sstables_partially_contained.push_back(*sst_it);
+                sstables_partially_contained.push_back(sst);
             }
             co_await coroutine::maybe_yield();
         }
