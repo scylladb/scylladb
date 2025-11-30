@@ -369,14 +369,12 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
         for (const auto& sst : reversed_sstables) {
             auto sst_token_range = sstable_token_range(sst);
 
-            // sstables are sorted by first key, so should skip this SSTable since it
-            // doesn't overlap with the current tablet range.
-            if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
-                // If the start of the next SSTable's token range lies beyond the current tablet's token
-                // range, we can safely conclude that no more relevant SSTables remain for this tablet.
-                if (tablet_range.after(sst_token_range.start()->value(), dht::token_comparator{})) {
-                    break;
-                }
+            // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
+            if (tablet_range.after(sst_token_range.start()->value(), dht::token_comparator{})) {
+                break;
+            }
+            // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
+            if (tablet_range.before(sst_token_range.end()->value(), dht::token_comparator{})) {
                 continue;
             }
 
