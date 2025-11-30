@@ -397,7 +397,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, raft_topology_cmd cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
@@ -413,7 +413,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     };
 
-    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
+    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, raft_topology_cmd cmd) {
         auto id = node.id;
         release_node(std::move(node));
         const auto cmd_index = ++_last_cmd_index;
@@ -423,14 +423,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    future<> exec_global_command_helper(auto nodes, raft_topology_cmd cmd, auto&& func) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
-        auto f = co_await coroutine::as_future(
-                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
-            return exec_direct_command_helper(id, cmd_index, cmd);
-        }));
+        auto f = co_await coroutine::as_future(seastar::parallel_for_each(
+            std::move(nodes),
+            [&] (raft::server_id id) { return func(id, cmd_index, cmd); }));
 
         if (f.failed()) {
             co_await coroutine::return_exception(std::runtime_error(
@@ -440,7 +439,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     };
 
     future<group0_guard> exec_global_command(
-            group0_guard guard, const raft_topology_cmd& cmd,
+            group0_guard guard, raft_topology_cmd cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
@@ -452,11 +451,54 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }
-        co_await exec_global_command_helper(std::move(nodes), cmd);
+        co_await exec_global_command_helper(std::move(nodes), cmd, 
+            std::bind_front(&topology_coordinator::exec_direct_command_helper, this));
         if (drop_and_retake) {
             guard = co_await start_operation();
         }
         co_return guard;
+    }
+
+    enum class scoped_exec_reach {
+        scope_nodes,
+        all_active_nodes
+    };
+    future<scoped_exec_reach> exec_scoped_command(group0_guard guard, raft_topology_cmd cmd,
+            const std::unordered_set<locator::host_id>& scope_nodes, scoped_exec_reach intended_reach,
+            std::string_view reason)
+    {
+        rtlogger.info("executing scoped topology command {}, ignored nodes: {}, reason: {}",
+            cmd.cmd, _topo_sm._topology.ignored_nodes, reason);
+        auto actual_reach = intended_reach;
+
+        const auto& t = _topo_sm._topology;
+        auto nodes = boost::range::join(t.normal_nodes, t.transition_nodes)
+            | std::views::transform([](const auto& n) {  return n.first; })
+            | std::views::filter([&] (const auto& n) { return !t.ignored_nodes.contains(n); })
+            | std::views::filter([&] (const auto& n) {
+                return intended_reach == scoped_exec_reach::all_active_nodes || 
+                    scope_nodes.contains(to_host_id(n));
+            });
+        release_guard(std::move(guard));
+
+        co_await exec_global_command_helper(std::move(nodes), cmd, 
+            [&](raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) -> future<> {
+                auto f = co_await coroutine::as_future(exec_direct_command_helper(id, cmd_index, cmd));
+                if (!f.failed()) {
+                    co_return;
+                }
+                const auto e = f.get_exception();
+                const auto is_in_scope = scope_nodes.contains(to_host_id(id));
+                rtlogger.log(is_in_scope ? log_level::warn : log_level::debug, 
+                    "command {} with index {} failed on {} node {}, error: {}",
+                    cmd.cmd, cmd_index, is_in_scope ? "scope" : "non-scope", id, e);
+                if (is_in_scope) {
+                    co_await coroutine::exception(e);
+                }
+                actual_reach = scoped_exec_reach::scope_nodes;
+            });
+
+        co_return actual_reach;
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes_for_topology_request(const topology_state_machine::topology_type& topo,
@@ -1178,9 +1220,65 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
-    future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
-        // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
+    // Use this function when you only need to ensure that `affected_nodes`
+    // see the latest `group0` state. No guarantees are made about other nodes.
+    future<> scope_barrier(group0_guard guard,
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        return exec_scoped_command(std::move(guard), raft_topology_cmd::command::barrier,
+            affected_nodes, scoped_exec_reach::scope_nodes, reason).discard_result();
+    }
+
+    // Like `scope_barrier`, but also drains stale requests and sessions on `affected_nodes`.
+    // No guarantees are made about other nodes.
+    future<> scope_barrier_and_drain(group0_guard guard, 
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        return exec_scoped_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain,
+            affected_nodes, scoped_exec_reach::scope_nodes, reason).discard_result();
+    }
+
+    // Like `scope_barrier_and_drain`, but also attempts to apply the barrier_and_drain to other nodes.
+    // Guarantees that either all nodes acknowledge it, or non-affected nodes are fenced out.
+    future<group0_guard> global_barrier_and_fence(group0_guard guard, 
+        const std::unordered_set<locator::host_id>& affected_nodes,
+        std::string_view reason)
+    {
+        if (affected_nodes.empty()) {
+            on_internal_error(rtlogger, "affected_nodes must not be empty");
+        }
+
+        const auto version = _topo_sm._topology.version;
+
+        // Drain all nodes; fail if any affected node fails to drain.
+        const auto drain_reach = co_await exec_scoped_command(std::move(guard),
+            raft_topology_cmd::command::barrier_and_drain,
+            affected_nodes,
+            scoped_exec_reach::all_active_nodes,
+            reason);
+
+        // Set the fence
+        guard = co_await start_operation();
+        auto mut = topology_mutation_builder(guard.write_timestamp())
+            .set_fence_version(version)
+            .build();
+        co_await update_topology_state(std::move(guard), {std::move(mut)},
+            ::format("advance fence version to {}, reason {}", version, reason));
+
+        // Ensure the affected nodes apply the fence if a non-affected node failed the drain.
+        guard = co_await start_operation();
+        if (drain_reach == scoped_exec_reach::scope_nodes) {
+            co_await exec_scoped_command(std::move(guard),
+                raft_topology_cmd::command::barrier,
+                affected_nodes,
+                scoped_exec_reach::all_active_nodes,
+                reason);
+            guard = co_await start_operation();
+        }
+    
+        co_return std::move(guard);
     }
 
     // Represents a two-state state machine which changes monotonically
@@ -1369,6 +1467,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::chunked_vector<canonical_mutation> updates;
         bool needs_barrier = false;
         bool has_transitions = false;
+        std::unordered_set<locator::host_id> barrier_nodes;
 
         shared_promise barrier;
         auto fail_barrier = seastar::defer([&] {
@@ -1413,6 +1512,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto do_barrier = [&] {
                 return advance_in_background(gid, tablet_state.barriers[trinfo.stage], "barrier", [&] {
                     needs_barrier = true;
+                    for (const auto& r: tmap.get_tablet_info(gid.tablet).replicas) {
+                        barrier_nodes.insert(r.host);
+                    }
+                    if (trinfo.pending_replica) {
+                        barrier_nodes.insert(trinfo.pending_replica->host);
+                    }
                     return barrier.get_shared_future();
                 });
             };
@@ -1520,7 +1625,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                     break;
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
-                // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
+                // get admitted before global_barrier_and_fence() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: {
                     if (drain) {
@@ -1857,7 +1962,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!guard) {
                 guard = co_await start_operation();
             }
-            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            guard = co_await global_barrier_and_fence(std::move(guard), barrier_nodes, "tablets migration");
             barrier.set_value();
             fail_barrier.cancel();
             co_return;
@@ -1939,20 +2044,45 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    void collect_table_replicas(const locator::tablet_metadata& tablets, table_id table_id, 
+        std::unordered_set<locator::host_id>& replicas)
+    {
+        collect_table_replicas(tablets.get_tablet_map(table_id), replicas);
+    }
+
+    void collect_table_replicas(const locator::tablet_map& tablet_map,
+            std::unordered_set<locator::host_id>& replicas)
+    {
+        const auto& excluded_nodes = _topo_sm._topology.excluded_tablet_nodes;
+        for (const auto& tinfo: tablet_map.tablets()) {
+            for (const auto& replica: tinfo.replicas) {
+                if (!excluded_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                    replicas.insert(replica.host);
+                }
+            }
+        }
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         co_await utils::get_local_injector().inject("handle_tablet_resize_finalization_wait", [] (auto& handler) -> future<> {
             rtlogger.info("handle_tablet_resize_finalization: waiting");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
         });
 
-        // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
-        // of token metadata will complete before we update topology.
-        auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
-
-        co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
-
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+
+        // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
+        // of token metadata will complete before we update topology.
+        std::unordered_set<locator::host_id> barrier_nodes;
+        for (const auto table_id: plan.resize_plan().finalize_resize) {
+            collect_table_replicas(tm->tablets(), table_id, barrier_nodes);
+            co_await coroutine::maybe_yield();
+        }
+        co_await scope_barrier_and_drain(std::move(g), barrier_nodes, "tablet_resize_finaliztion");
+        auto guard = co_await start_operation();
+
+        co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
@@ -1984,13 +2114,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto new_cnt = new_tablet_map.tablet_count();
             if (old_cnt > new_cnt) {
                 std::unordered_set<locator::host_id> replicas;
-                for (auto& tinfo : tmap.tablets()) {
-                    for (auto& r : tinfo.replicas) {
-                        if (!is_excluded(raft::server_id(r.host.uuid()))) {
-                            replicas.insert(r.host);
-                        }
-                    }
-                }
+                collect_table_replicas(tmap, replicas);
                 if (_feature_service.tablet_incremental_repair) {
                     rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
                     if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
@@ -2022,52 +2146,47 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> handle_truncate_table(group0_guard guard) {
-        // Execute a barrier to make sure the nodes we are performing truncate on see the session
-        // and are able to create a topology_guard using the frozen_guard we are sending over RPC
-        // TODO: Exclude nodes which don't contain replicas of the table we are truncating
-        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        // The global_request_id and the topology request entry are dropped as the final
+        // step of this function, atomically with clearing the transition_state::truncate_table
+        // topology state. Therefore, if we are still in transition_state::truncate_table,
+        // both of these must still exist.
+        //
+        // The target table may be dropped at any time, so we must also handle the case
+        // where it no longer exists.
 
-        const utils::UUID& global_request_id = _topo_sm._topology.global_request_id.value();
-        std::optional<sstring> error;
+        const auto req_id = _topo_sm._topology.global_request_id.value();
+        const auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
+        const auto& table_id = req_entry.truncate_table_id;
+        const auto table = _db.get_tables_metadata().get_table_if_exists(table_id);
+        const auto session = _topo_sm._topology.session;
+        std::unordered_set<locator::host_id> replica_hosts;
+        if (table) {
+            collect_table_replicas(get_token_metadata_ptr()->tablets(), table_id, replica_hosts);
+
+            // Execute a barrier to make sure the nodes we are performing truncate on see the session
+            // and are able to create a topology_guard using the frozen_guard we are sending over RPC.
+            // Keep the guard released to avoid blocking group0 while the RPCs are in progress.
+            co_await scope_barrier(std::move(guard), replica_hosts, "truncate_table");
+        } else {
+            // Release the guard so that the rest of the function can assume
+            // the guard being released after this point.
+            release_guard(std::move(guard));
+        }
+
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
-        if (_topo_sm._topology.session) {
-            const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id, true);
-            const table_id& table_id = topology_requests_entry.truncate_table_id;
-            lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(table_id);
-
+        if (session) {
+            std::optional<sstring> error;
             if (table) {
                 const sstring& ks_name = table->schema()->ks_name();
                 const sstring& cf_name = table->schema()->cf_name();
 
                 rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
 
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
-                        if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                            replica_hosts.insert(replica.host);
-                        }
-                    }
-                    return make_ready_future<>();
-                });
-
-                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
-                release_guard(std::move(guard));
-
                 co_await utils::get_local_injector().inject("truncate_table_wait", utils::wait_for_message(std::chrono::minutes(2)));
 
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform TRUNCATE on table {}.{} because host {} is down", ks_name, cf_name, replica_host));
-                    }
-                }
-
                 // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                const service::frozen_topology_guard frozen_guard { session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
                     co_await ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
                 });
@@ -2077,16 +2196,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             // Clear the session and save the error message
             while (true) {
-                if (!guard) {
-                    guard = co_await start_operation();
-                }
+                guard = co_await start_operation();
 
                 utils::chunked_vector<canonical_mutation> updates;
                 updates.push_back(topology_mutation_builder(guard.write_timestamp())
                                     .del_session()
                                     .build());
                 if (error) {
-                    updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
+                    updates.push_back(topology_request_tracking_mutation_builder(req_id)
                                         .set("error", *error)
                                         .build());
                 }
@@ -2105,23 +2222,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         });
 
         // Execute a barrier to ensure the TRUNCATE RPC can't run on any nodes after this point
-        if (!guard) {
-            guard = co_await start_operation();
-        }
-        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        guard = co_await start_operation();
+        co_await scope_barrier_and_drain(std::move(guard), replica_hosts, "finalize_truncate_table");
 
         // Finalize the request
         while (true) {
-            if (!guard) {
-                guard = co_await start_operation();
-            }
+            guard = co_await start_operation();
             utils::chunked_vector<canonical_mutation> updates;
             updates.push_back(topology_mutation_builder(guard.write_timestamp())
                                 .del_transition_state()
                                 .del_global_topology_request()
                                 .del_global_topology_request_id()
                                 .build());
-            updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
+            updates.push_back(topology_request_tracking_mutation_builder(req_id)
                                 .done()
                                 .build());
 
