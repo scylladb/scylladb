@@ -22,7 +22,6 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="tombstone_gc repair mode is not supported yet for MVs due to #24816")
 async def test_mv_tombstone_gc_setting(manager):
     """
     Test that the tombstone_gc parameter can be set on a materialized view,

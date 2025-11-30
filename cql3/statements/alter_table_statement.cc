@@ -422,14 +422,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 throw exceptions::invalid_request_exception(format("The synchronous_updates option is only applicable to materialized views, not to base tables"));
             }
 
-            if (is_cdc_log_table) {
-                auto gc_opts = _properties->get_tombstone_gc_options(schema_extensions);
-                if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
-                    throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on CDC log tables.");
-                }
-            }
-
-            _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), !is_cdc_log_table);
+            _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace());
         }
         break;
 

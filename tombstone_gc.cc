@@ -284,24 +284,20 @@ static bool requires_repair_before_gc(const locator::abstract_replication_strate
     return rs.uses_tablets() && needs_repair_before_gc(rs, tm);
 }
 
-std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm, bool supports_repair) {
-    return {{"mode", (supports_repair && requires_repair_before_gc(rs, tm)) ? "repair" : "timeout"}};
+std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
+    return {{"mode", requires_repair_before_gc(rs, tm) ? "repair" : "timeout"}};
 }
 
-std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name, bool supports_repair) {
+std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name) {
     auto real_db_ptr = db.real_database_ptr();
     if (!real_db_ptr) {
-        return {{"mode", "timeout"}};
-    }
-
-    if (!supports_repair) {
         return {{"mode", "timeout"}};
     }
 
     const replica::keyspace& ks = real_db_ptr->find_keyspace(ks_name);
     const locator::token_metadata& tm = real_db_ptr->get_token_metadata();
 
-    return get_default_tombstone_gc_mode(ks.get_replication_strategy(), tm, supports_repair);
+    return get_default_tombstone_gc_mode(ks.get_replication_strategy(), tm);
 }
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name) {
