@@ -361,24 +361,20 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     auto reversed_sstables = sstables | std::views::reverse;
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
-        auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
-            return dht::token_range(sst->get_first_decorated_key().token(),
-                                    sst->get_last_decorated_key().token());
-        };
-
         for (const auto& sst : reversed_sstables) {
-            auto sst_token_range = sstable_token_range(sst);
+            auto sst_first = sst->get_first_decorated_key().token();
+            auto sst_last = sst->get_last_decorated_key().token();
 
             // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
-            if (tablet_range.after(sst_token_range.start()->value(), dht::token_comparator{})) {
+            if (tablet_range.after(sst_first, dht::token_comparator{})) {
                 break;
             }
             // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
-            if (tablet_range.before(sst_token_range.end()->value(), dht::token_comparator{})) {
+            if (tablet_range.before(sst_last, dht::token_comparator{})) {
                 continue;
             }
 
-            if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
+            if (tablet_range.contains(dht::token_range{sst_first, sst_last}, dht::token_comparator{})) {
                 sstables_fully_contained.push_back(sst);
             } else {
                 sstables_partially_contained.push_back(sst);
