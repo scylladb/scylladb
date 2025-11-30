@@ -10,6 +10,8 @@
 
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include "dht/i_partitioner_fwd.hh"
+#include "dht/token.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
@@ -152,3 +154,12 @@ struct fmt::formatter<sstables_loader::stream_scope> : fmt::formatter<string_vie
         }
     }
 };
+
+struct tablet_sstable_collection {
+    dht::token_range tablet_range;
+    std::vector<sstables::shared_sstable> sstables_fully_contained;
+    std::vector<sstables::shared_sstable> sstables_partially_contained;
+};
+
+future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                                 std::vector<tablet_sstable_collection>&& tablets_sstables);

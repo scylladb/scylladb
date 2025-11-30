@@ -163,6 +163,11 @@ public:
         _sst->_shards.push_back(this_shard_id());
     }
 
+    void set_first_and_last_keys(const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
+        _sst->_first = first_key;
+        _sst->_last = last_key;
+    }
+
     void rewrite_toc_without_component(component_type component) {
         SCYLLA_ASSERT(component != component_type::TOC);
         _sst->_recognized_components.erase(component);
