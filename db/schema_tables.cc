@@ -2834,7 +2834,7 @@ void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view
             "Materialized view {}.{}: first clustering key column ({}) is not computed and does not have a corresponding"
             " column in the base table. This materialized view must therefore be a secondary index created"
             " using legacy method (without computed columns) that wasn't migrated properly to new method."
-            " Make sure that you perform rolling upgrade according to documented procedure without skipping"
+            " Make sure that you perform rolling upgrade according to the documented procedure; do not skip"
             " major Scylla versions.", v->ks_name(), v->cf_name(), first_view_ck.name_as_text()));
     }
 }
