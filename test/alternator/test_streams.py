@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
+from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
 
 # All tests in this file are expected to fail with tablets due to #23838.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -549,6 +549,10 @@ def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams):
     yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY')
 
 @pytest.fixture(scope="function")
+def test_table_s_no_ck_new_image(dynamodb, dynamodbstreams):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_IMAGE')
+
+@pytest.fixture(scope="function")
 def test_table_s_no_ck_old_image(dynamodb, dynamodbstreams):
     yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'OLD_IMAGE')
 
@@ -703,10 +707,7 @@ def compare_events(expected_events, output, mode, expected_region):
         deserializer = TypeDeserializer()
         key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
         expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
-        if isinstance(expected_type, list): # relaxed op checking to bypass #6918
-            assert op in expected_type
-        elif expected_type != '*': # hack to allow a caller to not test op, to bypass issue #6918.
-            assert op == expected_type
+        assert op == expected_type
         assert record['StreamViewType'] == mode
         # We don't know what ApproximateCreationDateTime should be, but we do
         # know it needs to be a timestamp - there is conflicting documentation
@@ -806,8 +807,7 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbst
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'x': 2})
-        # TODO: change to 'INSERT' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
@@ -817,17 +817,13 @@ def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'a': 1})
-        # TODO: change to 'INSERT' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': 1}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': 1}])
         table.put_item(Item={'p': p, 'c': c, 'b': 2})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 1}, {'p': p, 'c': c, 'b': 2}])
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 1}, {'p': p, 'c': c, 'b': 2}])
         table.put_item(Item={'p': p, 'c': c, 'a': 3, 'b': 4})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'b': 2}, {'p': p, 'c': c, 'a': 3, 'b': 4}])
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'b': 2}, {'p': p, 'c': c, 'a': 3, 'b': 4}])
         table.put_item(Item={'p': p, 'c': c})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 3, 'b': 4}, {'p': p, 'c': c}])
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 3, 'b': 4}, {'p': p, 'c': c}])
         return events
     do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
@@ -837,11 +833,9 @@ def test_streams_putitem_new_item_overrides_old_lsi(test_table_sss_new_and_old_i
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'a': '1'})
-        # TODO: change to 'INSERT' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': '1'}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': '1'}])
         table.put_item(Item={'p': p, 'c': c})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': '1'}, {'p': p, 'c': c}])
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'a': '1'}, {'p': p, 'c': c}])
         assert len(full_scan(table, IndexName='a_idx')) == 0
         return events
     do_test(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
@@ -851,17 +845,13 @@ def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and
     def do_updates(table, p, _):
         events = []
         table.put_item(Item={'p': p, 'a': 1})
-        # TODO: change to 'INSERT' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p}, None, {'p': p, 'a': 1}])
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'a': 1}])
         table.put_item(Item={'p': p, 'b': 2})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'a': 1}, {'p': p, 'b': 2}])
+        events.append(['MODIFY', {'p': p}, {'p': p, 'a': 1}, {'p': p, 'b': 2}])
         table.put_item(Item={'p': p, 'a': 3, 'b': 4})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'b': 2}, {'p': p, 'a': 3, 'b': 4}])
+        events.append(['MODIFY', {'p': p}, {'p': p, 'b': 2}, {'p': p, 'a': 3, 'b': 4}])
         table.put_item(Item={'p': p})
-        # TODO: change to 'MODIFY' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'a': 3, 'b': 4}, {'p': p}])
+        events.append(['MODIFY', {'p': p}, {'p': p, 'a': 3, 'b': 4}, {'p': p}])
         return events
     do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
@@ -879,8 +869,7 @@ def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_image
         events = []
         table.update_item(Key={'p': p},
             AttributeUpdates={'x': {'Value': 1, 'Action': 'PUT'}})
-        # TODO: change to just 'INSERT' when #6918 is fixed
-        events.append([['INSERT', 'MODIFY'], {'p': p}, None, {'p': p, 'x': 1}])
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'x': 1}])
         table.delete_item(Key={'p': p})
         events.append(['REMOVE', {'p': p}, {'p': p, 'x': 1}, None])
         return events
@@ -888,28 +877,13 @@ def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_image
     do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test a single UpdateItem. Should result in a single INSERT event.
-# Currently fails because Alternator generates a MODIFY event even though
-# this is a new item (issue #6918).
-@pytest.mark.xfail(reason="Currently fails - see issue #6918")
+# Reproduces #6918.
 def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
-        return events
-    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-
-# This is exactly the same test as test_streams_updateitem_keys_only except
-# we don't verify the type of even we find (MODIFY or INSERT). It allows us
-# to have at least one good GetRecords test until solving issue #6918.
-# When we do solve that issue, this test should be removed.
-def test_streams_updateitem_keys_only_2(test_table_ss_keys_only, dynamodb, dynamodbstreams):
-    def do_updates(table, p, c):
-        events = []
-        table.update_item(Key={'p': p, 'c': c},
-            UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
@@ -921,12 +895,9 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodb, dynamod
         events = []
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
-        # We use here '*' instead of the really expected 'INSERT' to avoid
-        # checking again the same Alternator bug already checked by
-        # test_streams_updateitem_keys_only (issue #6918).
         # Note: The "None" as OldImage here tests that the OldImage should be
         # missing because the item didn't exist. This reproduces issue #6933.
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
@@ -945,7 +916,7 @@ def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamo
         events = []
         # Create an *empty* item, with nothing except a key:
         table.update_item(Key={'p': p, 'c': c})
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c}])
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
         # Note that OLD_IMAGE should be present and be the empty item,
@@ -994,10 +965,7 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :x, k = :k',
             ExpressionAttributeValues={':x': 2, ':k': 'dog'})
-        # We use here '*' instead of the really expected 'INSERT' to avoid
-        # checking again the same Alternator bug already checked by
-        # test_streams_updateitem_keys_only (issue #6918).
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2, 'k': 'dog'}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2, 'k': 'dog'}])
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET y = :y', ExpressionAttributeValues={':y': 3})
         # In issue #7030, the 'k' value was missing from the OldImage.
@@ -1017,7 +985,7 @@ def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :x',
             ExpressionAttributeValues={':x': 2})
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET y = :y', ExpressionAttributeValues={':y': 3})
         # "k" should be missing from OldImage, because it wasn't set earlier.
@@ -1033,7 +1001,6 @@ def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image
 # Corresponding tests for PutItem are included in tests based on do_updates_1.
 # The case for a PutItem within a BatchWriteItem is tested in
 # test_streams_batch_overwrite_identical. Reproduces #6918.
-@pytest.mark.xfail(reason="Currently fails - see #6918")
 def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -1050,15 +1017,15 @@ def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new
             UpdateExpression='SET x = :x',
             ExpressionAttributeValues={':x': 2})
         return events
-    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
-    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
-    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Tests that deleting a missing attribute with UpdateItem doesn't generate a
 # REMOVE event. Other cases are tested in test_streams_batch_delete_missing
 # and in tests based on do_updates_1. Reproduces #6918.
-@pytest.mark.xfail(reason="Currently fails - see #6918")
 def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -1073,10 +1040,11 @@ def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_s
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='REMOVE z')
         return events
-    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
-    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
-    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Tests similar to the above tests for OLD_IMAGE, just for NEW_IMAGE mode.
 # Verify that the NEW_IMAGE includes the entire old item (including the key),
@@ -1090,8 +1058,7 @@ def test_streams_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
         # Confirm that when adding one attribute "x", the NewImage contains both
         # the new x, and the key columns (p and c).
-        # We use here '*' instead of 'INSERT' to avoid testing issue #6918 here.
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         # Confirm that when adding just attribute "y", the NewImage will contain
         # all the attributes, including the old "x":
         table.update_item(Key={'p': p, 'c': c},
@@ -1121,8 +1088,7 @@ def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, 
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
         # The item doesn't yet exist, so OldImage is missing.
-        # We use here '*' instead of 'INSERT' to avoid testing issue #6918 here.
-        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         # Confirm that when adding just attribute "y", the NewImage will contain
         # all the attributes, including the old "x". Also, OldImage contains the
         # key attributes, not just "x":
@@ -1433,6 +1399,7 @@ def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstrea
 # stream for correctness.
 # The following tests focus on multiple operations on the *same* item. Those
 # should appear in the stream in the correct order.
+# Reproduces #6918, #6930.
 def do_updates_1(table, p, c):
     events = []
     # a first put_item appears as an INSERT event. Note also empty old_image.
@@ -1469,26 +1436,73 @@ def do_updates_1(table, p, c):
     events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'b': 4, 'x': 5}, {'p': p, 'c': c, 'x': 5}])
     return events
 
-@pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
+# The tested events are the same as in do_updates_1, but the table doesn't have
+# a clustering key.
+def do_updates_1_no_ck(table, p, _):
+    events = []
+    # a first put_item appears as an INSERT event. Note also empty old_image.
+    table.put_item(Item={'p': p, 'x': 2})
+    events.append(['INSERT', {'p': p}, None, {'p': p, 'x': 2}])
+    # a second put_item of the *same* key and same value, doesn't appear in the log at all!
+    table.put_item(Item={'p': p, 'x': 2})
+    # a second put_item of the *same* key and different value, appears as a MODIFY event
+    table.put_item(Item={'p': p, 'y': 3})
+    events.append(['MODIFY', {'p': p}, {'p': p, 'x': 2}, {'p': p, 'y': 3}])
+    # deleting an item appears as a REMOVE event. Note no new_image at all, but there is an old_image.
+    table.delete_item(Key={'p': p})
+    events.append(['REMOVE', {'p': p}, {'p': p, 'y': 3}, None])
+    # deleting a non-existent item doesn't appear in the log at all.
+    table.delete_item(Key={'p': p})
+    # If update_item creates an item, the event is INSERT as well.
+    table.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1',
+        ExpressionAttributeValues={':val1': 4})
+    events.append(['INSERT', {'p': p}, None, {'p': p, 'b': 4}])
+    # If update_item modifies the item, note how old and new image includes both old and new columns
+    table.update_item(Key={'p': p},
+        UpdateExpression='SET x = :val1',
+        ExpressionAttributeValues={':val1': 5})
+    events.append(['MODIFY', {'p': p}, {'p': p, 'b': 4}, {'p': p, 'b': 4, 'x': 5}])
+    # Test BatchWriteItem as well. This modifies the item, so will be a MODIFY event.
+    table.meta.client.batch_write_item(RequestItems = {table.name: [{'PutRequest': {'Item': {'p': p, 'x': 5}}}]})
+    events.append(['MODIFY', {'p': p}, {'p': p, 'b': 4, 'x': 5}, {'p': p, 'x': 5}])
+    return events
+
 def test_streams_1_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
-    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates_1, 'KEYS_ONLY')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates_1, 'KEYS_ONLY')
 
-@pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
-    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates_1, 'NEW_IMAGE')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates_1, 'NEW_IMAGE')
 
-@pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
-    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
 
-@pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
-    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_1_no_ck_keys_only(test_table_s_no_ck_keys_only, dynamodb, dynamodbstreams):
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_keys_only, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'KEYS_ONLY')
+
+def test_streams_1_no_ck_new_image(test_table_s_no_ck_new_image, dynamodb, dynamodbstreams):
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_new_image, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'NEW_IMAGE')
+
+def test_streams_1_no_ck_old_image(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams):
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'OLD_IMAGE')
+
+def test_streams_1_no_ck_new_and_old_images(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'NEW_AND_OLD_IMAGES')
 
 # Tests that a DeleteItem within a BatchWriteItem that tries to remove a
 # missing item doesn't generate a REMOVE event. 
 # Reproduces #6918.
-@pytest.mark.xfail(reason="Currently fails - see #6918")
 def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, ps, cs):
         # Deleting items that don't exist shouldn't produce any events.
@@ -1496,17 +1510,17 @@ def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new
             table.name: [{'DeleteRequest': {'Key': {'p': p, 'c': c}}} for p, c in zip(ps, cs)]
         })
         return []
-    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
-    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
-    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # This test verifies that a PutItem within a BatchWriteItem generates no event
 # when it replaces an item with an identical one. This no-op behaviour is also
 # tested for a standard PutItem (see tests based on do_updates_1), and an
 # UpdateItem (see test_streams_updateitem_overwrite_identical). Reproduces
 # #6918.
-@pytest.mark.xfail(reason="Currently fails - see #6918")
 def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     # Batch PutItem identical items
     def do_updates(table, ps, cs):
@@ -1520,12 +1534,12 @@ def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_s
             table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': i}}} for p, c, i in zip(ps, cs, range(1, len(ps) + 1))]
         })
         return events
-    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
-    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
-    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
-@pytest.mark.xfail(reason="Currently fails - see #6918")
 def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, ps, cs):
         # Emit a separate event for each item in the batch.
@@ -1539,10 +1553,11 @@ def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_s
         })
         events.extend([['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 1}, {'p': p, 'c': c, 'x': 2}] for p, c in zip(ps, cs)])
         return events
-    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
-    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
-    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
-    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.

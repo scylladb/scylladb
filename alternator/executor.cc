@@ -2624,14 +2624,14 @@ std::optional<service::cas_shard> rmw_operation::shard_for_execute(bool needs_re
 // Build the return value from the different RMW operations (UpdateItem,
 // PutItem, DeleteItem). All these return nothing by default, but can
 // optionally return Attributes if requested via the ReturnValues option.
-static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
+static executor::request_return_type rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
     rjson::value ret = rjson::empty_object();
     consumed_capacity.add_consumed_capacity_to_response_if_needed(ret);
     metric += consumed_capacity.get_consumed_capacity_units();
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return rjson::print(std::move(ret));
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -2697,7 +2697,10 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         stats& global_stats,
         stats& per_table_stats,
         uint64_t& wcu_total) {
-    auto cdc_opts = cdc::per_request_options{};
+    auto cdc_opts = cdc::per_request_options{
+        .alternator = true,
+        .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
+    };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
@@ -2742,7 +2745,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
-        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+        return make_ready_future<executor::request_return_type>(rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total));
     });
 }
 
@@ -3054,6 +3057,9 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, serv
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     auto cdc_opts = cdc::per_request_options{
+        .alternator = true,
+        .alternator_streams_increased_compatibility =
+                schema->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
     return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -3104,8 +3110,10 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         utils::chunked_vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
         api::timestamp_type now = api::new_timestamp();
+        bool any_cdc_enabled = false;
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));
+            any_cdc_enabled |= b.first->cdc_options().enabled();
         }
         return proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
@@ -3114,7 +3122,10 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes,
                 false,
-                cdc::per_request_options{});
+                cdc::per_request_options{
+                    .alternator = true,
+                    .alternator_streams_increased_compatibility = any_cdc_enabled && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
+                });
     } else {
         // Do the write via LWT:
         // Multiple mutations may be destined for the same partition, adding
