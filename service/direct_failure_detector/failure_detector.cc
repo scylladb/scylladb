@@ -480,7 +480,7 @@ static future<bool> ping_with_timeout(pinger::endpoint_id id, clock::timepoint_t
         }
     });
 
-    auto f = pinger.ping(id, timeout_as);
+    auto f = pinger.ping(id, timeout, timeout_as, c);
     auto sleep_and_abort = [] (clock::timepoint_t timeout, abort_source& timeout_as, clock& c) -> future<> {
         co_await c.sleep_until(timeout, timeout_as).then_wrapped([&timeout_as] (auto&& f) {
             // Avoid throwing if sleep was aborted.
