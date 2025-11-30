@@ -154,7 +154,7 @@ is holding your keys. You can use the following options:
    * - Local Key Provider
      - ``LocalFileSystemKeyProviderFactory`` (**default**)
      - Stores the key on the same machine as the data.
-   * - Replicated Key Provider
+   * - Replicated Key Provider (**deprecated**)
      - ``ReplicatedKeyProviderFactory``
      - Stores table keys in a ScyllaDB table where the table itself is encrypted
        using the system key.
@@ -1397,6 +1397,7 @@ This procedure demonstrates how to encrypt a new table.
             ;
 
       .. group-tab:: Replicated Key Provider
+         **Warning**: The replicated key provider is deprecated and will be removed in a future scylla release.
 
          .. code-block:: cql
 
