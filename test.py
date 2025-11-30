@@ -331,6 +331,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
+            f'--dist=worksteal',
         ])
     if options.verbose:
         args.append('-v')
