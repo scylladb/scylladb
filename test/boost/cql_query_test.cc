@@ -5658,11 +5658,11 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         e.execute_cql("CREATE TABLE null_in_col (p int primary key, l list<int>, s set<int>, m map<int, int>);").get();
 
         // The predicate that checks the message has to be a lambda to preserve source_location
-        auto check_null_msg = [](compat::source_location loc = std::source_location::current()) {
+        auto check_null_msg = [](std::source_location loc = std::source_location::current()) {
             return exception_predicate::message_matches(".*(null|NULL).*", loc);
         };
 
-        auto check_unset_msg = [](compat::source_location loc = std::source_location::current()) {
+        auto check_unset_msg = [](std::source_location loc = std::source_location::current()) {
             return exception_predicate::message_contains("unset", loc);
         };
 
@@ -5829,7 +5829,7 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
         e.execute_cql("CREATE TABLE tab1 (p int primary key, a int, b text, c int)").get();
 
         // The predicate that checks the message has to be a lambda to preserve source_location
-        auto check_type_conflict = [](compat::source_location loc = std::source_location::current()) {
+        auto check_type_conflict = [](std::source_location loc = std::source_location::current()) {
             return exception_predicate::message_contains("variable :var has type", loc);
         };
 
