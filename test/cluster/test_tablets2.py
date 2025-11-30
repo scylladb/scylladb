@@ -544,7 +544,14 @@ async def test_tablet_cleanup(manager: ManagerClient):
 async def test_tablet_cleanup_failure(manager: ManagerClient):
     cmdline = ['--smp=1']
 
-    servers = [await manager.server_add(cmdline=cmdline)]
+    # Force capacity based balancing, so that after the move_tablet API the load balancer does
+    # not attempt to migrate the tablet back to the first node.
+    # Without this, the second node might have a slightly lower transient effective disk
+    # capacity, the size based load balancer will compute a higher load, and move the tablet
+    # back to the first node.
+    config = { 'force_capacity_based_balancing': True }
+
+    servers = [await manager.server_add(cmdline=cmdline, config=config)]
 
     cql = manager.get_cql()
     n_tablets = 1
@@ -560,7 +567,7 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
         s0_log = await manager.server_open_log(servers[0].server_id)
         s0_mark = await s0_log.mark()
 
-        servers.append(await manager.server_add())
+        servers.append(await manager.server_add(config=config))
 
         tablet_token = 0
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
