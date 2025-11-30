@@ -359,7 +359,6 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     }
     // sstables are sorted by first key in reverse order.
     auto reversed_sstables = sstables | std::views::reverse;
-    auto sstable_it = reversed_sstables.cbegin();
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
         auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
@@ -367,15 +366,7 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
                                     sst->get_last_decorated_key().token());
         };
 
-        // sstable is exhausted if its last key is before the current tablet range
-        auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
-            return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
-        };
-        while (sstable_it != reversed_sstables.cend() && exhausted(*sstable_it)) {
-            sstable_it++;
-        }
-
-        for (auto sst_it = sstable_it; sst_it != reversed_sstables.cend(); sst_it++) {
+        for (auto sst_it = reversed_sstables.cbegin(); sst_it != reversed_sstables.cend(); sst_it++) {
             auto sst_token_range = sstable_token_range(*sst_it);
 
             // sstables are sorted by first key, so should skip this SSTable since it
