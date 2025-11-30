@@ -38,8 +38,9 @@ for required in jq curl; do
 	fi
 done
 
-FORCE=0
 ALLOW_SUBMODULE=0
+ALLOW_UNSTABLE=0
+ALLOW_ANY_BRANCH=0
 
 function print_usage {
 cat << EOF
@@ -60,12 +61,18 @@ Options:
 -h
     Print this help message and exit.
 
---force
-    Do not check current branch to be next*
-    Do not check jenkins job status
-
 --allow-submodule
     Allow a PR to update a submudule
+
+--allow-unstable
+    Do not check jenkins job status
+
+--allow-any-branch
+    Merge PR even if target branch is not next
+
+--force
+    Sets all above --allow-* options
+
 EOF
 }
 
@@ -73,11 +80,21 @@ while [[ $# -gt 0 ]]
 do
     case $1 in
         "--force"|"-f")
-            FORCE=1
+            ALLOW_UNSTABLE=1
+            ALLOW_SUBMODULE=1
+            ALLOW_ANY_BRANCH=1
             shift 1
             ;;
         --allow-submodule)
             ALLOW_SUBMODULE=1
+            shift
+            ;;
+        --allow-unstable)
+            ALLOW_UNSTABLE=1
+            shift
+            ;;
+        --allow-any-branch)
+            ALLOW_ANY_BRANCH=1
             shift
             ;;
         +([0-9]))
@@ -147,7 +164,7 @@ check_jenkins_job_status() {
   fi
 }
 
-if [[ $FORCE -eq 0 ]]; then
+if [[ $ALLOW_UNSTABLE -eq 0 ]]; then
   check_jenkins_job_status
 fi
 
@@ -179,17 +196,19 @@ echo -n "Fetching full name of author $PR_LOGIN... "
 USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
 echo "$USER_NAME"
 
-BASE_BRANCH=$(jq -r .base.ref <<< $PR_DATA)
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-TARGET_BASE="unknown"
-if [[ ${BASE_BRANCH} == master ]]; then
-    TARGET_BASE="next"
-elif [[ ${BASE_BRANCH}  == branch-* ]]; then
-    TARGET_BASE=${BASE_BRANCH//branch/next}
-fi
-if [[ "${CURRENT_BRANCH}" != "${TARGET_BASE}" ]]; then
-    echo "Merging into wrong next, want ${TARGET_BASE}, have ${CURRENT_BRANCH}"
-    exit 1
+if [[ $ALLOW_ANY_BRANCH -eq 0 ]]; then
+    BASE_BRANCH=$(jq -r .base.ref <<< $PR_DATA)
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    TARGET_BASE="unknown"
+    if [[ ${BASE_BRANCH} == master ]]; then
+        TARGET_BASE="next"
+    elif [[ ${BASE_BRANCH}  == branch-* ]]; then
+        TARGET_BASE=${BASE_BRANCH//branch/next}
+    fi
+    if [[ "${CURRENT_BRANCH}" != "${TARGET_BASE}" ]]; then
+        echo "Merging into wrong next, want ${TARGET_BASE}, have ${CURRENT_BRANCH}. Use --allow-any-branch or --force to skip this check"
+        exit 1
+    fi
 fi
 
 git fetch "$REMOTE" pull/$PR_NUM/head
