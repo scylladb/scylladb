@@ -290,6 +290,14 @@ experimental:
   considered experimental so needs to be enabled explicitly with the
   `--experimental-features=alternator-streams` configuration option.
 
+  In this version, Alternator Streams is only supported if the base table
+  uses vnodes instead of tablets. However, by default new tables use tablets
+  so to create a table that can be used with Streams, you must set the tag
+  `system:initial_tablets` set to `none` during CreateTable - so that the
+  new table will use vnodes. Streams cannot be enabled on an already-existing
+  table that uses tablets.
+  See <https://github.com/scylladb/scylla/issues/23838>.
+
   Alternator streams also differ in some respects from DynamoDB Streams:
   * The number of separate "shards" in Alternator's streams is significantly
     larger than is typical on DynamoDB.
