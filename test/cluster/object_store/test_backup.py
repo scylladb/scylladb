@@ -316,23 +316,22 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     #
     # in this test, we:
     # 1. upload:
-    #    prefix: {prefix}/{suffix}
+    #    prefix: {some}/{objects}/{path}
     #    sstables:
     #    - 1-TOC.txt
     #    - 2-TOC.txt
     #    - ...
     # 2. download:
-    #    prefix = {prefix}
+    #    prefix = {some}/{objects}/{path}
     #    sstables:
-    #    - {suffix}/1-TOC.txt
-    #    - {suffix}/2-TOC.txt
+    #    - 1-TOC.txt
+    #    - 2-TOC.txt
     #    - ...
-    suffix = 'suffix'
     old_files = list_sstables();
-    toc_names = [f'{suffix}/{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
+    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}/{suffix}')
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}')
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
