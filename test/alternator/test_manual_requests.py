@@ -465,6 +465,23 @@ def assert_validation_exception(response_text, request_info, accept_serializatio
         (accept_serialization_exception and "SerializationException" in r['__type']), \
         f"Unexpected error type {r['__type']} for {request_info}"
 
+# Test that JSON parse errors have a reasonable type (in DynamoDB, it is
+# SerializationException but in Alternator it is ValidationException), and
+# if it contains a message, it doesn't contain garbage positions (reproduces
+# issue #27372).
+def test_json_parse_error(dynamodb, test_table):
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'PutItem', '{broken json')
+    e = err.value
+    # In DynamoDB, we get a SerializationException with no message.
+    # In Alternator, we get a ValidationException with a message.
+    # For now, we'll accept both, but want to check that if we do have
+    # a message it gives the correct position of the error ('at 1') and
+    # not some garbage number (issue #27372).
+    assert e.type == 'SerializationException' or e.type == 'ValidationException'
+    if e.message:
+        assert e.message.endswith('at 1')
+
 # Tests some invalid payloads (empty values, wrong types) to BatchWriteItem. Reproduces #23233
 def test_batch_write_item_invalid_payload(dynamodb, test_table):
     cases = [
