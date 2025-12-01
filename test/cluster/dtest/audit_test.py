@@ -23,7 +23,7 @@ from typing import Any, Optional, override
 import pytest
 import requests
 from cassandra import AlreadyExists, AuthenticationFailed, ConsistencyLevel, InvalidRequest, Unauthorized, Unavailable, WriteFailure
-from cassandra.cluster import NoHostAvailable, Session
+from cassandra.cluster import NoHostAvailable, Session, EXEC_PROFILE_DEFAULT
 from cassandra.query import SimpleStatement, named_tuple_factory
 from ccmlib.scylla_node import ScyllaNode, NodeError
 
@@ -983,6 +983,14 @@ class TestCQLAudit(AuditTester):
 
             session.execute("DROP TABLE test1")
 
+    def _get_attempt_count(self, session: Session, *, execution_profile=EXEC_PROFILE_DEFAULT, consistency_level: ConsistencyLevel = ConsistencyLevel.ONE) -> int:
+        # dtest env is using FlakyRetryPolicy which has `max_retries` attribute
+        cl_profile = session.execution_profile_clone_update(execution_profile, consistency_level=consistency_level)
+        policy = cl_profile.retry_policy
+        retries = getattr(policy, "max_retries", None)
+        assert retries is not None
+        return 1 + retries
+
     def _test_insert_failure_doesnt_report_success_assign_nodes(self, session: Session = None):
         all_nodes: set[ScyllaNode] = set(self.cluster.nodelist())
         assert len(all_nodes) == 7
@@ -1002,6 +1010,7 @@ class TestCQLAudit(AuditTester):
         for i in range(256):
             stmt = SimpleStatement(f"INSERT INTO ks.test1 (k, v1) VALUES ({i}, 1337)", consistency_level=ConsistencyLevel.THREE)
             session.execute(stmt)
+            attempt_count = self._get_attempt_count(session, consistency_level=ConsistencyLevel.THREE)
 
             token = rows_to_list(session.execute(f"SELECT token(k) FROM ks.test1 WHERE k = {i}"))[0][0]
 
@@ -1016,9 +1025,9 @@ class TestCQLAudit(AuditTester):
                     audit_partition_nodes = [address_to_node[address] for address in audit_nodes]
                     insert_node = address_to_node[insert_node.pop()]
                     kill_node = address_to_node[partitions.pop()]
-                    return audit_partition_nodes, insert_node, kill_node, stmt.query_string
+                    return audit_partition_nodes, insert_node, kill_node, stmt.query_string, attempt_count
 
-        return [], [], None, None
+        return [], [], None, None, None
 
     @pytest.mark.exclude_errors("audit - Unexpected exception when writing log with: node_ip")
     def test_insert_failure_doesnt_report_success(self):
@@ -1040,7 +1049,7 @@ class TestCQLAudit(AuditTester):
             with self.assert_exactly_n_audit_entries_were_added(session, 1):
                 conn.execute(stmt)
 
-        audit_paritition_nodes, insert_node, node_to_stop, query_to_fail = self._test_insert_failure_doesnt_report_success_assign_nodes(session=session)
+        audit_paritition_nodes, insert_node, node_to_stop, query_to_fail, query_fail_count = self._test_insert_failure_doesnt_report_success_assign_nodes(session=session)
 
         # TODO: remove the loop when scylladb#24473 is fixed
         # We call get_host_id only to cache host_id
@@ -1075,8 +1084,8 @@ class TestCQLAudit(AuditTester):
                 pytest.fail(f"audit log not updated after {i} iterations")
 
             rows = self.get_audit_log_list(session)
-            rows_with_error = list(filter(lambda r: r.error, rows))
-            if len(rows_with_error) == 6:
+            rows_with_error = [row for row in rows if row.error and row.operation == query_to_fail]
+            if len(rows_with_error) == query_fail_count:
                 logger.info(f"audit log updated after {i} iterations ({i / 10}s)")
                 assert rows_with_error[0].error is True
                 assert rows_with_error[0].consistency == "THREE"
