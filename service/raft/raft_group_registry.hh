@@ -127,6 +127,7 @@ private:
     // My Raft ID. Shared between different Raft groups.
     raft::server_id _my_id;
 
+    bool _group0_is_alive = false;
 public:
     raft_group_registry(raft::server_id my_id, netw::messaging_service& ms,
             direct_failure_detector::failure_detector& fd);
@@ -181,6 +182,9 @@ public:
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
+    bool is_group0_alive() const {
+        return _group0_is_alive;
+    }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
