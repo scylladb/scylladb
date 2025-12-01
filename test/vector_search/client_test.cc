@@ -8,6 +8,7 @@
 
 #include "seastar/http/common.hh"
 #include "vector_search/client.hh"
+#include "vector_search/utils.hh"
 #include "vs_mock_server.hh"
 #include "unavailable_server.hh"
 #include "utils.hh"
@@ -20,6 +21,7 @@ using namespace seastar;
 using namespace vector_search;
 using namespace test::vector_search;
 using namespace seastar::httpd;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -194,4 +196,50 @@ SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
         co_await server->stop();
         co_await down_server->stop();
     }
+}
+
+SEASTAR_TEST_CASE(is_down_when_connection_times_out) {
+    abort_source_timeout as;
+    auto unreachable = co_await make_unreachable_socket();
+    client client{client_test_logger, client::endpoint_type{unreachable.host, unreachable.port, seastar::net::inet_address(unreachable.host)},
+            utils::updateable_value<uint32_t>{5000}, shared_ptr<seastar::tls::certificate_credentials>{}};
+
+    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+
+    BOOST_CHECK(!client.is_up());
+    BOOST_CHECK(!res);
+    BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
+
+    co_await unreachable.close();
+    co_await client.close();
+}
+
+SEASTAR_TEST_CASE(connection_timeout_cannot_be_smaller_than_5s) {
+    abort_source_timeout as;
+    auto unreachable = co_await make_unreachable_socket();
+    client client{client_test_logger, client::endpoint_type{unreachable.host, unreachable.port, seastar::net::inet_address(unreachable.host)},
+            utils::updateable_value<uint32_t>{1000}, shared_ptr<seastar::tls::certificate_credentials>{}};
+
+
+    auto start = std::chrono::steady_clock::now();
+    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+    auto duration = std::chrono::steady_clock::now() - start;
+
+    BOOST_CHECK(duration >= 5s);
+
+    co_await unreachable.close();
+    co_await client.close();
+}
+
+BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
+
+    auto params1 = get_keepalive_parameters(10s);
+    BOOST_CHECK_EQUAL(params1.idle.count(), 4);
+    BOOST_CHECK_EQUAL(params1.interval.count(), 2);
+    BOOST_CHECK_EQUAL(params1.count, 3);
+
+    auto params2 = get_keepalive_parameters(5s);
+    BOOST_CHECK_EQUAL(params2.idle.count(), 2);
+    BOOST_CHECK_EQUAL(params2.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params2.count, 3);
 }
