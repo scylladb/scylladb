@@ -630,6 +630,7 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
     for s in servers:
         streamed_to = defaultdict(int)
         log, mark = log_marks[s.server_id]
+        direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTables to the table', from_mark=mark)
         res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
         for r in res:
             target_host_id = r[1].group('target_host_id')
@@ -662,14 +663,17 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
 
         # asses balance
         streamed_to_counts = streamed_to.values()
-        assert len(streamed_to_counts) > 0
-        mean_count = statistics.mean(streamed_to_counts)
-        max_deviation = max(abs(count - mean_count) for count in streamed_to_counts)
-        if not primary_replica_only:
-            assert max_deviation == 0, f'if primary_replica_only is False, streaming should be perfectly balanced: {streamed_to}'
-            continue
+        if scope == 'node' and len(streamed_to_counts) == 0:
+            assert len(direct_downloads) > 0
+        else:
+            assert len(streamed_to_counts) > 0
+            mean_count = statistics.mean(streamed_to_counts)
+            max_deviation = max(abs(count - mean_count) for count in streamed_to_counts)
+            if not primary_replica_only:
+                assert max_deviation == 0, f'if primary_replica_only is False, streaming should be perfectly balanced: {streamed_to}'
+                continue
 
-        assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
+            assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
 
 async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix = None, object_storage = None, primary_replica_only = False, load_fn=do_restore_server):
     logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
