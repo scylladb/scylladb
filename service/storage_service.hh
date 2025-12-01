@@ -43,7 +43,6 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
-#include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
@@ -131,6 +130,7 @@ class group0_info;
 class raft_group0_client;
 class tablet_virtual_task;
 class task_manager_module;
+class topology_state_machine;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -928,9 +928,7 @@ private:
     future<> raft_state_monitor_fiber(raft::server&, gate::holder);
 
 public:
-    bool topology_global_queue_empty() const {
-        return !_topology_state_machine._topology.global_request.has_value();
-    }
+    bool topology_global_queue_empty() const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
 private:
