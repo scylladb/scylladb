@@ -144,6 +144,17 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+    auto url = utils::http::parse_simple_url(ep);
+    endpoint_config cfg = {
+        .port = url.port,
+        .use_https = url.is_https(),
+        .region = std::move(region),
+        .role_arn = std::move(iam_role_arn),
+    };
+    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), memory, gf);
+}
+
 future<> client::update_credentials_and_rearm() {
     _credentials = co_await _creds_provider_chain.get_aws_credentials();
     _creds_invalidation_timer.rearm(_credentials.expires_at);

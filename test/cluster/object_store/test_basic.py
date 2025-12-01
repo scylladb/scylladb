@@ -252,9 +252,9 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
 
 @pytest.mark.asyncio
 async def test_get_object_store_endpoints(manager: ManagerClient, object_storage):
-    a_ep_name='a'
+    a_ep_name='http://a'
     objconf = object_storage.create_endpoint_conf()
-    badconf = MinioServer.create_conf(a_ep_name, 123, 'bad_region')
+    badconf = MinioServer.create_conf(a_ep_name, 'bad_region')
     cfg = {'object_storage_endpoints': objconf + badconf}
 
     print('Scylla returns the object storage endpoints')
@@ -274,11 +274,11 @@ async def test_get_object_store_endpoints(manager: ManagerClient, object_storage
     assert json.loads(res[object_storage.address]) == objconf[0]
     assert json.loads(res[a_ep_name]) == badconf[0]
 
-    b_ep_name = 'b'
+    b_ep_name = 'http://b'
     print('Update config with a new endpoint and SIGHUP Scylla to reload configuration')
-    new_endpoint = MinioServer.create_conf(b_ep_name, 456, 'good_region')
+    new_endpoint = MinioServer.create_conf(b_ep_name, 'good_region')
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', new_endpoint)
-    await wait_for_config(manager, server, 'object_storage_endpoints', {b_ep_name: '{ "port": 456, "use_https": false, "aws_region": "good_region", "iam_role_arn": "" }'})
+    await wait_for_config(manager, server, 'object_storage_endpoints', {b_ep_name: '{ "type": "s3", "aws_region": "good_region", "iam_role_arn": "" }'})
 
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',

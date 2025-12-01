@@ -62,8 +62,7 @@ fmt::formatter<sstables::object_name>::format(const sstables::object_name& n, fm
 
 static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, semaphore& memory, std::function<shared_ptr<s3::client>(std::string)> factory) {
     auto& epc = ep.get_s3_storage();
-    auto cfg = make_lw_shared<s3::endpoint_config>(ep.get_s3_storage().config);
-    return s3::client::make(epc.endpoint, std::move(cfg), memory, std::move(factory));
+    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, memory, std::move(factory));
 }
 
 class s3_client_wrapper : public sstables::object_storage_client {
@@ -105,7 +104,7 @@ public:
     }
     future<> update_config(const db::object_storage_endpoint_param& ep) override {
         auto& epc = ep.get_s3_storage();
-        return _client->update_config(epc.config.region, epc.config.role_arn);
+        return _client->update_config(epc.region, epc.iam_role_arn);
     }
     future<> close() override {
         return _client->close();
