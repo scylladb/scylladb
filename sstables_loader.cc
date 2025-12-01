@@ -205,9 +205,6 @@ private:
     }
 
     bool tablet_in_scope(locator::tablet_id) const;
-
-    static future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
-                                                                                   std::vector<dht::token_range>&& tablets_ranges);
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
@@ -346,8 +343,8 @@ public:
     }
 };
 
-future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
-                                                                                                 std::vector<dht::token_range>&& tablets_ranges) {
+future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
+                                                                        std::vector<dht::token_range>&& tablets_ranges) {
     auto tablets_sstables =
         tablets_ranges | std::views::transform([](auto range) { return tablet_sstable_collection{.tablet_range = range}; }) | std::ranges::to<std::vector>();
     // sstables are sorted by first key in reverse order.
