@@ -104,8 +104,8 @@ public:
         return _client->upload_file(std::move(path), name.str(), up, as);
     }
     future<> update_config(const db::object_storage_endpoint_param& ep) override {
-        auto s3_cfg = make_lw_shared<s3::endpoint_config>(ep.get_s3_storage().config);
-        return _client->update_config(std::move(s3_cfg));
+        auto& epc = ep.get_s3_storage();
+        return _client->update_config(epc.config.region, epc.config.role_arn);
     }
     future<> close() override {
         return _client->close();

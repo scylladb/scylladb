@@ -211,7 +211,7 @@ public:
                          upload_progress& up,
                          seastar::abort_source* = nullptr);
 
-    future<> update_config(endpoint_config_ptr);
+    future<> update_config(std::string reg, std::string ira);
 
     struct handle {
         std::string _host;
