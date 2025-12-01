@@ -536,14 +536,6 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     }
 }
 
-template <typename... Args>
-static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets, Args&&... args) {
-    if (uses_tablets) {
-        return std::make_unique<tablet_sstable_streamer>(std::forward<Args>(args)...);
-    }
-    return std::make_unique<sstable_streamer>(std::forward<Args>(args)...);
-}
-
 future<locator::effective_replication_map_ptr> sstables_loader::await_topology_quiesced_and_get_erm(::table_id table_id) {
     // By waiting for topology to quiesce, we guarantee load-and-stream will not start in the middle
     // of a topology operation that changes the token range boundaries, e.g. split or merge.
@@ -581,9 +573,14 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // throughout its lifetime.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
 
-    auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
-                                          _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
-                                          primary, unlink_sstables(unlink), scope);
+    std::unique_ptr<sstable_streamer> streamer;
+    if (_db.local().find_column_family(table_id).uses_tablets()) {
+        streamer =
+            std::make_unique<tablet_sstable_streamer>(_messaging, _db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink_sstables(unlink), scope);
+    } else {
+        streamer =
+            std::make_unique<sstable_streamer>(_messaging, _db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink_sstables(unlink), scope);
+    }
 
     co_await streamer->stream(progress);
 }
