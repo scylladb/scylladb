@@ -363,6 +363,7 @@ future<> view_building_coordinator::update_views_statuses(const service::group0_
 future<> view_building_coordinator::work_on_view_building(service::group0_guard guard) {
     if (!_vb_sm.building_state.currently_processed_base_table) {
         vbc_logger.debug("No base table is selected, nothing to do.");
+        co_return;
     }
 
     // Acquire unique lock of `_finished_tasks` to ensure each replica has its own entry in it
