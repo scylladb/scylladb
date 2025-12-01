@@ -126,11 +126,14 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
     }
 }
 
-future<> client::update_config(endpoint_config_ptr cfg) {
-    if (_cfg->port != cfg->port || _cfg->use_https != cfg->use_https) {
-        throw std::runtime_error("Updating port and/or https usage is not possible");
-    }
-    _cfg = std::move(cfg);
+future<> client::update_config(std::string region, std::string ira) {
+    endpoint_config new_cfg = {
+        .port = _cfg->port,
+        .use_https = _cfg->use_https,
+        .region = std::move(region),
+        .role_arn = std::move(ira),
+    };
+    _cfg = make_lw_shared<endpoint_config>(std::move(new_cfg));
     auto units = co_await get_units(_creds_sem, 1);
     _creds_provider_chain.invalidate_credentials();
     _credentials = {};
