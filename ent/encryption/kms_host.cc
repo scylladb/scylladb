@@ -35,6 +35,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
+#include "utils/http.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
@@ -151,15 +152,10 @@ public:
     {
         // check if we have an explicit endpoint set.
         if (!_options.endpoint.empty()) {
-            static std::regex simple_url(R"foo((https?):\/\/(?:([\w\.]+)|\[([\w:]+)\]):?(\d+)?\/?)foo");
-            std::transform(_options.endpoint.begin(), _options.endpoint.end(), _options.endpoint.begin(), ::tolower);
-            std::smatch m;
-            if (!std::regex_match(_options.endpoint, m, simple_url)) {
-                throw std::invalid_argument(fmt::format("Could not parse URL: {}", _options.endpoint));
-            }
-            _options.https = m[1].str() == "https";
-            _options.host = m[2].length() > 0 ? m[2].str() : m[3].str();
-            _options.port = m[4].length() > 0 ? std::stoi(m[4].str()) : 0;
+            auto info = utils::http::parse_simple_url(_options.endpoint);
+            _options.https = info.is_https();
+            _options.host = info.host;
+            _options.port = info.port;
         }
         if (_options.endpoint.empty() && _options.host.empty() && _options.aws_region.empty() && !_options.aws_use_ec2_region) {
             throw std::invalid_argument("No AWS region or endpoint specified");

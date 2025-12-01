@@ -15,6 +15,7 @@
 #include "db/config.hh"
 #include "utils/log.hh"
 #include "utils/hash.hh"
+#include "utils/http.hh"
 #include "utils/rjson.hh"
 #include "utils/base64.hh"
 #include "utils/loading_cache.hh"
@@ -267,7 +268,6 @@ std::tuple<std::string, std::string> azure_host::impl::parse_key(std::string_vie
 
 std::tuple<std::string, std::string, unsigned> azure_host::impl::parse_vault(std::string_view vault) {
     static const boost::regex vault_name_re(R"([a-zA-Z0-9-]+)");
-    static const boost::regex vault_endpoint_re(R"((https?)://([^/:]+)(?::(\d+))?)");
 
     boost::smatch match;
     std::string tmp{vault};
@@ -277,16 +277,12 @@ std::tuple<std::string, std::string, unsigned> azure_host::impl::parse_vault(std
         return {"https", fmt::format(AKV_HOST_TEMPLATE, vault), 443};
     }
 
-    if (boost::regex_match(tmp, match, vault_endpoint_re)) {
-        std::string scheme = match[1];
-        std::string host = match[2];
-        std::string port_str = match[3];
-
-        unsigned port = (port_str.empty()) ? (scheme == "https" ? 443 : 80) : std::stoi(port_str);
-        return {scheme, host, port};
+    try {
+        auto info = utils::http::parse_simple_url(tmp);
+        return {info.scheme, info.host, info.port};
+    } catch (...) {
+        std::throw_with_nested(std::invalid_argument(fmt::format("Invalid vault '{}'. Must be either a name or an endpoint in format: http(s)://<host>[:port]", vault)));
     }
-
-    throw std::invalid_argument(fmt::format("Invalid vault '{}'. Must be either a name or an endpoint in format: http(s)://<host>[:port]", vault));
 }
 
 future<shared_ptr<tls::certificate_credentials>> azure_host::impl::make_creds() {
