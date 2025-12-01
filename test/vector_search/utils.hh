@@ -141,4 +141,38 @@ inline seastar::future<> remove(seastar::tmp_file& f) {
     });
 }
 
+struct unreachable_socket {
+    seastar::server_socket socket;
+    std::vector<connected_socket> connections;
+    sstring host = "127.0.0.1";
+    std::uint16_t port;
+
+    seastar::future<> close() {
+        socket.abort_accept();
+        for (auto& conn : connections) {
+            conn.shutdown_input();
+            conn.shutdown_output();
+            co_await conn.wait_input_shutdown();
+        }
+        // There is currently no effective way to abort an ongoing connect in Seastar.
+        // Timing out connect by with_timeout, remains pending coroutine in the reactor.
+        // To prevent resource leaks, we close the unreachable socket and sleep,
+        // allowing the pending connect coroutines to fail and release their resources.
+        co_await seastar::sleep(3s);
+    }
+};
+
+inline seastar::future<unreachable_socket> make_unreachable_socket() {
+    unreachable_socket ret;
+    seastar::listen_options opts;
+    opts.listen_backlog = 1;
+    opts.set_fixed_cpu(seastar::this_shard_id());
+    ret.socket = seastar::listen(seastar::socket_address(seastar::net::inet_address(ret.host), 0), opts);
+    ret.port = ret.socket.local_address().port();
+    // Make two (backlog + 1) connections to occupy the backlog.
+    ret.connections.push_back(co_await seastar::connect(seastar::socket_address(seastar::net::inet_address(ret.host), ret.port)));
+    ret.connections.push_back(co_await seastar::connect(seastar::socket_address(seastar::net::inet_address(ret.host), ret.port)));
+    co_return std::move(ret);
+}
+
 } // namespace test::vector_search
