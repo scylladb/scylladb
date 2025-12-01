@@ -85,10 +85,17 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
 static const char HTTPS[] = "https";
 
 utils::http::url_info utils::http::parse_simple_url(std::string_view uri) {
-    static boost::regex simple_url(R"foo((https?):\/\/([^\/:]+)(:\d+)?(\/.*)?)foo");
+    /**
+     * https://en.wikipedia.org/wiki/IPv6#Addressing
+     * In case a port is included with a numerical ipv6 address, 
+     * the address part is encases in a "[]" wrapper, like
+     * http://[2001:db8:4006:812::200e]:8080
+     */
+    static boost::regex simple_url(R"foo(([a-zA-Z]+):\/\/((?:\[[^\]]+\])|[^\/:]+)(:\d+)?(\/.*)?)foo");
 
     boost::smatch m;
     std::string tmp(uri);
+
     if (!boost::regex_match(tmp, m, simple_url)) {
         throw std::invalid_argument(fmt::format("Could not parse URI {}", uri));
     }
@@ -98,8 +105,12 @@ utils::http::url_info utils::http::parse_simple_url(std::string_view uri) {
     auto port = m[3].str();
     auto path = m[4].str();
 
-    bool https = scheme == HTTPS;
+    bool https = (strcasecmp(scheme.c_str(), HTTPS) == 0);
 
+    // check for numeric ipv6 address + port case
+    if (host.size() > 2 && host.front() == '[' && host.back() == ']') {
+        host = host.substr(1, host.size() - 2);
+    }
     return url_info {
         .scheme = std::move(scheme),
         .host = std::move(host),
@@ -109,6 +120,6 @@ utils::http::url_info utils::http::parse_simple_url(std::string_view uri) {
 }
 
 bool utils::http::url_info::is_https() const {
-    return scheme == HTTPS;
+    return strcasecmp(scheme.c_str(), HTTPS) == 0;
 }
 
