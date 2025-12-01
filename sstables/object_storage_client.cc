@@ -60,12 +60,18 @@ fmt::formatter<sstables::object_name>::format(const sstables::object_name& n, fm
     return fmt::format_to(ctx.out(), "{}", n.str());
 }
 
+static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, semaphore& memory, std::function<shared_ptr<s3::client>(std::string)> factory) {
+    auto& epc = ep.get_s3_storage();
+    auto cfg = make_lw_shared<s3::endpoint_config>(ep.get_s3_storage().config);
+    return s3::client::make(epc.endpoint, std::move(cfg), memory, std::move(factory));
+}
+
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
 public:
-    s3_client_wrapper(const std::string& host, s3::endpoint_config_ptr cfg, semaphore& memory, shard_client_factory cf)
-        : _client(s3::client::make(host, cfg, memory, std::bind_front(&s3_client_wrapper::shard_client, this)))
+    s3_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
+        : _client(make_s3_client(ep, memory, std::bind_front(&s3_client_wrapper::shard_client, this)))
         , _cf(std::move(cf))
     {}
     shared_ptr<s3::client> shard_client(std::string host) const {
@@ -290,9 +296,7 @@ public:
 
 shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf) {
     if (ep.is_s3_storage()) {
-        auto& epc = ep.get_s3_storage();
-        auto s3_cfg = make_lw_shared<s3::endpoint_config>(epc.config);
-        return seastar::make_shared<s3_client_wrapper>(epc.endpoint, std::move(s3_cfg), memory, std::move(cf));
+        return seastar::make_shared<s3_client_wrapper>(ep, memory, std::move(cf));
     }
     if (ep.is_gs_storage()) {
         return seastar::make_shared<gs_client_wrapper>(ep, memory, std::move(cf));
