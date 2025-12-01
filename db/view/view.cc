@@ -2056,27 +2056,8 @@ endpoints_to_update get_view_natural_endpoint(
             }
         }
     }
-    // https://github.com/scylladb/scylladb/issues/19439
-    // With tablets, a node being replaced might transition to "left" state
-    // but still be kept as a replica.
-    // As of writing this hints are not prepared to handle nodes that are left
-    // but are still replicas. Therefore, there is no other sensible option
-    // right now but to give up attempt to send the update or write a hint
-    // to the paired, permanently down replica.
-    // We use the same workaround for the extra replica.
-    auto return_host_id_if_not_left = [] (const auto& replica) -> std::optional<locator::host_id> {
-        if (!replica) {
-            return std::nullopt;
-        }
-        const auto& node = replica->get();
-        if (!node.left()) {
-            return node.host_id();
-        } else {
-            return std::nullopt;
-        }
-    };
-    return {.natural_endpoint = return_host_id_if_not_left(paired_replica),
-            .endpoint_with_no_pairing = return_host_id_if_not_left(no_pairing_replica)};
+    return {.natural_endpoint = paired_replica ? std::make_optional(paired_replica->get().host_id()) : std::nullopt,
+            .endpoint_with_no_pairing = no_pairing_replica ? std::make_optional(no_pairing_replica->get().host_id()) : std::nullopt};
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
