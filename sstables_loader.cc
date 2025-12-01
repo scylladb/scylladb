@@ -186,15 +186,26 @@ class tablet_sstable_streamer : public sstable_streamer {
     const locator::tablet_map& _tablet_map;
     [[maybe_unused]] sstables::storage_manager& _storage_manager;
 public:
-    tablet_sstable_streamer(sstring endpoint, sstring bucket, sstring prefix, sstables::storage_manager& storage_manager, netw::messaging_service& ms, sharded<replica::database>& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
-                            std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
+    tablet_sstable_streamer(sstring endpoint,
+                            sstring bucket,
+                            sstring prefix,
+                            sstables::storage_manager& storage_manager,
+                            netw::messaging_service& ms,
+                            sharded<replica::database>& db,
+                            ::table_id table_id,
+                            locator::effective_replication_map_ptr erm,
+                            std::vector<sstables::shared_sstable> sstables,
+                            primary_replica_only primary,
+                            unlink_sstables unlink,
+                            stream_scope scope)
         : sstable_streamer(ms, db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
         , _db(db)
-        , _endpoint(std::move(endpoint)), _bucket(std::move(bucket)), _prefix(std::move(prefix))
+        , _endpoint(std::move(endpoint))
+        , _bucket(std::move(bucket))
+        , _prefix(std::move(prefix))
         , _scope(scope)
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id))
-        , _storage_manager(storage_manager) {
-    }
+        , _storage_manager(storage_manager) {}
 
     virtual future<> stream(shared_ptr<stream_progress> on_streamed) override;
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const override;
