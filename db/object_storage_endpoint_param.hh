@@ -13,7 +13,6 @@
 #include <variant>
 #include <compare>
 #include <fmt/core.h>
-#include "utils/s3/creds.hh"
 
 namespace YAML {
     class Node;
@@ -44,7 +43,6 @@ public:
     object_storage_endpoint_param();
     object_storage_endpoint_param(const object_storage_endpoint_param&);
     object_storage_endpoint_param(s3_storage);
-    object_storage_endpoint_param(std::string endpoint, s3::endpoint_config config);
     object_storage_endpoint_param(gs_storage);
 
     std::strong_ordering operator<=>(const object_storage_endpoint_param&) const;

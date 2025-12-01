@@ -12,17 +12,12 @@
 #include <yaml-cpp/yaml.h>
 
 #include <boost/lexical_cast.hpp>
-
-#include "utils/s3/creds.hh"
 #include "object_storage_endpoint_param.hh"
 
 using namespace std::string_literals;
 
 db::object_storage_endpoint_param::object_storage_endpoint_param(s3_storage s)
     : _data(std::move(s))
-{}
-db::object_storage_endpoint_param::object_storage_endpoint_param(std::string endpoint, s3::endpoint_config config)
-    : object_storage_endpoint_param(s3_storage{std::move(endpoint), std::move(config)})
 {}
 db::object_storage_endpoint_param::object_storage_endpoint_param(gs_storage s)
     : _data(std::move(s))
