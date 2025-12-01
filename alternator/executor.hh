@@ -40,6 +40,7 @@ namespace cql3::selection {
 
 namespace service {
     class storage_proxy;
+    class cas_shard;
 }
 
 namespace cdc {
@@ -225,6 +226,10 @@ private:
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
         service_permit permit);
+
+    future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, dht::decorated_key dk, 
+        std::vector<put_or_delete_item>&& mutation_builders, service::client_state& client_state, 
+        tracing::trace_state_ptr trace_state, service_permit permit);
 
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&, const std::map<sstring, sstring> *tags = nullptr);
