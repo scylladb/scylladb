@@ -879,7 +879,7 @@ private:
             _fd.start(
                 std::ref(_fd_pinger), std::ref(fd_clock),
                 service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count(),
-                service::direct_fd_clock::base::duration{std::chrono::milliseconds{600}}.count()).get();
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{600}}.count(), gcfg.gossip_scheduling_group).get();
 
             auto stop_fd = defer_verbose_shutdown("direct failure detector", [this] {
                 _fd.stop().get();

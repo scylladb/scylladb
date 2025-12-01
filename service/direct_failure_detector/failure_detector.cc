@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "seastar/core/scheduling.hh"
 #include "utils/assert.hh"
 #include <unordered_set>
 
@@ -17,6 +18,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/coroutine/switch_to.hh>
 
 #include "utils/log.hh"
 
@@ -118,7 +120,7 @@ struct failure_detector::impl {
 
     // Fetches endpoint updates from _endpoint_queue and performs the add/remove operation.
     // Runs on shard 0 only.
-    future<> update_endpoint_fiber();
+    future<> update_endpoint_fiber(seastar::scheduling_group sg);
     future<> _update_endpoint_fiber = make_ready_future<>();
 
     // Workers running on this shard.
@@ -140,7 +142,7 @@ struct failure_detector::impl {
     // The unregistering process requires cross-shard operations which we perform on this fiber.
     future<> _destroy_subscriptions = make_ready_future<>();
 
-    impl(failure_detector& parent, pinger&, clock&, clock::interval_t ping_period, clock::interval_t ping_timeout);
+    impl(failure_detector& parent, pinger&, clock&, clock::interval_t ping_period, clock::interval_t ping_timeout, seastar::scheduling_group sg);
     ~impl();
 
     // Inform update_endpoint_fiber() about an added/removed endpoint.
@@ -177,19 +179,19 @@ struct failure_detector::impl {
 };
 
 failure_detector::failure_detector(
-    pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout)
-        : _impl(std::make_unique<impl>(*this, pinger, clock, ping_period, ping_timeout))
+    pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout, seastar::scheduling_group sg)
+        : _impl(std::make_unique<impl>(*this, pinger, clock, ping_period, ping_timeout, sg))
 {}
 
 failure_detector::impl::impl(
-    failure_detector& parent, pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout)
+    failure_detector& parent, pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout, seastar::scheduling_group sg)
         : _parent(parent), _pinger(pinger), _clock(clock), _ping_period(ping_period), _ping_timeout(ping_timeout) {
     if (this_shard_id() != 0) {
         return;
     }
 
     _num_workers.resize(smp::count, 0);
-    _update_endpoint_fiber = update_endpoint_fiber();
+    _update_endpoint_fiber = update_endpoint_fiber(sg);
 }
 
 void failure_detector::impl::send_update_endpoint(pinger::endpoint_id ep, endpoint_update update) {
@@ -205,9 +207,9 @@ void failure_detector::impl::send_update_endpoint(pinger::endpoint_id ep, endpoi
     _endpoint_changed.signal();
 }
 
-future<> failure_detector::impl::update_endpoint_fiber() {
+future<> failure_detector::impl::update_endpoint_fiber(seastar::scheduling_group sg) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-
+    co_await coroutine::switch_to(sg);
     while (true) {
         co_await _endpoint_changed.wait([this] { return !_endpoint_updates.empty(); });
 
