@@ -57,6 +57,7 @@ class schema_builder;
 namespace alternator {
 
 class rmw_operation;
+class put_or_delete_item;
 
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
 bool is_alternator_keyspace(const sstring& ks_name);
@@ -218,6 +219,12 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr, const std::map<sstring, sstring> *tags = nullptr);
+
+    future<> do_batch_write(
+        std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
+        service::client_state& client_state,
+        tracing::trace_state_ptr trace_state,
+        service_permit permit);
 
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&, const std::map<sstring, sstring> *tags = nullptr);
