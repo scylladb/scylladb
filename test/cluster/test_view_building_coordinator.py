@@ -971,3 +971,39 @@ async def test_tablet_merge_during_view_building(manager: ManagerClient):
 
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
+
+
+# Reproduces scylladb/scylladb#27363.
+#
+# The bug in the issue caused the view building coordinator to read the contents
+# of a disengaged optional, causing undefined behavior. This also caused
+# the in-memory state of the view building coordinator's task map to be polluted
+# with a garbage key, which triggered a warning in view_building_state_observer.
+#
+# This would happen when a node becomes up - the view building coordinator
+# is notified in that case so that it can send tasks to a node which was
+# previously down, but it would misbehave in that case if there were no views
+# to be built.
+#
+# We check that the observed bad behavior no longer occurs by checking that
+# the view_building_state_observer no longer prints warnings.
+@pytest.mark.asyncio
+async def test_all_good_on_node_restart(manager: ManagerClient):
+    node_count = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+
+    # Just bootstrapping two nodes is sufficient to reproduce the issue -
+    # the first node receives an "up" notification when the other node
+    # finishes bootstrap.
+
+    # This sleep is unfortunate, but without it the check that follows happens
+    # too quickly, before the node has the chance to reload the view build
+    # coordinator state and print the error.
+    await asyncio.sleep(5)
+
+    log = await manager.server_open_log(servers[0].server_id)
+    warnings = await log.grep(expr="view_building_state_observer failed with")
+    assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
