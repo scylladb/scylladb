@@ -2917,6 +2917,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     auto str = ::format("{}: read fence completed", node.rs->state);
                     muts.push_back(builder.build());
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
+                    co_await utils::get_local_injector().inject("in_left_token_ring_transition", utils::wait_for_message(std::chrono::minutes(5)));
                 }
                     break;
                 case node_state::replacing: {
@@ -3406,6 +3407,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         "Topology coordinator is called for node {} in state 'left'", node.id));
                 break;
         }
+
+        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_node_transition", utils::wait_for_message(5min));
     }
 
     node_validation_result

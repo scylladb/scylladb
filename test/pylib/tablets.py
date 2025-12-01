@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from collections import defaultdict
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo, HostID
@@ -41,6 +42,18 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
         last_token=x.last_token,
         replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas]
     ) for x in rows]
+
+async def get_replica_count_by_host(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> dict[HostID, int]:
+    """
+    Retrieves the count of tablet replicas per host for a given table.
+
+    :param server: server to query. Can be any live node.
+    """
+    result = defaultdict(int)
+    for tablet in await get_all_tablet_replicas(manager, server, keyspace_name, table_name, is_view):
+        for host, shard in tablet.replicas:
+            result[host] += 1
+    return result
 
 async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
     """
