@@ -3087,13 +3087,11 @@ struct schema_decorated_key_equal {
 
 // FIXME: if we failed writing some of the mutations, need to return a list
 // of these failed mutations rather than fail the whole write (issue #5650).
-static future<> do_batch_write(service::storage_proxy& proxy,
-        smp_service_group ssg,
+future<> executor::do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
-        service_permit permit,
-        stats& stats) {
+        service_permit permit) {
     if (mutation_builders.empty()) {
         return make_ready_future<>();
     }
@@ -3115,7 +3113,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
             mutations.push_back(b.second.build(b.first, now));
             any_cdc_enabled |= b.first->cdc_options().enabled();
         }
-        return proxy.mutate(std::move(mutations),
+        return _proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
                 executor::default_timeout(),
                 trace_state,
@@ -3124,7 +3122,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 false,
                 cdc::per_request_options{
                     .alternator = true,
-                    .alternator_streams_increased_compatibility = any_cdc_enabled && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
+                    .alternator_streams_increased_compatibility = any_cdc_enabled && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
                 });
     } else {
         // Do the write via LWT:
@@ -3138,8 +3136,8 @@ static future<> do_batch_write(service::storage_proxy& proxy,
             auto [it, added] = key_builders.try_emplace(schema_decorated_key{b.first, dk});
             it->second.push_back(std::move(b.second));
         }
-        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
-            stats.write_using_lwt++;
+        return parallel_for_each(std::move(key_builders), [this, &client_state, trace_state, permit = std::move(permit)] (auto& e) {
+            _stats.write_using_lwt++;
             auto desired_shard = service::cas_shard(*e.first.schema, e.first.dk.token());
             auto s = e.first.schema;
 
@@ -3154,13 +3152,13 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                     elogger.info("{}: continue", injection_name);
                 }
             }).then([e = std::move(e), desired_shard = std::move(desired_shard),
-                 &client_state, trace_state = std::move(trace_state), permit = std::move(permit), &proxy, ssg, &stats]() mutable
+                 &client_state, trace_state = std::move(trace_state), permit = std::move(permit), this]() mutable
             {
                 if (desired_shard.this_shard()) {
-                    return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, std::move(e.second), client_state, trace_state, permit);
+                    return cas_write(_proxy, e.first.schema, std::move(desired_shard), e.first.dk, std::move(e.second), client_state, trace_state, permit);
                 } else {
-                    stats.shard_bounce_for_lwt++;
-                    return proxy.container().invoke_on(desired_shard.shard(), ssg,
+                    _stats.shard_bounce_for_lwt++;
+                    return container().invoke_on(desired_shard.shard(), _ssg,
                                 [cs = client_state.move_to_other_shard(),
                                 mb = e.second,
                                 dk = e.first.dk,
@@ -3168,11 +3166,11 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                                 cf = e.first.schema->cf_name(),
                                 gt =  tracing::global_trace_state_ptr(trace_state),
                                 permit = std::move(permit)]
-                                (service::storage_proxy& proxy) mutable {
-                        return do_with(cs.get(), [&proxy, mb = std::move(mb), dk = std::move(dk), ks = std::move(ks), cf = std::move(cf),
-                                                trace_state = tracing::trace_state_ptr(gt)]
+                                (executor& self) mutable {
+                        return do_with(cs.get(), [mb = std::move(mb), dk = std::move(dk), ks = std::move(ks), cf = std::move(cf),
+                                                trace_state = tracing::trace_state_ptr(gt), &self]
                                                 (service::client_state& client_state) mutable {
-                            auto schema = proxy.data_dictionary().find_schema(ks, cf);
+                            auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
 
                             // The desired_shard on the original shard remains alive for the duration
                             // of cas_write on this shard and prevents any tablet operations.
@@ -3183,7 +3181,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                             //FIXME: Instead of passing empty_service_permit() to the background operation,
                             // the current permit's lifetime should be prolonged, so that it's destructed
                             // only after all background operations are finished as well.
-                            return cas_write(proxy, schema, std::move(cas_shard), dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
+                            return cas_write(self._proxy, schema, std::move(cas_shard), dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
                         });
                     }).finally([desired_shard = std::move(desired_shard)]{});
                 }
@@ -3335,7 +3333,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
     _stats.api_operations.batch_write_item_batch_total += total_items;
     _stats.api_operations.batch_write_item_histogram.add(total_items);
-    co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats);
+    co_await do_batch_write(std::move(mutation_builders), client_state, trace_state, std::move(permit));
     // FIXME: Issue #5650: If we failed writing some of the updates,
     // need to return a list of these failed updates in UnprocessedItems
     // rather than fail the whole write (issue #5650).
