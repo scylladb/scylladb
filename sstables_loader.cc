@@ -400,8 +400,14 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
             progress,
             sstables_fully_contained.size() + sstables_partially_contained.size());
         auto tablet_pr = dht::to_partition_range(tablet_range);
-        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress);
-        co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), per_tablet_progress);
+        if (!sstables_partially_contained.empty()) {
+            llog.debug("Streaming {} partially contained SSTables.",sstables_partially_contained.size());
+            co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress);
+        }
+        if (!sstables_fully_contained.empty()) {
+            llog.debug("Streaming {} fully contained SSTables.",sstables_fully_contained.size());
+            co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), per_tablet_progress);
+        }
     }
 }
 
