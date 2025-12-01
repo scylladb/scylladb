@@ -1439,7 +1439,7 @@ public:
         // _fd_service must be started before raft server,
         // because as soon as raft server is started, it may start adding endpoints to the service.
         // _fd_service is using _server's RPC, but not until the first endpoint is added.
-        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count(), fd_ping_timeout.count());
+        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count(), fd_ping_timeout.count(), seastar::current_scheduling_group());
         _fd_subscription.emplace(co_await _fd_service->local().register_listener(*_fd_listener, _fd_convict_threshold.count()));
         co_await _server->start();
     }

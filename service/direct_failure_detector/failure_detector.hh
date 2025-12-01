@@ -128,7 +128,10 @@ public:
 
         // Duration after which a ping is aborted, so that next ping can be started
         // (pings are sent sequentially).
-        clock::interval_t ping_timeout
+        clock::interval_t ping_timeout,
+
+        // Scheduling group used for fibers inside the failure detector.
+        seastar::scheduling_group sg
     );
 
     ~failure_detector();
