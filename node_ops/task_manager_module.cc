@@ -60,28 +60,47 @@ static future<db::system_keyspace::topology_requests_entries> get_entries(db::sy
     return sys_ks.get_node_ops_request_entries(db_clock::now() - ttl);
 }
 
+static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requests_entry& entry,
+                                        const tasks::virtual_task_hint& hint) {
+    return tasks::task_stats{
+        .task_id = tasks::task_id{entry.id},
+        .type = request_type_to_task_type(entry.request_type),
+        .kind = tasks::task_kind::cluster,
+        .scope = "cluster",
+        .state = get_state(entry),
+        .sequence_number = 0,
+        .keyspace = "",
+        .table = "",
+        .entity = "",
+        .shard = 0,
+        .start_time = entry.start_time,
+        .end_time = entry.end_time,
+    };
+}
+
 future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto entry_opt = co_await _ss._sys_ks.local().get_topology_request_entry_opt(id.uuid());
     if (!entry_opt) {
         co_return std::nullopt;
     }
     auto& entry = *entry_opt;
+    auto stats = get_task_stats(entry, hint);
     co_return tasks::task_status{
-        .task_id = id,
-        .type = request_type_to_task_type(entry.request_type),
-        .kind = tasks::task_kind::cluster,
-        .scope = "cluster",
-        .state = get_state(entry),
+        .task_id = stats.task_id,
+        .type = stats.type,
+        .kind = stats.kind,
+        .scope = stats.scope,
+        .state = stats.state,
         .is_abortable = co_await is_abortable(std::move(hint)),
-        .start_time = entry.start_time,
-        .end_time = entry.end_time,
+        .start_time = stats.start_time,
+        .end_time = stats.end_time,
         .error = entry.error,
         .parent_id = tasks::task_id::create_null_id(),
-        .sequence_number = 0,
-        .shard = 0,
-        .keyspace = "",
-        .table = "",
-        .entity = "",
+        .sequence_number = stats.sequence_number,
+        .shard = stats.shard,
+        .keyspace = stats.keyspace,
+        .table = stats.table,
+        .entity = stats.entity,
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
         .children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()))
@@ -136,20 +155,8 @@ future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
             | std::views::transform([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
-        return tasks::task_stats {
-            .task_id = tasks::task_id{id},
-            .type = node_ops::request_type_to_task_type(entry.request_type),
-            .kind = tasks::task_kind::cluster,
-            .scope = "cluster",
-            .state = get_state(entry),
-            .sequence_number = 0,
-            .keyspace = "",
-            .table = "",
-            .entity = "",
-            .shard = 0,
-            .start_time = entry.start_time,
-            .end_time = entry.end_time
-        };
+        tasks::virtual_task_hint hint;
+        return get_task_stats(entry, hint);
     }));
 }
 
