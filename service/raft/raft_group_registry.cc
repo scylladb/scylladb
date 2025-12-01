@@ -216,19 +216,10 @@ void raft_group_registry::init_rpc_verbs() {
             });
         }
 
-        return container().invoke_on(0, [] (raft_group_registry& me) -> future<direct_fd_ping_reply> {
-            bool group0_alive = false;
-            if (me._group0_id) {
-                auto* group0_server = me.find_server(*me._group0_id);
-                if (group0_server && group0_server->is_alive()) {
-                    group0_alive = true;
-                }
+        return make_ready_future<direct_fd_ping_reply>(direct_fd_ping_reply {
+            .result = service::group_liveness_info{
+                .group0_alive = _group0_is_alive,
             }
-            co_return direct_fd_ping_reply {
-                .result = service::group_liveness_info{
-                    .group0_alive = group0_alive,
-                }
-            };
         });
     });
 }
@@ -250,13 +241,24 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
-static void ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
-    if (!server_for_group.aborted) {
-        server_for_group.aborted = server_for_group.server->abort(std::move(reason))
-            .handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
-                rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
-            });
+void raft_group_registry::ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
+    if (server_for_group.aborted) {
+        return;
     }
+
+    if (server_for_group.gid == _group0_id) {
+        server_for_group.aborted = container().invoke_on_all([] (raft_group_registry& rg) {
+                rg._group0_is_alive = false;
+        });
+    } else {
+        server_for_group.aborted = make_ready_future<>();
+    }
+
+    server_for_group.aborted = server_for_group.aborted->then([&server_for_group, reason = std::move(reason)] () mutable {
+        return server_for_group.server->abort(std::move(reason));
+    }).handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
+        rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
+    });
 }
 
 future<> raft_group_registry::stop_server(raft::group_id gid, sstring reason) {
@@ -406,6 +408,12 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     if (ex) {
         co_await server.abort();
         std::rethrow_exception(ex);
+    }
+
+    if (gid == _group0_id) {
+        co_await container().invoke_on_all([] (raft_group_registry& rg) {
+            rg._group0_is_alive = true;
+        });
     }
 }
 
