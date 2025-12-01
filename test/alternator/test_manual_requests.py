@@ -13,30 +13,12 @@ import urllib3
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
 
-from test.alternator.util import random_bytes, random_string
+from test.alternator.util import random_bytes, random_string, get_signed_request
 
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
 
-def get_signed_request(dynamodb, target, payload):
-    # Usually "payload" will be a Python string and we'll write it as UTF-8.
-    # but in some tests we may want to write bytes directly - potentially
-    # bytes which include invalid UTF-8.
-    payload_bytes = payload if isinstance(payload, bytes) else payload.encode(encoding='UTF-8')
-    # NOTE: Signing routines use boto3 implementation details and may be prone
-    # to unexpected changes
-    class Request:
-        url=dynamodb.meta.client._endpoint.host
-        headers={'X-Amz-Target': 'DynamoDB_20120810.' + target, 'Content-Type': 'application/x-amz-json-1.0'}
-        body=payload_bytes
-        method='POST'
-        context={}
-        params={}
-    req = Request()
-    signer = dynamodb.meta.client._request_signer
-    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
-    return req
 
 # Test that deeply nested objects (e.g. with depth of 200k) are parsed correctly,
 # i.e. do not cause stack overflows for the server. It's totally fine for the
