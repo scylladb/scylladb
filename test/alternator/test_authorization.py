@@ -9,7 +9,7 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.test_manual_requests import get_signed_request
+from .util import get_signed_request
 
 
 # Test that trying to perform an operation signed with a wrong key
