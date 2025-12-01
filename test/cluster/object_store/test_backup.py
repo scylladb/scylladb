@@ -418,7 +418,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
               'task_ttl_in_seconds': 300,
               }
 
-    servers = await manager.servers_add(servers_num=3, config=config)
+    servers = await manager.servers_add(servers_num=3, config=config, auto_rack_dc='dc1')
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
@@ -552,7 +552,6 @@ async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_stora
 
 
 @pytest.mark.asyncio
-
 async def test_simple_backup_and_restore_with_encryption(manager: ManagerClient, object_storage, tmp_path):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
     await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, True, False)
