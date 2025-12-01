@@ -3042,11 +3042,13 @@ public:
     }
 };
 
-static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk, const std::vector<put_or_delete_item>& mutation_builders,
-        service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
+future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
+        const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
+        tracing::trace_state_ptr trace_state, service_permit permit)
+{
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, mutation_builders);
-    return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
+    return _proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout).discard_result();
@@ -3137,7 +3139,7 @@ future<> executor::do_batch_write(
                  &client_state, trace_state = std::move(trace_state), permit = std::move(permit), this]() mutable
             {
                 if (desired_shard.this_shard()) {
-                    return cas_write(_proxy, e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
+                    return cas_write(e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
                 } else {
                     _stats.shard_bounce_for_lwt++;
                     return container().invoke_on(desired_shard.shard(), _ssg,
@@ -3163,7 +3165,7 @@ future<> executor::do_batch_write(
                             //FIXME: Instead of passing empty_service_permit() to the background operation,
                             // the current permit's lifetime should be prolonged, so that it's destructed
                             // only after all background operations are finished as well.
-                            return cas_write(self._proxy, schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                            return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
                         });
                     }).finally([desired_shard = std::move(desired_shard)]{});
                 }
