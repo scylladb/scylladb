@@ -5008,6 +5008,10 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+bool storage_service::topology_global_queue_empty() const {
+    return !_topology_state_machine._topology.global_request.has_value();
+}
+
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
