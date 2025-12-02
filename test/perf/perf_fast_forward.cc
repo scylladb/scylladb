@@ -53,7 +53,7 @@ std::ostream& operator<<(std::ostream& os, const std::vector<string>& v) {
 }
 }
 
-reactor::io_stats s;
+io_stats s;
 
 static bool errors_found = false;
 
@@ -77,7 +77,7 @@ struct metrics_snapshot {
     std::chrono::high_resolution_clock::time_point hr_clock;
     steady_clock_type::duration busy_time;
     steady_clock_type::duration idle_time;
-    reactor::io_stats io;
+    io_stats io;
     reactor::sched_stats sched;
     memory::statistics mem;
     partition_index_cache_stats index;
