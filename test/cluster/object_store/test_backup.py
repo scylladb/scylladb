@@ -587,7 +587,7 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, obj
 
     return servers,host_ids
 
-def create_dataset(manager, ks, cf, topology, logger, dcs_num=None):
+def create_dataset(manager, ks, cf, topology, logger, dcs_num=None, min_tablet_count=None):
     cql = manager.get_cql()
     logger.info(f'Create keyspace, rf={topology.rf}')
     keys = range(256)
@@ -603,7 +603,10 @@ def create_dataset(manager, ks, cf, topology, logger, dcs_num=None):
 
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
 
-    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text );"
+    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text )"
+    if min_tablet_count is not None:
+        schema += f" WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
+    schema += ';'
     cql.execute(schema)
     for k in keys:
         cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
@@ -1052,3 +1055,53 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
         streamed_to = set([ r[1].group(1) for r in res ])
         logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
         assert len(streamed_to) == 2
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topology", [
+        topo(rf = 3, nodes = 9, racks = 3, dcs = 1),
+        topo(rf = 4, nodes = 4, racks = 2, dcs = 1),
+        topo(rf = 4, nodes = 4, racks = 1, dcs = 1),
+        topo(rf = 1, nodes = 2, racks = 2, dcs = 2),
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+    ])
+@pytest.mark.parametrize("scope", ["node", "rack", "dc", "all"])
+@pytest.mark.parametrize("min_tablet_count", [None, 512])
+@pytest.mark.parametrize("restored_tablet_count", [None, 256, 512, 1024])
+async def test_restore_primary_replica_only_dataset_balance(manager: ManagerClient, object_storage, topology, scope, min_tablet_count, restored_tablet_count):
+    '''Check that restoring with primary_replica_only=True, the data is distributed across all replicas in scope
+    resulting in a balanced cluster before the repair step begins.'''
+
+    ks = 'ks'
+    cf = 'cf'
+
+    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger, min_tablet_count=min_tablet_count)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    prefix = f'{cf}/{snap_name}'
+
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    # scope is passed from parametrization here, we only care about the distribution logic of nodes to rack/dcs
+    _,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ r[1].group(1) for r in res ])
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
+        assert len(streamed_to) == topology.nodes
