@@ -3138,37 +3138,37 @@ static future<> do_batch_write(service::storage_proxy& proxy,
             }).then([&e, desired_shard = std::move(desired_shard),
                  &client_state, trace_state = std::move(trace_state), permit = std::move(permit), &proxy, ssg, &stats]() mutable
             {
-            if (desired_shard.this_shard()) {
-                return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
-            } else {
-                stats.shard_bounce_for_lwt++;
-                return proxy.container().invoke_on(desired_shard.shard(), ssg,
-                            [cs = client_state.move_to_other_shard(),
-                             &mb = e.second,
-                             &dk = e.first.dk,
-                             ks = e.first.schema->ks_name(),
-                             cf = e.first.schema->cf_name(),
-                             gt =  tracing::global_trace_state_ptr(trace_state),
-                             permit = std::move(permit)]
-                            (service::storage_proxy& proxy) mutable {
-                    return do_with(cs.get(), [&proxy, &mb, &dk, ks = std::move(ks), cf = std::move(cf),
-                                              trace_state = tracing::trace_state_ptr(gt)]
-                                              (service::client_state& client_state) mutable {
-                        auto schema = proxy.data_dictionary().find_schema(ks, cf);
+                if (desired_shard.this_shard()) {
+                    return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
+                } else {
+                    stats.shard_bounce_for_lwt++;
+                    return proxy.container().invoke_on(desired_shard.shard(), ssg,
+                                [cs = client_state.move_to_other_shard(),
+                                &mb = e.second,
+                                &dk = e.first.dk,
+                                ks = e.first.schema->ks_name(),
+                                cf = e.first.schema->cf_name(),
+                                gt =  tracing::global_trace_state_ptr(trace_state),
+                                permit = std::move(permit)]
+                                (service::storage_proxy& proxy) mutable {
+                        return do_with(cs.get(), [&proxy, &mb, &dk, ks = std::move(ks), cf = std::move(cf),
+                                                trace_state = tracing::trace_state_ptr(gt)]
+                                                (service::client_state& client_state) mutable {
+                            auto schema = proxy.data_dictionary().find_schema(ks, cf);
 
-                        // The desired_shard on the original shard remains alive for the duration
-                        // of cas_write on this shard and prevents any tablet operations.
-                        // However, we need a local instance of cas_shard on this shard
-                        // to pass it to sp::cas, so we just create a new one.
-                        service::cas_shard cas_shard(*schema, dk.token());
+                            // The desired_shard on the original shard remains alive for the duration
+                            // of cas_write on this shard and prevents any tablet operations.
+                            // However, we need a local instance of cas_shard on this shard
+                            // to pass it to sp::cas, so we just create a new one.
+                            service::cas_shard cas_shard(*schema, dk.token());
 
-                        //FIXME: Instead of passing empty_service_permit() to the background operation,
-                        // the current permit's lifetime should be prolonged, so that it's destructed
-                        // only after all background operations are finished as well.
-                        return cas_write(proxy, schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
-                    });
-                }).finally([desired_shard = std::move(desired_shard)]{});
-            }
+                            //FIXME: Instead of passing empty_service_permit() to the background operation,
+                            // the current permit's lifetime should be prolonged, so that it's destructed
+                            // only after all background operations are finished as well.
+                            return cas_write(proxy, schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                        });
+                    }).finally([desired_shard = std::move(desired_shard)]{});
+                }
             });
         }).finally([key_builders = std::move(key_builders)]{});
     }
