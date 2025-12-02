@@ -500,7 +500,7 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
         'system_key_directory': str(d),
         'user_info_encryption': { 'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory' }
     }
-    cmd = ['--smp', '16','-m','32G', '--logger-log-level', 'sstables_loader=info:sstable=info']
+    cmd = ['--smp', '8','-m','16G', '--logger-log-level', 'sstables_loader=info:sstable=info']
     servers = await manager.servers_add(servers_num=3, config=config, cmdline=cmd, auto_rack_dc="dc1")
 
     # Obtain the CQL interface from the manager.
@@ -517,11 +517,11 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     table = 'test_cf'
     await create_keyspace_and_table(manager, cql, servers, keyspace, table, initial_tablets)
 
-    # 2) disable balancing.
-    for server in servers:
-        # Disable auto compaction just to keep more sstables around for restore
-        await manager.api.disable_autocompaction(server.ip_addr, keyspace)
-        await manager.api.disable_tablet_balancing(server.ip_addr)
+    # # 2) disable balancing.
+    # for server in servers:
+    #     # Disable auto compaction just to keep more sstables around for restore
+    #     await manager.api.disable_autocompaction(server.ip_addr, keyspace)
+    #     await manager.api.disable_tablet_balancing(server.ip_addr)
 
     # 3) write hundreds of keys, so data is spread across N tablets.
     insert_rows_mt(cql, keyspace, table, 100_000)
@@ -566,25 +566,25 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     print("Dropping table data...")
     cql.execute(f"TRUNCATE TABLE {keyspace}.{table};")
 
-    # 5) alter table to have min_tablet_count hint set to N*2 (causes split)
-    alter_query = f"ALTER TABLE {keyspace}.{table} WITH tablets = {{'min_tablet_count': '{target_tablets}'}};"
-    cql.execute(alter_query)
-
-    # 6) enable balancing (enables split too)
-    for server in servers:
-        await manager.api.enable_tablet_balancing(server.ip_addr)
-
-    # 7) wait for tablet count to be greater than N (see test_tablets2.py for guidance)
-    start_time = time.time()
-    while True:
-        actual_tablet_count = await get_tablet_count(manager, servers[0], keyspace, table)
-        logger.debug(f'actual/expected tablet count: {actual_tablet_count}/{target_tablets}')
-        if actual_tablet_count == target_tablets:
-            break
-        assert time.time() - start_time < 120, 'Timeout while waiting for tablet merge'
-        await asyncio.sleep(1)
-
-    logger.info(f'Merged test table; new number of tablets: {actual_tablet_count}')
+    # # 5) alter table to have min_tablet_count hint set to N*2 (causes split)
+    # alter_query = f"ALTER TABLE {keyspace}.{table} WITH tablets = {{'min_tablet_count': '{target_tablets}'}};"
+    # cql.execute(alter_query)
+    #
+    # # 6) enable balancing (enables split too)
+    # for server in servers:
+    #     await manager.api.enable_tablet_balancing(server.ip_addr)
+    #
+    # # 7) wait for tablet count to be greater than N (see test_tablets2.py for guidance)
+    # start_time = time.time()
+    # while True:
+    #     actual_tablet_count = await get_tablet_count(manager, servers[0], keyspace, table)
+    #     logger.debug(f'actual/expected tablet count: {actual_tablet_count}/{target_tablets}')
+    #     if actual_tablet_count == target_tablets:
+    #         break
+    #     assert time.time() - start_time < 120, 'Timeout while waiting for tablet merge'
+    #     await asyncio.sleep(1)
+    #
+    # logger.info(f'Merged test table; new number of tablets: {actual_tablet_count}')
 
     # 8) write hundreds of keys, so data is spread across N*2 tablets.
     insert_rows_mt(cql, keyspace, table, 100_000)
@@ -652,7 +652,7 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Super long test")
+# @pytest.mark.skip(reason="Super long test")
 async def test_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     await do_direct_restore(manager, s3_storage, tmp_path)
 

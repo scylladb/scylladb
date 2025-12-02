@@ -268,10 +268,10 @@ private:
                                                                                    shared_ptr<stream_progress> progress) const {
         constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
         constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
+        const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
         sst_classification_info downloaded_sstables(smp::count);
         dht::auto_refreshing_sharder sharder(_table.shared_from_this());
         for (const auto& sstable : sstables) {
-            auto client = _storage_manager.get_endpoint_client(_endpoint);
             auto components = sstable->all_components();
 
             // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
@@ -283,7 +283,7 @@ private:
             }
 
             auto gen = _table.get_sstable_generation_generator()();
-            auto sources = co_await sstable->source_for_all_components();
+            // auto sources = co_await sstable->source_for_all_components();
             for (auto it = components.cbegin(); it != components.cend(); ++it) {
                 auto descriptor = sstable->get_descriptor(it->first);
                 auto sstable_sink = sstables::create_stream_sink(
@@ -295,7 +295,7 @@ private:
                         _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
                     std::distance(components.cbegin(), it) + 1ull == components.size());
                 auto out = co_await sstable_sink->output(foptions, stream_options);
-                auto& src = sources.at(it->first);
+                auto src = co_await sstable->get_storage().make_data_source(*sstable, it->first, {}, 0, std::numeric_limits<size_t>::max(), fis_options);
                 std::exception_ptr eptr;
                 try {
                     while (true) {
