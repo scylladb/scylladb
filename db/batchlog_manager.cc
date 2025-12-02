@@ -218,11 +218,14 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
             auto in = ser::as_input_stream(data);
             while (in.size()) {
                 auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
-                const auto& tbl = _qp.proxy().local_db().find_column_family(fm.column_family_id());
-                if (written_at <= tbl.get_truncation_time()) {
+                const auto tbl = _qp.db().try_find_table(fm.column_family_id());
+                if (!tbl) {
                     continue;
                 }
-                schema_ptr s = tbl.schema();
+                if (written_at <= tbl->get_truncation_time()) {
+                    continue;
+                }
+                schema_ptr s = tbl->schema();
                 timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
                 fms.emplace_back(std::move(fm), std::move(s));
             }
