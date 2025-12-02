@@ -69,6 +69,19 @@ future<mutation> tablet_map_to_mutation(const shared_tablet_map& tablets, const 
     co_return std::move(*ret);
 }
 
+static inline
+future<mutation> colocated_tablet_map_to_mutation(const shared_tablet_map& tablets, const locator::per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
+                       table_id base_table, api::timestamp_type ts, const gms::feature_service& features) {
+    std::optional<mutation> ret;
+    co_await colocated_tablet_map_to_mutations(tablets, per_table_map, id, keyspace_name, table_name, base_table, ts, features, [&] (mutation m) {
+        SCYLLA_ASSERT(!ret.has_value());
+        ret = std::move(m);
+        return make_ready_future();
+    });
+    SCYLLA_ASSERT(ret.has_value());
+    co_return std::move(*ret);
+}
+
 static api::timestamp_type current_timestamp(cql_test_env& e) {
     // Mutations in system.tablets got there via group0, so in order for new
     // mutations to take effect, their timestamp should be "later" than that
@@ -370,6 +383,20 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
+
+            // Add repair request to table2
+            {
+                shared_tablet_map tmap(2);
+                auto tb = tmap.first_tablet();
+                per_table_tablet_map per_table_tmap;
+                per_table_tmap.set_tablet(tb, per_table_tablet_info(
+                    db_clock::time_point(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1"}),
+                    0));
+                tm.set_tablet_map(table2, std::move(tmap), std::move(per_table_tmap));
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
@@ -482,6 +509,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
 
         auto table1 = add_table(e).get();
         auto table2 = add_table(e).get();
+        auto table3 = add_table(e).get();
         auto ts = current_timestamp(e);
 
         {
@@ -514,12 +542,52 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                 tm.set_colocated_table(table2, table1, std::move(per_table_tmap2)).get();
             }
 
-            const auto& tmap1 = tm.get_tablet_map(table1);
-            const auto& tmap2 = tm.get_tablet_map(table2);
-            BOOST_REQUIRE_EQUAL(tmap1, tmap2);
+            {
+                // Verify the repair fields
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                BOOST_REQUIRE_EQUAL(10, tmap1.get_tablet_info(tmap1.first_tablet()).sstables_repaired_at());
+                BOOST_REQUIRE_EQUAL(20, tmap2.get_tablet_info(tmap2.first_tablet()).sstables_repaired_at());
+            }
 
             verify_tablet_metadata_persistence(e, tm, ts);
 
+            {
+                // Add table3 as a co-located table of table1
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                per_table_tablet_map per_table_tmap3;
+                per_table_tmap3.set_tablet(tmap1.first_tablet(), per_table_tablet_info(
+                    db_clock::now() + std::chrono::seconds(2),
+                    locator::tablet_task_info(),
+                    30));
+                tm.set_colocated_table(table3, table1, std::move(per_table_tmap3)).get();
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
+
+            {
+                // Update the repair time of table2
+                tm.mutate_colocated_tablet_map_async(table2, [&] (const shared_tablet_map& shared_map, per_table_tablet_map& per_table_map) {
+                    auto tb = shared_map.first_tablet();
+                    per_table_map.set_tablet(tb, per_table_tablet_info(
+                        db_clock::now() + std::chrono::seconds(1),
+                        locator::tablet_task_info(),
+                        40));
+                    return make_ready_future();
+                }).get();
+            }
+
+            {
+                // Verify the repair fields
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                BOOST_REQUIRE_EQUAL(10, tmap1.get_tablet_info(tmap1.first_tablet()).sstables_repaired_at());
+                BOOST_REQUIRE_EQUAL(40, tmap2.get_tablet_info(tmap2.first_tablet()).sstables_repaired_at());
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
@@ -814,6 +882,135 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
                     make_drop_tablet_map_mutation(table2, ts++)
             });
         }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_tablet_metadata_update_with_colocated_tables) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto& db = e.local_db();
+
+        auto table1 = add_table(e).get();
+        auto table1_schema = db.find_schema(table1);
+        auto table2 = add_table(e).get();
+        auto table2_schema = db.find_schema(table2);
+
+        testlog.trace("table1: {}", table1);
+        testlog.trace("table2: {}", table2);
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        auto ts = current_timestamp(e);
+
+        // Add table1
+        {
+            testlog.trace("add table1");
+
+            shared_tablet_map tmap(2);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                    tablet_replica {h3, 1},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 4},
+                    tablet_replica {h2, 5},
+                    tablet_replica {h3, 6},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, per_table_tablet_map(), table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
+            });
+        }
+
+        // Add table2 as a co-located table of table1
+        {
+            testlog.trace("add table2 as co-located table of table1");
+            const auto& tmap1 = tm.get_tablet_map(table1);
+            per_table_tablet_map per_table_tmap2;
+            per_table_tmap2.set_tablet(tmap1.first_tablet(), per_table_tablet_info());
+
+            verify_tablet_metadata_update(e, tm, {
+                    colocated_tablet_map_to_mutation(*tmap1.shared, per_table_tmap2, table2, table2_schema->ks_name(), table2_schema->cf_name(), table1, ++ts, db.features()).get(),
+            });
+        }
+
+        // Update the per-table map of the co-located table
+        {
+            const auto& tmap2 = tm.get_tablet_map(table2);
+            auto tb = tmap2.first_tablet();
+            per_table_tablet_map per_table_tmap2;
+            per_table_tmap2.set_tablet(tb, per_table_tablet_info(
+                db_clock::now() + std::chrono::seconds(1),
+                locator::tablet_task_info(),
+                20));
+
+            verify_tablet_metadata_update(e, tm, {
+                    colocated_tablet_map_to_mutation(*tmap2.shared, per_table_tmap2, table2, table2_schema->ks_name(), table2_schema->cf_name(), table1, ++ts, db.features()).get(),
+            });
+        }
+
+        // Update the per-table map of table1
+        {
+            const auto& tmap1 = tm.get_tablet_map(table1);
+            auto tb = tmap1.first_tablet();
+            per_table_tablet_map per_table_tmap1;
+            per_table_tmap1.set_tablet(tb, per_table_tablet_info(
+                db_clock::now() + std::chrono::seconds(2),
+                locator::tablet_task_info(),
+                30));
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(*tmap1.shared, per_table_tmap1, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
+            });
+        }
+
+        // Update the repair time of table2
+        {
+            const auto& tmap = tm.get_tablet_map(table2);
+
+            replica::tablet_mutation_builder builder(ts++, table2);
+
+            auto tb = tmap.first_tablet();
+            builder.set_repair_time(tmap.get_last_token(tb), db_clock::now() + std::chrono::seconds(3));
+
+            tb = *tmap.next_tablet(tb);
+            builder.set_repair_time(tmap.get_last_token(tb), db_clock::now() + std::chrono::seconds(5));
+
+            verify_tablet_metadata_update(e, tm, {
+                    builder.build(),
+            });
+        }
+
+        // remove a tablet row from the per-table map of table2
+        {
+            testlog.info("MICHAEL remove");
+            const auto& tmap2 = tm.get_tablet_map(table2);
+            auto tb = tmap2.first_tablet();
+            auto last_token = tmap2.get_last_token(tb);
+
+            auto s = db::system_keyspace::tablets();
+            mutation m(s, partition_key::from_single_value(*s,
+                data_value(table2.uuid()).serialize_nonnull()));
+
+            auto ck = clustering_key::from_single_value(*s,
+                data_value(dht::token::to_int64(last_token)).serialize_nonnull());
+            m.partition().apply_delete(*s, ck, tombstone(++ts, gc_clock::now()));
+
+            utils::chunked_vector<mutation> muts;
+            muts.push_back(std::move(m));
+
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+        }
+
     }, tablet_cql_test_config());
 }
 
@@ -5884,6 +6081,169 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
         auto ring = ss.describe_ring_for_table(s->ks_name(), s->cf_name()).get();
         BOOST_REQUIRE_GE(ring.size(), min_tablet_count);
     }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_split_tablets_with_colocated_tables) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 2);
+        auto base_table = add_table(e, ks_name).get();
+        auto colocated_table = add_table(e, ks_name).get();
+        auto now = db_clock::now();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+
+        // Set up initial tablet map with 2 tablets for base table
+        // and colocate the second table with the base table
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            shared_tablet_map tmap(2);
+            auto tid0 = tmap.first_tablet();
+            auto tid1 = *tmap.next_tablet(tid0);
+
+            tmap.set_tablet(tid0, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            tmap.set_tablet(tid1, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 1},
+                }
+            });
+
+            // Set resize decision to split
+            locator::resize_decision decision;
+            decision.way = locator::resize_decision::split{};
+            decision.sequence_number = 1;
+            tmap.set_resize_decision(decision);
+
+            per_table_tablet_map per_tablet_map;
+            per_tablet_map.set_tablet(tid0, per_table_tablet_info(now + std::chrono::seconds(1), {}, 0));
+            per_tablet_map.set_tablet(tid1, per_table_tablet_info(now + std::chrono::seconds(2), {}, 0));
+
+            tmeta.set_tablet_map(base_table, std::move(tmap), std::move(per_tablet_map));
+
+            // Set up colocated table
+            per_table_tablet_map per_table_tmap;
+            per_table_tmap.set_tablet(tid0, per_table_tablet_info(now + std::chrono::seconds(3), {}, 0));
+            per_table_tmap.set_tablet(tid1, per_table_tablet_info(now + std::chrono::seconds(4), {}, 0));
+            co_await tmeta.set_colocated_table(colocated_table, base_table, std::move(per_table_tmap));
+        });
+
+        auto tmptr = stm.get();
+
+        // Call resize_tablets for the base table
+        auto [base_tmap_after_split, base_per_table_tmap_after_split] = talloc.resize_tablets(tmptr, base_table).get();
+        auto [colocated_tmap_after_split, colocated_per_table_tmap_after_split] = talloc.resize_tablets(tmptr, colocated_table).get();
+
+        // Verify the base map after split
+        {
+            BOOST_REQUIRE_EQUAL(base_tmap_after_split.tablet_count(), 4);
+            auto tid = base_tmap_after_split.first_tablet();
+            BOOST_REQUIRE_EQUAL(base_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(1));
+            tid = *base_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(base_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(1));
+            tid = *base_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(base_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(2));
+            tid = *base_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(base_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(2));
+        }
+
+        // Verify the colocated map after split
+        {
+            BOOST_REQUIRE_EQUAL(colocated_tmap_after_split.tablet_count(), 4);
+            auto tid = colocated_tmap_after_split.first_tablet();
+            BOOST_REQUIRE_EQUAL(colocated_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(3));
+            tid = *colocated_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(colocated_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(3));
+            tid = *colocated_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(colocated_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(4));
+            tid = *colocated_tmap_after_split.next_tablet(tid);
+            BOOST_REQUIRE_EQUAL(colocated_per_table_tmap_after_split.get_tablet_info(tid).repair_time, now + std::chrono::seconds(4));
+        }
+    }, tablet_cql_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_tablets_with_colocated_tables) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 2);
+        auto base_table = add_table(e, ks_name).get();
+        auto colocated_table = add_table(e, ks_name).get();
+        auto now = db_clock::now();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+
+        // Set up initial tablet map with 2 tablets for base table
+        // and colocate the second table with the base table
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            shared_tablet_map tmap(2);
+            auto tid0 = tmap.first_tablet();
+            auto tid1 = *tmap.next_tablet(tid0);
+
+            tmap.set_tablet(tid0, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            tmap.set_tablet(tid1, shared_tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+
+            // Set resize decision to merge
+            locator::resize_decision decision;
+            decision.way = locator::resize_decision::merge{};
+            decision.sequence_number = 1;
+            tmap.set_resize_decision(decision);
+
+            per_table_tablet_map per_tablet_map;
+            per_tablet_map.set_tablet(tid0, per_table_tablet_info(now + std::chrono::seconds(1), {}, 0));
+            per_tablet_map.set_tablet(tid1, per_table_tablet_info(now + std::chrono::seconds(2), {}, 0));
+
+            tmeta.set_tablet_map(base_table, std::move(tmap), std::move(per_tablet_map));
+
+            // Set up colocated table
+            per_table_tablet_map per_table_tmap;
+            per_table_tmap.set_tablet(tid0, per_table_tablet_info(now + std::chrono::seconds(3), {}, 0));
+            per_table_tmap.set_tablet(tid1, per_table_tablet_info(now + std::chrono::seconds(4), {}, 0));
+            co_await tmeta.set_colocated_table(colocated_table, base_table, std::move(per_table_tmap));
+        });
+
+        auto tmptr = stm.get();
+
+        auto [base_tmap_after_merge, base_per_table_tmap_after_merge] = talloc.resize_tablets(tmptr, base_table).get();
+        auto [colocated_tmap_after_merge, colocated_per_table_tmap_after_merge] = talloc.resize_tablets(tmptr, colocated_table).get();
+
+        // Verify the base map after merge
+        // the repair time is the max of the two merged tablets
+        {
+            BOOST_REQUIRE_EQUAL(base_tmap_after_merge.tablet_count(), 1);
+            auto tid = base_tmap_after_merge.first_tablet();
+            BOOST_REQUIRE_EQUAL(base_per_table_tmap_after_merge.get_tablet_info(tid).repair_time, now + std::chrono::seconds(2));
+        }
+
+        // Verify the colocated map after merge
+        {
+            BOOST_REQUIRE_EQUAL(colocated_tmap_after_merge.tablet_count(), 1);
+            auto tid = colocated_tmap_after_merge.first_tablet();
+            BOOST_REQUIRE_EQUAL(colocated_per_table_tmap_after_merge.get_tablet_info(tid).repair_time, now + std::chrono::seconds(4));
+        }
+
+    }, tablet_cql_test_config()).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
