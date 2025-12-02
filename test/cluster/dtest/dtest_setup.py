@@ -505,7 +505,6 @@ class DTestSetup:
             "cas_contention_timeout_in_ms": timeout,
             "request_timeout_in_ms": timeout,
             "num_tokens": None,
-            "sstable_format": "ms",
         }
 
         if self.setup_overrides is not None and self.setup_overrides.cluster_options:

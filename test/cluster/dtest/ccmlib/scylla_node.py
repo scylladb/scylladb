@@ -363,7 +363,6 @@ class ScyllaNode:
             "--commitlog-use-o-dsync": ["0"],
             "--max-networking-io-control-blocks": ["1000"],
             "--unsafe-bypass-fsync": ["1"],
-            "--num-tokens": ["16"],
         }
 
         if self.scylla_mode() == "debug":

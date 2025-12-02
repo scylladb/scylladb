@@ -15,11 +15,6 @@ def test_system_highest_sstable_format(rest_api):
     resp.raise_for_status()
     assert resp.json() == "me"
 
-def test_chosen_sstable_format(rest_api):
-    resp = rest_api.send('GET', "system/chosen_sstable_version")
-    resp.raise_for_status()
-    assert resp.json() == "ms"
-
 @pytest.mark.parametrize("params", [
     ("storage_service/compaction_throughput", "value"),
     ("storage_service/stream_throughput", "value")
