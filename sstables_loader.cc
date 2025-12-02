@@ -231,8 +231,7 @@ private:
 
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
-            auto& db = _db.local();
-            llog.info("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size(), db.get_version());
+            llog.info("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
             return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
                 auto dwnld_ssts = std::move(downloaded_ssts);
 
@@ -241,9 +240,9 @@ private:
                         continue;
                     }
                     co_await smp::submit_to(
-                        i, [this, ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name(), min_infos = std::move(dwnld_ssts[i])] -> future<> {
+                        i, [this, from = this_shard_id(), ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name(), min_infos = std::move(dwnld_ssts[i])] -> future<> {
                             llog.info(
-                                "Adding {} downloaded SSTables to the table {} on shard {}", min_infos.size(), _table.schema()->cf_name(), this_shard_id());
+                                "Adding {} downloaded SSTables to the table {} on shard {}, submitted from shard {}", min_infos.size(), _table.schema()->cf_name(), this_shard_id(), from);
                             for (const auto& min_info : min_infos) {
                                 llog.debug("Loading SSTable on shard {}", this_shard_id());
                                 auto& db = _db.local();
@@ -319,8 +318,7 @@ private:
                     co_await sst->load_owner_shards(sharder);
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
                     llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                    downloaded_sstables[shards.front()].emplace_back(
-                        minimal_sst_info{._generation = gen, ._version = descriptor.version, ._format = descriptor.format});
+                    downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
                     co_await sst->destroy();
                     sst = {};
                 }
