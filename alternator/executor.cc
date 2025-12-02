@@ -3123,6 +3123,21 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         return parallel_for_each(*key_builders_ptr, [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (const auto& e) {
             stats.write_using_lwt++;
             auto desired_shard = service::cas_shard(*e.first.schema, e.first.dk.token());
+            auto s = e.first.schema;
+
+            static const auto* injection_name = "alternator_executor_batch_write_wait";
+            return utils::get_local_injector().inject(injection_name, [s = std::move(s)] (auto& handler) -> future<> {
+                const auto ks = handler.get("keyspace");
+                const auto cf = handler.get("table");
+                const auto shard = std::atoll(handler.get("shard")->data());
+                if (ks == s->ks_name() && cf == s->cf_name() && shard == this_shard_id()) {
+                    elogger.info("{}: hit", injection_name);
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                    elogger.info("{}: continue", injection_name);
+                }
+            }).then([&e, desired_shard = std::move(desired_shard),
+                 &client_state, trace_state = std::move(trace_state), permit = std::move(permit), &proxy, ssg, &stats]() mutable
+            {
             if (desired_shard.this_shard()) {
                 return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
             } else {
@@ -3154,6 +3169,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                     });
                 }).finally([desired_shard = std::move(desired_shard)]{});
             }
+            });
         }).finally([key_builders = std::move(key_builders)]{});
     }
 }
