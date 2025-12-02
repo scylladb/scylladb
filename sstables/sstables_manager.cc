@@ -170,18 +170,11 @@ storage_manager::config_updater::config_updater(const db::config& cfg, storage_m
 {}
 
 sstables::sstable::version_types sstables_manager::get_highest_supported_format() const noexcept {
-    // FIXME: start announcing `ms` here after it becomes the default.
-    // (There are several tests which expect that new sstables are written with
-    // the format reported by this API).
-    //
-    // After `ms` becomes the default, this function look like this:
-    //
-    // if (_features.ms_sstable) {
-    //     return sstable_version_types::ms;
-    // } else {
-    //     return sstable_version_types::me;
-    // }
-    return sstable_version_types::me;
+     if (_features.ms_sstable) {
+         return sstable_version_types::ms;
+     } else {
+         return sstable_version_types::me;
+     }
 }
 
 sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
