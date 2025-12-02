@@ -27,6 +27,7 @@
 
 namespace db {
     class system_distributed_keyspace;
+    class system_keyspace;
 }
 
 namespace query {
@@ -132,11 +133,14 @@ namespace parsed {
 class expression_cache;
 }
 
+class stream_arn;
+
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
+    db::system_keyspace &_system_keyspace;
     cdc::metadata& _cdc_metadata;
     utils::updateable_value<bool> _enforce_authorization;
     utils::updateable_value<bool> _warn_authorization;
@@ -173,6 +177,7 @@ public:
              service::storage_proxy& proxy,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
+             db::system_keyspace& system_keyspace,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
              utils::updateable_value<uint32_t> default_timeout_in_ms);
@@ -218,6 +223,7 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr, const std::map<sstring, sstring> *tags = nullptr);
+    future<> describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
 
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&, const std::map<sstring, sstring> *tags = nullptr);

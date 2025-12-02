@@ -745,8 +745,22 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                 if (!json_request.IsObject()) {
                     co_return api_error::validation("Request content must be an object");
                 }
-                co_return co_await callback(_executor, client_state, trace_state,
+                auto res = co_await callback(_executor, client_state, trace_state,
                     make_service_permit(std::move(units)), std::move(json_request), std::move(req));
+                if (slogger.is_enabled(log_level::trace)) {
+                    std::visit(overloaded_functor {
+                        [&] (const std::string& str) {
+                            slogger.trace("Response: {}", str);
+                        },
+                        [&] (const executor::body_writer& body_writer) {
+                            slogger.trace("Response: <body_writer>");
+                        },
+                        [&] (const api_error& err) {
+                            slogger.trace("Response error: {} {}", err._type, err._msg);
+                        }
+                    }, res);
+                }
+                co_return std::move(res);
     };
     co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
