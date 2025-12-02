@@ -283,7 +283,7 @@ private:
             }
 
             auto gen = _table.get_sstable_generation_generator()();
-            auto files = co_await sstable->readable_file_for_all_components();
+            auto sources = co_await sstable->source_for_all_components();
             for (auto it = components.cbegin(); it != components.cend(); ++it) {
                 auto descriptor = sstable->get_descriptor(it->first);
                 auto sstable_sink = sstables::create_stream_sink(
@@ -295,11 +295,11 @@ private:
                         _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
                     std::distance(components.cbegin(), it) + 1ull == components.size());
                 auto out = co_await sstable_sink->output(foptions, stream_options);
-                auto inp = make_file_input_stream(files.at(it->first), file_input_stream_options{});
+                auto& src = sources.at(it->first);
                 std::exception_ptr eptr;
                 try {
                     while (true) {
-                        auto buff = co_await inp.read();
+                        auto buff = co_await src.get();
                         if (!buff) {
                             break;
                         }
@@ -308,7 +308,7 @@ private:
                 } catch (...) {
                     eptr = std::current_exception();
                 }
-                co_await inp.close();
+                co_await src.close();
                 co_await out.close();
                 if (eptr) {
                     co_await sstable_sink->abort();

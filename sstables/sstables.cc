@@ -900,6 +900,16 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
     co_return std::move(files);
 }
 
+future<std::unordered_map<component_type, data_source>> sstable::source_for_all_components() {
+    file_input_stream_options options{.buffer_size = sstable_buffer_size, .read_ahead = 2};
+    std::unordered_map<component_type, data_source> sources;
+    for (auto c : _recognized_components) {
+        sources.emplace(
+            c, co_await _storage->make_data_or_index_source(*this, c, co_await open_file(c, open_flags::ro), 0, std::numeric_limits<size_t>::max(), options));
+    }
+    co_return std::move(sources);
+}
+
 future<entry_descriptor> sstable::clone(generation_type new_generation) const {
     co_await _storage->snapshot(*this, _storage->prefix(), storage::absolute_path::yes, new_generation);
     co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);

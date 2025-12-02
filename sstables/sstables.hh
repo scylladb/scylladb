@@ -1064,6 +1064,7 @@ public:
 
     // Returns a read-only file for all existing components of the sstable
     future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
+    future<std::unordered_map<component_type, data_source>> source_for_all_components();
 
     // Clones this sstable with a new generation, under the same location as the original one.
     // Implementation is underlying storage specific.
