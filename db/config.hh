@@ -344,6 +344,9 @@ public:
     named_value<sstring> request_scheduler;
     named_value<sstring> request_scheduler_id;
     named_value<string_map> request_scheduler_options;
+    named_value<sstring> vector_store_primary_uri;
+    named_value<sstring> vector_store_secondary_uri;
+    named_value<string_map> vector_store_encryption_options;
     named_value<sstring> authenticator;
     named_value<sstring> internode_authenticator;
     named_value<sstring> authorizer;
@@ -470,10 +473,6 @@ public:
     named_value<bool> alternator_allow_system_table_write;
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
-
-    named_value<sstring> vector_store_primary_uri;
-    named_value<sstring> vector_store_secondary_uri;
-    named_value<string_map> vector_store_encryption_options;
 
     named_value<bool> abort_on_ebadf;
 
