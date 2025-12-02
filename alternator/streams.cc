@@ -24,6 +24,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "cql3/column_identifier.hh"
+#include "replica/database.hh"
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature.hh"
@@ -430,6 +431,73 @@ using namespace std::chrono_literals;
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 
+future<> executor::describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
+    std::optional<shard_id> shard_start;
+    try {
+        shard_start = rjson::get_opt<shard_id>(request, "ExclusiveStartShardId");
+    } catch (...) {
+        // If we cannot parse the start shard, it is treated as non-matching 
+        // in dynamo. We can just shortcut this and say "no records", i.e limit=0
+        limit = 0;
+    }
+
+    auto low_ts = db_clock::time_point::min();
+    if (shard_start) {
+        low_ts = std::max(low_ts, shard_start->time);
+    }
+    auto timestamps = co_await _system_keyspace.read_cdc_for_tablets_timestamps(bs->ks_name(), bs->cf_name(), low_ts, std::min(10, limit));
+    auto shards = rjson::empty_array();
+    std::optional<shard_id> last;
+
+    for(auto timestamp : timestamps) {
+        auto stream_ids = co_await _system_keyspace.read_cdc_for_tablets_stream_ids_for_timestamp(bs->ks_name(), bs->cf_name(), timestamp, std::min(1000, limit));
+        if (stream_ids.empty()) {
+            continue;
+        }
+
+        std::sort(stream_ids.begin(), stream_ids.end(), [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
+            return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
+        });
+
+        auto lo = stream_ids.begin();
+        auto end = stream_ids.end();
+
+        if (shard_start) {
+            // find next shard position
+            lo = std::upper_bound(lo, end, shard_start->id, [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
+                return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
+            });
+            shard_start = std::nullopt;
+        }
+
+        while (lo != end && limit > 0) {
+            auto& id = *lo++;
+
+            auto shard = rjson::empty_object();
+
+            last.emplace(timestamp, id);
+            rjson::add(shard, "ShardId", *last);
+            auto range = rjson::empty_object();
+            rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(timestamp.time_since_epoch())));
+            // NOTE: EndingSequenceNumber is optional and i've not found an efficient way to retrieve it, so we omit it for now.
+
+            rjson::add(shard, "SequenceNumberRange", std::move(range));
+            rjson::push_back(shards, std::move(shard));
+            
+            --limit;
+        }
+        if (limit <= 0) {
+            break;
+        }
+        last = std::nullopt;
+    }
+    if (last) {
+        rjson::add(stream_desc, "LastEvaluatedShardId", *last);
+    }
+
+    rjson::add(stream_desc, "Shards", std::move(shards));
+}
+
 future<> executor::describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
     auto db = _proxy.data_dictionary();
 
@@ -619,7 +687,12 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // TODO: label
     // TODO: creation time
 
-    co_await describe_stream_for_vnodes(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+    if (schema->table().uses_tablets()) {
+        co_await describe_stream_for_tablets(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+    }
+    else {
+        co_await describe_stream_for_vnodes(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+    }
 
     rjson::add(ret, "StreamDescription", std::move(stream_desc));
     co_return rjson::print(std::move(ret));
