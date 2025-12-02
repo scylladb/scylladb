@@ -76,3 +76,7 @@ template <>
 struct fmt::formatter<db::object_storage_endpoint_param> : fmt::formatter<std::string_view> {
     auto format(const db::object_storage_endpoint_param&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
+
+inline bool maybe_legacy_endpoint_name(std::string_view ep) noexcept {
+    return !(ep.starts_with("http://") || ep.starts_with("https://"));
+}
