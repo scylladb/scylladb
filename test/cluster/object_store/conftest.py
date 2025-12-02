@@ -135,17 +135,6 @@ async def s3_server(pytestconfig, tmpdir):
     finally:
         await server.stop()
 
-def get_s3_resource(s3_server):
-    """Creates boto3.resource object that can be used to communicate to the given server"""
-    return boto3.resource('s3',
-        endpoint_url=f'http://{s3_server.address}:{s3_server.port}',
-        aws_access_key_id=s3_server.acc_key,
-        aws_secret_access_key=s3_server.secret_key,
-        aws_session_token=None,
-        config=boto3.session.Config(signature_version='s3v4'),
-        verify=False
-    )
-
 class GSFront:
     def __init__(self, endpoint, bucket_name, credentials_file):
         self.endpoint = endpoint
