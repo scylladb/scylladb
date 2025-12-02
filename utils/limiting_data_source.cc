@@ -30,7 +30,7 @@ public:
     {}
 
     limiting_data_source_impl(limiting_data_source_impl&&) noexcept = default;
-    limiting_data_source_impl& operator=(limiting_data_source_impl&&) noexcept = default;
+    limiting_data_source_impl& operator=(limiting_data_source_impl&&) noexcept = delete;
 
     virtual future<temporary_buffer<char>> get() override {
         if (_buf.empty()) {

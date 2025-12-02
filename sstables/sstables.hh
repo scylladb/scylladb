@@ -578,7 +578,7 @@ private:
     generation_type _generation{0};
     sstable_state _state;
     sstable_enabled_features _features = {};
-
+    data_dictionary::storage_options _storage_options;
     std::unique_ptr<storage> _storage;
 
     const version_types _version;
@@ -631,6 +631,7 @@ public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
+    const data_dictionary::storage_options& storage_options() const { return _storage_options; }
 
     static future<std::vector<sstring>> read_and_parse_toc(file f);
 private:
@@ -1063,6 +1064,7 @@ public:
 
     // Returns a read-only file for all existing components of the sstable
     future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
+    future<std::unordered_map<component_type, data_source>> source_for_all_components();
 
     // Clones this sstable with a new generation, under the same location as the original one.
     // Implementation is underlying storage specific.

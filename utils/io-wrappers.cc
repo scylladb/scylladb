@@ -213,7 +213,7 @@ data_source create_memory_source(std::vector<seastar::temporary_buffer<char>> bu
             : _bufs(std::move(bufs))
         {}
         buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-        buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+        buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = delete;
 
         future<temporary_buffer<char>> get() override {
             if (_index < _bufs.size()) {

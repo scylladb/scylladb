@@ -900,6 +900,16 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
     co_return std::move(files);
 }
 
+future<std::unordered_map<component_type, data_source>> sstable::source_for_all_components() {
+    file_input_stream_options options{.buffer_size = sstable_buffer_size, .read_ahead = 2};
+    std::unordered_map<component_type, data_source> sources;
+    for (auto c : _recognized_components) {
+        sources.emplace(
+            c, co_await _storage->make_data_or_index_source(*this, c, co_await open_file(c, open_flags::ro), 0, std::numeric_limits<size_t>::max(), options));
+    }
+    co_return std::move(sources);
+}
+
 future<entry_descriptor> sstable::clone(generation_type new_generation) const {
     co_await _storage->snapshot(*this, _storage->prefix(), storage::absolute_path::yes, new_generation);
     co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
@@ -3584,7 +3594,8 @@ sstable::sstable(schema_ptr schema,
     , _schema(std::move(schema))
     , _generation(generation)
     , _state(state)
-    , _storage(make_storage(manager, storage, _state))
+    , _storage_options(storage)
+    , _storage(make_storage(manager, _storage_options, _state))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
@@ -3878,7 +3889,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                         : _bufs(std::move(bufs))
                     {}
                     buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = delete;
 
                     future<temporary_buffer<char>> get() override {
                         if (_index < _bufs.size()) {

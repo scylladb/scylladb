@@ -89,7 +89,7 @@ public:
         return _client->make_upload_sink(name.str(), as);
     }
     data_source make_download_source(object_name name, abort_source* as) override {
-        return _client->make_chunked_download_source(name.str(), s3::full_range, as);
+        return _client->make_download_source(name.str(), s3::full_range, as);
     }
     abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type filter) override {
         return abstract_lister::make<s3::client::bucket_lister>(_client, std::move(bucket), std::move(prefix), std::move(filter));
