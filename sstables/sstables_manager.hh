@@ -70,6 +70,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     seastar::metrics::metric_groups metrics;
 
     future<> update_config(const db::config&);
+    object_storage_endpoint& get_endpoint(const sstring& ep);
 
 public:
     struct config {
