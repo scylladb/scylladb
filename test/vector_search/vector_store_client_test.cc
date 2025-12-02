@@ -1123,3 +1123,29 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
                 co_await server->stop();
             }));
 }
+
+SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
+    auto server = co_await make_vs_mock_server();
+    server->ann_response_delay(std::chrono::seconds(10));
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    cfg.query_timeout = make_query_timeout(std::chrono::seconds(1)); // CQL SELECT query timeout shorter than response delay
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+
+                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                        exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
+                            return ex.what() == std::string("Vector Store request was aborted");
+                        });
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}

@@ -1227,8 +1227,9 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
         auto ann_vector = util::to_vector<float>(values);
 
-        auto as = abort_source();
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
+        auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+        auto aoe = abort_on_expiry(timeout);
+        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));

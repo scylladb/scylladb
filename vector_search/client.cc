@@ -113,6 +113,9 @@ seastar::future<client::request_result> client::request(
     auto f = co_await seastar::coroutine::as_future(request_impl(method, std::move(path), std::move(content), std::nullopt, as));
     if (f.failed()) {
         auto err = f.get_exception();
+        if (as.abort_requested()) {
+            co_return std::unexpected{aborted_error{}};
+        }
         if (is_server_problem(err)) {
             handle_server_unavailable();
         }
