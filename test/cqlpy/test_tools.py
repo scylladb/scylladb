@@ -31,7 +31,7 @@ from typing import Iterable, Type, Union
 from cassandra.util import Duration
 import yaml
 
-from test.cluster.object_store.conftest import s3_server, get_s3_resource
+from test.cluster.object_store.conftest import s3_server
 from test.pylib.minio_server import MinioServer
 
 
@@ -198,7 +198,7 @@ def all_sstables(sstables):
 
 
 def upload_folder_to_s3(folder_path, s3_server):
-    s3_resource = get_s3_resource(s3_server)
+    s3_resource = s3_server.get_resource()
     bucket = s3_resource.Bucket(s3_server.bucket_name)
     prefix = "just/some/s3/prefix"
     sstables = []
@@ -217,7 +217,7 @@ def upload_folder_to_s3(folder_path, s3_server):
 def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
                                                scylla_home_dir, what,
                                                where, s3_server):
-    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+    objconf = s3_server.create_endpoint_conf()
     scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
     with open(scylla_yaml_file, "a") as f:
         f.write(f"\n{yaml.dump({'object_storage_endpoints': objconf})}")
@@ -238,7 +238,7 @@ def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace
 def test_scylla_sstable_dump_data_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
                                           scylla_home_dir, where,
                                           s3_server):
-    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+    objconf = s3_server.create_endpoint_conf()
     scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
     with open(scylla_yaml_file, "a") as f:
         f.write(f"\n{yaml.dump({'object_storage_endpoints': objconf})}")
