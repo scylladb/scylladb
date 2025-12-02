@@ -1799,6 +1799,60 @@ static endpoints_to_update get_view_natural_endpoint_vnodes(
     return {.natural_endpoint = view_endpoints[idx].get().host_id()};
 }
 
+static std::optional<locator::host_id> get_unpaired_view_endpoint(
+        std::vector<std::reference_wrapper<const locator::node>> base_nodes,
+        std::vector<std::reference_wrapper<const locator::node>> view_nodes,
+        replica::cf_stats& cf_stats) {
+    std::unordered_set<locator::endpoint_dc_rack> base_dc_racks;
+    for (auto&& base_node : base_nodes) {
+        if (base_dc_racks.contains(base_node.get().dc_rack())) {
+            // We can't do rack-aware pairing if there are multiple replicas in the same rack.
+            ++cf_stats.total_view_updates_failed_pairing;
+            vlogger.warn("Can't perform base-view pairing in this topology. There are multiple base table replicas in the same dc/rack({}/{}):",
+                    base_node.get().dc(), base_node.get().rack());
+            return std::nullopt;
+        }
+        base_dc_racks.insert(base_node.get().dc_rack());
+    }
+
+    std::unordered_set<locator::endpoint_dc_rack> paired_view_dc_racks;
+    std::unordered_map<locator::endpoint_dc_rack, locator::host_id> unpaired_view_dc_rack_replicas;
+    for (auto&& view_node : view_nodes) {
+        if (paired_view_dc_racks.contains(view_node.get().dc_rack()) || unpaired_view_dc_rack_replicas.contains(view_node.get().dc_rack())) {
+            // We can't do rack-aware pairing if there are multiple replicas in the same rack.
+            ++cf_stats.total_view_updates_failed_pairing;
+            vlogger.warn("Can't perform base-view pairing in this topology. There are multiple view table replicas in the same dc/rack({}/{}):",
+                    view_node.get().dc(), view_node.get().rack());
+            return std::nullopt;
+        }
+        // Track unpaired replicas in both sets
+        if (base_dc_racks.contains(view_node.get().dc_rack())) {
+            paired_view_dc_racks.insert(view_node.get().dc_rack());
+        } else {
+            unpaired_view_dc_rack_replicas.insert({view_node.get().dc_rack(), view_node.get().host_id()});
+        }
+    }
+
+    if (unpaired_view_dc_rack_replicas.size() > 0) {
+        // There are view replicas that can't be paired with any base replica
+        // This can happen as a result of an RF change when the view replica finishes streaming
+        // before the base replica.
+        // Because of this, a view replica might not get paired with any base replica, so we need
+        // to send an additional update to it.
+        ++cf_stats.total_view_updates_due_to_replica_count_mismatch;
+        auto extra_replica = unpaired_view_dc_rack_replicas.begin()->second;
+        unpaired_view_dc_rack_replicas.erase(unpaired_view_dc_rack_replicas.begin());
+        if (unpaired_view_dc_rack_replicas.size() > 0) {
+            // We only expect one extra replica to appear due to an RF change. If there's more, that's an error,
+            // but we'll still perform updates to the paired and last replicas to minimize degradation.
+            vlogger.warn("There are too many view endpoints for base-view pairing. View updates may get lost on view_endpoints={}",
+                    unpaired_view_dc_rack_replicas | std::views::values);
+        }
+        return extra_replica;
+    }
+    return std::nullopt;
+}
+
 // Calculate the node ("natural endpoint") to which this node should send
 // a view update.
 //
@@ -1820,11 +1874,10 @@ static endpoints_to_update get_view_natural_endpoint_vnodes(
 // If the keyspace's replication strategy is a NetworkTopologyStrategy,
 // we pair only nodes in the same datacenter.
 //
-// If the table uses tablets, then pairing is rack-aware. In this case,
-// all racks have the same number of replicas, and those are never migrated
-// outside their racks. Therefore, the base replicas are naturally paired with the
-// view replicas that are in the same rack, based on the ordinal position.
-// Note that typically, there is a single replica per rack and pairing is trivial.
+// If the table uses tablets, then pairing is rack-aware. In this case, in each
+// rack where we have a base replica there is also one replica of each view tablet.
+// Therefore, the base replicas are naturally paired with the view replicas that
+// are in the same rack.
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
@@ -1857,12 +1910,7 @@ endpoints_to_update get_view_natural_endpoint(
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     auto& my_location = topology.get_location(me);
-    auto& my_datacenter = my_location.dc;
     auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
-    bool simple_rack_aware_pairing = false;
-    using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
-    node_vector orig_base_endpoints, orig_view_endpoints;
-    node_vector base_endpoints, view_endpoints;
 
     auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
         if (auto* np = topology.find_node(ep)) {
@@ -1873,6 +1921,7 @@ endpoints_to_update get_view_natural_endpoint(
 
     // We need to use get_replicas() for pairing to be stable in case base or view tablet
     // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
+    using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
     auto base_nodes = base_erm->get_replicas(base_token) | std::views::transform([&] (const locator::host_id& ep) -> const locator::node& {
         return resolve(topology, ep, false);
     }) | std::ranges::to<node_vector>();
@@ -1911,184 +1960,28 @@ endpoints_to_update get_view_natural_endpoint(
                 cf_stats);
     }
 
-    std::function<bool(const locator::node&)> is_candidate;
-    if (network_topology) {
-        is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
-    } else {
-        is_candidate = [&] (const locator::node&) { return true; };
-    }
-    auto process_candidate = [&] (node_vector& nodes, std::reference_wrapper<const locator::node> node) {
-        if (is_candidate(node)) {
-            nodes.emplace_back(node);
-        }
-    };
-
-    for (auto&& base_node : base_nodes) {
-        process_candidate(base_endpoints, base_node);
-    }
+    std::optional<locator::host_id> paired_replica;
     for (auto&& view_node : view_nodes) {
-        process_candidate(view_endpoints, view_node);
-    }
-
-    // Try optimizing for simple rack-aware pairing
-    // If the numbers of base and view replica differ, that means an RF change is taking place
-    // and we can't use simple rack-aware pairing.
-    if (use_tablets && base_endpoints.size() == view_endpoints.size()) {
-        auto dc_rf = network_topology->get_replication_factor(my_datacenter);
-        const auto& racks = topology.get_datacenter_rack_nodes().at(my_datacenter);
-        // Simple rack-aware pairing is possible when the datacenter replication factor
-        // is a multiple of the number of racks in the datacenter.
-        if (dc_rf % racks.size() == 0) {
-            simple_rack_aware_pairing = true;
-            size_t rack_rf = dc_rf / racks.size();
-            // If any rack doesn't have enough nodes to satisfy the per-rack rf
-            // simple rack-aware pairing is disabled.
-            for (const auto& [rack, nodes] : racks) {
-                if (nodes.size() < rack_rf) {
-                    simple_rack_aware_pairing = false;
-                    break;
-                }
-            }
-        }
-        if (dc_rf != base_endpoints.size()) {
-            // If the datacenter replication factor is not equal to the number of base replicas,
-            // we're in progress of a RF change and we can't use simple rack-aware pairing.
-            simple_rack_aware_pairing = false;
-        }
-        if (simple_rack_aware_pairing) {
-            std::erase_if(base_endpoints, [&] (const locator::node& node) { return node.dc_rack() != my_location; });
-            std::erase_if(view_endpoints, [&] (const locator::node& node) { return node.dc_rack() != my_location; });
+        if (view_node.get().dc_rack() == my_location) {
+            paired_replica = view_node.get().host_id();
+            break;
         }
     }
-
-    orig_base_endpoints = base_endpoints;
-    orig_view_endpoints = view_endpoints;
-
-    // For the complex rack_aware_pairing case, nodes are already filtered by datacenter
-    // Use best-match, for the minimum number of base and view replicas in each rack,
-    // and ordinal match for the rest.
-    std::optional<std::reference_wrapper<const locator::node>> paired_replica;
-    if (use_tablets && !simple_rack_aware_pairing) {
-        struct indexed_replica {
-            size_t idx;
-            std::reference_wrapper<const locator::node> node;
-        };
-        std::unordered_map<sstring, std::vector<indexed_replica>> base_racks, view_racks;
-
-        // First, index all replicas by rack
-        auto index_replica_set = [] (std::unordered_map<sstring, std::vector<indexed_replica>>& racks, const node_vector& replicas) {
-            size_t idx = 0;
-            for (const auto& r: replicas) {
-                racks[r.get().rack()].emplace_back(idx++, r);
-            }
-        };
-        index_replica_set(base_racks, base_endpoints);
-        index_replica_set(view_racks, view_endpoints);
-
-        // Try optimistically pairing `me` first
-        const auto& my_base_replicas = base_racks[my_location.rack];
-        auto base_it = std::ranges::find(my_base_replicas, me, [] (const indexed_replica& ir) { return ir.node.get().host_id(); });
-        if (base_it == my_base_replicas.end()) {
-            return {};
-        }
-        const auto& my_view_replicas = view_racks[my_location.rack];
-        size_t idx = base_it - my_base_replicas.begin();
-        if (idx < my_view_replicas.size()) {
-            if (orig_view_endpoints.size() <= orig_base_endpoints.size()) {
-                return {.natural_endpoint = my_view_replicas[idx].node.get().host_id()};
-            } else {
-                // If the number of view replicas is larger than the number of base replicas,
-                // we need to find the unpaired view replica, so we can't return yet.
-                paired_replica = my_view_replicas[idx].node;
-            }
-        }
-
-        // Collect all unpaired base and view replicas,
-        // where the number of replicas in the base rack is different than the respective view rack
-        std::vector<indexed_replica> unpaired_base_replicas, unpaired_view_replicas;
-        for (const auto& [rack, base_replicas] : base_racks) {
-            const auto& view_replicas = view_racks[rack];
-            for (auto i = view_replicas.size(); i < base_replicas.size(); ++i) {
-                unpaired_base_replicas.emplace_back(base_replicas[i]);
-            }
-        }
-        for (const auto& [rack, view_replicas] : view_racks) {
-            const auto& base_replicas = base_racks[rack];
-            for (auto i = base_replicas.size(); i < view_replicas.size(); ++i) {
-                unpaired_view_replicas.emplace_back(view_replicas[i]);
-            }
-        }
-
-        // Sort by the original ordinality, and copy the sorted results
-        // back into {base,view}_endpoints, for backward compatible processing below.
-        std::ranges::sort(unpaired_base_replicas, std::less(), std::mem_fn(&indexed_replica::idx));
-        base_endpoints.clear();
-        std::ranges::transform(unpaired_base_replicas, std::back_inserter(base_endpoints), std::mem_fn(&indexed_replica::node));
-
-        std::ranges::sort(unpaired_view_replicas, std::less(), std::mem_fn(&indexed_replica::idx));
-        view_endpoints.clear();
-        std::ranges::transform(unpaired_view_replicas, std::back_inserter(view_endpoints), std::mem_fn(&indexed_replica::node));
+    if (paired_replica && base_nodes.size() == view_nodes.size()) {
+        // We don't need to find any extra replicas, so we can return early
+        return {.natural_endpoint = paired_replica};
     }
-
-    auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
-    if (!paired_replica && base_it == base_endpoints.end()) {
-        // This node is not a base replica of this key, so we return empty
-        // FIXME: This case shouldn't happen, and if it happens, a view update
-        // would be lost.
-        ++cf_stats.total_view_updates_on_wrong_node;
-        vlogger.warn("Could not find {} in base_endpoints={}", me,
-                orig_base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
-        return {};
-    }
-    size_t idx = base_it - base_endpoints.begin();
-    std::optional<std::reference_wrapper<const locator::node>> no_pairing_replica;
-    if (!paired_replica && idx >= view_endpoints.size()) {
-        // There are fewer view replicas than base replicas
-        // FIXME: This might still happen when reducing replication factor with tablets,
-        // see https://github.com/scylladb/scylladb/issues/21492
-        ++cf_stats.total_view_updates_failed_pairing;
-        vlogger.warn("Could not pair {}: rack_aware={} base_endpoints={} view_endpoints={}", me,
-                use_tablets ? (simple_rack_aware_pairing ? "simple" : "complex") : "none",
-                orig_base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)),
-                orig_view_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
-        return {};
-    } else if (base_endpoints.size() < view_endpoints.size()) {
-        // There are fewer base replicas than view replicas.
-        // This can happen as a result of an RF change when the view replica finishes streaming
-        // before the base replica.
-        // Because of this, a view replica might not get paired with any base replica, so we need
-        // to send an additional update to it.
-        ++cf_stats.total_view_updates_due_to_replica_count_mismatch;
-        no_pairing_replica = view_endpoints.back();
-        if (base_endpoints.size() < view_endpoints.size() - 1) {
-            // We only expect one extra replica to appear due to an RF change. If there's more, that's an error,
-            // but we'll still perform updates to the paired and last replicas to minimize degradation.
-            vlogger.warn("There are too many view endpoints for base-view pairing. View updates may get lost on view_endpoints={}",
-                    std::span(view_endpoints.begin() + base_endpoints.size(), view_endpoints.end() - 1) | std::views::transform(std::mem_fn(&locator::node::host_id)));
-        }
-    }
-
     if (!paired_replica) {
-        paired_replica = view_endpoints[idx];
+        // We couldn't find any view replica in our rack
+        ++cf_stats.total_view_updates_failed_pairing;
+        vlogger.warn("Could not find a view replica in the same rack as base replica {} for base_endpoints={} view_endpoints={}", 
+                me,
+                base_nodes | std::views::transform(std::mem_fn(&locator::node::host_id)),
+                view_nodes | std::views::transform(std::mem_fn(&locator::node::host_id)));
     }
-    if (!no_pairing_replica && base_nodes.size() < view_nodes.size()) {
-        // This can happen when the view replica with no pairing is in another DC.
-        // We need to send an update to it if there are no base replicas in that DC yet,
-        // as it won't receive updates otherwise.
-        std::unordered_set<sstring> dcs_with_base_replicas;
-        for (const auto& base_node : base_nodes) {
-            dcs_with_base_replicas.insert(base_node.get().dc());
-        }
-        for (const auto& view_node : view_nodes) {
-            if (!dcs_with_base_replicas.contains(view_node.get().dc())) {
-                ++cf_stats.total_view_updates_due_to_replica_count_mismatch;
-                no_pairing_replica = view_node;
-                break;
-            }
-        }
-    }
-    return {.natural_endpoint = paired_replica ? std::make_optional(paired_replica->get().host_id()) : std::nullopt,
-            .endpoint_with_no_pairing = no_pairing_replica ? std::make_optional(no_pairing_replica->get().host_id()) : std::nullopt};
+    std::optional<locator::host_id> no_pairing_replica = get_unpaired_view_endpoint(base_nodes, view_nodes, cf_stats);
+    return {.natural_endpoint = paired_replica,
+            .endpoint_with_no_pairing = no_pairing_replica};
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
