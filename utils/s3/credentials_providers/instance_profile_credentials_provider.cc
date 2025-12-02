@@ -72,7 +72,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
 }
 
 s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sstring& creds_response) {
-    rapidjson::Document document;
+    rjson::document document;
     document.Parse(creds_response.data());
 
     if (document.HasParseError()) {
