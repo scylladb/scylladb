@@ -3071,11 +3071,6 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, dh
                                     trace_state = tracing::trace_state_ptr(gt), &self]
                                     (service::client_state& client_state) mutable {
                 auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
-
-                // The desired_shard on the original shard remains alive for the duration
-                // of cas_write on this shard and prevents any tablet operations.
-                // However, we need a local instance of cas_shard on this shard
-                // to pass it to sp::cas, so we just create a new one.
                 service::cas_shard cas_shard(*schema, dk.token());
 
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
@@ -3083,7 +3078,7 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, dh
                 // only after all background operations are finished as well.
                 return self.cas_write(schema, std::move(cas_shard), dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
             });
-        }).finally([desired_shard = std::move(cas_shard)]{});
+        });
     }
 
     auto timeout = executor::default_timeout();
