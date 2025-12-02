@@ -2031,14 +2031,16 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
                     fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
         }
 
-        auto as = abort_source();
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, as);
+        auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+        auto aoe = abort_on_expiry(timeout);
+        auto pkeys = co_await qp.vector_store_client().ann(
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys.value());
+        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
     });
 
     auto page_size = options.get_page_size();
@@ -2073,10 +2075,10 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
     return util::to_vector<float>(values);
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(
-        query_processor& qp, service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys) const {
+future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
+        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
+        lowres_clock::time_point timeout) const {
     auto command = prepare_command_for_base_query(qp, state, options);
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
 
     // For tables without clustering columns, we can optimize by querying
     // partition ranges instead of individual primary keys, since the

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "cql3/expr/expression.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils.hh"
 #include "vs_mock_server.hh"
@@ -125,6 +126,18 @@ public:
 cql_test_config make_config() {
     cql_test_config cfg;
     cfg.initial_tablets = 1;
+    return cfg;
+}
+
+timeout_config make_query_timeout(std::chrono::seconds timeout) {
+    timeout_config cfg{};
+    cfg.read_timeout = timeout;
+    cfg.write_timeout = timeout;
+    cfg.range_read_timeout = timeout;
+    cfg.counter_write_timeout = timeout;
+    cfg.truncate_timeout = timeout;
+    cfg.cas_timeout = timeout;
+    cfg.other_timeout = timeout;
     return cfg;
 }
 
@@ -1073,5 +1086,65 @@ SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error
             .finally(seastar::coroutine::lambda([&] -> future<> {
                 co_await server->stop();
                 co_await remove(broken_cert);
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
+    auto server = co_await make_vs_mock_server();
+    auto unreachable = co_await make_unreachable_socket();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unreachable.node:{}", unreachable.port));
+    cfg.db_config->vector_store_secondary_uri.set(format("http://server.node:{}", server->port()));
+    cfg.db_config->request_timeout_in_ms.set(5000);                   // connection timeout to the vector store
+    cfg.query_timeout = make_query_timeout(std::chrono::seconds(10)); // CQL SELECT query timeout longer than connection timeout
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns(
+                        {{"unreachable.node", std::vector<std::string>{unreachable.host}}, {"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+
+                // Execute an ANN SELECT. The primary URI points to an unreachable socket,
+                // so the client's connection attempt to the primary will fail (request_timeout_in_ms = 5000).
+                // The client is expected to transparently fall back to the secondary URI and
+                // complete the request successfully. The entire operation must complete within
+                // the configured CQL query timeout (10s), so the test expects a normal rows result.
+                auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;");
+
+                BOOST_CHECK(dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await unreachable.close();
+                co_await server->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
+    auto server = co_await make_vs_mock_server();
+    server->ann_response_delay(std::chrono::seconds(10));
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    cfg.query_timeout = make_query_timeout(std::chrono::seconds(1)); // CQL SELECT query timeout shorter than response delay
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+
+                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                        exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
+                            return ex.what() == std::string("Vector Store request was aborted");
+                        });
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
             }));
 }

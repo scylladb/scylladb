@@ -11,6 +11,7 @@
 #include "utils.hh"
 #include "utils/rjson.hh"
 #include "seastar/http/request.hh"
+#include <chrono>
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/http/function_handlers.hh>
@@ -87,6 +88,10 @@ public:
         _next_ann_response = std::move(response);
     }
 
+    void ann_response_delay(std::chrono::seconds delay) {
+        _ann_response_delay = delay;
+    }
+
     void next_status_response(response response) {
         _next_status_response = std::move(response);
     }
@@ -111,6 +116,9 @@ private:
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);
+        if (_ann_response_delay > 0s) {
+            co_await seastar::sleep(_ann_response_delay);
+        }
         co_return rep;
     }
 
@@ -145,6 +153,7 @@ private:
     std::vector<request> _ann_requests;
     std::vector<request> _status_requests;
     response _next_ann_response{seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
+    std::chrono::seconds _ann_response_delay = std::chrono::seconds(0);
     response _next_status_response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
     seastar::httpd::http_server::server_credentials_ptr _credentials;

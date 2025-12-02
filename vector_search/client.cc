@@ -17,6 +17,7 @@
 #include <seastar/net/api.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/with_timeout.hh>
 #include <chrono>
 #include <fmt/format.h>
 
@@ -31,19 +32,18 @@ class client_connection_factory : public http::experimental::connection_factory 
     shared_ptr<tls::certificate_credentials> _creds;
 
 public:
-    explicit client_connection_factory(client::endpoint_type endpoint, shared_ptr<tls::certificate_credentials> creds)
+    explicit client_connection_factory(
+            client::endpoint_type endpoint, shared_ptr<tls::certificate_credentials> creds, utils::updateable_value<uint32_t> connect_timeout_in_ms)
         : _endpoint(std::move(endpoint))
-        , _creds(std::move(creds)) {
+        , _creds(std::move(creds))
+        , _connect_timeout_in_ms(std::move(connect_timeout_in_ms)) {
     }
 
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
-        auto socket = co_await connect();
+        auto deadline = std::chrono::steady_clock::now() + timeout();
+        auto socket = co_await with_timeout(deadline, connect());
         socket.set_nodelay(true);
-        socket.set_keepalive_parameters(net::tcp_keepalive_params{
-                .idle = 60s,
-                .interval = 60s,
-                .count = 10,
-        });
+        socket.set_keepalive_parameters(get_keepalive_parameters(timeout()));
         socket.set_keepalive(true);
         co_return socket;
     }
@@ -56,6 +56,17 @@ private:
         }
         return seastar::connect(addr, {}, transport::TCP);
     }
+
+    std::chrono::milliseconds timeout() const {
+        constexpr std::chrono::milliseconds MIN_TIMEOUT = 5s;
+        auto timeout_ms = std::chrono::milliseconds(_connect_timeout_in_ms.get());
+        if (timeout_ms < MIN_TIMEOUT) {
+            timeout_ms = MIN_TIMEOUT;
+        }
+        return timeout_ms;
+    }
+
+    utils::updateable_value<uint32_t> _connect_timeout_in_ms;
 };
 
 bool is_server_unavailable(std::exception_ptr& err) {
@@ -63,7 +74,7 @@ bool is_server_unavailable(std::exception_ptr& err) {
 }
 
 bool is_server_problem(std::exception_ptr& err) {
-    return is_server_unavailable(err) || try_catch<tls::verification_error>(err) != nullptr;
+    return is_server_unavailable(err) || try_catch<tls::verification_error>(err) != nullptr || try_catch<timed_out_error>(err) != nullptr;
 }
 
 bool is_request_aborted(std::exception_ptr& err) {
@@ -88,7 +99,7 @@ auto constexpr BACKOFF_RETRY_MIN_TIME = 100ms;
 client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms,
         ::shared_ptr<seastar::tls::certificate_credentials> credentials)
     : _endpoint(std::move(endpoint_))
-    , _http_client(std::make_unique<client_connection_factory>(_endpoint, std::move(credentials)))
+    , _http_client(std::make_unique<client_connection_factory>(_endpoint, std::move(credentials), request_timeout_in_ms))
     , _logger(logger)
     , _request_timeout(std::move(request_timeout_in_ms)) {
 }
@@ -102,6 +113,9 @@ seastar::future<client::request_result> client::request(
     auto f = co_await seastar::coroutine::as_future(request_impl(method, std::move(path), std::move(content), std::nullopt, as));
     if (f.failed()) {
         auto err = f.get_exception();
+        if (as.abort_requested()) {
+            co_return std::unexpected{aborted_error{}};
+        }
         if (is_server_problem(err)) {
             handle_server_unavailable();
         }
