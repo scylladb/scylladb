@@ -186,7 +186,7 @@ class tablet_sstable_streamer : public sstable_streamer {
     sstring _prefix;
     stream_scope _scope;
     const locator::tablet_map& _tablet_map;
-    sstables::storage_manager& _storage_manager;
+    [[maybe_unused]]sstables::storage_manager& _storage_manager;
 public:
     tablet_sstable_streamer(sstring endpoint,
                             sstring bucket,
