@@ -20,6 +20,7 @@
 #include <seastar/core/with_timeout.hh>
 #include <chrono>
 #include <fmt/format.h>
+#include <netinet/tcp.h>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -45,6 +46,8 @@ public:
         socket.set_nodelay(true);
         socket.set_keepalive_parameters(get_keepalive_parameters(timeout()));
         socket.set_keepalive(true);
+        unsigned int timeout_ms = timeout().count();
+        socket.set_sockopt(IPPROTO_TCP, TCP_USER_TIMEOUT, &timeout_ms, sizeof(timeout_ms));
         co_return socket;
     }
 
