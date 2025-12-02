@@ -1081,7 +1081,7 @@ static void add_column(schema_builder& builder, const std::string& name, const r
     for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
         const rjson::value& attribute_info = *it;
         if (attribute_info["AttributeName"].GetString() == name) {
-            auto type = attribute_info["AttributeType"].GetString();
+            std::string_view type = rjson::to_string_view(attribute_info["AttributeType"]);
             data_type dt = parse_key_type(type);
             if (computed_column) {
                 // Computed column for GSI (doesn't choose a real column as-is
@@ -1888,7 +1888,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
             const rjson::value& attribute_info = *it;
             if (attribute_info["AttributeName"].GetString() == def.name_as_text()) {
-                auto type = attribute_info["AttributeType"].GetString();
+                std::string_view type = rjson::to_string_view(attribute_info["AttributeType"]);
                 if (type != def_type) {
                     throw api_error::validation(fmt::format("AttributeDefinitions redefined {} to {} already a key attribute of type {} in this table", def.name_as_text(), type, def_type));
                 }
