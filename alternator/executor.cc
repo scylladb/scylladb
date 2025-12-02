@@ -3139,9 +3139,11 @@ future<> executor::do_batch_write(
             schema_decorated_key_hash, 
             schema_decorated_key_equal>;
         auto key_builders = std::make_unique<map_type>(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
-        for (auto& b : mutation_builders) {
-            auto dk = dht::decorate_key(*b.first, b.second.pk());
-            auto [it, added] = key_builders->try_emplace(schema_decorated_key{b.first, dk});
+        for (auto&& b : std::move(mutation_builders)) {
+            auto [it, added] = key_builders->try_emplace(schema_decorated_key {
+                .schema = b.first,
+                .dk = dht::decorate_key(*b.first, b.second.pk())
+            });
             it->second.push_back(std::move(b.second));
         }
         auto* key_builders_ptr = key_builders.get();
