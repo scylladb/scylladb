@@ -27,6 +27,7 @@ public:
     virtual std::optional<table> try_find_table(database db, table_id id) const = 0;
     virtual const secondary_index::secondary_index_manager& get_index_manager(table t) const = 0;
     virtual schema_ptr get_table_schema(table t) const = 0;
+    virtual db_clock::time_point get_truncation_time(table t) const = 0;
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(keyspace ks) const = 0;
     virtual bool is_internal(keyspace ks) const = 0;
     virtual const locator::abstract_replication_strategy& get_replication_strategy(keyspace ks) const = 0;
