@@ -1744,6 +1744,61 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
         && std::ranges::contains(shards, this_shard_id());
 }
 
+static endpoints_to_update get_view_natural_endpoint_vnodes(
+        locator::host_id me,
+        std::vector<std::reference_wrapper<const locator::node>> base_nodes,
+        std::vector<std::reference_wrapper<const locator::node>> view_nodes,
+        locator::endpoint_dc_rack my_location,
+        const locator::network_topology_strategy* network_topology,
+        replica::cf_stats& cf_stats) {
+    using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
+    node_vector base_endpoints, view_endpoints;
+    auto& my_datacenter = my_location.dc;
+
+    auto process_candidate = [&] (node_vector& nodes, std::reference_wrapper<const locator::node> node) {
+        if (!network_topology || node.get().dc() == my_datacenter) {
+            nodes.emplace_back(node);
+        }
+    };
+
+    for (auto&& base_node : base_nodes) {
+        process_candidate(base_endpoints, base_node);
+    }
+
+    for (auto&& view_node : view_nodes) {
+        auto it = std::ranges::find(base_endpoints, view_node.get().host_id(), std::mem_fn(&locator::node::host_id));
+        // If this base replica is also one of the view replicas, we use
+        // ourselves as the view replica.
+        // We don't return an extra endpoint, as it's only needed when
+        // using tablets (so !use_legacy_self_pairing)
+        if (view_node.get().host_id() == me && it != base_endpoints.end()) {
+            return {.natural_endpoint = me};
+        }
+
+        // We have to remove any endpoint which is shared between the base
+        // and the view, as it will select itself and throw off the counts
+        // otherwise.
+        if (it != base_endpoints.end()) {
+            base_endpoints.erase(it);
+        } else if (!network_topology || view_node.get().dc() == my_datacenter) {
+            view_endpoints.push_back(view_node);
+        }
+    }
+
+    auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
+    if (base_it == base_endpoints.end()) {
+        // This node is not a base replica of this key, so we return empty
+        // FIXME: This case shouldn't happen, and if it happens, a view update
+        // would be lost.
+        ++cf_stats.total_view_updates_on_wrong_node;
+        vlogger.warn("Could not find {} in base_endpoints={}", me,
+                base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
+        return {};
+    }
+    size_t idx = base_it - base_endpoints.begin();
+    return {.natural_endpoint = view_endpoints[idx].get().host_id()};
+}
+
 // Calculate the node ("natural endpoint") to which this node should send
 // a view update.
 //
@@ -1846,6 +1901,16 @@ endpoints_to_update get_view_natural_endpoint(
         }
     }
 
+    if (!use_tablets) {
+        return get_view_natural_endpoint_vnodes(
+                me,
+                base_nodes,
+                view_nodes,
+                my_location,
+                network_topology,
+                cf_stats);
+    }
+
     std::function<bool(const locator::node&)> is_candidate;
     if (network_topology) {
         is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
@@ -1861,31 +1926,8 @@ endpoints_to_update get_view_natural_endpoint(
     for (auto&& base_node : base_nodes) {
         process_candidate(base_endpoints, base_node);
     }
-
-    if (!use_tablets) {
-        for (auto&& view_node : view_nodes) {
-            auto it = std::ranges::find(base_endpoints, view_node.get().host_id(), std::mem_fn(&locator::node::host_id));
-            // If this base replica is also one of the view replicas, we use
-            // ourselves as the view replica.
-            // We don't return an extra endpoint, as it's only needed when
-            // using tablets (so !use_legacy_self_pairing)
-            if (view_node.get().host_id() == me && it != base_endpoints.end()) {
-                return {.natural_endpoint = me};
-            }
-
-            // We have to remove any endpoint which is shared between the base
-            // and the view, as it will select itself and throw off the counts
-            // otherwise.
-            if (it != base_endpoints.end()) {
-                base_endpoints.erase(it);
-            } else if (is_candidate(view_node)) {
-                view_endpoints.push_back(view_node);
-            }
-        }
-    } else {
-        for (auto&& view_node : view_nodes) {
-            process_candidate(view_endpoints, view_node);
-        }
+    for (auto&& view_node : view_nodes) {
+        process_candidate(view_endpoints, view_node);
     }
 
     // Try optimizing for simple rack-aware pairing
