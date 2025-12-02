@@ -42,6 +42,11 @@ table::get_index_manager() const {
     return _ops->get_index_manager(*this);
 }
 
+db_clock::time_point
+table::get_truncation_time() const {
+    return _ops->get_truncation_time(*this);
+}
+
 lw_shared_ptr<keyspace_metadata>
 keyspace::metadata() const {
     return _ops->get_keyspace_metadata(*this);
