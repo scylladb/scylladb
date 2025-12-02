@@ -973,7 +973,6 @@ async def test_alternator_concurrent_rmw_same_partition_different_server(manager
         table.delete()
 
 
-@pytest.mark.xfail(reason="#27353")
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
