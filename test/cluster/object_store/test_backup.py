@@ -652,7 +652,7 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.skip(reason="Super long test")
+@pytest.mark.skip(reason="Super long test")
 async def test_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     await do_direct_restore(manager, s3_storage, tmp_path)
 
