@@ -174,13 +174,6 @@ future<> print_with_extra_array(const rjson::value& value,
     seastar::output_stream<char>& os,
     size_t max_nested_level = default_max_nested_level);
 
-// Returns a string_view to the string held in a JSON value (which is
-// assumed to hold a string, i.e., v.IsString() == true). This is a view
-// to the existing data - no copying is done.
-inline std::string_view to_string_view(const rjson::value& v) {
-    return std::string_view(v.GetString(), v.GetStringLength());
-}
-
 // Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
 
