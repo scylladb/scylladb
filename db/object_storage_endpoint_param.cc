@@ -108,6 +108,13 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
         ep.region = aws_region ? aws_region.as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
         ep.iam_role_arn = get_opt(node, "iam_role_arn", ""s);
 
+        if (maybe_legacy_endpoint_name(ep.endpoint)) {
+            // Support legacy config for a while
+            auto port = node["port"].as<unsigned>();
+            auto use_https = node["https"].as<bool>(false);
+            ep.endpoint = fmt::format("http{}://{}:{}", use_https ? "s" : "", ep.endpoint, port);
+        }
+
         return object_storage_endpoint_param{std::move(ep)};
     }
     // GCS endpoint
