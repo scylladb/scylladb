@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import glob
 import json
 import os
 import logging
@@ -825,14 +824,13 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
                 for file in files:
                     local_path = os.path.join(root, file)
                     print("Processing file:", local_path)
-                    sst_generation = subprocess.check_output(
+                    sst = subprocess.check_output(
                         [scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-format", "json",
-                         "--output-dir", tmp_dir, "--input-file", local_path]).decode().strip()
-                    sst_path = glob.glob(f"{tmp_dir}/??-{sst_generation}-???-TOC.txt")[0]
+                         "--output-dir", tmp_dir, "--input-file", local_path])
                     expected_rows += json.loads(subprocess.check_output(
                         [scylla_path, "sstable", "query", "-q", f"SELECT COUNT(*) FROM scylla_sstable.{table}",
                          "--output-format", "json", "--sstables",
-                         sst_path]).decode())[0]['count']
+                         os.path.join(tmp_dir, f"me-{sst.decode().strip()}-big-TOC.txt")]).decode())[0]['count']
 
             prefix = unique_name('/test/streaming_')
             s3_resource = s3_storage.get_resource()

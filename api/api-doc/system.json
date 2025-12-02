@@ -209,21 +209,6 @@
                "parameters":[]
             }
          ]
-      },
-      {
-         "path":"/system/chosen_sstable_version",
-         "operations":[
-            {
-               "method":"GET",
-               "summary":"Get sstable version currently chosen for use in new sstables",
-               "type":"string",
-               "nickname":"get_chosen_sstable_version",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[]
-            }
-         ]
       }
    ]
 }
