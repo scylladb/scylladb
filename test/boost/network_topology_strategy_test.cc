@@ -1487,8 +1487,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     // Test tablets rack-aware base-view pairing
     auto base_token = dht::token::get_random_token();
     auto view_token = dht::token::get_random_token();
-    bool use_legacy_self_pairing = false;
-    bool use_tablets_basic_rack_aware_view_pairing = true;
+    bool use_tablets = true;
     const auto& base_replicas = base_tmap.get_tablet_info(base_tmap.get_tablet_id(base_token)).replicas;
     replica::cf_stats cf_stats;
     std::unordered_map<locator::host_id, locator::host_id> base_to_view_pairing;
@@ -1502,8 +1501,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             *ars_ptr,
             base_token,
             view_token,
-            use_legacy_self_pairing,
-            use_tablets_basic_rack_aware_view_pairing,
+            use_tablets,
             cf_stats).natural_endpoint;
 
         // view pair must be found
@@ -1640,8 +1638,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     // Test tablets rack-aware base-view pairing
     auto base_token = dht::token::get_random_token();
     auto view_token = dht::token::get_random_token();
-    bool use_legacy_self_pairing = false;
-    bool use_tablets_basic_rack_aware_view_pairing = true;
+    bool use_tablets = true;
     const auto& base_replicas = base_tmap.get_tablet_info(base_tmap.get_tablet_id(base_token)).replicas;
     replica::cf_stats cf_stats;
     std::unordered_map<locator::host_id, locator::host_id> base_to_view_pairing;
@@ -1657,8 +1654,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             *ars_ptr,
             base_token,
             view_token,
-            use_legacy_self_pairing,
-            use_tablets_basic_rack_aware_view_pairing,
+            use_tablets,
             cf_stats).natural_endpoint;
 
         // view pair must be found
