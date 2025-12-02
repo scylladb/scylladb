@@ -81,6 +81,7 @@ public:
     storage_manager(const db::config&, config cfg);
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
+    sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
 };

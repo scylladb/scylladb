@@ -154,6 +154,10 @@ shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client
     return ep.client;
 }
 
+sstring storage_manager::get_endpoint_type(sstring endpoint) {
+    return get_endpoint(endpoint).cfg.type();
+}
+
 bool storage_manager::is_known_endpoint(sstring endpoint) const {
     return _object_storage_endpoints.contains(endpoint);
 }
