@@ -955,10 +955,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
         _client_state.set_driver_name(driver_name_opt->second);
     }
 
-    if (auto client_options = options.find("CLIENT_OPTIONS"); client_options != options.end()) {
-        clogger.debug("Received CLIENT_OPTIONS option: {}", client_options->second);
-        _client_state.set_client_options(client_options->second);
-    }
+    _client_state.set_client_options(std::map<sstring, sstring>(options.begin(), options.end()));
 
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {

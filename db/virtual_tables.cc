@@ -749,7 +749,7 @@ class clients_table : public streaming_virtual_table {
             .with_column("ssl_protocol", utf8_type)
             .with_column("username", utf8_type)
             .with_column("scheduling_group", utf8_type)
-            .with_column("client_options", utf8_type)
+            .with_column("client_options", map_type_impl::get_instance(utf8_type, utf8_type, true))
             .with_hash_version()
             .build();
     }
@@ -860,7 +860,16 @@ class clients_table : public streaming_virtual_table {
                     set_cell(cr.cells(), "scheduling_group", *cd.scheduling_group_name);
                 }
                 if (cd.client_options) {
-                    set_cell(cr.cells(), "client_options", *cd.client_options);
+                    auto map_type = map_type_impl::get_instance(
+                        utf8_type,
+                        utf8_type,
+                        true
+                    );
+
+                    set_cell(cr.cells(), "client_options",
+                        make_map_value(map_type, map_type_impl::native_type(
+                        std::make_move_iterator(cd.client_options->begin()),
+                        std::make_move_iterator(cd.client_options->end()))));
                 }
                 co_await result.emit_row(std::move(cr));
             }

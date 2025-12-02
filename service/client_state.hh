@@ -102,7 +102,8 @@ private:
     private volatile String keyspace;
 #endif
     std::optional<auth::authenticated_user> _user;
-    std::optional<sstring> _driver_name, _driver_version, _client_options;
+    std::optional<sstring> _driver_name, _driver_version;
+    std::optional<std::map<sstring, sstring>> _client_options;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
     bool _control_connection = false;
@@ -158,11 +159,11 @@ public:
         _driver_name = std::move(driver_name);
     }
 
-    std::optional<sstring> get_client_options() const {
+    const std::optional<std::map<sstring, sstring>>& get_client_options() const {
         return _client_options;
     }
 
-    void set_client_options(sstring client_options) {
+    void set_client_options(std::map<sstring, sstring> client_options) {
         _client_options = std::move(client_options);
     }
 
