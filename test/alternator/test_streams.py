@@ -5,14 +5,19 @@
 # Tests for stream operations: ListStreams, DescribeStream, GetShardIterator,
 # GetRecords.
 
+import asyncio
 import time
 import urllib.request
+import requests
 from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 
 import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
+
+from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, scylla_config_temporary
+from test.cluster.test_cdc_with_tablets import CdcStreamState
 
 # all tests in this will are parametrized to run twice (with vnodes and tablets respectively).
 pytestmark = pytest.mark.parametrize('TAGS', [ [{'Key': 'system:initial_tablets', 'Value': 'none'}], [] ], scope='module')
@@ -357,6 +362,149 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams, TAG
             dynamodbstreams.get_shard_iterator(
                     StreamArn=arn, ShardId='adfasdasdasdasdasdasdasdasdasasdasd', ShardIteratorType='LATEST'
                 )
+
+def get_table_or_view_id(cql, keyspace: str, table: str):
+    rows = cql.execute(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
+    for r in rows:
+        return r.id
+    rows = cql.execute(f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{table}'")
+    for r in rows:
+        return r.id
+    assert False, f'Table or view {keyspace}.{table} not found'
+
+def get_base_table(cql, table_id):
+    rows = cql.execute(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
+    for r in rows:
+        if r.base_table:
+            return r.base_table
+        break
+    return table_id
+
+def assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, cdc_log_table_name):
+    tablet_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
+    rows = cql.execute(f"SELECT toUnixTimestamp(timestamp) AS ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='{table_name}' ORDER BY timestamp DESC LIMIT 1")
+    for r in rows:
+        ts = r.ts
+        break
+    else:
+        assert False
+    rows = cql.execute(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table_name}' AND timestamp = {ts} AND stream_state = {CdcStreamState.CURRENT}")
+    count = 0
+    for r in rows:
+        count += 1
+    assert count == tablet_count
+
+def get_tablet_count(rest_api, cql, keyspace_name: str, table_name: str):
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    # await read_barrier(rest_api)
+
+    table_id = get_table_or_view_id(cql, keyspace_name, table_name)
+    table_id = get_base_table(cql, table_id)
+    rows = cql.execute(f"SELECT tablet_count FROM system.tablets where table_id = {table_id}")
+    for r in rows:
+        return r.tablet_count
+    assert False, f'Tablet count for table {table_name} not found'
+
+async def read_barrier(rest_api) -> None:
+    resp = requests.get(f'{rest_api}/raft/read_barrier')
+    resp.raise_for_status()
+
+def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
+    if TAGS:
+        # this test tests tablet count changes, no need to run it on vnode variation.
+        return
+    tablet_multipliers = [1, 2, 4, 8, 16, 8, 4, 2, 1]
+    writes_per_tablet_multiplier = 100
+
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES', name=unique_table_name('alternator_test_')) as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+
+        ks = f'alternator_{table.name}'
+        table_name = table.name
+        cdc_log_table_name = f'{table_name}_scylla_cdc_log'
+        init_table_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
+
+        index = 0
+        index2 = 0
+        expected_items = []
+        retrieved_items = []
+        for tablet_mult in tablet_multipliers:
+            assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
+            cql.execute(f"ALTER TABLE {ks}.{cdc_log_table_name} WITH tablets = {{'min_tablet_count': {init_table_count * tablet_mult}}};")
+            def tablet_count_is(expected_tablet_count):
+                new_tablet_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
+                if new_tablet_count == expected_tablet_count:
+                    return True
+                return False
+            start = time.time()
+            while time.time() < start + 10:
+                if tablet_count_is(init_table_count * tablet_mult):
+                    break
+                time.sleep(1)
+            else:
+                pytest.fail(f'Tablet count did not reach expected value {init_table_count * tablet_mult} within timeout')
+            assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
+            for i in range(0, writes_per_tablet_multiplier):
+                index2 = (index2 + 1 * 17) % 2000000000
+                index += 1
+                # we want to partition keys by small set of partitions to force key collisions
+                # to detect any ordering issues within a partition
+                p = str(index2 % 32)
+                c = '1'
+                e = str(index)
+                table.put_item(Item={'p': p, 'c': c, 'e': e})
+                expected_items.append((p, c, e))
+                index += 1
+
+        iterators = {}
+
+        while len(retrieved_items) < len(expected_items):
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)
+
+            while True:
+                shards = desc['StreamDescription']['Shards']
+
+                for shard in shards:
+                    shard_id = shard['ShardId']
+                    if shard_id not in iterators:
+                        start = shard['SequenceNumberRange']['StartingSequenceNumber']
+                        iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
+                        iterators[shard_id] = iter
+
+                last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
+                if not last_shard:
+                    break
+
+                desc = dynamodbstreams.describe_stream(StreamArn=arn, ExclusiveStartShardId=last_shard)
+
+            for shard_id, iter in iterators.items():
+                if not iter:
+                    continue
+                response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
+                if 'NextShardIterator' in response:
+                    iterators[shard_id] = response['NextShardIterator']
+
+                records = response.get('Records')
+                for record in records:
+                    type = record['eventName']
+                    dynamodb = record['dynamodb']
+                    keys = dynamodb['NewImage']
+                    
+                    assert set(keys) == set(['p', 'c', 'e'])
+                    p = keys['p'].get('S')
+                    c = keys['c'].get('S')
+                    e = keys['e'].get('S')
+                    retrieved_items.append((p, c, e))
+
+        assert len(retrieved_items) == len(expected_items)
+        assert sorted(retrieved_items) == sorted(expected_items)
+        previous_values = {}
+        for p, c, e in retrieved_items:
+            e = int(e)
+            pv = previous_values.get(p, -1)
+            assert pv < e
+            previous_values[p] = e
 
 def test_get_records(dynamodb, dynamodbstreams, TAGS):
     # TODO: add tests for storage/transactionable variations and global/local index
