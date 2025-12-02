@@ -3158,9 +3158,11 @@ future<> executor::do_batch_write(
         // because we can do them in one cas() call.
         std::unordered_map<schema_decorated_key, std::vector<put_or_delete_item>, schema_decorated_key_hash, schema_decorated_key_equal>
             key_builders(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
-        for (auto& b : mutation_builders) {
-            auto dk = dht::decorate_key(*b.first, b.second.pk());
-            auto [it, added] = key_builders.try_emplace(schema_decorated_key{b.first, dk});
+        for (auto&& b : std::move(mutation_builders)) {
+            auto [it, added] = key_builders.try_emplace(schema_decorated_key {
+                .schema = b.first,
+                .dk = dht::decorate_key(*b.first, b.second.pk())
+            });
             it->second.push_back(std::move(b.second));
         }
         return parallel_for_each(std::move(key_builders), [this, &client_state, trace_state, permit = std::move(permit)] (auto& e) {
