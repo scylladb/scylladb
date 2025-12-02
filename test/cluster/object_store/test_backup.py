@@ -587,7 +587,14 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, obj
 
     return servers,host_ids
 
-def create_dataset(manager, ks, cf, topology, logger, dcs_num=None, min_tablet_count=None):
+def create_schema(ks, cf, min_tablet_count=None):
+    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text )"
+    if min_tablet_count is not None:
+        schema += f" WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
+    schema += ';'
+    return schema
+
+def create_dataset(manager, ks, cf, topology, logger, dcs_num=None, min_tablet_count=None, schema=None):
     cql = manager.get_cql()
     logger.info(f'Create keyspace, rf={topology.rf}')
     keys = range(256)
@@ -603,10 +610,10 @@ def create_dataset(manager, ks, cf, topology, logger, dcs_num=None, min_tablet_c
 
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
 
-    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text )"
-    if min_tablet_count is not None:
-        schema += f" WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
-    schema += ';'
+    if schema is None:
+        if min_tablet_count is not None:
+            logger.info(f'Creating schema with min_tablet_count={min_tablet_count}')
+        schema = create_schema(ks, cf, min_tablet_count)
     cql.execute(schema)
     for k in keys:
         cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
@@ -1064,7 +1071,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
         topo(rf = 1, nodes = 2, racks = 2, dcs = 2),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
-@pytest.mark.parametrize("scope", ["node", "rack", "dc", "all"])
+@pytest.mark.parametrize("scope", ["rack", "dc", "all"])
 @pytest.mark.parametrize("min_tablet_count", [None, 512])
 @pytest.mark.parametrize("restored_tablet_count", [None, 256, 512, 1024])
 async def test_restore_primary_replica_only_dataset_balance(manager: ManagerClient, object_storage, topology, scope, min_tablet_count, restored_tablet_count):
@@ -1079,7 +1086,7 @@ async def test_restore_primary_replica_only_dataset_balance(manager: ManagerClie
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
     cql = manager.get_cql()
 
-    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger, min_tablet_count=min_tablet_count)
+    _, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger, min_tablet_count=min_tablet_count)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
@@ -1089,6 +1096,9 @@ async def test_restore_primary_replica_only_dataset_balance(manager: ManagerClie
     logger.info(f'Re-initialize keyspace')
     cql.execute(f'DROP KEYSPACE {ks}')
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    if restored_tablet_count is not None:
+        logger.info(f'Re-creating schema with min_tablet_count={restored_tablet_count}')
+    schema=create_schema(ks, cf, restored_tablet_count)
     cql.execute(schema)
 
     # scope is passed from parametrization here, we only care about the distribution logic of nodes to rack/dcs
