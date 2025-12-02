@@ -25,12 +25,14 @@ import json
 from cassandra.auth import PlainTextAuthProvider
 import threading
 import random
+import re
 
 from test.cluster.util import get_replication
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import skip_mode
+from test.pylib.tablets import get_tablet_replica
 
 logger = logging.getLogger(__name__)
 
@@ -969,3 +971,119 @@ async def test_alternator_concurrent_rmw_same_partition_different_server(manager
             t.join()
     finally:
         table.delete()
+
+
+@pytest.mark.xfail(reason="#27353")
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
+    """
+    Reproducer for issue #27353.
+
+    LWT requires that storage_proxy::cas() is invoked on a valid shard — the one
+    returned by sharder.try_get_shard_for_reads() for a tablets-based table.
+
+    The bug: if the current shard is invalid and we jump to the valid shard, that
+    new shard may become invalid again by the time we attempt to capture the ERM.
+    This leads to a failure of the CAS path.
+
+    The fix: retry the validity check and jump again if the current shard is already
+    invalid. We should exit the loop once the shard is valid *and* we hold a strong pointer
+    to the ERM — which prevents further tablet movements until the ERM is released.
+
+    This problem is specific to BatchWriteItem; other commands are already handled
+    correctly.
+    """
+    config = alternator_config.copy()
+    config['alternator_write_isolation'] = 'always_use_lwt'
+    cmdline = [
+        '--logger-log-level', 'alternator-executor=trace',
+        '--logger-log-level', 'alternator_controller=trace',
+        '--logger-log-level', 'paxos=trace'
+    ]
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    alternator = get_alternator(server.ip_addr)
+
+    logger.info("Creating alternator test table")
+    table = alternator.create_table(TableName=unique_table_name(),
+                                    Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
+                                    BillingMode='PAY_PER_REQUEST',
+                                    KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                                    AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table_name = table.name
+    ks_name = 'alternator_' + table_name
+    last_token = 7 # Any token works since we have only one tablet
+    
+    (src_host_id, src_shard) = await get_tablet_replica(manager, server, ks_name, table_name, last_token)
+    dst_shard = 0 if src_shard == 1 else 1
+
+    logger.info("Inject 'intranode_migration_streaming_wait'")
+    await manager.api.enable_injection(server.ip_addr,
+                                       "intranode_migration_streaming_wait",
+                                       one_shot=False)
+
+    logger.info("Start tablet migration")
+    intranode_migration_task = asyncio.create_task(
+        manager.api.move_tablet(server.ip_addr, ks_name, table_name,
+                                src_host_id, src_shard,
+                                src_host_id, dst_shard, last_token))
+
+    logger.info("Open server logs")
+    log = await manager.server_open_log(server.server_id)
+
+    logger.info("Wait for intranode_migration_streaming_wait")
+    await log.wait_for("intranode_migration_streaming: waiting")
+
+    logger.info("Inject 'alternator_executor_batch_write_wait'")
+    await manager.api.enable_injection(server.ip_addr,
+                                       "alternator_executor_batch_write_wait",
+                                       one_shot=False,
+                                       parameters={
+                                           'table': table_name,
+                                           'keyspace': ks_name,
+                                           'shard': dst_shard
+                                       })
+    m = await log.mark()
+
+    # Start a background thread, which tries to hit the alternator_executor_batch_write_wait
+    # injection on the destination shard.
+    logger.info("Start a batch_write thread")
+    stop_event = threading.Event()
+    def run_batch():
+        alternator = get_alternator(server.ip_addr)
+        table = alternator.Table(table_name)
+        while not stop_event.is_set():
+            with table.batch_writer() as batch:
+                batch.put_item(Item={'p': 1, 'x': 'hellow world'})
+    t = ThreadWrapper(target=run_batch)
+    t.start()
+
+    logger.info("Waiting for 'alternator_executor_batch_write_wait: hit'")
+    await log.wait_for("alternator_executor_batch_write_wait: hit", from_mark=m)
+
+    # We have a batch request with "streaming" cas_shard on the destination shard.
+    # This means we have already made a decision to jump to the src_shard.
+    # Now we're releasing the tablet migration so that it reaches write_both_read_new and
+    # and invaldiates this decision.
+
+    m = await log.mark()
+    await manager.api.message_injection(server.ip_addr, "intranode_migration_streaming_wait")
+
+    # The next barrier must be for the write_both_read_new, we need a guarantee
+    # that the src_shard observed it
+    logger.info("Waiting for the next barrier")
+    await log.wait_for(re.escape(f"[shard {src_shard}: gms] raft_topology - raft_topology_cmd::barrier_and_drain done"),
+                       from_mark=m)
+
+    # Now we have a guarantee that a new barrier succeeded on the src_shard,
+    # this means the src_shard has already transitioned to write_both_read_new,
+    # and our batch write will have to jump back to the destination shard.
+
+    logger.info("Release the 'alternator_executor_batch_write_wait'")
+    await manager.api.message_injection(server.ip_addr, "alternator_executor_batch_write_wait")
+
+    logger.info("Waiting for migratino task to finish")
+    await intranode_migration_task
+
+    stop_event.set()
+    t.join()
