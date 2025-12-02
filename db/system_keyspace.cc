@@ -2459,6 +2459,40 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
+future<utils::chunked_vector<db_clock::time_point>> system_keyspace::read_cdc_for_tablets_timestamps(const sstring &ks_name, const sstring &table_name, db_clock::time_point from, unsigned int limit) {
+    static const sstring timestamp_query = format("SELECT timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ? and timestamp >= ?", NAME, CDC_TIMESTAMPS);
+
+    utils::chunked_vector<db_clock::time_point> timestamps;
+
+    co_await _qp.query_internal(timestamp_query,
+                db::consistency_level::ONE,
+                data_value_list{ ks_name, table_name, from },
+                limit,
+                [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ts = row.get_as<db_clock::time_point>("timestamp");
+        timestamps.push_back(ts);
+        co_return stop_iteration::no;
+    });
+    co_return timestamps;
+}
+
+future<utils::chunked_vector<cdc::stream_id>> system_keyspace::read_cdc_for_tablets_stream_ids_for_timestamp(const sstring &ks_name, const sstring &table_name, db_clock::time_point ts, unsigned int limit) {
+    static const sstring stream_id_query = format("SELECT stream_id FROM {}.{} WHERE keyspace_name = ? and table_name = ? and timestamp = ? and stream_state = 0", NAME, CDC_STREAMS);
+
+    utils::chunked_vector<cdc::stream_id> stream_ids;
+
+    co_await _qp.query_internal(stream_id_query,
+                db::consistency_level::ONE,
+                data_value_list{ ks_name, table_name,ts },
+                limit,
+                [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto stream_id = cdc::stream_id{ row.get_as<bytes>("stream_id") };
+        stream_ids.push_back(stream_id);
+        co_return stop_iteration::no;
+    });
+    co_return stream_ids;
+}
+
 future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
         noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f) {
     static const sstring all_tables_query = format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
