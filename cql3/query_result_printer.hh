@@ -18,10 +18,13 @@ namespace cql3 {
 
 class result;
 
-future<> print_query_results_text(std::ostream& os, const result& result);
+// expand=false: all rows are printed in a single table, each result row is one line in the table.
+// expand=true: each row is printed in a separate table, each result row is a separate table.
+// Use the latter when the former results in very wide tables that are hard to read.
+future<> print_query_results_text(std::ostream& os, const result& result, bool expand = false);
 future<> print_query_results_json(std::ostream& os, const result& result);
 
-future<> print_query_results_text(output_stream<char>& os, const result& result);
+future<> print_query_results_text(output_stream<char>& os, const result& result, bool expand = false);
 future<> print_query_results_json(output_stream<char>& os, const result& result);
 
 } // namespace cql3
