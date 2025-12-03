@@ -13,30 +13,12 @@ import urllib3
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
 
-from test.alternator.util import random_bytes, random_string
+from test.alternator.util import random_bytes, random_string, get_signed_request, manual_request, ManualRequestError
 
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
 
-def get_signed_request(dynamodb, target, payload):
-    # Usually "payload" will be a Python string and we'll write it as UTF-8.
-    # but in some tests we may want to write bytes directly - potentially
-    # bytes which include invalid UTF-8.
-    payload_bytes = payload if isinstance(payload, bytes) else payload.encode(encoding='UTF-8')
-    # NOTE: Signing routines use boto3 implementation details and may be prone
-    # to unexpected changes
-    class Request:
-        url=dynamodb.meta.client._endpoint.host
-        headers={'X-Amz-Target': 'DynamoDB_20120810.' + target, 'Content-Type': 'application/x-amz-json-1.0'}
-        body=payload_bytes
-        method='POST'
-        context={}
-        params={}
-    req = Request()
-    signer = dynamodb.meta.client._request_signer
-    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
-    return req
 
 # Test that deeply nested objects (e.g. with depth of 200k) are parsed correctly,
 # i.e. do not cause stack overflows for the server. It's totally fine for the
@@ -587,3 +569,57 @@ def test_keep_alive(dynamodb, test_table, use_keep_alive):
     finally:
         urllib3.connection.HTTPConnection.connect = original_http_connect
         urllib3.connection.HTTPSConnection.connect = original_https_connect
+
+# Test that attempting to write a malformed value with PutItem, UpdateItem or
+# BatchWriteItem fails. A "malformed value" is valid JSON but which doesn't
+# conform to DynamoDB's value structure - maps with types. For example,
+# {"S": "dog"} is a proper value (a string), but {"dog": "cat"} is malformed.
+# We don't want to store the malformed value on disk and only discover the
+# problem when reading the value back. We want the write to fail immediately,
+# and this is what this test checks. Reproduces issue #8070.
+@pytest.mark.xfail(reason="issue #8070")
+@pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_write_malformed_value(dynamodb, test_table_s, op):
+    p = random_string()
+    payloads = {
+        'PutItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Item": {"p": {"S": "''' + p + '''"}, "x": %s}}''',
+        'UpdateItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Key": {"p": {"S": "''' + p + '''"}},
+            "UpdateExpression": "SET x = :x",
+            "ExpressionAttributeValues": {":x": %s }}''',
+        'BatchWriteItem': '''{
+            "RequestItems": {
+            "''' + test_table_s.name + '''": [
+                {"PutRequest":
+                    {"Item": {"p": {"S": "''' + p + '''"}, "x": %s}}}
+            ]}}'''
+    }
+    payload = payloads[op]
+    # As a sanity check, check the value {"S": "hello"} works:
+    manual_request(dynamodb, op, payload % '{"S": "hello"}')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['x'] == 'hello'
+    # The value {"dog": "cat"} is malformed. Because Alternator wants to
+    # optimize how it stores certain types, it checks the supposed type
+    # of this value and sees "dog" is not a known type and fails the write.
+    with pytest.raises(ManualRequestError, match='ValidationException'):
+        manual_request(dynamodb, op, payload % '{"dog": "cat"}')
+    # The value {"N": 3} is also malformed - it has a good type ("S") but
+    # the 3 should have been a string, not a number. DynamoDB generates a
+    # SerializationException error here, Alternator a ValidationException.
+    # I consider the difference to be not important - the important thing
+    # is that the write fails and doesn't save a malformed value on disk.
+    with pytest.raises(ManualRequestError, match='ValidationException|SerializationException'):
+        manual_request(dynamodb, op, payload % '{"N": 3}')
+    # If the value is a map (type "M"), Alternator doesn't attempt to further
+    # optimize its storage, and as issue #8070 noted, just stored the value
+    # as-is, as JSON, so it missed the need to validate the content of that
+    # JSON - and failed to find the malformed value.
+    with pytest.raises(ManualRequestError, match='ValidationException|SerializationException'):
+        manual_request(dynamodb, op, payload % '{"M": {"dog": "cat"}}')
+        # If PutItem didn't fail, and wrote the malformed map, GetItem
+        # will return this broken map and boto3's attempt to parse the
+        # returned map will fail, causing the following call to fail.
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True)

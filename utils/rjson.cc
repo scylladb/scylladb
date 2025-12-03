@@ -39,6 +39,7 @@ public:
     chunked_content_stream(chunked_content&& content)
         : _content(std::move(content))
         , _current_chunk(_content.begin())
+        , _count(0)
     {}
     bool eof() const {
         return _current_chunk == _content.end();
