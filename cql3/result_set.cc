@@ -300,4 +300,24 @@ future<> print_query_results_json(std::ostream& os, const result& result) {
     return do_print_query_results_json(std_ostream_wrapper{os}, result);
 }
 
+struct seastar_outputs_stream_wrapper {
+    seastar::output_stream<char>& os;
+
+    future<> operator()(std::string_view raw) {
+        co_await os.write(raw.data(), raw.size());
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        auto str = fmt::format(fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        co_await os.write(str.data(), str.size());
+    }
+};
+
+future<> print_query_results_text(seastar::output_stream<char>& os, const result& result) {
+    return do_print_query_results_text(seastar_outputs_stream_wrapper{os}, result);
+}
+
+future<> print_query_results_json(seastar::output_stream<char>& os, const result& result) {
+    return do_print_query_results_json(seastar_outputs_stream_wrapper{os}, result);
+}
+
 }
