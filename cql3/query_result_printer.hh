@@ -10,6 +10,7 @@
 
 #include <ostream>
 #include <seastar/core/future.hh>
+#include <seastar/core/iostream.hh>
 
 #include "seastarx.hh"
 
@@ -19,5 +20,8 @@ class result;
 
 future<> print_query_results_text(std::ostream& os, const result& result);
 future<> print_query_results_json(std::ostream& os, const result& result);
+
+future<> print_query_results_text(output_stream<char>& os, const result& result);
+future<> print_query_results_json(output_stream<char>& os, const result& result);
 
 } // namespace cql3
