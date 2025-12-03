@@ -1717,7 +1717,9 @@ void writer::consume_end_of_stream() {
         .map = _collector.get_ext_timestamp_stats()
     });
     _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats));
-    _sst.seal_sstable(_cfg.backup).get();
+    if (!_cfg.leave_unsealed) {
+        _sst.seal_sstable(_cfg.backup).get();
+    }
 }
 
 uint64_t writer::data_file_position_for_tests() const {
