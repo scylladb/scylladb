@@ -60,9 +60,9 @@ def try_connect(host, port, creds, protocol_version):
 
 # If there is a protocol version mismatch, the server should
 # raise a protocol error, which is counted in the metrics.
-def test_protocol_version_mismatch(scylla_only, request, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+def test_protocol_version_mismatch(scylla_only, debug_exceptions_logging, request, host):
+    run_count = 200
+    cpp_exception_threshold = 20
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -164,6 +164,44 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
     finally:
         s.close()
 
+<<<<<<< HEAD
+||||||| parent of 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
+def _test_impl(host, flag):
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+
+    for _ in range(run_count):
+        kwargs = {flag: True}
+        _protocol_error_impl(host, **kwargs)
+
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, f"Expected protocol errors to increase after running test with {flag}"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, f"Expected C++ protocol errors to not increase after running test with {flag}"
+
+=======
+def _test_impl(host, flag):
+    run_count = 200
+    cpp_exception_threshold = 20
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+
+    for _ in range(run_count):
+        kwargs = {flag: True}
+        _protocol_error_impl(host, **kwargs)
+
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, f"Expected protocol errors to increase after running test with {flag}"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, f"Expected C++ protocol errors to not increase after running test with {flag}"
+
+>>>>>>> 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
 @pytest.fixture
 def no_ssl(request):
     if request.config.getoption("--ssl"):
@@ -209,9 +247,9 @@ def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
 # Test if the protocol exceptions do not decrease after running the test.
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
-def test_no_protocol_exceptions(scylla_only, no_ssl, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+def test_no_protocol_exceptions(scylla_only, no_ssl, debug_exceptions_logging, host):
+    run_count = 200
+    cpp_exception_threshold = 20
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
