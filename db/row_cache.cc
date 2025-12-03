@@ -1287,6 +1287,9 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
     , _partitions(dht::raw_token_less_comparator{})
     , _underlying(src())
     , _snapshot_source(std::move(src))
+    , _update_section(format("{}.{}_update", _schema->ks_name(), _schema->cf_name()))
+    , _populate_section(format("{}.{}_populate", _schema->ks_name(), _schema->cf_name()))
+    , _read_section(format("{}.{}_read", _schema->ks_name(), _schema->cf_name()))
 {
   try {
     with_allocator(_tracker.allocator(), [this, cont] {
