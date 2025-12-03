@@ -57,7 +57,6 @@ repair/* @tgrabiec @asias
 
 # SCHEMA MANAGEMENT
 db/schema_tables* @tgrabiec
-db/legacy_schema_migrator* @tgrabiec
 service/migration* @tgrabiec
 schema* @tgrabiec
 
