@@ -241,28 +241,6 @@ public:
         static schema_ptr cdc_local();
     };
 
-    struct legacy {
-        static constexpr auto HINTS = "hints";
-        static constexpr auto BATCHLOG = "batchlog";
-        static constexpr auto KEYSPACES = "schema_keyspaces";
-        static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
-        static constexpr auto COLUMNS = "schema_columns";
-        static constexpr auto TRIGGERS = "schema_triggers";
-        static constexpr auto USERTYPES = "schema_usertypes";
-        static constexpr auto FUNCTIONS = "schema_functions";
-        static constexpr auto AGGREGATES = "schema_aggregates";
-
-        static schema_ptr keyspaces();
-        static schema_ptr column_families();
-        static schema_ptr columns();
-        static schema_ptr triggers();
-        static schema_ptr usertypes();
-        static schema_ptr functions();
-        static schema_ptr aggregates();
-        static schema_ptr hints();
-        static schema_ptr batchlog();
-    };
-
     // Partition estimates for a given range of tokens.
     struct range_estimates {
         schema_ptr schema;

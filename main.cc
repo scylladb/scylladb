@@ -37,7 +37,6 @@
 #include "api/api_init.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "db/legacy_schema_migrator.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
@@ -1867,8 +1866,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             group0_client.init().get();
 
             checkpoint(stop_signal, "initializing system schema");
-            // schema migration, if needed, is also done on shard 0
-            db::legacy_schema_migrator::migrate(proxy, db, sys_ks, qp.local()).get();
             db::schema_tables::save_system_schema(qp.local()).get();
             db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
 
