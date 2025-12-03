@@ -118,9 +118,10 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
     await make_server("r1")
     await make_server("r2")
+    await make_server("r3")
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         keys = range(256)
@@ -146,30 +147,30 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is on [{replicas}]")
-        assert len(replicas) == 1 and len(replicas[0].replicas) == 2
+        assert len(replicas) == 1 and len(replicas[0].replicas) == 3
 
         last_token = replicas[0].last_token
         old_replica = None
         for r in replicas[0].replicas:
-            assert r[0] != host_ids[2], "Tablet got migrated to node2"
+            assert r[0] != host_ids[3], "Tablet got migrated to node3"
             if r[0] == host_ids[1]:
                 old_replica = r
         assert old_replica is not None
-        new_replica = (host_ids[2], 0)
+        new_replica = (host_ids[3], 0)
         logger.info(f"Moving tablet {old_replica} -> {new_replica}")
 
         class node_failer:
             def __init__(self, stage, replica, ks):
                 self.stage = stage
                 self.replica = replica
-                self.fail_idx = 1 if self.replica == "source" else 2
+                self.fail_idx = 1 if self.replica == "source" else 3
                 self.ks = ks
 
             async def setup(self):
                 logger.info(f"Will fail {self.stage}")
                 if self.stage == "streaming":
-                    await manager.api.enable_injection(servers[2].ip_addr, "stream_mutation_fragments", one_shot=True)
-                    self.log = await manager.server_open_log(servers[2].server_id)
+                    await manager.api.enable_injection(servers[3].ip_addr, "stream_mutation_fragments", one_shot=True)
+                    self.log = await manager.server_open_log(servers[3].server_id)
                     self.mark = await self.log.mark()
                 elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration", "do_revert_migration" ]:
                     await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False,
@@ -181,7 +182,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                     self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
                     self.mark = await self.log.mark()
                 elif self.stage == "cleanup_target":
-                    assert self.fail_idx == 2
+                    assert self.fail_idx == 3
                     self.stream_fail = node_failer('streaming', 'source', ks)
                     await self.stream_fail.setup()
                     self.cleanup_fail = node_failer('cleanup', 'destination', ks)
@@ -215,11 +216,11 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
             async def stop(self, via=0):
                 if self.stage == "cleanup_target":
-                    await self.cleanup_fail.stop(via=3) # removenode of source is happening via node0 already
+                    await self.cleanup_fail.stop(via=4) # removenode of source is happening via node0 already
                     await self.stream_stop_task
                     return
                 if self.stage == "revert_migration":
-                    await self.revert_fail.stop(via=3)
+                    await self.revert_fail.stop(via=4)
                     await self.wbro_fail_task
                     return
 
