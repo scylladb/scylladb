@@ -27,50 +27,48 @@ class MetricsProcessor:
         os.makedirs(output_directory, exist_ok=True)
         return output_directory
 
-    def _process_single_file(self, file_path, destination_path, metrics_config_path):
+    def _process_single_file(self, file_path, destination_path, metrics_config_path, strict=False):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         if self.MARKER in content and not os.path.exists(destination_path):
             try:
                 metrics_info = metrics.get_metrics_information(metrics_config_path)
-                
                 # Get relative path to the repo root
                 relative_path = os.path.relpath(file_path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
                 repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
                 old_cwd = os.getcwd()
                 os.chdir(repo_root)
-                
                 # Get metrics from the file
                 try:
-                    metrics_file = metrics.get_metrics_from_file(relative_path, "scylla_", metrics_info)
+                    metrics_file = metrics.get_metrics_from_file(relative_path, "scylla_", metrics_info, strict=strict)
                 finally:
                     os.chdir(old_cwd)
-                
                 if metrics_file:
                     with open(destination_path, 'w+', encoding='utf-8') as f:
                         json.dump(metrics_file, f, indent=4)
                     LOGGER.info(f'Generated {len(metrics_file)} metrics for {file_path}')
                 else:
                     LOGGER.info(f'No metrics generated for {file_path}')
-                    
             except Exception as error:
                 LOGGER.info(f'Error processing {file_path}: {str(error)}')
 
-    def _process_metrics_files(self, repo_dir, output_directory, metrics_config_path):
+    def _process_metrics_files(self, repo_dir, output_directory, metrics_config_path, strict=False):
         for root, _, files in os.walk(repo_dir):
             for file in files:
                 if file.endswith(".cc"):
                     file_path = os.path.join(root, file)
                     file_name = os.path.splitext(file)[0] + ".json"
                     destination_path = os.path.join(output_directory, file_name)
-                    self._process_single_file(file_path, destination_path, metrics_config_path)
+                    self._process_single_file(file_path, destination_path, metrics_config_path, strict)
 
     def run(self, app, exception=None):
         repo_dir = os.path.abspath(os.path.join(app.srcdir, ".."))
         metrics_config_path = os.path.join(repo_dir, app.config.scylladb_metrics_config_path)
         output_directory = self._create_output_directory(app, app.config.scylladb_metrics_directory)
 
-        self._process_metrics_files(repo_dir, output_directory, metrics_config_path)
+        strict_mode = getattr(app.config, 'scylladb_metrics_strict_mode', False) or False
+
+        self._process_metrics_files(repo_dir, output_directory, metrics_config_path, strict_mode)
 
 
 class MetricsTemplateDirective(DataTemplateJSON):
@@ -186,6 +184,7 @@ def setup(app):
     app.add_config_value("scylladb_metrics_directory", default="_data/metrics", rebuild="html")
     app.add_config_value("scylladb_metrics_config_path", default='scripts/metrics-config.yml', rebuild="html")
     app.add_config_value('scylladb_metrics_option_template', default='metrics_option.tmpl', rebuild='html', types=[str])
+    app.add_config_value('scylladb_metrics_strict_mode', default=None, rebuild='html', types=[bool])
     app.connect("builder-inited", MetricsProcessor().run)
     app.add_object_type(
         'metrics_option',
@@ -195,7 +194,7 @@ def setup(app):
     app.add_directive("metrics_option", MetricsOption)
     app.add_directive("scylladb_metrics", MetricsDirective)
 
-   
+
     return {
         "version": "0.1",
         "parallel_read_safe": True,
