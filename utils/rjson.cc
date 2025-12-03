@@ -543,14 +543,8 @@ static inline bool needs_escaping(std::string_view s) {
     return std::any_of(s.begin(), s.end(), [](char c) {return is_control_char(c) || c == '"' || c == '\\';});
 }
 
-
-sstring quote_json_string(std::string_view value) {
-    if (!needs_escaping(value)) {
-        return format("\"{}\"", value);
-    }
-    std::ostringstream oss;
+static void escape_json_string(std::ostream& oss, std::string_view value) {
     oss << std::hex << std::uppercase << std::setfill('0');
-    oss.put('"');
     for (char c : value) {
         switch (c) {
         case '"':
@@ -583,6 +577,21 @@ sstring quote_json_string(std::string_view value) {
             break;
         }
     }
+}
+
+sstring escape_json_string(std::string_view value) {
+    std::ostringstream oss;
+    escape_json_string(oss, value);
+    return oss.str();
+}
+
+sstring quote_json_string(std::string_view value) {
+    if (!needs_escaping(value)) {
+        return format("\"{}\"", value);
+    }
+    std::ostringstream oss;
+    oss.put('"');
+    escape_json_string(oss, value);
     oss.put('"');
     return oss.str();
 }

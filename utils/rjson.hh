@@ -373,6 +373,10 @@ Map parse_to_map(std::string_view raw) {
 // This function exists for historical reasons as well.
 rjson::value from_string_map(const std::map<sstring, sstring>& map);
 
+// Escape JSON control characters.
+sstring escape_json_string(std::string_view value);
+
+// Escape and quote JSON string (i.e. surround with double quotes).
 sstring quote_json_string(std::string_view value);
 
 inline bytes base64_decode(const value& v) {
