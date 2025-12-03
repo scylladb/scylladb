@@ -461,6 +461,9 @@ public:
         , _metrics(m)
         , _lru(l)
         , _region(reg)
+        , _as(abstract_formatter([this] (fmt::format_context& ctx) {
+            fmt::format_to(ctx.out(), "cached_file {}", _file_name);
+        }))
         , _cache(page_idx_less_comparator())
         , _size(size)
     {

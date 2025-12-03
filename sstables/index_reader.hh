@@ -57,7 +57,10 @@ public:
     index_list indexes;
 
     index_consumer(logalloc::region& r, schema_ptr s)
-        : _s(std::move(s))
+        : _s(s)
+        , _alloc_section(abstract_formatter([s] (fmt::format_context& ctx) {
+            fmt::format_to(ctx.out(), "index_consumer {}.{}", s->ks_name(), s->cf_name());
+        }))
         , _region(r)
     { }
 
@@ -785,6 +788,9 @@ public:
                                                       _sstable->manager().get_cache_tracker().region(),
                                                       _sstable->manager().get_cache_tracker().get_partition_index_cache_stats()))
         , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _alloc_section(abstract_formatter([sst = _sstable] (fmt::format_context& ctx) {
+            fmt::format_to(ctx.out(), "index_reader {}", sst->get_filename());
+        }))
         , _region(_sstable->manager().get_cache_tracker().region())
         , _use_caching(caching)
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
