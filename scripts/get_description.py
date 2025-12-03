@@ -19,9 +19,17 @@ sstring_match = re.compile(r'\s*sstring\(\s*("[^"]+")\s*\)\s*')
 metrics_directive = re.compile(r'.*@metrics\s*([^=]+)\s*=\s*(\[[^\]]*\]).*')
 format_match = re.compile(r'\s*(?:seastar::)?format\(\s*"([^"]+)"\s*,\s*(.*)\s*')
 
+def handle_error(message, strict=True, verbose_mode=False):
+    if strict:
+        print(f"[ERROR] {message}")
+        exit(-1)
+    elif verbose_mode:
+        print(f"[WARNING] {message}")
+
 def verbose(verb, *arg):
     if verb:
         print(*arg)
+
 def get_end_part(str):
     parenthes_count = 0
     for idx, c in enumerate(str):
@@ -63,21 +71,21 @@ def split_paterns(str):
         res.append(cur_str)
     return res
 
-def validate_parameter(txt, param_mapping, err=""):
+def validate_parameter(txt, param_mapping, err="", strict=True, verbose_mode=False):
     if isinstance(txt, str):
         txt = [txt]
     for t in txt:
         if t not in param_mapping:
-            print("Could not resolve param", err, t)
+            handle_error(f"Could not resolve param {err} {t}", strict, verbose_mode)
             return None
         if not param_mapping[t]:
-            print("Could not resolve param is empty", err, txt)
+            handle_error(f"Could not resolve param is empty {err} {txt}", strict, verbose_mode)
             return None
     return txt
 def sort_by_index(arr,ind):
     return [arr[i] for i in ind]
 
-def make_name_list(names, err, param_mapping, verb=None):
+def make_name_list(names, err, param_mapping, verb=None, strict=True):
     param = []
     format_string = ""
     for txt in names:
@@ -88,10 +96,10 @@ def make_name_list(names, err, param_mapping, verb=None):
             if txt[0] == '"':
                 format_string += txt[1:-1]
             else:
-                param = param + validate_parameter(txt, param_mapping, "(make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno) +")"+err)
+                param = param + validate_parameter(txt, param_mapping, "(make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno) +")"+err, strict, verb)
                 format_string += "{}"
                 if not param:
-                    print("make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno), names)
+                    handle_error(f"make_name_list:{inspect.getframeinfo(inspect.currentframe()).lineno} {names}", strict, verb)
                     return None
     if not param:
         return [format_string]
@@ -102,12 +110,12 @@ def make_name_list(names, err, param_mapping, verb=None):
     param.sort()
     param_keys = ';'.join(param)
     if param_keys not in param_mapping:
-        print("Parameter not found", param_keys, err)
-        exit(-1)
+        handle_error(f"Parameter not found: {param_keys} {err}", strict)
+        return None
     for p in param_mapping[param_keys]:
         if not p:
-            print("empty (make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno) +")"+err, param)
-            exit(-1)
+            handle_error(f"empty (make_name_list:{inspect.getframeinfo(inspect.currentframe()).lineno}){err} {param}", strict)
+            return None
     verbose(verb, "make_name_list", [format_string.format(p) for p in param_mapping[param[0]]] if len(param) == 1 else [format_string.format(*sort_by_index(p,indexed_array)) for p in param_mapping[param_keys]])
     return [format_string.format(p) for p in param_mapping[param[0]]] if len(param) == 1 else [format_string.format(*sort_by_index(p,indexed_array)) for p in param_mapping[param_keys]]
 
@@ -149,7 +157,7 @@ def get_metrics_information(config_file):
     with open(config_file, 'r') as file:
         return yaml.safe_load(file)
 
-def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
+def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, strict=True):
     current_group = ""
     # Normalize path for cross-platform compatibility
     # Convert absolute paths to relative and backslashes to forward slashes
@@ -213,16 +221,16 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                             current_group = param_mapping[m_alt.group(1)] if m_alt.group(1) in param_mapping else m_alt.group(1)
                     verbose(verb, "group found on same line as metric", current_group)
                 else:
-                    print("new name found with no group", file_name, line_number, line)
-                    exit(-1)
+                    handle_error(f"new name found with no group {file_name} {line_number} {line}", strict)
+                    continue
             if current_metric or m:
                 # Only error if add_group appears after we've started processing a metric
                 if current_metric and gr.match(line):
-                    print("add group found unexpectedly", file_name, line_number, line)
-                    exit(-1)
+                    handle_error(f"add group found unexpectedly {file_name} {line_number} {line}", strict)
+                    continue
                 if current_metric and m:
-                    print("new metrics was found while parsing the previous one", file_name, line_number, line)
-                    exit(-1)
+                    handle_error(f"new metrics was found while parsing the previous one {file_name} {line_number} {line}", strict)
+                    continue
                 ln = line.replace('\\"','#').rstrip()
                 current_metric = merge_strings(current_metric, ln)
                 no_string = re.sub(string_match, '', ln)
@@ -241,8 +249,8 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                         if multi_part_name:
                             names = [clear_string(s) for s in multi_part_name.split('+')]
                         else:
-                            print("names not found", file_name, line_number, line, current_metric)
-                            exit(-1)
+                            handle_error(f"names not found {file_name} {line_number} {line} {current_metric}", strict)
+                            continue
                     else:
                         names = ['"'  + m.group(1) + '"']
                     desc_str = get_decription(current_metric)
@@ -253,13 +261,13 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                         else:
                             descrs = [clear_string(s) for s in split_paterns(desc_str)]
                     else:
-                        print("description not found", file_name, line_number, line, current_metric)
-                        exit(-1)
-                    name_list = make_name_list(names, file_name+" "+str(line_number), param_mapping, verb)
+                        handle_error(f"description not found {file_name} {line_number} {line} {current_metric}", strict)
+                        continue
+                    name_list = make_name_list(names, file_name+" "+str(line_number), param_mapping, verb, strict)
                     if not name_list:
-                        print("no name list", current_metric)
-                        exit(-1)
-                    description_list = make_name_list(descrs, file_name+" "+str(line_number), param_mapping, verb)
+                        handle_error(f"no name list {current_metric}", strict)
+                        continue
+                    description_list = make_name_list(descrs, file_name+" "+str(line_number), param_mapping, verb, strict)
                     current_groups = current_group if isinstance(current_group, list) else [current_group]
                     for cg in current_groups:
                         for idx, base_name in enumerate(name_list):
@@ -302,16 +310,16 @@ def write_metrics_to_file(out_file, metrics, fmt="pipe"):
                 fo.write(l.replace('-','_')+'|' +'|'.join(metrics[l])+ '\n')
 
 
-def validate_all_metrics(prefix, config_file, verbose=False):
+def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
     """Validate all metrics files and report issues"""
-    
+
     print("Validating all metrics files...")
-    
+
     # Use pathlib to find all .cc files (cross-platform)
     try:
         current_dir = Path('.')
         all_cc_files = list(current_dir.rglob('*.cc'))
-        
+
         # Filter files that contain '::description'
         metric_files = []
         for cc_file in all_cc_files:
@@ -326,23 +334,23 @@ def validate_all_metrics(prefix, config_file, verbose=False):
                 if verbose:
                     print(f"[WARN] Could not read {cc_file}: {e}")
                 continue
-        
+
     except Exception as e:
         print(f"[ERROR] Error finding metrics files: {e}")
         return False
 
-    
+
     total_files = len(metric_files)
-    
+
     print(f"Found {total_files} files with metrics")
-    
+
     failed_files = []
     total_metrics = 0
     metrics_info = get_metrics_information(config_file)
-    
+
     for file_path in metric_files:
         try:
-            metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose)
+            metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose, strict)
             metrics_count = len(metrics)
             total_metrics += metrics_count
             if verbose:
@@ -353,8 +361,7 @@ def validate_all_metrics(prefix, config_file, verbose=False):
             print(f"[ERROR] {file_path}")
             print(f"   Error: {str(e)}")
             failed_files.append((file_path, str(e)))
-    
-    
+
     if failed_files:
         print("\n[ERROR] METRICS VALIDATION FAILED")
         print("Failed files:")
@@ -365,7 +372,7 @@ def validate_all_metrics(prefix, config_file, verbose=False):
     else:
         working_files = total_files - len(failed_files)
         coverage_pct = (working_files * 100 // total_files) if total_files > 0 else 0
-        
+
         print(f"\n[SUCCESS] All metrics files validated successfully")
         print(f"   Files: {working_files}/{total_files} working ({coverage_pct}% coverage)")
         print(f"   Metrics: {total_metrics} total processed")
@@ -379,16 +386,20 @@ if __name__ == '__main__':
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='When set prints verbose information')
     parser.add_argument('-F', '--format', default="pipe", help='Set the output format, can be pipe, or yml')
     parser.add_argument('--validate', action='store_true', help='Validate all metrics files instead of processing single file')
+    parser.add_argument('--non-strict', action='store_true', help='Continue with warnings instead of failing on errors (useful for multiversion builds)')
     parser.add_argument('file', nargs='?', help='the file to parse (not needed with --validate)')
 
     args = parser.parse_args()
-    
+
+    # Determine strict mode
+    strict_mode = not args.non_strict
+
     if args.validate:
-        success = validate_all_metrics(args.prefix, args.config_file, args.verbose)
+        success = validate_all_metrics(args.prefix, args.config_file, args.verbose, strict_mode)
         exit(0 if success else 1)
-    
+
     if not args.file:
         parser.error('file argument is required when not using --validate')
-    
-    metrics = get_metrics_from_file(args.file, args.prefix, get_metrics_information(args.config_file), args.verbose)
+
+    metrics = get_metrics_from_file(args.file, args.prefix, get_metrics_information(args.config_file), args.verbose, strict_mode)
     write_metrics_to_file(args.out_file, metrics, args.format)
