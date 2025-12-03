@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <string>
+#include <functional>
 #include <seastar/core/memory.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -443,7 +444,7 @@ class allocating_section {
     size_t _minimum_lsa_emergency_reserve = 0;
     int64_t _remaining_std_bytes_until_decay = s_bytes_per_decay;
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
-    std::string _name; // Optional name for debugging
+    std::function<std::string()> _name_supplier; // Optional name supplier for debugging
 private:
     struct guard {
         tracker::impl& _tracker;
@@ -456,7 +457,7 @@ private:
     void on_alloc_failure(logalloc::region&);
 public:
     allocating_section() = default;
-    explicit allocating_section(std::string name) : _name(std::move(name)) {}
+    explicit allocating_section(std::function<std::string()> name_supplier) : _name_supplier(std::move(name_supplier)) {}
 
     void set_lsa_reserve(size_t) noexcept;
     void set_std_reserve(size_t) noexcept;
