@@ -1462,22 +1462,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (do_barrier()) {
-                    if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
-                        if (!trinfo.pending_replica) {
-                            rtlogger.info("Tablet cleanup of {} skipped because no replicas pending", gid);
-                            return make_ready_future<>();
+                        if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
+                            if (!trinfo.pending_replica) {
+                                rtlogger.info("Tablet cleanup of {} skipped because no replicas pending", gid);
+                                return make_ready_future<>();
+                            }
+                            locator::tablet_replica dst = *trinfo.pending_replica;
+                            if (is_excluded(raft::server_id(dst.host.uuid()))) {
+                                rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
+                                return make_ready_future<>();
+                            }
+                            rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
+                            return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                                                                    dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                        })) {
+                            transition_to(locator::tablet_transition_stage::revert_migration);
                         }
-                        locator::tablet_replica dst = *trinfo.pending_replica;
-                        if (is_excluded(raft::server_id(dst.host.uuid()))) {
-                            rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
-                            return make_ready_future<>();
-                        }
-                        rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
-                        return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
-                    })) {
-                        transition_to(locator::tablet_transition_stage::revert_migration);
-                    }
                     }
                     break;
                 case locator::tablet_transition_stage::revert_migration:
