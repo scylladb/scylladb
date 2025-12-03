@@ -2037,10 +2037,10 @@ public:
         const auto& result = rows.rs();
         switch (_output_format) {
             case output_format::text:
-                cql3::print_query_results_text(std::cout, result);
+                cql3::print_query_results_text(std::cout, result).get();
                 break;
             case output_format::json:
-                cql3::print_query_results_json(std::cout, result);
+                cql3::print_query_results_json(std::cout, result).get();
                 break;
         }
     }

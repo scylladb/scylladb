@@ -190,7 +190,8 @@ make_empty_metadata() {
     return empty_metadata_cache;
 }
 
-void print_query_results_text(std::ostream& os, const cql3::result& result) {
+template <typename OStream>
+future<> do_print_query_results_text(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
@@ -240,35 +241,63 @@ void print_query_results_text(std::ostream& os, const cql3::result& result) {
             const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
             row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
         }
-        fmt::print(os, "{}\n", fmt::join(row, "|"));
+        co_await os("{}\n", fmt::join(row, "|"));
         if (!r) {
-            fmt::print(os, "-{}-\n", fmt::join(separators, "-+-"));
+            co_await os("-{}-\n", fmt::join(separators, "-+-"));
         }
     }
 }
 
-void print_query_results_json(std::ostream& os, const cql3::result& result) {
+template <typename OStream>
+future<> do_print_query_results_json(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
-    rjson::streaming_writer writer(os);
-
-    writer.StartArray();
+    co_await os("[");
+    bool first = true;
     for (const auto& row : result.result_set().rows()) {
-        writer.StartObject();
+        if (first) {
+            first = false;
+        } else {
+            co_await os(",");
+        }
+        co_await os("{");
         for (size_t i = 0; i < row.size(); ++i) {
-            writer.Key(column_metadata[i]->name->text());
+            if (i) {
+                co_await os(",");
+            }
+            co_await os("{}:", rjson::quote_json_string(column_metadata[i]->name->text()));
             if (!row[i] || row[i]->empty()) {
-                writer.Null();
+                co_await os("null");
                 continue;
             }
             const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
-            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
-            writer.RawValue(value, type);
+            co_await os("{}", value);
         }
-        writer.EndObject();
+        co_await os("}");
     }
-    writer.EndArray();
+    co_await os("]");
+}
+
+struct std_ostream_wrapper {
+    std::ostream& os;
+
+    future<> operator()(auto&& raw) {
+        os << raw;
+        return make_ready_future<>();
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        fmt::print(os, fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        return make_ready_future<>();
+    }
+};
+
+future<> print_query_results_text(std::ostream& os, const result& result) {
+    return do_print_query_results_text(std_ostream_wrapper{os}, result);
+}
+
+future<> print_query_results_json(std::ostream& os, const result& result) {
+    return do_print_query_results_json(std_ostream_wrapper{os}, result);
 }
 
 }
