@@ -9,6 +9,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
+from test.pylib.util import start_writes
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
 import time
@@ -237,6 +238,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await manager.remove_node(servers[via].server_id, servers[self.fail_idx].server_id)
                 logger.info(f"Done with {self.replica} {host_ids[self.fail_idx]}")
 
+        finish_writes = await start_writes(cql, ks, "test")
 
         failer = node_failer(fail_stage, fail_replica, ks)
         await failer.setup()
@@ -253,6 +255,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         assert len(replicas) == 1
         for r in replicas[0].replicas:
             assert r[0] != host_ids[failer.fail_idx]
+
+        await finish_writes()
 
         # For dropping the keyspace after the node failure
         await reconnect_driver(manager)

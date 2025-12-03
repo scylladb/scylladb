@@ -1643,6 +1643,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
+                    if (do_barrier()) {
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
                         if (!trinfo.pending_replica) {
                             rtlogger.info("Tablet cleanup of {} skipped because no replicas pending", gid);
@@ -1662,6 +1663,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         });
                     })) {
                         transition_to(locator::tablet_transition_stage::revert_migration);
+                    }
                     }
                     break;
                 case locator::tablet_transition_stage::revert_migration:
