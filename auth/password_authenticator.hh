@@ -16,6 +16,7 @@
 #include "db/consistency_level_type.hh"
 #include "auth/authenticator.hh"
 #include "auth/passwords.hh"
+#include "auth/cache.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/alien_worker.hh"
 
@@ -41,6 +42,7 @@ class password_authenticator : public authenticator {
     cql3::query_processor& _qp;
     ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
+    cache& _cache;
     future<> _stopped;
     abort_source _as;
     std::string _superuser; // default superuser name from the config (may or may not be present in roles table)
@@ -53,7 +55,7 @@ public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
     static std::string default_superuser(const db::config&);
 
-    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&);
+    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, utils::alien_worker&);
 
     ~password_authenticator();
 

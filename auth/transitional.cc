@@ -13,6 +13,7 @@
 #include "auth/authorizer.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/password_authenticator.hh"
+#include "auth/cache.hh"
 #include "auth/permission.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
@@ -37,8 +38,8 @@ class transitional_authenticator : public authenticator {
 public:
     static const sstring PASSWORD_AUTHENTICATOR_NAME;
 
-    transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, utils::alien_worker& hashing_worker)
-            : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm, hashing_worker)) {
+    transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, utils::alien_worker& hashing_worker)
+            : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm, cache, hashing_worker)) {
     }
     transitional_authenticator(std::unique_ptr<authenticator> a)
             : _authenticator(std::move(a)) {
@@ -240,6 +241,7 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::raft_group0_client&,
         ::service::migration_manager&,
+        auth::cache&,
         utils::alien_worker&> transitional_authenticator_reg(auth::PACKAGE_NAME + "TransitionalAuthenticator");
 
 static const class_registrator<

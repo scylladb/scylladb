@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 #include "service/raft/group0_state_machine.hh"
+#include "auth/cache.hh"
 #include "db/schema_tables.hh"
 #include "mutation/atomic_cell.hh"
 #include "cql3/selection/selection.hh"
@@ -174,6 +175,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     bool update_service_levels_effective_cache = false;
     bool make_view_building_state_transition = false;
     std::unordered_set<table_id> update_cdc_streams;
+    std::unordered_set<auth::cache::role_name_t> update_auth_cache_roles;
 
     for (const auto& m : modules.entries) {
         if (m.table == db::system_keyspace::service_levels_v2()->id()) {
@@ -197,6 +199,12 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_history());
             auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
             update_cdc_streams.insert(cdc_log_table_id);
+        } else if (auth::cache::includes_table(m.table)) {
+            auto schema = _ss.get_database().find_schema(m.table);
+            const auto elements = m.pk.explode(*schema);
+            auto role = value_cast<sstring>(schema->partition_key_type()->
+                    types().front()->deserialize(elements.front()));
+            update_auth_cache_roles.insert(std::move(role));
         }
     }
     
@@ -208,6 +216,9 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     }
     if (update_cdc_streams.size()) {
         co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
+    }
+    if (update_auth_cache_roles.size()) {
+        co_await _ss.auth_cache().load_roles(std::move(update_auth_cache_roles));
     }
 }
 
@@ -375,6 +386,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     if (_feature_service.cdc_with_tablets) {
         co_await _ss.load_cdc_streams();
     }
+    co_await _ss.auth_cache().load_all();
     _ss._topology_state_machine.event.broadcast();
     _ss._view_building_state_machine.event.broadcast();
 }
@@ -442,6 +454,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     if (raft_snp) {
         co_await mutate_locally(std::move(raft_snp->mutations), _sp);
     }
+
+    co_await _ss.auth_cache().load_all();
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
   } catch (const abort_requested_exception&) {

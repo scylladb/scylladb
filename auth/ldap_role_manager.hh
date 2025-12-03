@@ -14,6 +14,7 @@
 
 #include "ent/ldap/ldap_connection.hh"
 #include "standard_role_manager.hh"
+#include "auth/cache.hh"
 
 namespace auth {
 
@@ -43,12 +44,13 @@ class ldap_role_manager : public role_manager {
             std::string_view bind_password, ///< LDAP bind credentials.
             cql3::query_processor& qp, ///< Passed to standard_role_manager.
             ::service::raft_group0_client& rg0c, ///< Passed to standard_role_manager.
-            ::service::migration_manager& mm ///< Passed to standard_role_manager.
+            ::service::migration_manager& mm, ///< Passed to standard_role_manager.
+            cache& cache ///< Passed to standard_role_manager.
     );
 
     /// Retrieves LDAP configuration entries from qp and invokes the other constructor.  Required by
     /// class_registrator<role_manager>.
-    ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm);
+    ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache);
 
     /// Thrown when query-template parsing fails.
     struct url_error : public std::runtime_error {

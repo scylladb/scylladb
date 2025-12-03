@@ -17,6 +17,7 @@
 #include <chrono>
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
 
@@ -157,6 +158,7 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 
 service::service(
         utils::loading_cache_config c,
+        cache& cache,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
@@ -166,6 +168,7 @@ service::service(
         maintenance_socket_enabled used_by_maintenance_socket)
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
+            , _cache(cache)
             , _qp(qp)
             , _group0_client(g0)
             , _mnotifier(mn)
@@ -188,15 +191,17 @@ service::service(
         ::service::migration_manager& mm,
         const service_config& sc,
         maintenance_socket_enabled used_by_maintenance_socket,
+        cache& cache,
         utils::alien_worker& hashing_worker)
             : service(
                       std::move(c),
+                      cache,
                       qp,
                       g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, hashing_worker),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache, hashing_worker),
+                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
                       used_by_maintenance_socket) {
 }
 
@@ -232,6 +237,9 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
     auto auth_version = co_await sys_ks.get_auth_version();
     // version is set in query processor to be easily available in various places we call auth::legacy_mode check.
     _qp.auth_version = auth_version;
+    if (this_shard_id() == 0) {
+        co_await _cache.load_all();
+    }
     if (!_used_by_maintenance_socket) {
         // this legacy keyspace is only used by cqlsh
         // it's needed when executing `list roles` or `list users`
