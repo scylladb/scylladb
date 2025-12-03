@@ -65,7 +65,7 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
                          manager.server_stop_gracefully(servers[4].server_id))
 
     logger.info("starting a sixth node with no quorum")
-    await manager.server_add(expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+    await manager.server_add(expected_error="raft operation \\[read_barrier\\] timed out, there is no raft quorum",
                              timeout=60)
 
     logger.info("done")
@@ -96,7 +96,7 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     logger.info("starting a fourth node")
     fourth_node_future = asyncio.create_task(manager.server_add(
         seeds=[servers[0].ip_addr],
-        expected_error="raft operation [add_entry] timed out, there is no raft quorum",
+        expected_error="raft operation \\[add_entry\\] timed out, there is no raft quorum",
         timeout=60))
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the join request")
@@ -141,7 +141,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     logger.info("starting a fourth node")
     fourth_node_future = asyncio.create_task(
         manager.server_start(servers[3].server_id,
-                             expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+                             expected_error="raft operation \\[read_barrier\\] timed out, there is no raft quorum",
                              timeout=60))
 
     logger.info(
