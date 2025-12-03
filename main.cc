@@ -1825,11 +1825,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
-            api::set_server_storage_service(ctx, ss, group0_client).get();
-            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
-                api::unset_server_storage_service(ctx).get();
-            });
-
             checkpoint(stop_signal, "initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
             qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(mapreduce_service),
@@ -2183,6 +2178,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+
+            api::set_server_storage_service(ctx, ss, group0_client).get();
+            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
+                api::unset_server_storage_service(ctx).get();
+            });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all([&] (auto& ms) {
