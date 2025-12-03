@@ -60,9 +60,9 @@ def try_connect(host, port, creds, protocol_version):
 
 # If there is a protocol version mismatch, the server should
 # raise a protocol error, which is counted in the metrics.
-def test_protocol_version_mismatch(scylla_only, request, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+def test_protocol_version_mismatch(scylla_only, debug_exceptions_logging, request, host):
+    run_count = 200
+    cpp_exception_threshold = 20
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -244,8 +244,8 @@ def _protocol_error_impl(
         s.close()
 
 def _test_impl(host, flag):
-    run_count = 100
-    cpp_exception_threshold = 10
+    run_count = 200
+    cpp_exception_threshold = 20
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -305,9 +305,9 @@ def test_process_register_malformed_string_list(scylla_only, no_ssl, host):
 # Test if the protocol exceptions do not decrease after running the test happy path.
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
-def test_no_protocol_exceptions(scylla_only, no_ssl, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+def test_no_protocol_exceptions(scylla_only, no_ssl, debug_exceptions_logging, host):
+    run_count = 200
+    cpp_exception_threshold = 20
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
