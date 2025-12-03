@@ -42,7 +42,7 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
     if (!comparison_operator.IsString()) {
         throw api_error::validation(fmt::format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
-    std::string op = comparison_operator.GetString();
+    std::string op = rjson::to_string(comparison_operator);
     auto it = ops.find(op);
     if (it == ops.end()) {
         throw api_error::validation(fmt::format("Unsupported comparison operator {}", op));

@@ -93,7 +93,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     if (v->GetStringLength() < 1 || v->GetStringLength() > 255) {
         co_return api_error::validation("The length of AttributeName must be between 1 and 255");
     }
-    sstring attribute_name(v->GetString(), v->GetStringLength());
+    sstring attribute_name = rjson::to_sstring(*v);
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [&](std::map<sstring, sstring>& tags_map) {
