@@ -191,7 +191,7 @@ make_empty_metadata() {
 }
 
 template <typename OStream>
-future<> do_print_query_results_text(OStream os, const cql3::result& result) {
+future<> print_query_results_text_collapsed(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
@@ -249,6 +249,49 @@ future<> do_print_query_results_text(OStream os, const cql3::result& result) {
 }
 
 template <typename OStream>
+future<> print_query_results_text_expanded(OStream os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    size_t max_col_name_length = 0;
+    for (const auto& col : column_metadata) {
+        max_col_name_length = std::max(max_col_name_length, col->name->text().size());
+    }
+
+    size_t max_col_value_length = 0;
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (!row[i]) {
+                continue;
+            }
+            max_col_value_length = std::max(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))).size(), max_col_value_length);
+        }
+    }
+
+    const auto row_format = fmt::format(" {{:<{}}} | {{:<{}}}\n", max_col_name_length, max_col_value_length);
+
+    size_t row_index = 0;
+    for (const auto& row : result.result_set().rows()) {
+        co_await os("\n@ Row {}\n", ++row_index);
+        co_await os("{}+{}\n", sstring(max_col_name_length + 2, '-'), sstring(max_col_value_length + 2, '-'));
+
+        for (size_t i = 0; i < row.size(); ++i) {
+            co_await os(row_format, column_metadata[i]->name->text(),
+                row[i] ? column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))) : "");
+        }
+    }
+}
+
+template <typename OStream>
+future<> do_print_query_results_text(OStream os, const cql3::result& result, bool expand) {
+    if (expand) {
+        return print_query_results_text_expanded(std::move(os), result);
+    } else {
+        return print_query_results_text_collapsed(std::move(os), result);
+    }
+}
+
+template <typename OStream>
 future<> do_print_query_results_json(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
@@ -292,8 +335,8 @@ struct std_ostream_wrapper {
     }
 };
 
-future<> print_query_results_text(std::ostream& os, const result& result) {
-    return do_print_query_results_text(std_ostream_wrapper{os}, result);
+future<> print_query_results_text(std::ostream& os, const result& result, bool expand) {
+    return do_print_query_results_text(std_ostream_wrapper{os}, result, expand);
 }
 
 future<> print_query_results_json(std::ostream& os, const result& result) {
@@ -312,8 +355,8 @@ struct seastar_outputs_stream_wrapper {
     }
 };
 
-future<> print_query_results_text(seastar::output_stream<char>& os, const result& result) {
-    return do_print_query_results_text(seastar_outputs_stream_wrapper{os}, result);
+future<> print_query_results_text(seastar::output_stream<char>& os, const result& result, bool expand) {
+    return do_print_query_results_text(seastar_outputs_stream_wrapper{os}, result, expand);
 }
 
 future<> print_query_results_json(seastar::output_stream<char>& os, const result& result) {
