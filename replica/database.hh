@@ -606,6 +606,10 @@ public:
 
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    // Adds a newly created sstable to the table. If adding fails, the sstable is deleted from disk.
+    // This is intended for use during streaming to prevent orphaned sstables.
+    future<> add_new_sstable(sstables::shared_sstable sst,
+                             sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();

@@ -53,15 +53,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
         co_await sst->load(erm->get_sharder(*t.schema()));
-        try {
-            co_await t.add_sstable_and_update_cache(sst);
-        } catch (...) {
-            // If attaching the sstable fails, delete it to prevent data resurrection
-            // and issues with tablet splits. The sstable is already sealed on disk
-            // and must be removed before the topology guard expires.
-            co_await sst->unlink();
-            throw;
-        }
+        co_await t.add_new_sstable(sst);
         blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
 
         if (state == sstables::sstable_state::staging) {

@@ -79,15 +79,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                                 cf->schema()->ks_name(), cf->schema()->cf_name());
                         cf->enable_off_strategy_trigger();
                     }
-                    try {
-                        co_await cf->add_sstable_and_update_cache(sst, offstrategy);
-                    } catch (...) {
-                        // If attaching the sstable fails, delete it to prevent data resurrection
-                        // and issues with tablet splits. The sstable is already sealed on disk
-                        // and must be removed before the topology guard expires.
-                        co_await sst->unlink();
-                        throw;
-                    }
+                    co_await cf->add_new_sstable(sst, offstrategy);
                 }).then([cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
                     if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
                         return vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());

@@ -1390,6 +1390,19 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offs
 }
 
 future<>
+table::add_new_sstable(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+    try {
+        co_await add_sstable_and_update_cache(sst, offstrategy);
+    } catch (...) {
+        // If attaching the sstable fails, delete it to prevent data resurrection
+        // and issues with tablet splits. The sstable is already sealed on disk
+        // and must be removed before the topology guard expires.
+        co_await sst->unlink();
+        throw;
+    }
+}
+
+future<>
 table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts) {
     constexpr bool do_not_trigger_compaction = false;
     for (auto& sst : ssts) {
