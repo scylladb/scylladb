@@ -10,6 +10,7 @@ import re
 import requests
 import socket
 import struct
+from test.cqlpy import nodetool
 from test.cqlpy.util import cql_session
 
 def get_protocol_error_metrics(host) -> int:
@@ -57,6 +58,45 @@ def cql_with_protocol(host_str, port, creds, protocol_version):
 def try_connect(host, port, creds, protocol_version):
     with cql_with_protocol(host, port, creds, protocol_version) as session:
         return 1 if session else 0
+
+@pytest.fixture
+def debug_exceptions_logging(request, cql):
+    def _read_level() -> str | None:
+        try:
+            level = nodetool.getlogginglevel(cql, "exception")
+            if level:
+                level = level.strip().strip('"').lower()
+            return level
+        except Exception as exc:
+            print(f"Failed to read exception logger level: {exc}")
+            return None
+
+    def _set_and_verify(level: str) -> bool:
+        try:
+            nodetool.setlogginglevel(cql, "exception", level)
+        except Exception as exc:
+            print(f"Failed to set exception logger level to '{level}': {exc}")
+            return False
+
+        observed = _read_level()
+        if observed == level:
+            return True
+
+        print(f"Exception logger level observed as '{observed}' while expecting '{level}'")
+        return False
+
+    def _restore_logging():
+        if not enabled and previous_level is None:
+            return
+
+        target_level = previous_level or "info"
+        _set_and_verify(target_level)
+
+    previous_level = _read_level()
+    enabled = _set_and_verify("debug")
+
+    yield
+    _restore_logging()
 
 # If there is a protocol version mismatch, the server should
 # raise a protocol error, which is counted in the metrics.
@@ -267,39 +307,39 @@ def no_ssl(request):
     yield
 
 # Malformed BATCH with an invalid kind triggers a protocol error.
-def test_invalid_kind_in_batch_message(scylla_only, no_ssl, host):
+def test_invalid_kind_in_batch_message(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_bad_batch")
 
 # Send OPTIONS during AUTHENTICATE to trigger auth-state error.
-def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
+def test_unexpected_message_during_auth(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_unexpected_auth")
 
 # STARTUP with an invalid/missing string-map entry should produce a protocol error.
-def test_process_startup_invalid_string_map(scylla_only, no_ssl, host):
+def test_process_startup_invalid_string_map(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_startup_invalid_string_map")
 
 # STARTUP with unknown COMPRESSION option should produce a protocol error.
-def test_unknown_compression_algorithm(scylla_only, no_ssl, host):
+def test_unknown_compression_algorithm(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_unknown_compression")
 
 # QUERY long-string truncation: declared length > provided bytes triggers protocol error.
-def test_process_query_internal_malformed_query(scylla_only, no_ssl, host):
+def test_process_query_internal_malformed_query(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_query_internal_malformed_query")
 
 # QUERY options malformed: PAGE_SIZE flag set but page_size truncated triggers protocol error.
-def test_process_query_internal_fail_read_options(scylla_only, no_ssl, host):
+def test_process_query_internal_fail_read_options(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_query_internal_fail_read_options")
 
 # PREPARE long-string truncation: declared length > provided bytes triggers protocol error.
-def test_process_prepare_malformed_query(scylla_only, no_ssl, host):
+def test_process_prepare_malformed_query(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_prepare_malformed_query")
 
 # EXECUTE cache-key malformed: short-bytes length > provided bytes triggers protocol error.
-def test_process_execute_internal_malformed_cache_key(scylla_only, no_ssl, host):
+def test_process_execute_internal_malformed_cache_key(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_execute_internal_malformed_cache_key")
 
 # REGISTER malformed string list: declared string length > provided bytes triggers protocol error.
-def test_process_register_malformed_string_list(scylla_only, no_ssl, host):
+def test_process_register_malformed_string_list(scylla_only, no_ssl, debug_exceptions_logging, host):
     _test_impl(host, "trigger_process_register_malformed_string_list")
 
 # Test if the protocol exceptions do not decrease after running the test happy path.
