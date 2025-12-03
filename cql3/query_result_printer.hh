@@ -9,12 +9,15 @@
 #pragma once
 
 #include <ostream>
+#include <seastar/core/future.hh>
+
+#include "seastarx.hh"
 
 namespace cql3 {
 
 class result;
 
-void print_query_results_text(std::ostream& os, const result& result);
-void print_query_results_json(std::ostream& os, const result& result);
+future<> print_query_results_text(std::ostream& os, const result& result);
+future<> print_query_results_json(std::ostream& os, const result& result);
 
 } // namespace cql3
