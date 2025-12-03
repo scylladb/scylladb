@@ -3342,7 +3342,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         }), std::ref(state));
 
         // [1, 2, 3, 0] --> [0, 1, 3, 6]
-        std::exclusive_scan(global_offset.begin(), global_offset.end(), global_offset.begin(), 0, std::plus());
+        std::exclusive_scan(global_offset.begin(), global_offset.end(), global_offset.begin(), uint64_t(0), std::plus());
 
         // We can't generate random non-negative integers smaller than 0,
         // so let's just deal with the `total_chunks == 0` case with an early return.
