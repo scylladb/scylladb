@@ -426,9 +426,12 @@ future<> view_building_worker::check_for_aborted_tasks() {
 
         auto my_host_id = vbw._db.get_token_metadata().get_topology().my_host_id();
         auto my_replica = locator::tablet_replica{my_host_id, this_shard_id()};
-        auto tasks_map = vbw._state._batch->tasks; // Potentially, we'll remove elements from the map, so we need a copy to iterate over it
-        for (auto& [id, t]: tasks_map) {
-            auto task_opt = building_state.get_task(t.base_id, my_replica, id);
+        auto it = vbw._state._batch->tasks.begin();
+        while (it != vbw._state._batch->tasks.end()) {
+            auto id = it->first;
+            auto task_opt = building_state.get_task(it->second.base_id, my_replica, id);
+
+            ++it; // Advance the iterator before potentially removing the entry from the map.
             if (!task_opt || task_opt->get().aborted) {
                 co_await vbw._state._batch->abort_task(id);
             }
