@@ -2223,12 +2223,12 @@ void validate_value(const rjson::value& v, const char* caller) {
 
 // The put_or_delete_item class builds the mutations needed by the PutItem and
 // DeleteItem operations - either as stand-alone commands or part of a list
-// of commands in BatchWriteItems.
+// of commands in BatchWriteItem.
 // put_or_delete_item splits each operation into two stages: Constructing the
 // object parses and validates the user input (throwing exceptions if there
 // are input errors). Later, build() generates the actual mutation, with a
 // specified timestamp. This split is needed because of the peculiar needs of
-// BatchWriteItems and LWT. BatchWriteItems needs all parsing to happen before
+// BatchWriteItem and LWT. BatchWriteItem needs all parsing to happen before
 // any writing happens (if one of the commands has an error, none of the
 // writes should be done). LWT makes it impossible for the parse step to
 // generate "mutation" objects, because the timestamp still isn't known.
@@ -3026,7 +3026,7 @@ struct primary_key_equal {
 };
 
 // This is a cas_request subclass for applying given put_or_delete_items to
-// one partition using LWT as part as BatchWriteItems. This is a write-only
+// one partition using LWT as part as BatchWriteItem. This is a write-only
 // operation, not needing the previous value of the item (the mutation to be
 // done is known prior to starting the operation). Nevertheless, we want to
 // do this mutation via LWT to ensure that it is serialized with other LWT
@@ -3065,7 +3065,7 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, serv
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout, true, std::move(cdc_opts)).discard_result();
-    // We discarded cas()'s future value ("is_applied") because BatchWriteItems
+    // We discarded cas()'s future value ("is_applied") because BatchWriteItem
     // does not need to support conditional updates.
 }
 
