@@ -100,10 +100,12 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
 }
 
 future<> cache::prune_all() noexcept {
-    for (auto it = _roles.begin(); it != _roles.end(); it++) {
+    for (auto it = _roles.begin(); it != _roles.end(); ) {
         if (it->second->version != _current_version) {
-            _roles.erase(it);
+            _roles.erase(it++);
             co_await coroutine::maybe_yield();
+        } else {
+            ++it;
         }
     }
     co_return;
