@@ -111,9 +111,7 @@ should follow this format:
 .. code-block:: yaml
 
    object_storage_endpoints:
-     - name: <endpoint_address_or_domain_name>
-       port: <port_number>
-       https: <true_or_false> # optional
+     - name: https://<endpoint_address_or_domain_name>[:<port_number>]
        aws_region: <region_name> # optional, e.g. us-east-1
        iam_role_arn: <iam_role> # optional
 
@@ -123,9 +121,7 @@ Example:
 .. code:: yaml
 
    object_storage_endpoints:
-     - name: s3.us-east-1.amazonaws.com
-       port: 443
-       https: true
+     - name: https://s3.us-east-1.amazonaws.com
        aws_region: us-east-1
        iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 

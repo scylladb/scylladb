@@ -70,6 +70,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     seastar::metrics::metric_groups metrics;
 
     future<> update_config(const db::config&);
+    object_storage_endpoint& get_endpoint(const sstring& ep);
 
 public:
     struct config {
@@ -80,6 +81,7 @@ public:
     storage_manager(const db::config&, config cfg);
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
+    sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
 };

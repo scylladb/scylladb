@@ -126,11 +126,14 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
     }
 }
 
-future<> client::update_config(endpoint_config_ptr cfg) {
-    if (_cfg->port != cfg->port || _cfg->use_https != cfg->use_https) {
-        throw std::runtime_error("Updating port and/or https usage is not possible");
-    }
-    _cfg = std::move(cfg);
+future<> client::update_config(std::string region, std::string ira) {
+    endpoint_config new_cfg = {
+        .port = _cfg->port,
+        .use_https = _cfg->use_https,
+        .region = std::move(region),
+        .role_arn = std::move(ira),
+    };
+    _cfg = make_lw_shared<endpoint_config>(std::move(new_cfg));
     auto units = co_await get_units(_creds_sem, 1);
     _creds_provider_chain.invalidate_credentials();
     _credentials = {};
@@ -139,6 +142,17 @@ future<> client::update_config(endpoint_config_ptr cfg) {
 
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
+}
+
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+    auto url = utils::http::parse_simple_url(ep);
+    endpoint_config cfg = {
+        .port = url.port,
+        .use_https = url.is_https(),
+        .region = std::move(region),
+        .role_arn = std::move(iam_role_arn),
+    };
+    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), memory, gf);
 }
 
 future<> client::update_credentials_and_rearm() {
