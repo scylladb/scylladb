@@ -6296,4 +6296,30 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
     });
 }
 
+SEASTAR_TEST_CASE(unsealed_sstable_compaction_test) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder("tests", "unsealed_sstable_compaction_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->start();
+
+        mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
+        mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
+
+        sstable_writer_config sst_cfg = env.manager().configure_writer();
+        sst_cfg.leave_unsealed = true;
+        auto unsealed_sstable = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut)), sst_cfg);
+
+        BOOST_REQUIRE(file_exists(unsealed_sstable->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+
+        auto sst_gen = env.make_sst_factory(s);
+        auto info = compact_sstables(env, compaction::compaction_descriptor({ unsealed_sstable }), t, sst_gen).get();
+        BOOST_REQUIRE(info.new_sstables.size() == 1);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
