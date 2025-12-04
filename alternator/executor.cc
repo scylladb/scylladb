@@ -3018,12 +3018,15 @@ struct primary_key_equal {
 // done is known prior to starting the operation). Nevertheless, we want to
 // do this mutation via LWT to ensure that it is serialized with other LWT
 // mutations to the same partition.
+// 
+// The std::vector<put_or_delete_item> must remain alive until the
+// storage_proxy::cas() future is resolved.
 class put_or_delete_item_cas_request : public service::cas_request {
     schema_ptr schema;
-    std::vector<put_or_delete_item> _mutation_builders;
+    const std::vector<put_or_delete_item>& _mutation_builders;
 public:
-    put_or_delete_item_cas_request(schema_ptr s, std::vector<put_or_delete_item>&& b) :
-        schema(std::move(s)), _mutation_builders(std::move(b)) { }
+    put_or_delete_item_cas_request(schema_ptr s, const std::vector<put_or_delete_item>& b) :
+        schema(std::move(s)), _mutation_builders(b) { }
     virtual ~put_or_delete_item_cas_request() = default;
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override {
         std::optional<mutation> ret;
@@ -3039,10 +3042,10 @@ public:
     }
 };
 
-static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, service::cas_shard cas_shard, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
+static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk, const std::vector<put_or_delete_item>& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto timeout = executor::default_timeout();
-    auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
+    auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, mutation_builders);
     return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
@@ -3106,30 +3109,34 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         // Multiple mutations may be destined for the same partition, adding
         // or deleting different items of one partition. Join them together
         // because we can do them in one cas() call.
-        std::unordered_map<schema_decorated_key, std::vector<put_or_delete_item>, schema_decorated_key_hash, schema_decorated_key_equal>
-            key_builders(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
+        using map_type = std::unordered_map<schema_decorated_key, 
+            std::vector<put_or_delete_item>, 
+            schema_decorated_key_hash, 
+            schema_decorated_key_equal>;
+        auto key_builders = std::make_unique<map_type>(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
         for (auto& b : mutation_builders) {
             auto dk = dht::decorate_key(*b.first, b.second.pk());
-            auto [it, added] = key_builders.try_emplace(schema_decorated_key{b.first, dk});
+            auto [it, added] = key_builders->try_emplace(schema_decorated_key{b.first, dk});
             it->second.push_back(std::move(b.second));
         }
-        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
+        auto* key_builders_ptr = key_builders.get();
+        return parallel_for_each(*key_builders_ptr, [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (const auto& e) {
             stats.write_using_lwt++;
             auto desired_shard = service::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard.this_shard()) {
-                return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, std::move(e.second), client_state, trace_state, permit);
+                return cas_write(proxy, e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
             } else {
                 stats.shard_bounce_for_lwt++;
                 return proxy.container().invoke_on(desired_shard.shard(), ssg,
                             [cs = client_state.move_to_other_shard(),
-                             mb = e.second,
-                             dk = e.first.dk,
+                             &mb = e.second,
+                             &dk = e.first.dk,
                              ks = e.first.schema->ks_name(),
                              cf = e.first.schema->cf_name(),
                              gt =  tracing::global_trace_state_ptr(trace_state),
                              permit = std::move(permit)]
                             (service::storage_proxy& proxy) mutable {
-                    return do_with(cs.get(), [&proxy, mb = std::move(mb), dk = std::move(dk), ks = std::move(ks), cf = std::move(cf),
+                    return do_with(cs.get(), [&proxy, &mb, &dk, ks = std::move(ks), cf = std::move(cf),
                                               trace_state = tracing::trace_state_ptr(gt)]
                                               (service::client_state& client_state) mutable {
                         auto schema = proxy.data_dictionary().find_schema(ks, cf);
@@ -3143,11 +3150,11 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                         //FIXME: Instead of passing empty_service_permit() to the background operation,
                         // the current permit's lifetime should be prolonged, so that it's destructed
                         // only after all background operations are finished as well.
-                        return cas_write(proxy, schema, std::move(cas_shard), dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
+                        return cas_write(proxy, schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
                     });
                 }).finally([desired_shard = std::move(desired_shard)]{});
             }
-        });
+        }).finally([key_builders = std::move(key_builders)]{});
     }
 }
 
