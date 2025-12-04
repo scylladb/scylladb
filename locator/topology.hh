@@ -125,6 +125,10 @@ public:
         }
     }
 
+    bool is_bootstrapping() const noexcept {
+        return _state == state::bootstrapping;
+    }
+
     bool is_normal() const noexcept {
         return _state == state::normal;
     }
