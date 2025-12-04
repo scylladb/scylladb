@@ -34,6 +34,7 @@
 #include "client_data.hh"
 #include "utils/updateable_value.hh"
 #include <zlib.h>
+#include "alternator/http_compression.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -111,9 +112,12 @@ class api_handler : public handler_base {
     // type applies to all replies, both success and error.
     static constexpr const char* REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
-    api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle) : _f_handle(
+    api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle,
+                const db::config& config) : _response_compressor(config), _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
-         return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped([this, rep = std::move(rep)](future<executor::request_return_type> resf) mutable {
+         sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
+         return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
+            [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
              if (resf.failed()) {
                  // Exceptions of type api_error are wrapped as JSON and
                  // returned to the client as expected. Other types of
@@ -177,6 +181,7 @@ protected:
         slogger.trace("api_handler error case: {}", rep._content);
     }
 
+    response_compressor _response_compressor;
     future_handler_function _f_handle;
 };
 
@@ -758,7 +763,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
 void server::set_routes(routes& r) {
     api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
         return handle_api_request(std::move(req));
-    });
+    }, _proxy.data_dictionary().get_config());
 
     r.put(operation_type::POST, "/", req_handler);
     r.put(operation_type::GET, "/", new health_handler(_pending_requests));
