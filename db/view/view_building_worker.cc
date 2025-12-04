@@ -781,13 +781,15 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
             tasks.insert({id, *task_opt});
         }
 #ifdef SEASTAR_DEBUG
-        auto& some_task = tasks.begin()->second;
-        for (auto& [_, t]: tasks) {
-            SCYLLA_ASSERT(t.base_id == some_task.base_id);
-            SCYLLA_ASSERT(t.last_token == some_task.last_token);
-            SCYLLA_ASSERT(t.replica == some_task.replica);
-            SCYLLA_ASSERT(t.type == some_task.type);
-            SCYLLA_ASSERT(t.replica.shard == this_shard_id());
+        {
+            auto& some_task = tasks.begin()->second;
+            for (auto& [_, t]: tasks) {
+                SCYLLA_ASSERT(t.base_id == some_task.base_id);
+                SCYLLA_ASSERT(t.last_token == some_task.last_token);
+                SCYLLA_ASSERT(t.replica == some_task.replica);
+                SCYLLA_ASSERT(t.type == some_task.type);
+                SCYLLA_ASSERT(t.replica.shard == this_shard_id());
+            }
         }
 #endif
 
