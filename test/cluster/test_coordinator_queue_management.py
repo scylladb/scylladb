@@ -61,7 +61,7 @@ async def test_coordinator_queue_management(manager: ManagerClient):
 
     s = await manager.server_add(start=False)
 
-    tasks = [asyncio.create_task(manager.server_start(s.server_id, expected_error="request canceled because some required nodes are dead")),
+    tasks = [asyncio.create_task(manager.server_start(s.server_id, expected_error="request canceled because some required nodes are dead|received notification of being banned from the cluster from")),
              asyncio.create_task(manager.decommission_node(servers[1].server_id, expected_error="Decommission failed. See earlier errors"))]
 
     await wait_for_first_completed([

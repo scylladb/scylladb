@@ -794,7 +794,7 @@ class ScyllaServer:
                 if expected_error is not None:
                     with self.log_filename.open("r", encoding="utf-8") as log_file:
                         for line in log_file:
-                            if expected_error in line:
+                            if re.search(expected_error, line):
                                 return
                         await report_error("the node startup failed, but the log file doesn't contain the expected error")
                 await report_error("failed to start the node")
