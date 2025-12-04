@@ -1453,6 +1453,7 @@ alternator = [
        'alternator/auth.cc',
        'alternator/streams.cc',
        'alternator/ttl.cc',
+       'alternator/http_compression.cc'
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
