@@ -235,4 +235,67 @@ future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::un
     return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
 }
 
+template<typename Compressor>
+class compressed_data_sink_impl : public data_sink_impl {
+    output_stream<char> _out;
+    Compressor _compressor;
+public:
+    template<typename... Args>
+    compressed_data_sink_impl(output_stream<char>&& out, Args&&... args)
+     : _out(std::move(out)), _compressor(std::forward<Args>(args)..., [this](temporary_buffer<char>&& buf) {
+        return _out.write(std::move(buf));
+    }) { }
+
+    future<> put(std::span<temporary_buffer<char>> data) override {
+        return data_sink_impl::fallback_put(data, [this] (temporary_buffer<char>&& buf) {
+            return do_put(std::move(buf));
+        });
+    }
+
+private:
+    future<> do_put(temporary_buffer<char> buf) {
+        co_return co_await _compressor.compress(buf.get(), buf.size());
+
+    }
+    future<> close() override {
+        return _compressor.close().then([this] {
+            return _out.close();
+        });
+    }
+};
+
+executor::body_writer compress(response_compressor::compression_type ct, const db::config& cfg, executor::body_writer&& bw) {
+    return [bw = std::move(bw), ct, level = cfg.alternator_response_gzip_compression_level()](output_stream<char>&& out) mutable -> future<> {
+        output_stream_options opts;
+        opts.trim_to_size = true;
+        std::unique_ptr<data_sink_impl> data_sink_impl;
+        switch (ct) {
+            case response_compressor::compression_type::gzip:
+                data_sink_impl = std::make_unique<compressed_data_sink_impl<zlib_compressor>>(std::move(out), true, level);
+                break;
+            case response_compressor::compression_type::deflate:
+                data_sink_impl = std::make_unique<compressed_data_sink_impl<zlib_compressor>>(std::move(out), false, level);
+                break;
+            case response_compressor::compression_type::none:
+            case response_compressor::compression_type::any:
+            case response_compressor::compression_type::unknown:
+                on_internal_error(slogger,"Compression not selected");
+            default:
+                on_internal_error(slogger, "Unsupported compression type for data sink");
+        }
+        return bw(output_stream<char>(data_sink(std::move(data_sink_impl)), compressed_buffer_size, opts));
+    };
+}
+
+future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::unique_ptr<http::reply> rep, sstring accept_encoding, const char* content_type, executor::body_writer&& body_writer) {
+    response_compressor::compression_type ct = find_compression(accept_encoding, std::numeric_limits<size_t>::max());
+    if (ct != response_compressor::compression_type::none) {
+        rep->add_header("Content-Encoding", get_encoding_name(ct));
+        rep->write_body(content_type, compress(ct, cfg, std::move(body_writer)));
+    } else {
+        rep->write_body(content_type, std::move(body_writer));
+    }
+    return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
+}
+
 } // namespace alternator
