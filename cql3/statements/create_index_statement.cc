@@ -95,11 +95,15 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
-    try {
-        db::view::validate_view_keyspace(db, keyspace());
-    } catch (const std::exception& e) {
-        // The type of the thrown exception is not specified, so we need to wrap it here.
-        throw exceptions::invalid_request_exception(e.what());
+    // Regular secondary indexes require rf-rack-validity.
+    // Custom indexes need to validate this property themselves, if they need it.
+    if (!_properties || !_properties->custom_class) {
+        try {
+            db::view::validate_view_keyspace(db, keyspace());
+        } catch (const std::exception& e) {
+            // The type of the thrown exception is not specified, so we need to wrap it here.
+            throw exceptions::invalid_request_exception(e.what());
+        }
     }
 
     validate_for_local_index(*schema);
