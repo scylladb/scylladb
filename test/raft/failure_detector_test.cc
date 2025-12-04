@@ -31,7 +31,7 @@ struct test_pinger: public direct_failure_detector::pinger {
     std::unordered_map<endpoint_id, size_t> _pings;
     bool _block = false;
 
-    virtual future<bool> ping(endpoint_id ep, abort_source& as) override {
+    virtual future<bool> ping(endpoint_id ep, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) override {
         bool ret = false;
         co_await invoke_abortable_on(0, [this, ep, &ret] (abort_source& as) -> future<> {
             ++_pings[ep];
@@ -91,6 +91,9 @@ struct test_clock : public direct_failure_detector::clock {
             throw sleep_aborted{};
         }
     }
+    virtual std::chrono::milliseconds to_milliseconds(timepoint_t tp) const override {
+        throw std::logic_error("to_milliseconds is not implemented");
+    }
 };
 
 struct test_listener : public direct_failure_detector::listener {
@@ -129,7 +132,7 @@ SEASTAR_TEST_CASE(failure_detector_test) {
     test_pinger pinger;
     test_clock clock;
     sharded<direct_failure_detector::failure_detector> fd;
-    co_await fd.start(std::ref(pinger), std::ref(clock), 10, 30);
+    co_await fd.start(std::ref(pinger), std::ref(clock), 10, 30, seastar::current_scheduling_group());
 
     test_listener l1, l2;
     auto sub1 = co_await fd.local().register_listener(l1, 95);
