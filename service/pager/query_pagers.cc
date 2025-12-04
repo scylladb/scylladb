@@ -301,6 +301,7 @@ protected:
 class ghost_row_deleting_query_pager : public service::pager::query_pager {
     service::storage_proxy& _proxy;
     db::timeout_clock::duration _timeout_duration;
+    size_t _concurrency;
 public:
     ghost_row_deleting_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
@@ -309,10 +310,12 @@ public:
                 dht::partition_range_vector ranges,
                 cql3::cql_stats& stats,
                 service::storage_proxy& proxy,
-                db::timeout_clock::duration timeout_duration)
+                db::timeout_clock::duration timeout_duration,
+                size_t concurrency)
         : query_pager(proxy, s, selection, state, options, std::move(cmd), std::move(ranges), std::nullopt)
         , _proxy(proxy)
         , _timeout_duration(timeout_duration)
+        , _concurrency(concurrency)
     {}
     virtual ~ghost_row_deleting_query_pager() {}
 
@@ -322,8 +325,12 @@ public:
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
-                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_query_schema), _timeout_duration},
+                std::exception_ptr ex;
+                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_query_schema), _timeout_duration, _concurrency, ex},
                         std::move(query_result), page_size, now);
+                if (ex) {
+                    std::rethrow_exception(ex);
+                }
                 return bo::success();
             });
         }));
@@ -503,7 +510,8 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         dht::partition_range_vector ranges,
         cql3::cql_stats& stats,
         storage_proxy& proxy,
-        db::timeout_clock::duration duration) {
+        db::timeout_clock::duration duration,
+        size_t concurrency) {
     return ::make_shared<ghost_row_deleting_query_pager>(std::move(s), std::move(selection), state,
-            options, std::move(cmd), std::move(ranges), stats, proxy, duration);
+            options, std::move(cmd), std::move(ranges), stats, proxy, duration, concurrency);
 }
