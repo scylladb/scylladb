@@ -31,7 +31,7 @@ public:
     test_data_source_impl() { }
 
     test_data_source_impl(test_data_source_impl&&) noexcept = default;
-    test_data_source_impl& operator=(test_data_source_impl&&) noexcept = default;
+    test_data_source_impl& operator=(test_data_source_impl&&) noexcept = delete;
 
     virtual future<temporary_buffer<char>> get() override {
         temporary_buffer<char> res(chunk_limit);

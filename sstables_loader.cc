@@ -232,6 +232,7 @@ private:
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
             llog.info("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
+            llog.info("Memory diagnostic before download\n{}", memory::generate_memory_diagnostics_report());
             return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
                 auto dwnld_ssts = std::move(downloaded_ssts);
 
@@ -315,8 +316,11 @@ private:
                     std::rethrow_exception(eptr);
                 }
                 if (auto sst = co_await sstable_sink->close_and_seal()) {
+                    llog.info("Memory diagnostic before load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     co_await sst->load_owner_shards(sharder);
+                    llog.info("Memory diagnostic right after load_owner_shards\n{}", memory::generate_memory_diagnostics_report());
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
+                    SCYLLA_ASSERT(shards.size() == 1);
                     llog.debug("SSTable shards {}", fmt::join(shards, ", "));
                     downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
                     co_await sst->destroy();

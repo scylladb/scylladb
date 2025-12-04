@@ -3889,7 +3889,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                         : _bufs(std::move(bufs))
                     {}
                     buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = delete;
 
                     future<temporary_buffer<char>> get() override {
                         if (_index < _bufs.size()) {

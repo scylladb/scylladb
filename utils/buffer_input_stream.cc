@@ -20,7 +20,7 @@ public:
     {}
 
     buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = delete;
 
     virtual future<temporary_buffer<char>> get() override {
         return make_ready_future<temporary_buffer<char>>(std::move(_buf));

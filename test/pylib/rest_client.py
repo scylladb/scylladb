@@ -427,6 +427,14 @@ class ScyllaRESTAPIClient:
             params["cf"] = table
         await self.client.post(url, host=node_ip, params=params)
 
+    async def major_compaction(self, node_ip: str, consider_only_existing_data: bool = False) -> None:
+        """Compact the specified or all tables in the keyspace"""
+        url = f"/storage_service/compact"
+        params = {
+            "consider_only_existing_data": str(consider_only_existing_data),
+        }
+        await self.client.post(url, host=node_ip, params=params)
+
     async def stop_compaction(self, node_ip: str, type: str) -> None:
         """Stop compaction of a given type"""
         url = f"/compaction_manager/stop_compaction?type={type}"
