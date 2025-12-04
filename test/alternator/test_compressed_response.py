@@ -138,7 +138,6 @@ def test_compressed_response_large(dynamodb, test_table_s, encoding):
 # Separate test to check that compression works also for chunked responses.
 # To trigger chunked responses in Alternator, we can use the BatchGetItem with response above 100KB.
 # DynamoDB probably does not use chunked responses, so we don't require it in that case.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_chunked_response_compression(dynamodb, test_table_s, encoding):
     # 10 items with 15KB data each - should trigger chunked response in Alternator

@@ -143,8 +143,8 @@ public:
                                                                REPLY_CONTENT_TYPE, std::move(str));
                 },
                 [&] (executor::body_writer&& body_writer) {
-                    rep->write_body(REPLY_CONTENT_TYPE, std::move(body_writer));
-                    return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+                    return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
+                                                               REPLY_CONTENT_TYPE, std::move(body_writer));
                 },
                 [&] (const api_error& err) {
                     generate_error_reply(*rep, err);
