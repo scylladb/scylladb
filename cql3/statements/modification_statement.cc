@@ -401,7 +401,8 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
                     type.is_update() ? "update" : "deletion"));
     }
 
-    auto request = seastar::make_shared<cas_request>(s, std::move(keys));
+    auto request = std::make_unique<cas_request>(s, std::move(keys));
+    auto* request_ptr = request.get();
     // cas_request can be used for batches as well single statements; Here we have just a single
     // modification in the list of CAS commands, since we're handling single-statement execution.
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
@@ -427,9 +428,9 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
         tablet_info = erm->check_locality(token);
     }
 
-    return qp.proxy().cas(s, std::move(cas_shard), request, request->read_command(qp), request->key(),
+    return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request = std::move(request), tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
         result->add_tablet_info(tablet_replicas, token_range);
         return result;
