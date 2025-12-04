@@ -396,6 +396,10 @@ public:
         return _version;
     }
 
+    format_types get_format() const {
+        return _format;
+    }
+
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk() const;
     file_size_stats get_file_size_stats() const;
