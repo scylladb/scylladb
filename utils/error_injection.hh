@@ -41,11 +41,14 @@ extern logging::logger errinj_logger;
 using error_injection_parameters = std::unordered_map<sstring, sstring>;
 
 // Wraps the argument to breakpoint injection (see the relevant inject() overload
-// in class error_injection below). The only parameter is the timeout after which
-// the pause is aborted
+// in class error_injection below). Parameters:
+// timeout - the timeout after which the pause is aborted
+// as (optional) - abort_source used to abort the pause
 struct wait_for_message {
     std::chrono::milliseconds timeout;
+    abort_source* as = nullptr;
     wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
+    wait_for_message(std::chrono::milliseconds tmo, abort_source* a) noexcept : timeout(tmo), as(a) {}
 };
 
 /**
@@ -477,7 +480,7 @@ public:
     future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
         co_await inject(name, [name, wfm] (injection_handler& handler) -> future<> {
             errinj_logger.info("{}: waiting for message", name);
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout, wfm.as);
             errinj_logger.info("{}: message received", name);
         });
     }
