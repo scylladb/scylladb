@@ -7,7 +7,69 @@
  */
 
 #include "alternator/http_compression.hh"
+#include "alternator/server.hh"
+#include <seastar/coroutine/maybe_yield.hh>
+#include <zlib.h>
+
+static logging::logger slogger("alternator-http-compression");
+
 namespace alternator {
+
+
+static constexpr size_t compressed_buffer_size = 1024;
+class zlib_compressor {
+    z_stream _zs;
+    temporary_buffer<char> _output_buf;
+    noncopyable_function<future<>(temporary_buffer<char>&&)> _write_func;
+public:
+    zlib_compressor(bool gzip, int compression_level, noncopyable_function<future<>(temporary_buffer<char>&&)> write_func)
+     : _write_func(std::move(write_func)) {
+        memset(&_zs, 0, sizeof(_zs));
+        if (deflateInit2(&_zs, std::clamp(compression_level, Z_NO_COMPRESSION, Z_BEST_COMPRESSION), Z_DEFLATED,
+                (gzip ? 16 : 0) + MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+            // Should only happen if memory allocation fails
+            throw std::bad_alloc();
+        }
+    }
+    ~zlib_compressor() {
+        deflateEnd(&_zs);
+    }
+    future<> close() {
+        return compress(nullptr, 0, true);
+    }
+
+    future<> compress(const char* buf, size_t len, bool is_last_chunk = false) {
+        _zs.next_in = reinterpret_cast<unsigned char*>(const_cast<char*>(buf));
+        _zs.avail_in = (uInt) len;
+        int mode = is_last_chunk ? Z_FINISH : Z_NO_FLUSH;
+        while(_zs.avail_in > 0 || is_last_chunk) {
+            co_await coroutine::maybe_yield();
+            if (_output_buf.empty()) {
+                if (is_last_chunk) {
+                    uint32_t max_buffer_size = 0;
+                    deflatePending(&_zs, &max_buffer_size, nullptr);
+                    max_buffer_size += deflateBound(&_zs, _zs.avail_in) + 1;
+                    _output_buf = temporary_buffer<char>(std::min(compressed_buffer_size, (size_t) max_buffer_size));
+                } else {
+                    _output_buf = temporary_buffer<char>(compressed_buffer_size);
+                }
+                _zs.next_out = reinterpret_cast<unsigned char*>(_output_buf.get_write());
+                _zs.avail_out = compressed_buffer_size;
+            }
+            int e = deflate(&_zs, mode);
+            if (e < Z_OK) {
+                throw api_error::internal("Error during compression of response body");
+            }
+            if (e == Z_STREAM_END || _zs.avail_out < compressed_buffer_size / 4) {
+                _output_buf.trim(compressed_buffer_size - _zs.avail_out);
+                co_await _write_func(std::move(_output_buf));
+                if (e == Z_STREAM_END) {
+                    break;
+                }
+            }
+        }
+    }
+};
 
 // Helper string_view functions for parsing Accept-Encoding header
 struct case_insensitive_cmp_sv {
@@ -127,6 +189,50 @@ response_compressor::compression_type response_compressor::find_compression(std:
         }
     }
     return selected_ct;
+}
+
+static future<chunked_content> compress(response_compressor::compression_type ct, const db::config& cfg, std::string str) {
+    chunked_content compressed;
+    auto write = [&compressed](temporary_buffer<char>&& buf) -> future<> {
+        compressed.push_back(std::move(buf));
+        return make_ready_future<>();
+    };
+    zlib_compressor compressor(ct != response_compressor::compression_type::deflate,
+        cfg.alternator_response_gzip_compression_level(), std::move(write));
+    co_await compressor.compress(str.data(), str.size(), true);
+    co_return compressed;
+}
+
+static sstring flatten(chunked_content&& cc) {
+    size_t total_size = 0;
+    for (const auto& chunk : cc) {
+        total_size += chunk.size();
+    }
+    sstring result = sstring{ sstring::initialized_later{}, total_size };
+    size_t offset = 0;
+    for (const auto& chunk : cc) {
+        std::copy(chunk.begin(), chunk.end(), result.begin() + offset);
+        offset += chunk.size();
+    }
+    return result;
+}
+
+future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::unique_ptr<http::reply> rep, sstring accept_encoding, const char* content_type, std::string&& response_body) {
+    response_compressor::compression_type ct = find_compression(accept_encoding, response_body.size());
+    if (ct != response_compressor::compression_type::none) {
+        rep->add_header("Content-Encoding", get_encoding_name(ct));
+        rep->set_content_type(content_type);
+        return compress(ct, cfg, std::move(response_body)).then([rep = std::move(rep)] (chunked_content compressed) mutable {
+            rep->_content = flatten(std::move(compressed));
+            return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
+        });
+    } else {
+        // Note that despite the move, there is a copy here -
+        // as str is std::string and rep->_content is sstring.
+        rep->_content = std::move(response_body);
+        rep->set_content_type(content_type);
+    }
+    return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
 }
 
 } // namespace alternator
