@@ -205,7 +205,7 @@ def test_batch_write_invalid_operation(test_table_s):
 
 # In test_item.py we have a bunch of test_empty_* tests on different ways to
 # create an empty item (which in Scylla requires the special CQL row marker
-# to be supported correctly). BatchWriteItems provides yet another way of
+# to be supported correctly). BatchWriteItem provides yet another way of
 # creating items, so check the empty case here too:
 def test_empty_batch_write(test_table):
     p = random_string()
@@ -214,7 +214,7 @@ def test_empty_batch_write(test_table):
         batch.put_item({'p': p, 'c': c})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c}
 
-# Test that BatchWriteItems allows writing to multiple tables in one operation
+# Test that BatchWriteItem allows writing to multiple tables in one operation
 def test_batch_write_multiple_tables(test_table_s, test_table):
     p1 = random_string()
     c1 = random_string()
