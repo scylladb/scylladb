@@ -83,6 +83,10 @@ private:
             }
         }
     }
+
+public:
+    future<std::unique_ptr<http::reply>> generate_reply(std::unique_ptr<http::reply> rep,
+         sstring accept_encoding, const char* content_type, std::string&& response_body);
 };
 
 }
