@@ -108,7 +108,6 @@ def server_response_compression(dynamodb, cql_request, encoding, compression_thr
 # This test works for both Alternator and DynamoDB.
 # In this test, we check that with 'Accept-Encoding' header in the request
 # responses above DynamoDBs threshold are compressed with the requested encoding and smaller ones are not.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_compressed_response(dynamodb, test_table_s, request, encoding):
     p = random_string()
@@ -144,7 +143,6 @@ def test_compressed_response(dynamodb, test_table_s, request, encoding):
 
 # Similar to `test_compressed_response`, but now we also test with poorly compressable data, 
 # which result in larger response and with this test we can see if we can avoid large allocations.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_compressed_response_large(dynamodb, test_table_s, request, encoding):
     p = random_string()
@@ -220,7 +218,6 @@ def test_compressed_response_chunked(dynamodb, test_table_s, cql, encoding):
 
 # The test checks various values of 'Accept-Encoding' header.
 # It works for both Alternator and DynamoDB.
-@pytest.mark.xfail(reason='issue #27246')
 def test_compressed_response_accept_encodings(dynamodb, test_table_s, request):
     p = random_string()
 
@@ -298,7 +295,6 @@ def test_compressed_response_accept_encodings(dynamodb, test_table_s, request):
 
 # So far we used DynamoDB's default threshold of 4KB for response compression.
 # Now test that in Alternator we can set this threshold and enable/disable compressions.
-@pytest.mark.xfail(reason='issue #27246')
 def test_compressed_response_set_threshold(dynamodb, test_table_s, cql):
     p = random_string()
 
