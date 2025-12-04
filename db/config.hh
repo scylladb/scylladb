@@ -473,6 +473,8 @@ public:
     named_value<bool> alternator_allow_system_table_write;
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
+    named_value<uint32_t> alternator_response_gzip_compression_threshold_in_bytes;
+    named_value<uint32_t> alternator_response_deflate_compression_threshold_in_bytes;
 
     named_value<bool> abort_on_ebadf;
 
