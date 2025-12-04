@@ -1908,7 +1908,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // When draining, this method is invoked with an active node transition, which
             // would normally cause preemption, which we don't want here.
             auto ts = guard.write_timestamp();
-            auto [new_preempt, new_guard] = should_preempt_balancing(std::move(guard));
+            auto [new_preempt, new_guard] = co_await should_preempt_balancing(std::move(guard));
             preempt = new_preempt;
             guard = std::move(new_guard);
             if (ts != guard.write_timestamp()) {
@@ -2225,33 +2225,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // This function must not release and reacquire the guard, callers rely
     // on the fact that the block which calls this is atomic.
     // FIXME: Don't take the ownership of the guard to make the above guarantee explicit.
-    std::pair<bool, group0_guard> should_preempt_balancing(group0_guard guard) {
+    future<std::pair<bool, group0_guard>> should_preempt_balancing(group0_guard guard) {
         auto work = get_next_task(std::move(guard));
         if (auto* node = std::get_if<node_to_work_on>(&work)) {
-            return std::make_pair(true, std::move(node->guard));
+            co_return std::make_pair(true, std::move(node->guard));
         }
 
         if (auto* cancel = std::get_if<cancel_requests>(&work)) {
             // request queue needs to be canceled, so preempt balancing
-            return std::make_pair(true, std::move(cancel->guard));
+            co_return std::make_pair(true, std::move(cancel->guard));
         }
 
         if (auto* cleanup = std::get_if<start_vnodes_cleanup>(&work)) {
             // cleanup has to be started
-            return std::make_pair(true, std::move(cleanup->guard));
+            co_return std::make_pair(true, std::move(cleanup->guard));
         }
 
         guard = std::get<group0_guard>(std::move(work));
 
         if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
-            return std::make_pair(true, std::move(guard));
+            co_return std::make_pair(true, std::move(guard));
+        }
+
+        for (const auto& request : _topo_sm._topology.paused_rf_change_requests) {
+            auto ready_to_resume = co_await service::is_rf_change_ready_to_resume(_db, get_token_metadata_ptr(), &_sys_ks, request);
+            if (ready_to_resume) {
+                co_return std::make_pair(true, std::move(guard));
+            }
         }
 
         if (!_topo_sm._topology.calculate_not_yet_enabled_features().empty()) {
-            return std::make_pair(true, std::move(guard));
+            co_return std::make_pair(true, std::move(guard));
         }
 
-        return std::make_pair(false, std::move(guard));
+        co_return std::make_pair(false, std::move(guard));
     }
 
     void cleanup_ignored_nodes_on_left(topology_mutation_builder& builder, raft::server_id id) {
