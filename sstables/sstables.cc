@@ -2485,11 +2485,6 @@ void sstable::validate_originating_host_id() const {
         }
         return;
     }
-
-    if (*originating_host_id != local_host_id) {
-        // FIXME refrain from throwing an exception because of #10148
-        sstlog.warn("Host id {} does not match local host id {} while validating SSTable: {}. Load foreign SSTables via the upload dir instead.", *originating_host_id, local_host_id, get_filename());
-    }
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
