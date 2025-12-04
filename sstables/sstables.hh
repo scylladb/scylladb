@@ -416,8 +416,8 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    component_name get_filename() const {
-        return component_name(*this, component_type::Data);
+    component_name get_filename(component_type f = component_type::Data) const {
+        return component_name(*this, f);
     }
 
     component_name toc_filename() const {
