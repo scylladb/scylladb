@@ -461,7 +461,7 @@ static std::unordered_set<table_id> get_ids_of_all_views(replica::database& db, 
     }) | std::ranges::to<std::unordered_set>();;
 }
 
-// If `state::processing_base_table` is diffrent that the `view_building_state::currently_processed_base_table`,
+// If `state::processing_base_table` is different that the `view_building_state::currently_processed_base_table`,
 // clear the state, save and flush new base table
 future<> view_building_worker::state::update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as) {
     if (processing_base_table != building_state.currently_processed_base_table) {
