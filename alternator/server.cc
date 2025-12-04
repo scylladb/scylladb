@@ -137,22 +137,20 @@ public:
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get();
-             std::visit(overloaded_functor {
+             return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
-                    // Note that despite the move, there is a copy here -
-                    // as str is std::string and rep->_content is sstring.
-                    rep->_content = std::move(str);
-                    rep->set_content_type(REPLY_CONTENT_TYPE);
+                    return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
+                                                               REPLY_CONTENT_TYPE, std::move(str));
                 },
                 [&] (executor::body_writer&& body_writer) {
                     rep->write_body(REPLY_CONTENT_TYPE, std::move(body_writer));
+                    return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 },
                 [&] (const api_error& err) {
                     generate_error_reply(*rep, err);
+                    return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 }
              }, std::move(res));
-
-             return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
          });
     }) { }
 

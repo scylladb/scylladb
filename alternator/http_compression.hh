@@ -70,7 +70,7 @@ private:
     void update_threshold() {
         _threshold[static_cast<size_t>(compression_type::none)] = std::numeric_limits<uint32_t>::max();
         _threshold[static_cast<size_t>(compression_type::any)] = std::numeric_limits<uint32_t>::max();
-        uint32_t gzip = cfg.alternator_response_gzip_compression_level() == 0 ? std::numeric_limits<uint32_t>::max()
+        uint32_t gzip = cfg.alternator_response_gzip_compression_level() <= 0 ? std::numeric_limits<uint32_t>::max()
             : cfg.alternator_response_compression_threshold_in_bytes();
         _threshold[static_cast<size_t>(compression_type::gzip)] = gzip;
         _threshold[static_cast<size_t>(compression_type::deflate)] = gzip;
@@ -80,6 +80,10 @@ private:
             }
         }
     }
+
+public:
+    future<std::unique_ptr<http::reply>> generate_reply(std::unique_ptr<http::reply> rep,
+         sstring accept_encoding, const char* content_type, std::string&& response_body);
 };
 
 }

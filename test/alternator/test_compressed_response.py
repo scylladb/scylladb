@@ -86,7 +86,6 @@ def server_response_compression(dynamodb, compression_threshold=DDB_RESPONSE_COM
 # This test works for both Alternator and DynamoDB.
 # In this test, we check that with 'Accept-Encoding' header in the request
 # responses above DynamoDBs threshold are compressed with the requested encoding and smaller ones are not.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_compressed_response(dynamodb, test_table_s, encoding):
     p = random_string()
@@ -120,7 +119,6 @@ def test_compressed_response(dynamodb, test_table_s, encoding):
 # Similar to `test_compressed_response`, but now we also test with less compressible data, 
 # which result in larger response that will not fit in single buffer and will be compressed in pieces. 
 # With this test we should see if we can avoid large allocations.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_compressed_response_large(dynamodb, test_table_s, encoding):
     p = random_string()
@@ -187,7 +185,6 @@ def test_chunked_response_compression(dynamodb, test_table_s, encoding):
 
 # The test checks various values of 'Accept-Encoding' header.
 # It works for both Alternator and DynamoDB.
-@pytest.mark.xfail(reason='issue #27246')
 def test_accept_encoding_header(dynamodb, test_table_s):
     p = random_string()
 
@@ -265,7 +262,6 @@ def test_accept_encoding_header(dynamodb, test_table_s):
 # It turns out that in DynamoDB headers are correctly combined for signature verification,
 # but then it only uses the first Accept-Encoding header, which may be considered a bug.
 # In Alternator, having multiple Accept-Encoding works well.
-@pytest.mark.xfail(reason='issue #27246')
 def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
     p = random_string()
     compressible_data = 'x' * DDB_RESPONSE_COMPRESSION_THRESHOLD
@@ -355,7 +351,6 @@ def test_signature_trims_accept_encoding_spaces(dynamodb, test_table_s):
 
 # So far we used DynamoDB's default threshold of 4KB for response compression and default compression level.
 # Now test that in Alternator we can set this threshold, enable/disable compressions and set level.
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_set_compression_options(dynamodb, test_table_s, scylla_only, encoding):
     p = random_string()
