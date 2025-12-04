@@ -163,7 +163,6 @@ def test_compressed_response_large(dynamodb, test_table_s, request, encoding):
 # Separate test to check that compression works also for chunked responses.
 # To trigger chunked responses, we can use the BatchGetItem with response above 100KB.
 # DynamoDB does not use chunked responses, so it is scylla only test (by direct use of `cql` fixture)
-@pytest.mark.xfail(reason='issue #27246')
 @pytest.mark.parametrize("encoding", ["gzip", "deflate"])
 def test_compressed_response_chunked(dynamodb, test_table_s, cql, encoding):
     p = [random_string() for _ in range(10)]
