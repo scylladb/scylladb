@@ -97,9 +97,7 @@ def cql_table(cql, cql_keyspace):
 # time of this writing, compression is LZ4 compression), but we want it to
 # have the same default in Alternator as in CQL.
 # Reproduces #26914 ('compression' difference).
-@pytest.mark.parametrize('option',
-    [pytest.param('compression', marks=pytest.mark.xfail(reason='#issue #26914')),
-    'speculative_retry'])
+@pytest.mark.parametrize('option', ['compression', 'speculative_retry'])
 def test_alternator_vs_cql(dynamodb, test_table, cql_keyspace, cql_table, option):
     alternator_schema = scylla_get_schema(dynamodb, cql_table_for(test_table))
     cql_schema = scylla_get_schema(dynamodb, (cql_keyspace, cql_table, False))
