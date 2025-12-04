@@ -2823,10 +2823,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 if (barrier_failed) {
-                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
-                    // Lets wait for the ring delay for those writes to complete and new topology to propagate
-                    // before continuing.
-                    co_await sleep_abortable(_ring_delay, _as);
+                    if (node.rs->state == node_state::decommissioning) {
+                        // If barrier above failed it means there may be unfinished writes to a decommissioned node.
+                        // Lets wait for the ring delay for those writes to complete and new topology to propagate
+                        // before continuing.
+                        co_await sleep_abortable(_ring_delay, _as);
+                    }
                     node = retake_node(co_await start_operation(), node.id);
                 }
 
