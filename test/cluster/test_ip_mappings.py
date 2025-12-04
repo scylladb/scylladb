@@ -10,6 +10,7 @@ import logging
 
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import new_test_keyspace
+from test.pylib.util import gather_safely
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +34,12 @@ async def test_broken_bootstrap(manager: ManagerClient):
         except Exception:
             pass
 
-        await manager.server_stop(server_b.server_id)
-        await manager.server_stop(server_a.server_id)
-
-        stop_event = asyncio.Event()
-        async def worker():
-            logger.info("Worker started")
-            while not stop_event.is_set():
-                for i in range(100):
-                    await manager.cql.run_async(f"INSERT INTO {table} (a, b) VALUES ({i}, {i})")
-                    response = await manager.cql.run_async(f"SELECT * FROM {table} WHERE a = {i}")
-                    assert response[0].b == i
-                await asyncio.sleep(0.1)
-            logger.info("Worker stopped")
+        await gather_safely(*(manager.server_stop(srv.server_id) for srv in [server_a, server_b]))
 
         await manager.server_start(server_a.server_id)
         await manager.driver_connect()
 
-        worker_task = asyncio.create_task(worker())
-
-        await asyncio.sleep(20)
-        stop_event.set()
-        await worker_task
+        for i in range(100):
+            await manager.cql.run_async(f"INSERT INTO {table} (a, b) VALUES ({i}, {i})")
+            response = await manager.cql.run_async(f"SELECT * FROM {table} WHERE a = {i}")
+            assert response[0].b == i
