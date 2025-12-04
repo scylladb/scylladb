@@ -823,25 +823,6 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
     co_return collect_completed_tasks();
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
 
 }
