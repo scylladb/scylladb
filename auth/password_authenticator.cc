@@ -54,11 +54,22 @@ static const class_registrator<
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
-static std::string_view get_config_value(std::string_view value, std::string_view def) {
-    return value.empty() ? def : value;
+static std::optional<std::string> get_config_value(std::string_view value) {
+    return value.empty() ? std::nullopt : std::optional<std::string>(value);
 }
-std::string password_authenticator::default_superuser(const db::config& cfg) {
-    return std::string(get_config_value(cfg.auth_superuser_name(), DEFAULT_USER_NAME));
+std::optional<std::string> password_authenticator::default_superuser(cql3::query_processor& qp) {
+    const auto& cfg = qp.db().get_config();
+
+    auto superuser_name = get_config_value(cfg.auth_superuser_name());
+    if (superuser_name) {
+        return *superuser_name;
+    }
+
+    if (legacy_mode(qp)) {
+        return std::string(DEFAULT_USER_NAME);
+    }
+
+    return std::nullopt;
 }
 
 password_authenticator::~password_authenticator() {
@@ -70,7 +81,6 @@ password_authenticator::password_authenticator(cql3::query_processor& qp, ::serv
     , _migration_manager(mm)
     , _cache(cache)
     , _stopped(make_ready_future<>()) 
-    , _superuser(default_superuser(qp.db().get_config()))
     , _hashing_worker(hashing_worker)
 {}
 
@@ -125,12 +135,13 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::legacy_create_default_if_missing() {
-    const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
+    SCYLLA_ASSERT(_superuser);
+    const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_salted_hash, *_superuser);
     if (exists) {
         co_return;
     }
-    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
-    if (salted_pwd.empty()) {
+    std::optional<std::string> salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password()));
+    if (!salted_pwd) {
         salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
     const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
@@ -142,13 +153,16 @@ future<> password_authenticator::legacy_create_default_if_missing() {
             query,
             db::consistency_level::QUORUM,
             internal_distributed_query_state(),
-            {salted_pwd, _superuser},
+            {std::move(*salted_pwd), *_superuser},
             cql3::query_processor::cache_internal::no);
     plogger.info("Created default superuser authentication record.");
 }
 
 future<> password_authenticator::maybe_create_default_password() {
     auto needs_password = [this] () -> future<bool> {
+        if (!_superuser) {
+            co_return false;
+        }
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query,
                 db::consistency_level::LOCAL_ONE,
@@ -159,7 +173,7 @@ future<> password_authenticator::maybe_create_default_password() {
         bool has_default = false;
         bool has_superuser_with_password = false;
         for (auto& result : *results) {
-            if (result.get_as<sstring>(meta::roles_table::role_col_name) == _superuser) {
+            if (result.get_as<sstring>(meta::roles_table::role_col_name) == *_superuser) {
                 has_default = true;
             }
             if (has_salted_hash(result)) {
@@ -180,12 +194,12 @@ future<> password_authenticator::maybe_create_default_password() {
         co_return;
     }
     // Set default superuser's password.
-    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
-    if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
+    std::optional<std::string> salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password()));
+    if (!salted_pwd) {
+        co_return;
     }
     const auto update_query = update_row_query();
-    co_await collect_mutations(_qp, batch, update_query, {salted_pwd, _superuser});
+    co_await collect_mutations(_qp, batch, update_query, {std::move(*salted_pwd), *_superuser});
     co_await std::move(batch).commit(_group0_client, _as, get_raft_timeout());
     plogger.info("Created default superuser authentication record.");
 }
@@ -212,6 +226,8 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
 
 future<> password_authenticator::start() {
     return once_among_shards([this] {
+        _superuser = default_superuser(_qp);
+
         // Verify that at least one hashing scheme is supported.
         passwords::detail::verify_scheme(_scheme);
         plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(_scheme));
@@ -219,6 +235,7 @@ future<> password_authenticator::start() {
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
                 if (legacy_mode(_qp)) {
+                    SCYLLA_ASSERT(_superuser);
                     if (!_superuser_created_promise.available()) {
                         // Counterintuitively, we mark promise as ready before any startup work
                         // because wait_for_schema_agreement() below will block indefinitely
@@ -253,6 +270,7 @@ future<> password_authenticator::start() {
         });
 
         if (legacy_mode(_qp)) {
+            SCYLLA_ASSERT(_superuser);
             static const sstring create_roles_query = fmt::format(
                     "CREATE TABLE {}.{} ("
                     "  {} text PRIMARY KEY,"

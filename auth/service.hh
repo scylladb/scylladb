@@ -144,6 +144,10 @@ public:
 
     void reset_authorization_cache();
 
+    bool is_used_by_maintenance_socket() const noexcept {
+        return _used_by_maintenance_socket == maintenance_socket_enabled::yes;
+    }
+
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
     ///
@@ -209,8 +213,9 @@ public:
         return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
     }
 
-private:
     future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
+
+private:
     future<bool> has_superuser(std::string_view role_name, const role_set& roles) const;
 
     future<std::vector<cql3::description>> describe_roles(bool with_hashed_passwords);

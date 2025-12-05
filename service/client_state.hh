@@ -367,6 +367,10 @@ public:
 
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error
+private:
+    bool is_from_maintenance_socket() const;
+
+public:
 
 #if 0
     public void ensureIsSuper(String message) throws UnauthorizedException
