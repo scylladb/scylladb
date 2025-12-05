@@ -1355,6 +1355,10 @@ void sstable::mark_as_being_repaired(const service::session_id& id) {
     being_repaired = id;
 }
 
+void sstable::copy_repair_state_from(const sstables::sstable& src) {
+    mark_as_being_repaired(src.being_repaired);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;

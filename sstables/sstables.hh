@@ -1131,6 +1131,9 @@ public:
 
     service::session_id being_repaired;
 public:
+    // Copies repaired state from the source sstable into this one, important
+    // when replacing a new sstable which has been marked as repairing.
+    void copy_repair_state_from(const sstables::sstable& src);
     void mark_as_being_repaired(const service::session_id& id);
     // This function must run inside a seastar thread since it calls
     // rewrite_statistics which must run inside a seastar thread.

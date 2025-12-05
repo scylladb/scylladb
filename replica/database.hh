@@ -604,9 +604,14 @@ public:
 
     data_dictionary::table as_data_dictionary() const;
 
-    future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
-                                          sstables::offstrategy offstrategy = sstables::offstrategy::no);
-    future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
+    // This function can split the sstable before loading it into the sstable set, to conform to
+    // the tablet map. When split happens, the function returns the output sstables, so the caller
+    // can work with the sstables that were actually loaded.
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_sstable_and_update_cache(sstables::shared_sstable sst,
+                                 sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
     void set_truncation_time(db_clock::time_point truncated_at) noexcept {
@@ -725,7 +730,7 @@ private:
     }
     void update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept;
     future<> do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy, bool trigger_compaction);
-    future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction);
+    future<std::vector<sstables::shared_sstable>> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction);
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
