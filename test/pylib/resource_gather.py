@@ -109,6 +109,7 @@ class ResourceGather(ABC):
         except subprocess.TimeoutExpired:
             logger.critical(f"Process {args} timed out")
             p.kill()
+            p.communicate()
         except KeyboardInterrupt:
             p.kill()
             raise
