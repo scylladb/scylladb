@@ -31,4 +31,11 @@ namespace utils {
 /// current backtrace.
 [[noreturn]] void on_internal_error(std::string_view reason);
 
+/// Report an internal error and abort unconditionally
+///
+/// The error will be logged, containing \p reason and the current backtrace,
+/// and the program will be aborted, regardless of the abort_on_internal_error
+/// setting.
+[[noreturn]] void on_fatal_internal_error(std::string_view reason) noexcept;
+
 }
