@@ -702,6 +702,9 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=10000, min_tablet_count=512)
 
+    # validate replicas assertions hold on fresh dataset
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
+
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
 
@@ -854,6 +857,9 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
 
+    # validate replicas assertions hold on fresh dataset
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
 
@@ -905,6 +911,9 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
 
+    # validate replicas assertions hold on fresh dataset
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
 
@@ -947,6 +956,9 @@ async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, 
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
+
+    # validate replicas assertions hold on fresh dataset
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
@@ -998,6 +1010,9 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
+
+    # validate replicas assertions hold on fresh dataset
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
