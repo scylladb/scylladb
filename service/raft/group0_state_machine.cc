@@ -79,7 +79,8 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         // the node won't try to fetch a topology snapshot if the other
         // node doesn't support it yet.
         _topology_change_enabled = true;
-    })) {
+    }))
+    , _in_memory_state_machine_enabled(false) {
     _state_id_handler.run();
 }
 
@@ -242,7 +243,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     [&] (schema_change& chng) -> future<> {
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        if (_in_memory_state_machine_enabled) {
         co_await reload_modules(std::move(modules_to_reload));
+        }
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -252,19 +255,25 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
+        if (_in_memory_state_machine_enabled) {
         co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
         co_await reload_modules(std::move(modules_to_reload));
+        }
     },
     [&] (mixed_change& chng) -> future<> {
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        if (_in_memory_state_machine_enabled) {
         co_await _ss.topology_transition();
         co_await reload_modules(std::move(modules_to_reload));
+        }
     },
     [&] (write_mutations& muts) -> future<> {
         auto modules_to_reload = get_modules_to_reload(muts.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        if (_in_memory_state_machine_enabled) {
         co_await reload_modules(std::move(modules_to_reload));
+        }
     }
     ), cmd.change);
 
@@ -374,9 +383,23 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
-    // topology_state_load applies persisted state machine state into
-    // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    if (_in_memory_state_machine_enabled) {
+        co_await reload_state();
+    }
+}
+
+future<> group0_state_machine::enable_in_memory_state_machine() {
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    if (!_in_memory_state_machine_enabled) {
+        _in_memory_state_machine_enabled  = true;
+        co_await reload_state();
+    }
+}
+
+future<> group0_state_machine::reload_state() {
+    // we assume that the apply mutex is held, topology_state_load applies
+    // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
     co_await _ss.view_building_state_load();
     if (_feature_service.compression_dicts) {

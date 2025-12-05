@@ -473,8 +473,10 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
-    co_await with_scheduling_group(_sg, [this, srv_for_group0 = std::move(srv_for_group0)] () mutable {
-        return _raft_gr.start_server_for_group(std::move(srv_for_group0));
+    co_await with_scheduling_group(_sg, [this, &srv_for_group0] (this auto self) -> future<> {
+        auto& state_machine = dynamic_cast<group0_state_machine&>(srv_for_group0.state_machine);
+        co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
+        co_await state_machine.enable_in_memory_state_machine();
     });
 
     _group0.emplace<raft::group_id>(group0_id);
