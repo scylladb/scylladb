@@ -79,7 +79,8 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         // the node won't try to fetch a topology snapshot if the other
         // node doesn't support it yet.
         _topology_change_enabled = true;
-    })) {
+    }))
+    , _in_memory_state_machine_enabled(false) {
     _state_id_handler.run();
 }
 
@@ -305,10 +306,12 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     }
     ), cmd.change);
 
-    if (topology_state_change_hint) {
-        co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+    if (_in_memory_state_machine_enabled) {
+        if (topology_state_change_hint) {
+            co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+        }
+        co_await reload_modules(std::move(modules_to_reload));
     }
-    co_await reload_modules(std::move(modules_to_reload));
 
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
 }
@@ -416,9 +419,23 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
-    // topology_state_load applies persisted state machine state into
-    // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    if (_in_memory_state_machine_enabled) {
+        co_await reload_state();
+    }
+}
+
+future<> group0_state_machine::enable_in_memory_state_machine() {
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    if (!_in_memory_state_machine_enabled) {
+        _in_memory_state_machine_enabled = true;
+        co_await reload_state();
+    }
+}
+
+future<> group0_state_machine::reload_state() {
+    // we assume that the apply mutex is held, topology_state_load applies
+    // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
     co_await _ss.view_building_state_load();
     if (_feature_service.compression_dicts) {
