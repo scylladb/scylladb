@@ -13,11 +13,8 @@
 #include "replica/tablets.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
 #include "mutation/frozen_mutation.hh"
 #include "types/types.hh"
-#include "types/user.hh"
-#include "utils/UUID.hh"
 #include "utils/log.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -28,45 +25,6 @@ namespace {
 static constexpr auto SYSTEM0_KEYSPACE_NAME = "system0";
 
 logging::logger sys0log("system0_virtual_tables");
-
-// Helper function to create tablets schema for a specific keyspace
-schema_ptr make_tablets_schema_for_keyspace(const sstring& ks_name) {
-    auto id = generate_legacy_id(ks_name, system_keyspace::TABLETS);
-    
-    // Get the user types from system keyspace tablets schema
-    static thread_local auto repair_scheduler_config_type = user_type_impl::get_instance(
-            "system", "repair_scheduler_config", {"auto_repair_enabled", "auto_repair_threshold"},
-            {boolean_type, long_type}, false);
-    static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
-            "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time", "repair_hosts_filter", "repair_dcs_filter"},
-            {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type, utf8_type, utf8_type}, false);
-    
-    auto replica_set_type = replica::get_replica_set_type();
-    
-    return schema_builder(ks_name, system_keyspace::TABLETS, id)
-            .with_column("table_id", uuid_type, column_kind::partition_key)
-            .with_column("tablet_count", int32_type, column_kind::static_column)
-            .with_column("keyspace_name", utf8_type, column_kind::static_column)
-            .with_column("table_name", utf8_type, column_kind::static_column)
-            .with_column("last_token", long_type, column_kind::clustering_key)
-            .with_column("replicas", replica_set_type)
-            .with_column("new_replicas", replica_set_type)
-            .with_column("stage", utf8_type)
-            .with_column("transition", utf8_type)
-            .with_column("session", uuid_type)
-            .with_column("resize_type", utf8_type, column_kind::static_column)
-            .with_column("resize_seq_number", long_type, column_kind::static_column)
-            .with_column("repair_time", timestamp_type)
-            .with_column("repair_task_info", tablet_task_info_type)
-            .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
-            .with_column("sstables_repaired_at", long_type)
-            .with_column("repair_incremental_mode", utf8_type)
-            .with_column("migration_task_info", tablet_task_info_type)
-            .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
-            .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_hash_version()
-            .build();
-}
 
 // Virtual table that mirrors system.topology but allows writes via group0
 class system0_topology_table : public memtable_filling_virtual_table {
@@ -159,7 +117,25 @@ public:
     {}
 
     static schema_ptr build_schema() {
-        return make_tablets_schema_for_keyspace(SYSTEM0_KEYSPACE_NAME);
+        // Create a simple schema for tablets in system0 keyspace
+        // This mirrors system.tablets structure
+        auto id = generate_legacy_id(SYSTEM0_KEYSPACE_NAME, system_keyspace::TABLETS);
+        auto replica_set_type = replica::get_replica_set_type();
+        
+        return schema_builder(SYSTEM0_KEYSPACE_NAME, system_keyspace::TABLETS, id)
+                .with_column("table_id", uuid_type, column_kind::partition_key)
+                .with_column("tablet_count", int32_type, column_kind::static_column)
+                .with_column("keyspace_name", utf8_type, column_kind::static_column)
+                .with_column("table_name", utf8_type, column_kind::static_column)
+                .with_column("last_token", long_type, column_kind::clustering_key)
+                .with_column("replicas", replica_set_type)
+                .with_column("new_replicas", replica_set_type)
+                .with_column("stage", utf8_type)
+                .with_column("transition", utf8_type)
+                .with_column("session", uuid_type)
+                .set_comment("Virtual table for updating system.tablets via group0")
+                .with_hash_version()
+                .build();
     }
 
     future<> execute(std::function<void(mutation)> mutation_sink) override {
