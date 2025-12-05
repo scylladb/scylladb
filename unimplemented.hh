@@ -36,6 +36,7 @@ enum class cause {
     NONATOMIC,
     CONSISTENCY,
     HINT,
+    SUPER,
     WRAP_AROUND, // Support for handling wrap around ranges in queries on database level and below
     STORAGE_SERVICE,
     SCHEMA_CHANGE,
