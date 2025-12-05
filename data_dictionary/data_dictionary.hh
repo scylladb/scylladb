@@ -77,6 +77,7 @@ public:
     schema_ptr schema() const;
     const std::vector<view_ptr>& views() const;
     const secondary_index::secondary_index_manager& get_index_manager() const;
+    db_clock::time_point get_truncation_time() const;
 };
 
 class keyspace {

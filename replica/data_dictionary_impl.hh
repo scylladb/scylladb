@@ -96,6 +96,9 @@ public:
     virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
         return const_cast<replica::table&>(unwrap(t)).get_index_manager();
     }
+    virtual db_clock::time_point get_truncation_time(data_dictionary::table t) const override {
+        return const_cast<replica::table&>(unwrap(t)).get_truncation_time();
+    }
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
         return unwrap(ks).metadata();
     }
