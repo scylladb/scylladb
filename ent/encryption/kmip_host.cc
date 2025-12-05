@@ -38,6 +38,7 @@
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/http.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
 
@@ -322,17 +323,26 @@ future<> kmip_host::impl::connection::connect() {
         f = f.then([this, cred] {
             return cred->set_x509_trust_file(_options.truststore, seastar::tls::x509_crt_format::PEM);
         });
+    } else {
+        f = f.then([cred] {
+            return cred->set_system_trust();
+        });
     }
     return f.then([this, cred] {
         // TODO, find if we should do hostname verification
         // TODO: connect all failovers already?
 
-        auto i = _host.find_last_of(':');
-        auto name = _host.substr(0, i);
-        auto port = i != sstring::npos ? std::stoul(_host.substr(i + 1)) : kmip_port;
+        // Use the URL parser to handle ipv6 etc proper.
+        // Turn host arg into a URL.
+        auto info = utils::http::parse_simple_url("kmip://" + _host);
+        auto name = info.host;
+        auto port = info.port != 80 ? info.port : kmip_port;
 
-        return seastar::net::dns::resolve_name(name).then([this, cred, port](seastar::net::inet_address addr) {
-            return seastar::tls::connect(cred, seastar::ipv4_addr{addr, uint16_t(port)}).then([this](seastar::connected_socket s) {
+        return seastar::net::dns::resolve_name(name).then([this, cred, port, name](seastar::net::inet_address addr) {
+            kmip_log.debug("Try connect {}:{}", addr, port);
+            // TODO: should we verify non-numeric hosts here? (opts.server_name)
+            // Adding this might break existing users with half-baked certs.
+            return seastar::tls::connect(cred, seastar::socket_address{addr, uint16_t(port)}).then([this](seastar::connected_socket s) {
                 kmip_log.debug("Successfully connected {}", _host);
                 // #998 Set keepalive to try avoiding connection going stale in between commands.
                 s.set_keepalive_parameters(net::tcp_keepalive_params{60s, 60s, 10});

@@ -445,6 +445,7 @@ ldap_tests = set([
 scylla_tests = set([
     'test/boost/combined_tests',
     'test/boost/UUID_test',
+    'test/boost/url_parse_test',
     'test/boost/advanced_rpc_compressor_test',
     'test/boost/allocation_strategy_test',
     'test/boost/alternator_unit_test',
@@ -1647,6 +1648,7 @@ deps['test/boost/bytes_ostream_test'] = [
 ]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
 deps['test/boost/UUID_test'] = ['clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
+deps['test/boost/url_parse_test'] = ['utils/http.cc', 'test/boost/url_parse_test.cc', ]
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']

@@ -1,5 +1,7 @@
 add_scylla_test(UUID_test
   KIND BOOST)
+add_scylla_test(url_parse_test
+  KIND BOOST)
 add_scylla_test(advanced_rpc_compressor_test
   KIND SEASTAR)
 add_scylla_test(allocation_strategy_test
