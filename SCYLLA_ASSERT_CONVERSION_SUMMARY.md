@@ -35,7 +35,7 @@ Analyzed entire codebase to identify safe vs unsafe conversion locations:
   - In noexcept functions: 187 usages across 50 files
   - In destructors: 36 usages across 25 files
 - **Safe to convert**: ~668 usages (75%)
-- **Converted in this PR**: 15 usages (2.2% of safe conversions)
+- **Converted in this PR**: 26 usages (3.9% of safe conversions)
 
 ### 3. Documentation ✓
 
@@ -54,7 +54,7 @@ Created comprehensive documentation:
 
 ### 4. Sample Conversions ✓
 
-Converted 15 safe SCYLLA_ASSERT usages across 8 files as demonstration:
+Converted 26 safe SCYLLA_ASSERT usages across 9 files as demonstration:
 
 | File | Conversions | Context |
 |------|------------|---------|
@@ -66,6 +66,7 @@ Converted 15 safe SCYLLA_ASSERT usages across 8 files as demonstration:
 | db/size_estimates_virtual_reader.cc | 1 | Lambda in coroutine |
 | db/corrupt_data_handler.cc | 2 | Lambdas in future-returning function |
 | raft/tracker.cc | 2 | Unreachable code (switch defaults) |
+| service/topology_coordinator.cc | 11 | Coroutine functions (topology operations) |
 
 All conversions were in **safe contexts** (non-noexcept, non-destructor functions).
 
@@ -163,6 +164,7 @@ virtual bool prefer_local() const noexcept override {
 - `db/size_estimates_virtual_reader.cc`
 - `db/corrupt_data_handler.cc`
 - `raft/tracker.cc`
+- `service/topology_coordinator.cc`
 
 ### Documentation
 - `docs/dev/scylla_assert_conversion.md`
@@ -173,4 +175,4 @@ virtual bool prefer_local() const noexcept override {
 
 This PR establishes the infrastructure and methodology for replacing SCYLLA_ASSERT with scylla_assert() to improve cluster availability. The sample conversions demonstrate the approach, while comprehensive documentation enables future work.
 
-**Key Achievement**: Provided a safe path forward for converting 75% (~668) of SCYLLA_ASSERT usages to exception-based assertions, while clearly documenting the 25% (~223) that must remain as crash-inducing assertions due to language constraints.
+**Key Achievement**: Provided a safe path forward for converting 75% (~668) of SCYLLA_ASSERT usages to exception-based assertions, while clearly documenting the 25% (~223) that must remain as crash-inducing assertions due to language constraints. Converted 26 usages as demonstration (3.9% of safe conversions), with ~642 remaining.

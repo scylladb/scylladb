@@ -11,7 +11,7 @@ This document tracks the conversion of `SCYLLA_ASSERT` to the new `scylla_assert
 - **Unsafe conversions (noexcept)**: ~187
 - **Unsafe conversions (destructors)**: ~36
 - **Safe conversions possible**: ~668
-- **Converted so far**: 15
+- **Converted so far**: 26
 
 ## Safe vs Unsafe Contexts
 
@@ -119,6 +119,19 @@ For contexts that cannot be converted:
 9. **raft/tracker.cc** (2 conversions)
    - Line 49: Switch default case with descriptive error
    - Line 90: Switch default case with descriptive error
+
+10. **service/topology_coordinator.cc** (11 conversions)
+    - Line 363: Node lookup assertion in `retake_node()`
+    - Line 2313: Bootstrapping state ring check
+    - Line 2362: Replacing state ring check
+    - Line 2365: Normal nodes lookup assertion
+    - Line 2366: Node ring and state validation
+    - Line 3025: Join request ring check
+    - Line 3036: Leave request ring check
+    - Line 3049: Remove request ring check
+    - Line 3061: Replace request ring check
+    - Line 3166: Transition nodes empty check
+    - Line 4016: Barrier validation in `stop()`
 
 ## Testing
 
