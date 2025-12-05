@@ -882,8 +882,8 @@ SEASTAR_THREAD_TEST_CASE(test_ttl_not_sticky_on_lookup) {
 
     sleep(ttl_timeout_test_timeout * 2).get();
 
-    // check_abort() will throw if the permit timed out due to sticky TTL during the above sleep.
-    BOOST_REQUIRE_NO_THROW(entry.permit.check_abort());
+    // get_abort_exception() will contain the timeout exception if the permit timed out due to sticky TTL during the above sleep.
+    BOOST_REQUIRE(!entry.permit.get_abort_exception());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_timeout_is_applied_on_lookup) {
@@ -902,11 +902,12 @@ SEASTAR_THREAD_TEST_CASE(test_timeout_is_applied_on_lookup) {
         .no_evictions();
 
     BOOST_REQUIRE(entry.permit.timeout() == new_timeout);
-    BOOST_REQUIRE_NO_THROW(entry.permit.check_abort());
+    BOOST_REQUIRE(!entry.permit.get_abort_exception());
 
     sleep(ttl_timeout_test_timeout * 2).get();
 
-    BOOST_REQUIRE_THROW(entry.permit.check_abort(), seastar::named_semaphore_timed_out);
+    BOOST_REQUIRE(entry.permit.get_abort_exception());
+    BOOST_REQUIRE_THROW(std::rethrow_exception(entry.permit.get_abort_exception()), seastar::named_semaphore_timed_out);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
