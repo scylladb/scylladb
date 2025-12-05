@@ -603,10 +603,10 @@ def compute_scope(topology, servers):
 
     return scope,r_servers
 
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, log_marks):
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, primary_replica_only, log_marks):
     logger.info(f'Check the data is back')
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
@@ -646,29 +646,25 @@ async def collect_mutations(cql, server, manager, ks, cf):
         ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
     return ret
 
-async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas = None):
+async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=None, expected_replicas = None):
     '''Check that each mutation is replicated to the expected number of replicas'''
     if expected_replicas is None:
         expected_replicas = topology.rf * topology.dcs
 
+    mutations = defaultdict(list)
     by_node = await asyncio.gather(*(collect_mutations(cql, s, manager, ks, cf) for s in servers))
-    mutations = {}
     for node_frags in by_node:
-        for pk in node_frags:
-            if not pk in mutations:
-                mutations[pk] = []
-            mutations[pk].append(node_frags[pk])
+        for pk, frags in node_frags.items():
+            mutations[pk].append(frags)
 
     for k in random.sample(keys, 17):
-        if not k in mutations:
-            logger.info(f'{k} not found in mutations')
+        if not str(k) in mutations:
             logger.info(f'Mutations: {mutations}')
-            assert False, "Key not found in mutations"
+            assert False, f"Key '{k}' not found in mutations. {topology=} {scope=} {primary_replica_only=}"
 
-        if len(mutations[k]) != expected_replicas:
-            logger.info(f'{k} is replicated {len(mutations[k])} times only, expect {expected_replicas}')
+        if len(mutations[str(k)]) != expected_replicas:
             logger.info(f'Mutations: {mutations}')
-            assert False, "Key not replicated enough"
+            assert False, f"'{k}' is replicated {len(mutations[str(k)])} times, expected {expected_replicas}"
 
 async def mark_all_logs(manager, servers):
     log_marks = dict()
@@ -718,7 +714,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger) for s in r_servers))
 
-    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, log_marks=log_marks)
+    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, False, log_marks=log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
@@ -868,7 +864,7 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
 
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
@@ -919,7 +915,7 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
 
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
@@ -962,7 +958,7 @@ async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, 
 
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
@@ -1013,7 +1009,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
 
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
