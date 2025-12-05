@@ -9,6 +9,7 @@
 
 
 #include "utils/UUID.hh"
+#include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
@@ -2018,6 +2019,101 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
         }
 
     }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host4 = topo.add_node(node_state::normal, shard_count);
+        auto rack3 = topo.start_new_rack();
+        [[maybe_unused]] auto host5 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host6 = topo.add_node(node_state::normal, shard_count);
+        auto dc2 = topo.start_new_dc().dc;
+        [[maybe_unused]] auto host7 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host8 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        // rack1: host1: A D    host2: C
+        // rack2: host3: A      host4: B
+        // rack3: host5: C      host6: B D
+        tablet_id A{0}, B{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            A = tid;
+            tmap.set_tablet(tid, tablet_info {  // A
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            B = tid;
+            tmap.set_tablet(tid, tablet_info {  // B
+                tablet_replica_set {
+                    tablet_replica{host4, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {  // C
+                tablet_replica_set {
+                    tablet_replica{host2, 0},
+                    tablet_replica{host5, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {  // D
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        // Build the map literal for CQL
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc1, rack1.rack, dc1, rack3.rack);
+
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.paused_rf_change_requests.insert(id);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        BOOST_REQUIRE(!plan.empty());
+        // A : host3 -> host5 / host6
+        // B : host4 -> host1 / host2
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Rack list colocation migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::migration);
+            BOOST_REQUIRE(mig.src.host == host3 || mig.src.host == host4);
+            if (mig.src.host == host3) {
+                BOOST_REQUIRE(mig.tablet.tablet == A);
+                BOOST_REQUIRE(mig.dst.host == host5 || mig.dst.host == host6);
+            } else {
+                BOOST_REQUIRE(mig.tablet.tablet == B);
+                BOOST_REQUIRE(mig.dst.host == host1 || mig.dst.host == host2);
+            }
+        }
+    }).get();
 }
 
 // Throws if tablets have more than 1 replica in a given rack.
