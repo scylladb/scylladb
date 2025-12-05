@@ -127,7 +127,7 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
 
     ks = 'ks'
     cf = 'cf'
-    _, keys, _ = create_dataset(manager, ks, cf, topology, logger)
+    _, keys, _ = await create_dataset(manager, ks, cf, topology, logger)
 
     _, sstables = await take_snapshot(ks, servers, manager, logger)
 
