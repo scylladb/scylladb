@@ -234,18 +234,12 @@ distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db,
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
-    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix, sstables=std::move(sstables), &get_abort_src, &db] (auto& global_table, auto& directory) {
+distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring type, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
+    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, type, prefix, sstables=std::move(sstables), &get_abort_src] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
-            sharded_parameter([bucket, endpoint, prefix, &get_abort_src, &db] {
-                auto eps = db.local().get_config().object_storage_endpoints() 
-                    | std::views::filter([&endpoint](auto& ep) { return ep.key() == endpoint; })
-                    ;
-                if (eps.empty()) {
-                    throw std::invalid_argument(fmt::format("Undefined endpoint {}", endpoint));
-                }
+            sharded_parameter([bucket, endpoint, type, prefix, &get_abort_src] {
                 seastar::abort_source* as = get_abort_src ? get_abort_src() : nullptr;
-                auto opts = data_dictionary::make_object_storage_options(endpoint, eps.front().type(), bucket, prefix, as);
+                auto opts = data_dictionary::make_object_storage_options(endpoint, type, bucket, prefix, as);
                 return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
             }),
             sstables,

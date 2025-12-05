@@ -135,19 +135,27 @@ future<> storage_manager::update_config(const db::config& cfg) {
     co_return;
 }
 
-shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client(sstring endpoint) {
+auto storage_manager::get_endpoint(const sstring& endpoint) -> object_storage_endpoint& {
     auto found = _object_storage_endpoints.find(endpoint);
     if (found == _object_storage_endpoints.end()) {
         smlogger.error("unable to find {} in configured object-storage endpoints", endpoint);
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
-    auto& ep = found->second;
+    return found->second;
+}
+
+shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client(sstring endpoint) {
+    auto& ep = get_endpoint(endpoint);
     if (ep.client == nullptr) {
         ep.client = make_object_storage_client(ep.cfg, _object_storage_clients_memory, [&ct = container()] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
         });
     }
     return ep.client;
+}
+
+sstring storage_manager::get_endpoint_type(sstring endpoint) {
+    return get_endpoint(endpoint).cfg.type();
 }
 
 bool storage_manager::is_known_endpoint(sstring endpoint) const {

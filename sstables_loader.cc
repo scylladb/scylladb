@@ -751,8 +751,9 @@ future<> sstables_loader::download_task_impl::run() {
     };
     llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
 
+    auto ep_type = _loader.local()._storage_manager.get_endpoint_type(_endpoint);
     std::vector<seastar::abort_source> shard_aborts(smp::count);
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, ep_type, _bucket, _prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
