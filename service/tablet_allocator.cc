@@ -933,8 +933,14 @@ public:
         , _skiplist(std::move(skiplist))
         , _size_based_balance_threshold(db.get_config().size_based_balance_threshold_percentage() / 100.0)
         , _force_capacity_based_balancing(db.get_config().force_capacity_based_balancing())
-        , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing())
-    { }
+        , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing()) {
+
+        // Force capacity based balancing until all the nodes have been upgraded
+        if (!_db.features().size_based_load_balancing && !_force_capacity_based_balancing) {
+            lblogger.info("Size based load balancing cluster feature disabled; forcing capacity based balancing");
+            _force_capacity_based_balancing = true;
+        }
+    }
 
     bool ongoing_rack_list_colocation() const {
         return _topology != nullptr && _sys_ks != nullptr && !_topology->paused_rf_change_requests.empty();
