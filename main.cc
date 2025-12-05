@@ -108,6 +108,7 @@
 #include "lang/manager.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
+#include "db/system0_virtual_tables.hh"
 
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -1834,6 +1835,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing virtual tables");
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, tablet_allocator, messaging, *cfg);
+            }).get();
+
+            checkpoint(stop_signal, "initializing system0 virtual tables");
+            smp::invoke_on_all([&] {
+                return db::initialize_system0_virtual_tables(raft_gr, sys_ks, qp);
             }).get();
 
             // #293 - do not stop anything
