@@ -458,7 +458,9 @@ std::ranges::subrange<utils::chunked_vector<mutation>::const_iterator> slice(
 
 // Reverses the mutation as if it was created with a schema with reverse
 // clustering order. The resulting mutation will contain a reverse schema too.
+// `reverse_with_load` additionally ensures the schema is loaded in the schema registry.
 mutation reverse(mutation mut);
+mutation reverse_with_load(mutation mut);
 
 template <> struct fmt::formatter<mutation> : fmt::formatter<string_view> {
     auto format(const mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
