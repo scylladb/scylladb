@@ -832,6 +832,7 @@ class load_balancer {
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
+    gms::feature_service& _feature_service;
 
     // This is the maximum load delta between the most and least loaded nodes,
     // below which the balancer considers the DC balanced
@@ -921,7 +922,8 @@ public:
             load_balancer_stats_manager& stats,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
-            std::unordered_set<host_id> skiplist)
+            std::unordered_set<host_id> skiplist,
+            gms::feature_service& fs)
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
@@ -931,10 +933,17 @@ public:
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
+        , _feature_service(fs)
         , _size_based_balance_threshold(db.get_config().size_based_balance_threshold_percentage() / 100.0)
         , _force_capacity_based_balancing(db.get_config().force_capacity_based_balancing())
-        , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing())
-    { }
+        , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing()) {
+
+        // Force capacity based balancing until all the nodes have been upgraded
+        if (!_feature_service.size_based_load_balancing && !_force_capacity_based_balancing) {
+            lblogger.info("Size based load balancing cluster feature disabled; forcing capacity based balancing");
+            _force_capacity_based_balancing = true;
+        }
+    }
 
     bool ongoing_rack_list_colocation() const {
         return _topology != nullptr && _sys_ks != nullptr && !_topology->paused_rf_change_requests.empty();
@@ -3668,6 +3677,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
+    gms::feature_service& _feature_service;
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
@@ -3677,19 +3687,22 @@ private:
             service::topology* topology,
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
-            std::unordered_set<host_id> skiplist) {
+            std::unordered_set<host_id> skiplist,
+            gms::feature_service& fs) {
         load_balancer lb(_db, tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
-            std::move(skiplist));
+            std::move(skiplist),
+            fs);
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
         return lb;
     }
 public:
-    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
+    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db, gms::feature_service& fs)
             : _migration_notifier(mn)
             , _db(db)
+            , _feature_service(fs)
             , _load_balancer_stats("load_balancer") {
         _migration_notifier.register_listener(this);
     }
@@ -3706,7 +3719,7 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, service::topology* topology, db::system_keyspace* sys_ks, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        auto lb = make_load_balancer(tm, topology, sys_ks, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist));
+        auto lb = make_load_balancer(tm, topology, sys_ks, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist), _feature_service);
         co_await coroutine::switch_to(_db.get_streaming_scheduling_group());
         co_return co_await lb.make_plan();
     }
@@ -3726,7 +3739,7 @@ public:
     // Allocates new tablets for a table which is not co-located with another table.
     tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
-        auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
+        auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {}, _feature_service);
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
         auto& table_plan = plan.tables[s.id()];
         if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
@@ -3939,8 +3952,8 @@ future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migrat
     co_return tablets;
 }
 
-tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db)
-    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db)) {
+tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db, gms::feature_service& fs)
+    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db, fs)) {
 }
 
 future<> tablet_allocator::stop() {
