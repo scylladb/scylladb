@@ -4,7 +4,7 @@
 #pragma once
 
 #include <cassert>
-#include <fmt/format.h>
+#include <seastar/core/format.hh>
 #include "utils/on_internal_error.hh"
 
 /// Like assert(), but independent of NDEBUG. Active in all build modes.
@@ -24,7 +24,7 @@
 #define scylla_assert(condition, ...) \
     do { \
         if (!(condition)) [[unlikely]] { \
-            ::utils::on_internal_error(::fmt::format("Assertion failed: {} at {}:{} in {}" __VA_OPT__(": {}"), \
+            ::utils::on_internal_error(::seastar::format("Assertion failed: {} at {}:{} in {}" __VA_OPT__(": {}"), \
                 #condition, __FILE__, __LINE__, __PRETTY_FUNCTION__ __VA_OPT__(,) __VA_ARGS__)); \
         } \
     } while (0)

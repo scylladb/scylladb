@@ -231,7 +231,7 @@ static schema_ptr get_current_service_levels(data_dictionary::database db) {
 }
 
 static schema_ptr get_updated_service_levels(data_dictionary::database db, bool workload_prioritization_enabled) {
-    SCYLLA_ASSERT(this_shard_id() == 0);
+    scylla_assert(this_shard_id() == 0);
     auto schema = get_current_service_levels(db);
     schema_builder b(schema);
     for (const auto& col : new_service_levels_columns(workload_prioritization_enabled)) {

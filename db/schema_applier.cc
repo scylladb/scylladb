@@ -1121,7 +1121,7 @@ future<> schema_applier::commit() {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
-    SCYLLA_ASSERT(this_shard_id() == 0);
+    scylla_assert(this_shard_id() == 0);
     commit_on_shard(sharded_db.local());
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);

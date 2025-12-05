@@ -165,7 +165,7 @@ future<> db::commitlog_replayer::impl::init() {
 
 future<db::commitlog_replayer::impl::stats>
 db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const commitlog::replay_state& rpstate) const {
-    SCYLLA_ASSERT(_column_mappings.local_is_initialized());
+    scylla_assert(_column_mappings.local_is_initialized());
 
     replay_position rp{d};
     auto gp = min_pos(rp.shard_id());
