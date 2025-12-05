@@ -331,7 +331,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     if (!cl_for_paxos) [[unlikely]] {
         return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
     }
-    seastar::shared_ptr<cas_request> request;
+    std::unique_ptr<cas_request> request;
     schema_ptr schema;
 
     db::timeout_clock::time_point now = db::timeout_clock::now();
@@ -354,9 +354,9 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         if (keys.empty()) {
             continue;
         }
-        if (request.get() == nullptr) {
+        if (!request) {
             schema = statement.s;
-            request = seastar::make_shared<cas_request>(schema, std::move(keys));
+            request = std::make_unique<cas_request>(schema, std::move(keys));
         } else if (keys.size() != 1 || keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
@@ -366,7 +366,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
         request->add_row_update(statement, std::move(ranges), std::move(json_cache), statement_options);
     }
-    if (request.get() == nullptr) {
+    if (!request) {
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
     }
 
@@ -377,9 +377,10 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
             );
     }
 
-    return qp.proxy().cas(schema, std::move(cas_shard), request, request->read_command(qp), request->key(),
+    auto* request_ptr = request.get();
+    return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
     });
 }
