@@ -343,7 +343,8 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
 
         auto& table = db.find_column_family(meta.table);
         auto& sstm = table.get_sstables_manager();
-        auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, meta.fops == file_ops::load_sstables);
+        sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables };
+        auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
         auto out = co_await sstable_sink->output(foptions, stream_options);
         co_return output_result{
             [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
@@ -351,7 +352,7 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
                     co_await sstable_sink->abort();
                     co_return;
                 }
-                auto sst = co_await sstable_sink->close_and_seal();
+                auto sst = co_await sstable_sink->close();
                 if (sst) {
                     blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
                     auto desc = sst->get_descriptor(sstables::component_type::TOC);
