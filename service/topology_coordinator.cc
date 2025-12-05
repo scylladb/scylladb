@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/ranges.h>
 
@@ -940,9 +941,54 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<> check_no_paused_ks_rf_change(const sstring& ks) {
+        for (auto request_id : _topo_sm._topology.paused_rf_change_requests) {
+            auto req_entry = co_await _sys_ks.get_topology_request_entry(request_id, true);
+            if (req_entry.new_keyspace_rf_change_ks_name.value() == ks) {
+                throw std::runtime_error(::format(
+                    "cannot proceed with keyspace {} RF change: there is a paused RF change request {} for this keyspace", ks, request_id));
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    struct request_result {
+        utils::UUID request_id;
+        sstring error = "";
+
+        operator bool() const {
+            return bool(request_id);
+        }
+    };
+
+    future<request_result> get_rf_change_ready_to_resume() {
+        if (_topo_sm._topology.paused_rf_change_requests.empty()) {
+            co_return request_result{};
+        }
+
+        for (const auto& request_id : _topo_sm._topology.paused_rf_change_requests) {
+            auto req_entry = co_await _sys_ks.get_topology_request_entry(request_id, true);
+            sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+
+            if (!_db.has_keyspace(ks_name)) {
+                co_return request_result{
+                    .request_id = request_id,
+                    .error = format("Keyspace {} not found", ks_name)
+                };
+            }
+
+            if (co_await service::is_rf_change_ready_to_resume(_db, get_token_metadata_ptr(), &_sys_ks, request_id)) {
+                co_return request_result{
+                    .request_id = request_id,
+                };
+            }
+        }
+        co_return request_result{};
+    }
+
     // Precondition: there is no node request and no ongoing topology transition
     // (checked under the guard we're holding).
-    future<> handle_global_request(group0_guard guard) {
+    future<> handle_global_request(group0_guard guard, request_result resumed_request) {
         global_topology_request req;
         utils::UUID req_id;
         db::system_keyspace::topology_requests_entry req_entry;
@@ -951,8 +997,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             req = *_topo_sm._topology.global_request;
             req_id = _topo_sm._topology.global_request_id.value();
         } else {
-            assert(_feature_service.topology_global_request_queue);
-            req_id = _topo_sm._topology.global_requests_queue[0];
+            if (resumed_request) {
+                req_id = resumed_request.request_id;
+            } else {
+                assert(_feature_service.topology_global_request_queue);
+                req_id = _topo_sm._topology.global_requests_queue[0];
+            }
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
             req = std::get<global_topology_request>(req_entry.request_type);
         }
@@ -997,19 +1047,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
+            bool needs_colocation = false;
             if (_db.has_keyspace(ks_name)) {
                 try {
+                    co_await check_no_paused_ks_rf_change(ks_name);
                     auto& ks = _db.find_keyspace(ks_name);
                     auto tmptr = get_token_metadata_ptr();
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
+                  if (!resumed_request) {  // Resumed requests have already applied the tablet mutations.
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
                     tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+                    bool needs_colocation_check = true;
                     for (const auto& table_or_mv : tables_with_mvs) {
                         if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                             // Apply the transition only on base tables.
@@ -1021,6 +1075,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count(), ks.metadata()->consistency_option()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
+
+                        if (std::exchange(needs_colocation_check, false)) {
+                            auto check_needs_colocation = [&] () {
+                                const auto& new_replication_strategy_config = new_strategy->get_config_options();
+                                const auto& old_replication_strategy_config = ks.metadata()->strategy_options();
+                                for (const auto& [dc, rf_value] : new_replication_strategy_config) {
+                                    if (std::holds_alternative<locator::rack_list>(rf_value)) {
+                                        auto it = old_replication_strategy_config.find(dc);
+                                        if (it != old_replication_strategy_config.end() && std::holds_alternative<sstring>(it->second) &&
+                                                tmptr->get_topology().get_datacenter_racks().at(dc).size() != std::get<locator::rack_list>(rf_value).size()) {
+                                            return true;
+                                        }
+                                    }
+                                }
+                                return false;
+                            };
+                            if (needs_colocation = check_needs_colocation(); needs_colocation) {
+                                break;
+                            }
+                        }
 
                         replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                         co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
@@ -1046,7 +1120,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             co_await coroutine::maybe_yield();
                         });
                     }
-
+                  }
                     auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                     for (auto& m: schema_muts) {
                         updates.emplace_back(m);
@@ -1061,16 +1135,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
             }
 
-            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-                                                         .set_transition_state(topology::transition_state::tablet_migration)
+            bool pause_request = needs_colocation && error.empty();
+            topology_mutation_builder tbuilder(guard.write_timestamp());
+            tbuilder.set_transition_state(topology::transition_state::tablet_migration)
                                                          .set_version(_topo_sm._topology.version + 1)
                                                          .del_global_topology_request()
                                                          .del_global_topology_request_id()
-                                                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
-                                                         .build()));
-            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
+                                                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+            if (pause_request) {
+                rtlogger.info("keyspace_rf_change for keyspace {} postponed for colocation", ks_name);
+                tbuilder.pause_rf_change_request(req_id);
+            } else {
+                if (resumed_request) {
+                    if (!resumed_request.error.empty()) {
+                        updates.clear();
+                        error = resumed_request.error;
+                    }
+                    tbuilder.resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, resumed_request.request_id);
+                }
+                updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
+            }
+            updates.push_back(canonical_mutation(tbuilder.build()));
 
             sstring reason = seastar::format("ALTER tablets KEYSPACE called with options: {}", saved_ks_props);
             rtlogger.trace("do update {} reason {}", updates, reason);
@@ -1338,6 +1425,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
             for (const tablet_migration_info& mig : plan.migrations()) {
+                co_await coroutine::maybe_yield();
+                generate_migration_update(out, guard, mig);
+            }
+
+            for (const tablet_migration_info& mig : plan.rack_list_colocation_plan().colocations()) {
                 co_await coroutine::maybe_yield();
                 generate_migration_update(out, guard, mig);
             }
@@ -1819,7 +1911,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // When draining, this method is invoked with an active node transition, which
             // would normally cause preemption, which we don't want here.
             auto ts = guard.write_timestamp();
-            auto [new_preempt, new_guard] = should_preempt_balancing(std::move(guard));
+            auto [new_preempt, new_guard] = co_await should_preempt_balancing(std::move(guard));
             preempt = new_preempt;
             guard = std::move(new_guard);
             if (ts != guard.write_timestamp()) {
@@ -1831,7 +1923,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         bool has_nodes_to_drain = false;
         if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), {}, get_dead_nodes());
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
             has_nodes_to_drain = plan.has_nodes_to_drain();
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
@@ -1954,7 +2046,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
 
         auto tm = get_token_metadata_ptr();
-        auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+        auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
@@ -2138,33 +2230,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // This function must not release and reacquire the guard, callers rely
     // on the fact that the block which calls this is atomic.
     // FIXME: Don't take the ownership of the guard to make the above guarantee explicit.
-    std::pair<bool, group0_guard> should_preempt_balancing(group0_guard guard) {
+    future<std::pair<bool, group0_guard>> should_preempt_balancing(group0_guard guard) {
         auto work = get_next_task(std::move(guard));
         if (auto* node = std::get_if<node_to_work_on>(&work)) {
-            return std::make_pair(true, std::move(node->guard));
+            co_return std::make_pair(true, std::move(node->guard));
         }
 
         if (auto* cancel = std::get_if<cancel_requests>(&work)) {
             // request queue needs to be canceled, so preempt balancing
-            return std::make_pair(true, std::move(cancel->guard));
+            co_return std::make_pair(true, std::move(cancel->guard));
         }
 
         if (auto* cleanup = std::get_if<start_vnodes_cleanup>(&work)) {
             // cleanup has to be started
-            return std::make_pair(true, std::move(cleanup->guard));
+            co_return std::make_pair(true, std::move(cleanup->guard));
         }
 
         guard = std::get<group0_guard>(std::move(work));
 
         if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
-            return std::make_pair(true, std::move(guard));
+            co_return std::make_pair(true, std::move(guard));
+        }
+
+        for (const auto& request : _topo_sm._topology.paused_rf_change_requests) {
+            auto ready_to_resume = co_await service::is_rf_change_ready_to_resume(_db, get_token_metadata_ptr(), &_sys_ks, request);
+            if (ready_to_resume) {
+                co_return std::make_pair(true, std::move(guard));
+            }
         }
 
         if (!_topo_sm._topology.calculate_not_yet_enabled_features().empty()) {
-            return std::make_pair(true, std::move(guard));
+            co_return std::make_pair(true, std::move(guard));
         }
 
-        return std::make_pair(false, std::move(guard));
+        co_return std::make_pair(false, std::move(guard));
     }
 
     void cleanup_ignored_nodes_on_left(topology_mutation_builder& builder, raft::server_id id) {
@@ -2262,8 +2361,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             guard = std::get<group0_guard>(std::move(work));
 
-            if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
-                co_await handle_global_request(std::move(guard));
+            request_result resumed_request;
+            if (_topo_sm._topology.global_request || (resumed_request = co_await get_rf_change_ready_to_resume()) || !_topo_sm._topology.global_requests_queue.empty()) {
+                co_await handle_global_request(std::move(guard), resumed_request);
                 co_return true;
             }
 
@@ -3458,7 +3558,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     }
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+    auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
         co_return false;
