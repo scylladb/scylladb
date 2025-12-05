@@ -605,15 +605,15 @@ def compute_scope(topology, servers):
 
     return scope,r_servers
 
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope):
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, log_marks):
     logger.info(f'Check the data is back')
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
-        log = await manager.server_open_log(s.server_id)
-        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        log, mark = log_marks[s.server_id]
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)', from_mark=mark)
         streamed_to = set([ str(host_ids[s.server_id]) ] + [ r[1].group(1) for r in res ])
         scope_nodes = set([ str(host_ids[s.server_id]) ])
         # See comment near merge_tocs() above for explanation of servers list filtering below
@@ -675,6 +675,13 @@ async def check_mutation_replicas(cql, manager, servers, keys, topology, logger,
             logger.info(f'Mutations: {mutations}')
             assert False, "Key not replicated enough"
 
+async def mark_all_logs(manager, servers):
+    log_marks = dict()
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        log_marks[s.server_id] = (log, await log.mark())
+    return log_marks
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -712,9 +719,11 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
     scope,r_servers = compute_scope(topology, servers)
 
+    log_marks = await mark_all_logs(manager, servers)
+
     await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger) for s in r_servers))
 
-    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope)
+    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, log_marks=log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
