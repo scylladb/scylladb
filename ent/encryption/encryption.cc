@@ -319,7 +319,7 @@ public:
 
         auto provider_class = opts(KEY_PROVIDER);
         if (!provider_class) {
-            provider_class = opts(SECRET_KEY_PROVIDER_FACTORY_CLASS).value_or(REPLICATED_KEY_PROVIDER_FACTORY);
+            provider_class = opts(SECRET_KEY_PROVIDER_FACTORY_CLASS).value_or(LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY);
         }
         if (provider_class->empty() || ::strcasecmp(provider_class->c_str(), "none") == 0) {
             return {};
