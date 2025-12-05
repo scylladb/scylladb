@@ -11,6 +11,7 @@
 #include "db/virtual_table.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
 #include "mutation/frozen_mutation.hh"
