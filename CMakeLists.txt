@@ -224,6 +224,7 @@ target_sources(scylla-main
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
     reader_concurrency_semaphore_group.cc
+    resources.cc
     serializer.cc
     service/direct_failure_detector/failure_detector.cc
     sstables_loader.cc

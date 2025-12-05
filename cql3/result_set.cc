@@ -9,8 +9,10 @@
  */
 
 #include <cstdint>
+#include "types/json_utils.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
+#include "utils/rjson.hh"
 #include "cql3/result_set.hh"
 
 namespace cql3 {
@@ -186,6 +188,179 @@ make_empty_metadata() {
         return result;
     }();
     return empty_metadata_cache;
+}
+
+template <typename OStream>
+future<> print_query_results_text_collapsed(OStream os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    struct column_values {
+        size_t max_size{0};
+        sstring header_format;
+        sstring row_format;
+        std::vector<sstring> values;
+
+        void add(sstring value) {
+            max_size = std::max(max_size, value.size());
+            values.push_back(std::move(value));
+        }
+    };
+
+    std::vector<column_values> columns;
+    columns.resize(column_metadata.size());
+
+    for (size_t i = 0; i < column_metadata.size(); ++i) {
+        columns[i].add(column_metadata[i]->name->text());
+    }
+
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (row[i]) {
+                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
+            } else {
+                columns[i].add("");
+            }
+        }
+    }
+
+    std::vector<sstring> separators(columns.size(), sstring());
+    for (size_t i = 0; i < columns.size(); ++i) {
+        auto& col_values = columns[i];
+        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
+        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
+        for (size_t c = 0; c < col_values.max_size; ++c) {
+            separators[i] += "-";
+        }
+    }
+
+    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
+        std::vector<sstring> row;
+        row.reserve(columns.size());
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
+            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
+        }
+        co_await os("{}\n", fmt::join(row, "|"));
+        if (!r) {
+            co_await os("-{}-\n", fmt::join(separators, "-+-"));
+        }
+    }
+}
+
+template <typename OStream>
+future<> print_query_results_text_expanded(OStream os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    size_t max_col_name_length = 0;
+    for (const auto& col : column_metadata) {
+        max_col_name_length = std::max(max_col_name_length, col->name->text().size());
+    }
+
+    size_t max_col_value_length = 0;
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (!row[i]) {
+                continue;
+            }
+            max_col_value_length = std::max(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))).size(), max_col_value_length);
+        }
+    }
+
+    const auto row_format = fmt::format(" {{:<{}}} | {{:<{}}}\n", max_col_name_length, max_col_value_length);
+
+    size_t row_index = 0;
+    for (const auto& row : result.result_set().rows()) {
+        co_await os("\n@ Row {}\n", ++row_index);
+        co_await os("{}+{}\n", sstring(max_col_name_length + 2, '-'), sstring(max_col_value_length + 2, '-'));
+
+        for (size_t i = 0; i < row.size(); ++i) {
+            co_await os(row_format, column_metadata[i]->name->text(),
+                row[i] ? column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))) : "");
+        }
+    }
+}
+
+template <typename OStream>
+future<> do_print_query_results_text(OStream os, const cql3::result& result, bool expand) {
+    if (expand) {
+        return print_query_results_text_expanded(std::move(os), result);
+    } else {
+        return print_query_results_text_collapsed(std::move(os), result);
+    }
+}
+
+template <typename OStream>
+future<> do_print_query_results_json(OStream os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    co_await os("[");
+    bool first = true;
+    for (const auto& row : result.result_set().rows()) {
+        if (first) {
+            first = false;
+        } else {
+            co_await os(",");
+        }
+        co_await os("{");
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (i) {
+                co_await os(",");
+            }
+            co_await os("{}:", rjson::quote_json_string(column_metadata[i]->name->text()));
+            if (!row[i] || row[i]->empty()) {
+                co_await os("null");
+                continue;
+            }
+            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
+            co_await os("{}", value);
+        }
+        co_await os("}");
+    }
+    co_await os("]");
+}
+
+struct std_ostream_wrapper {
+    std::ostream& os;
+
+    future<> operator()(auto&& raw) {
+        os << raw;
+        return make_ready_future<>();
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        fmt::print(os, fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        return make_ready_future<>();
+    }
+};
+
+future<> print_query_results_text(std::ostream& os, const result& result, bool expand) {
+    return do_print_query_results_text(std_ostream_wrapper{os}, result, expand);
+}
+
+future<> print_query_results_json(std::ostream& os, const result& result) {
+    return do_print_query_results_json(std_ostream_wrapper{os}, result);
+}
+
+struct seastar_outputs_stream_wrapper {
+    seastar::output_stream<char>& os;
+
+    future<> operator()(std::string_view raw) {
+        co_await os.write(raw.data(), raw.size());
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        auto str = fmt::format(fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        co_await os.write(str.data(), str.size());
+    }
+};
+
+future<> print_query_results_text(seastar::output_stream<char>& os, const result& result, bool expand) {
+    return do_print_query_results_text(seastar_outputs_stream_wrapper{os}, result, expand);
+}
+
+future<> print_query_results_json(seastar::output_stream<char>& os, const result& result) {
+    return do_print_query_results_json(seastar_outputs_stream_wrapper{os}, result);
 }
 
 }
