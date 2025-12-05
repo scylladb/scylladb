@@ -95,6 +95,8 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
+    virtual bool needs_guard(query_processor& qp, service::query_state& state) const override;
+
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
 
@@ -129,6 +131,11 @@ private:
             query_processor& qp,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
+
+    future<shared_ptr<cql_transport::messages::result_message>> execute_group0_batch(
+            query_processor& qp,
+            service::query_state& query_state, const query_options& options,
+            std::optional<service::group0_guard> guard) const;
 
     future<exceptions::coordinator_result<>> execute_without_conditions(
             query_processor& qp,

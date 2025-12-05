@@ -23,7 +23,7 @@ class modification_statement;
 class batch_statement : public raw::cf_statement {
 public:
     enum class type {
-        LOGGED, UNLOGGED, COUNTER
+        LOGGED, UNLOGGED, COUNTER, GROUP0
     };
 private:
     type _type;
