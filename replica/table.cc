@@ -2729,6 +2729,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     auto flush_future = co_await seastar::coroutine::as_future(flush());
 
     co_await _flush_gate.close();
+    co_await _sstable_add_gate.close();
   // FIXME: indentation
   _compaction_disabler_for_views.clear();
   co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
@@ -2742,7 +2743,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
 }
 
 bool compaction_group::empty() const noexcept {
-    return _memtables->empty() && live_sstable_count() == 0;
+    return _memtables->empty() && live_sstable_count() == 0 && _sstable_add_gate.get_count() == 0;
 }
 
 const schema_ptr& compaction_group::schema() const {
