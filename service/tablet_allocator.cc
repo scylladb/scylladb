@@ -635,6 +635,7 @@ class load_balancer {
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     dc_name _dc;
+    std::optional<sstring> _rack; // Set when plan making is limited to a single rack.
     size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
     size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
     uint64_t _total_capacity_storage; // Total storage of non-drained nodes in the balanced node set.
@@ -732,10 +733,19 @@ public:
 
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
-            auto dc_plan = co_await make_plan(dc);
-            auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
-            plan.merge(std::move(dc_plan));
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
+                    auto rack_plan = co_await make_plan(dc, rack);
+                    auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                    lblogger.log(level, "Prepared {} migrations in rack {} in DC {}", rack_plan.size(), rack, dc);
+                    plan.merge(std::move(rack_plan));
+                }
+            } else {
+                auto dc_plan = co_await make_plan(dc);
+                auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
+                plan.merge(std::move(dc_plan));
+            }
         }
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
@@ -2079,12 +2089,21 @@ public:
 
             for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
                 viable_targets.erase(r.host);
-                auto i = nodes.find(r.host);
-                if (i != nodes.end()) {
-                    auto& node = i->second;
-                    if (node.dc() == src_info.dc()) {
-                        rack_load[node.rack()] += 1;
-                    }
+            }
+
+            if (_rack) {
+                // "nodes" contains only nodes from a single rack, and so does viable_targets.
+                // Therefore, rack overload constraints cannot possibly exclude any target.
+                return viable_targets;
+            }
+
+            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+                auto* node = _tm->get_topology().find_node(r.host);
+                if (!node) {
+                    on_internal_error(lblogger, format("Node {} not found in topology", r.host));
+                }
+                if (node->dc() == src_info.dc()) {
+                    rack_load[node->rack()] += 1;
                 }
             }
 
@@ -2108,7 +2127,7 @@ public:
             return viable_targets;
         };
 
-        if (dst_info.rack() != src_info.rack()) {
+        if (!_rack && dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
             if (!targets.contains(dst_info.id)) {
                 auto new_rack_load = rack_load[dst_info.rack()] + 1;
@@ -2785,17 +2804,22 @@ public:
         }
     };
 
-    future<migration_plan> make_plan(dc_name dc) {
+    future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt) {
         migration_plan plan;
 
         _dc = dc;
+        _rack = rack;
+
+        auto node_filter = [&] (const locator::node& node) {
+            return node.dc_rack().dc == dc && (!rack || node.dc_rack().rack == *rack);
+        };
 
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = in_shuffle_mode();
 
         _stats.for_dc(dc).calls++;
-        lblogger.debug("Examining DC {} (shuffle={}, balancing={}, tablets_per_shard_goal={})",
-                dc, shuffle, _tm->tablets().balancing_enabled(), _tablets_per_shard_goal);
+        lblogger.debug("Examining DC {} rack {} (shuffle={}, balancing={}, tablets_per_shard_goal={})",
+                dc, rack, shuffle, _tm->tablets().balancing_enabled(), _tablets_per_shard_goal);
 
         const locator::topology& topo = _tm->get_topology();
 
@@ -2829,7 +2853,7 @@ public:
         };
 
         _tm->for_each_token_owner([&] (const locator::node& node) {
-            if (node.dc_rack().dc != dc) {
+            if (!node_filter(node)) {
                 return;
             }
             bool is_drained = node.get_state() == locator::node::state::being_decommissioned
@@ -2876,7 +2900,7 @@ public:
                         on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
                                                            r, global_tablet_id{table, tid}));
                     }
-                    if (node->left() && node->dc_rack().dc == dc) {
+                    if (node->left() && node_filter(*node)) {
                         ensure_node(r.host);
                         nodes_to_drain.insert(r.host);
                         nodes[r.host].drained = true;
