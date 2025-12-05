@@ -2611,8 +2611,8 @@ public:
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _t.get_sstables_manager();
     }
-    sstables::shared_sstable make_sstable() const override {
-        return _t.make_sstable();
+    sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
+        return _t.make_sstable(state);
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));

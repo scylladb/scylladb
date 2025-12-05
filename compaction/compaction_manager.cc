@@ -416,7 +416,9 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
     descriptor.creator = [&t] (shard_id) {
-        return t.make_sstable();
+        // All compaction types going through this path will work on normal input sstables only.
+        // Off-strategy, for example, waits until the sstables move out of staging state.
+        return t.make_sstable(sstables::sstable_state::normal);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
@@ -2297,8 +2299,11 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     compaction_progress_monitor monitor;
     compaction_data info = create_compaction_data();
     compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
+    desc.creator = [&t, sst] (shard_id _) {
+        // NOTE: preserves the sstable state, since we want the output to be on the same state as the original.
+        // For example, if base table has views, it's important that sstable produced by repair will be
+        // in the staging state.
+        return t.make_sstable(sst->state());
     };
     desc.replacer = [&] (compaction_completion_desc d) {
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
