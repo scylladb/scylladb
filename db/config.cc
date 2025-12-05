@@ -1470,6 +1470,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_max_expression_cache_entries_per_shard(this, "alternator_max_expression_cache_entries_per_shard", liveness::LiveUpdate, value_status::Used, 2000, "Maximum number of cached parsed request expressions, per shard.")
     , alternator_max_users_query_size_in_trace_output(this, "alternator_max_users_query_size_in_trace_output", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
             "Maximum size of user's command in trace output (`alternator_op` entry). Larger traces will be truncated and have `<truncated>` message appended - which doesn't count to the maximum limit.")
+    , alternator_response_gzip_compression_threshold_in_bytes(this, "alternator_response_gzip_compression_threshold_in_bytes", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
+            "Any value greater than 0 enables gzip compression of the Alternator response body (if the client requests it). The value indicate the minimum size of data to compress. Smaller responses will not be compressed.")
+    , alternator_response_deflate_compression_threshold_in_bytes(this, "alternator_response_deflate_compression_threshold_in_bytes", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
+            "Any value greater than 0 enables deflate compression of the Alternator response body (if the client requests it). The value indicate the minimum size of data to compress. Smaller responses will not be compressed.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")
