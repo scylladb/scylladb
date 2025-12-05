@@ -187,7 +187,7 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db, 
         auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
-            SCYLLA_ASSERT(b);
+            scylla_assert(b);
             return utf8_type->decompose(b->value().to_sstring());
         };
         // We merge the ranges to be compatible with how Cassandra shows it's size estimates table.
