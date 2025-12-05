@@ -3875,11 +3875,13 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     shared_sstable _sst;
     component_type _type;
     bool _last_component;
+    bool _leave_unsealed;
 public:
-    sstable_stream_sink_impl(shared_sstable sst, component_type type, bool last_component)
+    sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
         : _sst(std::move(sst))
         , _type(type)
-        , _last_component(last_component)
+        , _last_component(cfg.last_component)
+        , _leave_unsealed(cfg.leave_unsealed)
     {}
 private:
     future<> load_metadata() const {
@@ -3926,10 +3928,12 @@ public:
 
         co_return co_await make_file_output_stream(std::move(f), stream_options);
     }
-    future<shared_sstable> close_and_seal() override {
+    future<shared_sstable> close() override {
         if (_last_component) {
             // If we are the last component in a sequence, we can seal the table.
-            co_await _sst->_storage->seal(*_sst);
+            if (!_leave_unsealed) {
+                co_await _sst->_storage->seal(*_sst);
+            }
             co_return std::move(_sst);
         }
         _sst = {};
@@ -3946,7 +3950,7 @@ public:
     }
 };
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, bool last_component) {
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, sstable_stream_sink_cfg cfg) {
     auto desc = parse_path(component_filename, schema->ks_name(), schema->cf_name());
     auto sst = sstm.make_sstable(schema, s_opts, desc.generation, state, desc.version, desc.format);
 
@@ -3957,7 +3961,7 @@ std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstab
         type = component_type::TemporaryTOC;
     }
 
-    return std::make_unique<sstable_stream_sink_impl>(std::move(sst), type, last_component);
+    return std::make_unique<sstable_stream_sink_impl>(std::move(sst), type, cfg);
 }
 
 generation_type

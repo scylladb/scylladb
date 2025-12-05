@@ -1224,13 +1224,18 @@ public:
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.
-    virtual future<shared_sstable> close_and_seal() = 0;
+    virtual future<shared_sstable> close() = 0;
     virtual future<> abort() = 0;
+};
+
+struct sstable_stream_sink_cfg {
+    bool last_component = false;
+    bool leave_unsealed = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, bool last_component);
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, sstable_stream_sink_cfg cfg);
 
 } // namespace sstables
 
