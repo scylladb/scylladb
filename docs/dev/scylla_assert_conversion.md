@@ -11,7 +11,7 @@ This document tracks the conversion of `SCYLLA_ASSERT` to the new `scylla_assert
 - **Unsafe conversions (noexcept)**: ~187
 - **Unsafe conversions (destructors)**: ~36
 - **Safe conversions possible**: ~668
-- **Converted so far**: 26
+- **Converted so far**: 54
 
 ## Safe vs Unsafe Contexts
 
@@ -132,6 +132,17 @@ For contexts that cannot be converted:
     - Line 3061: Replace request ring check
     - Line 3166: Transition nodes empty check
     - Line 4016: Barrier validation in `stop()`
+
+11. **service/storage_service.cc** (28 conversions, 3 unsafe kept as SCYLLA_ASSERT)
+    - Lines 603, 691, 857, 901, 969: Core service operations
+    - Lines 1523, 1575, 1844, 2086, 2170, 2195: Bootstrap and join operations
+    - Lines 2319, 2352, 2354: Replacement operations
+    - Lines 3003, 3028, 3228: Cluster join and drain operations
+    - Lines 3995, 4047, 4353: Decommission and removenode operations
+    - Lines 4473, 5787, 5834, 5958: CDC and topology change operations
+    - Lines 6490, 6491: Tablet streaming operations
+    - Line 7512: Join node response handler
+    - **Unsafe (kept as SCYLLA_ASSERT)**: Lines 3398, 5760, 5775 (noexcept functions)
 
 ## Testing
 
