@@ -143,7 +143,7 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm);
 
 static std::vector<column_definition> create_columns_from_column_rows(
                 const query::result_set& rows, const sstring& keyspace,
-                const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns,
+                const sstring& table, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns,
                 const data_dictionary::user_types_storage& user_types);
 
 
@@ -1804,9 +1804,6 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     auto scylla_tables_mutation = make_scylla_tables_mutation(table, timestamp);
 
     list_type_impl::native_type flags;
-    if (table->is_super()) {
-        flags.emplace_back("super");
-    }
     if (table->is_dense()) {
         flags.emplace_back("dense");
     }
@@ -2280,7 +2277,6 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     auto id = table_id(table_row.get_nonnull<utils::UUID>("id"));
     schema_builder builder{ks_name, cf_name, id};
 
-    auto cf = cf_type::standard;
     auto is_dense = false;
     auto is_counter = false;
     auto is_compound = false;
@@ -2289,7 +2285,6 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (flags) {
         for (auto& s : *flags) {
             if (s == "super") {
-                // cf = cf_type::super;
                 fail(unimplemented::cause::SUPER);
             } else if (s == "dense") {
                 is_dense = true;
@@ -2305,9 +2300,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     std::vector<column_definition> column_defs = create_columns_from_column_rows(
             query::result_set(sm.columns_mutation()),
             ks_name,
-            cf_name,/*,
-            fullRawComparator, */
-            cf == cf_type::super,
+            cf_name,
             column_view_virtual::no,
             computed_columns,
             user_types);
@@ -2486,9 +2479,7 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
 static std::vector<column_definition> create_columns_from_column_rows(
                                                                const query::result_set& rows,
                                                                const sstring& keyspace,
-                                                               const sstring& table, /*,
-                                                               AbstractType<?> rawComparator, */
-                                                               bool is_super,
+                                                               const sstring& table,
                                                                column_view_virtual is_view_virtual,
                                                                const computed_columns_map& computed_columns,
                                                                const data_dictionary::user_types_storage& user_types)
@@ -2565,12 +2556,12 @@ static schema_builder prepare_view_schema_builder_from_mutations(const schema_ct
     }
 
     auto computed_columns = get_computed_columns(sm);
-    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns, user_types);
+    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, column_view_virtual::no, computed_columns, user_types);
     for (auto&& cdef : column_defs) {
         builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns, user_types);
+        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, column_view_virtual::yes, computed_columns, user_types);
         for (auto&& cdef : column_defs) {
             builder.with_column_ordered(cdef);
         }

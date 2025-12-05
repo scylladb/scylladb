@@ -41,7 +41,6 @@ std::string_view format_as(cause c) {
         case cause::NONATOMIC: return "NONATOMIC";
         case cause::CONSISTENCY: return "CONSISTENCY";
         case cause::HINT: return "HINT";
-        case cause::SUPER: return "SUPER";
         case cause::WRAP_AROUND: return "WRAP_AROUND";
         case cause::STORAGE_SERVICE: return "STORAGE_SERVICE";
         case cause::API: return "API";

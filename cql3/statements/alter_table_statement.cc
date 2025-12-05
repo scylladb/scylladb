@@ -186,10 +186,6 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
         if (!schema.is_compound()) {
             throw exceptions::invalid_request_exception("Cannot use non-frozen collections with a non-composite PRIMARY KEY");
         }
-        if (schema.is_super()) {
-            throw exceptions::invalid_request_exception("Cannot use non-frozen collections with super column families");
-        }
-
 
         // If there used to be a non-frozen collection column with the same name (that has been dropped),
         // we could still have some data using the old type, and so we can't allow adding a collection
