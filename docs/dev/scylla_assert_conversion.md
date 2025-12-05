@@ -8,10 +8,10 @@ This document tracks the conversion of `SCYLLA_ASSERT` to the new `scylla_assert
 
 - **Total SCYLLA_ASSERT usages**: ~1307 (including tests)
 - **Non-test usages**: ~886
-- **Unsafe conversions (noexcept)**: ~181
-- **Unsafe conversions (destructors)**: ~37
+- **Unsafe conversions (noexcept)**: ~187
+- **Unsafe conversions (destructors)**: ~36
 - **Safe conversions possible**: ~668
-- **Converted so far**: 10
+- **Converted so far**: 15
 
 ## Safe vs Unsafe Contexts
 
@@ -108,6 +108,17 @@ For contexts that cannot be converted:
 6. **db/view/row_locking.cc** (2 conversions)
    - Line 156: `unlock()` - partition lock check
    - Line 163: `unlock()` - row lock check
+
+7. **db/size_estimates_virtual_reader.cc** (1 conversion)
+   - Line 190: Lambda in `get_local_ranges()`
+
+8. **db/corrupt_data_handler.cc** (2 conversions)
+   - Line 78: `set_cell_raw` lambda
+   - Line 85: `set_cell` lambda
+
+9. **raft/tracker.cc** (2 conversions)
+   - Line 49: Switch default case with descriptive error
+   - Line 90: Switch default case with descriptive error
 
 ## Testing
 
