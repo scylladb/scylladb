@@ -84,6 +84,10 @@ class compaction_group {
     seastar::named_gate _async_gate;
     // Gates flushes.
     seastar::named_gate _flush_gate;
+    // Gates sstable being added to the group.
+    // This prevents the group from being considered empty when sstables are being added.
+    // Crucial for tablet split which ACKs split for a table when all pre-split groups are empty.
+    seastar::named_gate _sstable_add_gate;
     bool _tombstone_gc_enabled = true;
     std::optional<compaction::compaction_backlog_tracker> _backlog_tracker;
     repair_classifier_func _repair_sstable_classifier;
@@ -244,6 +248,10 @@ public:
 
     seastar::named_gate& flush_gate() noexcept {
         return _flush_gate;
+    }
+
+    seastar::named_gate& sstable_add_gate() noexcept {
+        return _sstable_add_gate;
     }
 
     compaction::compaction_manager& get_compaction_manager() noexcept;
