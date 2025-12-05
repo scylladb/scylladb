@@ -1662,7 +1662,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg;
             sharded<service::tablet_allocator> tablet_allocator;
-            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
+            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db), std::ref(feature_service)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });

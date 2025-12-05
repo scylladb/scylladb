@@ -1914,25 +1914,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto leaving = locator::get_leaving_replica(tinfo, trinfo);
             auto pending = trinfo.pending_replica;
             const dht::token_range trange {tmap.get_token_range(gid.tablet)};
-            if (leaving && pending) {
+            if (trinfo.transition == locator::tablet_transition_kind::migration) {
                 // Handle tablet migration
                 new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
-            } else if (!leaving && pending) {
+            } else if (trinfo.transition == locator::tablet_transition_kind::rebuild || trinfo.transition == locator::tablet_transition_kind::rebuild_v2) {
                 // Handle rebuild: compute the average tablet size of existing replicas
+                auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tinfo, trinfo);
                 new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
-                uint64_t tablet_size_sum = 0;
-                size_t replica_count = 0;
-                const locator::range_based_tablet_id rb_tid {gid.table, trange};
-                for (auto r : tinfo.replicas) {
-                    auto tablet_size_opt = new_load_stats->get_tablet_size(r.host, rb_tid);
-                    if (tablet_size_opt) {
-                        tablet_size_sum += *tablet_size_opt;
-                        replica_count++;
+                if (tsi.read_from.size() == 1) {
+                    new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = 0;
+                } else {
+                    uint64_t tablet_size_sum = 0;
+                    size_t replica_count = 0;
+                    const locator::range_based_tablet_id rb_tid {gid.table, trange};
+                    for (auto& r : tsi.read_from) {
+                        auto tablet_size_opt = new_load_stats->get_tablet_size(r.host, rb_tid);
+                        if (tablet_size_opt) {
+                            tablet_size_sum += *tablet_size_opt;
+                            replica_count++;
+                        }
                     }
-                }
 
-                if (replica_count && new_load_stats->tablet_stats.contains(pending->host)) {
-                    new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
+                    if (replica_count && new_load_stats->tablet_stats.contains(pending->host)) {
+                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
+                    }
                 }
             }
             if (new_load_stats) {
