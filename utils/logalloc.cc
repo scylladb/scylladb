@@ -2948,17 +2948,17 @@ void allocating_section::on_alloc_failure(logalloc::region& r) {
     r.allocator().invalidate_references();
     if (r.get_tracker().get_impl().segment_pool().allocation_failure_flag()) {
         _lsa_reserve *= 2;
-        if (!_name_supplier) {
+        if (!_namer) {
             llogger.info("LSA allocation failure, increasing reserve in section {} to {} segments; trace: {}", fmt::ptr(this), _lsa_reserve, current_backtrace());
         } else {
-            llogger.info("LSA allocation failure, increasing reserve in section {} ({}) to {} segments; trace: {}", fmt::ptr(this), _name_supplier(), _lsa_reserve, current_backtrace());
+            llogger.info("LSA allocation failure, increasing reserve in section {} ({}) to {} segments; trace: {}", fmt::ptr(this), _namer, _lsa_reserve, current_backtrace());
         }
     } else {
         _std_reserve *= 2;
-        if (!_name_supplier) {
+        if (!_namer) {
             llogger.info("Standard allocator failure, increasing head-room in section {} to {} [B]; trace: {}", fmt::ptr(this), _std_reserve, current_backtrace());
         } else {
-            llogger.info("Standard allocator failure, increasing head-room in section {} ({}) to {} [B]; trace: {}", fmt::ptr(this), _name_supplier(), _std_reserve, current_backtrace());
+            llogger.info("Standard allocator failure, increasing head-room in section {} ({}) to {} [B]; trace: {}", fmt::ptr(this), _namer, _std_reserve, current_backtrace());
         }
     }
     reserve(r.get_tracker().get_impl());

@@ -1287,9 +1287,15 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
     , _partitions(dht::raw_token_less_comparator{})
     , _underlying(src())
     , _snapshot_source(std::move(src))
-    , _update_section([this] { return format("{}.{}_update", _schema->ks_name(), _schema->cf_name()); })
-    , _populate_section([this] { return format("{}.{}_populate", _schema->ks_name(), _schema->cf_name()); })
-    , _read_section([this] { return format("{}.{}_read", _schema->ks_name(), _schema->cf_name()); })
+    , _update_section(logalloc::allocating_section_namer([this] (fmt::memory_buffer& buf) {
+        fmt::format_to(std::back_inserter(buf), "{}.{}_update", _schema->ks_name(), _schema->cf_name());
+    }))
+    , _populate_section(logalloc::allocating_section_namer([this] (fmt::memory_buffer& buf) {
+        fmt::format_to(std::back_inserter(buf), "{}.{}_populate", _schema->ks_name(), _schema->cf_name());
+    }))
+    , _read_section(logalloc::allocating_section_namer([this] (fmt::memory_buffer& buf) {
+        fmt::format_to(std::back_inserter(buf), "{}.{}_read", _schema->ks_name(), _schema->cf_name());
+    }))
 {
   try {
     with_allocator(_tracker.allocator(), [this, cont] {
