@@ -65,6 +65,8 @@ public:
      * @param endpoint the endpoint marked DOWN.
      */
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id host_id) {}
+
+    virtual void on_client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids) {}
 };
 
 class endpoint_lifecycle_notifier {
@@ -79,6 +81,8 @@ public:
     future<> notify_released(locator::host_id host_id);
     future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_joined(gms::inet_address endpoint, locator::host_id host_id);
+
+    future<> notify_client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids);
 };
 
 }

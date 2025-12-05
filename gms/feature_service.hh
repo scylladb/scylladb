@@ -172,6 +172,7 @@ public:
     gms::feature repair_msg_split { *this, "REPAIR_MSG_SPLIT"sv };
     gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
     gms::feature ms_sstable { *this, "MS_SSTABLE_FORMAT"sv };
+    gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
