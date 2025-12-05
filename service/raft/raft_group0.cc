@@ -244,6 +244,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                                                             service::migration_manager& mm, bool topology_change_enabled) {
     auto state_machine = std::make_unique<group0_state_machine>(
             _client, mm, qp.proxy(), ss, _gossiper, _feat, topology_change_enabled);
+    auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
@@ -277,6 +278,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
+        .state_machine = state_machine_ref,
         .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms
     };
 }
