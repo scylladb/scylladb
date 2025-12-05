@@ -1356,6 +1356,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
         case sstables::scylla_metadata_type::Schema: return "schema";
+        case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
     }
     std::abort();
 }
@@ -1412,6 +1413,28 @@ public:
             _writer.EndObject();
         }
         _writer.EndArray();
+    }
+    void operator()(const sstables::components_digests& val) const {
+        _writer.StartObject();
+
+        auto write_digest = [&](std::string_view key, const std::optional<uint32_t>& digest) {
+            if (digest) {
+                _writer.Key(key);
+                _writer.Uint(*digest);
+            }
+        };
+
+        write_digest("data_digest", val.data_digest);
+        write_digest("compression_digest", val.compression_digest);
+        write_digest("filter_digest",val.filter_digest);
+        write_digest("statistics_digest", val.statistics_digest);
+        write_digest("summary_digest", val.summary_digest);
+        write_digest("index_digest", val.index_digest);
+        write_digest("toc_digest", val.toc_digest);
+        write_digest("partitions_digest", val.partitions_digest);
+        write_digest("rows_digest", val.rows_digest);
+
+        _writer.EndObject();
     }
     void operator()(const sstables::sstable_enabled_features& val) const {
         std::pair<sstables::sstable_feature, const char*> all_features[] = {

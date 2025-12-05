@@ -816,6 +816,7 @@ public:
     future<data_sink> wrap_sink(const sstables::sstable& sst, sstables::component_type type, data_sink sink) override {
         switch (type) {
         case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryScylla:
         case sstables::component_type::TemporaryTOC:
         case sstables::component_type::TOC:
             co_return sink;
@@ -844,6 +845,7 @@ public:
                                                          sstables::component_type type,
                                                          data_source src) override {
         switch (type) {
+        case sstables::component_type::TemporaryScylla:
         case sstables::component_type::Scylla:
         case sstables::component_type::TemporaryTOC:
         case sstables::component_type::TOC:

@@ -44,6 +44,7 @@ sstable_version_constants::component_map_t sstable_version_constants::create_com
         { component_type::Filter, "Filter.db" },
         { component_type::Statistics, "Statistics.db" },
         { component_type::Scylla, "Scylla.db" },
+        { component_type::TemporaryScylla, "Scylla.db.tmp" },
         { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
         { component_type::TemporaryStatistics, "Statistics.db.tmp" }
     };
