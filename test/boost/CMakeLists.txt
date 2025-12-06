@@ -370,6 +370,7 @@ add_scylla_test(combined_tests
     sstable_compression_config_test.cc
     sstable_directory_test.cc
     sstable_set_test.cc
+    sstable_tablet_streaming.cc
     statement_restrictions_test.cc
     storage_proxy_test.cc
     tablets_test.cc
