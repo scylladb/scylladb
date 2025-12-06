@@ -15,33 +15,14 @@
 namespace unimplemented {
 
 enum class cause {
-    API,
-    INDEXES,
-    LWT,
-    PAGING,
-    AUTH,
-    PERMISSIONS,
-    TRIGGERS,
-    COUNTERS,
-    METRICS,
-    MIGRATIONS,
-    GOSSIP,
-    TOKEN_RESTRICTION,
-    LEGACY_COMPOSITE_KEYS,
-    COLLECTION_RANGE_TOMBSTONES,
-    RANGE_DELETES,
-    VALIDATION,
-    REVERSED,
-    COMPRESSION,
-    NONATOMIC,
-    CONSISTENCY,
-    HINT,
-    SUPER,
-    WRAP_AROUND, // Support for handling wrap around ranges in queries on database level and below
-    STORAGE_SERVICE,
-    SCHEMA_CHANGE,
-    MIXED_CF,
-    SSTABLE_FORMAT_M,
+    API,         // REST API features not implemented (force_user_defined_compaction, split_output in major compaction)
+    INDEXES,     // Secondary index features (filtering on collections, clustering columns)
+    TRIGGERS,    // Trigger support in schema tables and storage proxy
+    METRICS,     // Query processor metrics
+    VALIDATION,  // Schema validation in DDL statements (drop keyspace, truncate, token functions)
+    REVERSED,    // Reversed types in CQL protocol
+    HINT,        // Hint replaying in batchlog manager
+    SUPER,       // Super column families (legacy Cassandra feature, never supported)
 };
 
 [[noreturn]] void fail(cause what);

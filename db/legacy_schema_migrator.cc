@@ -152,8 +152,8 @@ public:
 
             builder.with_version(sm.digest());
 
-            cf_type cf = sstring_to_cf_type(td.get_or("type", sstring("standard")));
-            if (cf == cf_type::super) {
+            auto type_str = td.get_or("type", sstring("standard"));
+            if (type_str == "Super") {
                 fail(unimplemented::cause::SUPER);
             }
 
@@ -284,13 +284,8 @@ public:
                     if (kind_str == "compact_value") {
                         continue;
                     }
-                    if (kind == column_kind::clustering_key) {
-                        if (cf == cf_type::super && component_index != 0) {
-                            continue;
-                        }
-                        if (cf != cf_type::super && !is_compound) {
-                            continue;
-                        }
+                    if (kind == column_kind::clustering_key && !is_compound) {
+                        continue;
                     }
                 }
 

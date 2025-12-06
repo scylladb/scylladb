@@ -134,14 +134,11 @@ bool is_compatible(column_kind k1, column_kind k2);
 
 enum class cf_type : uint8_t {
     standard,
-    super,
 };
 
 inline sstring cf_type_to_sstring(cf_type t) {
     if (t == cf_type::standard) {
         return "Standard";
-    } else if (t == cf_type::super) {
-        return "Super";
     }
     throw std::invalid_argument(format("unknown type: {:d}\n", uint8_t(t)));
 }
@@ -149,8 +146,6 @@ inline sstring cf_type_to_sstring(cf_type t) {
 inline cf_type sstring_to_cf_type(sstring name) {
     if (name == "Standard") {
         return cf_type::standard;
-    } else if (name == "Super") {
-        return cf_type::super;
     }
     throw std::invalid_argument(format("unknown type: {}\n", name));
 }
@@ -688,13 +683,13 @@ public:
     }
 
     bool is_cql3_table() const {
-        return !is_super() && !is_dense() && is_compound();
+        return !is_dense() && is_compound();
     }
     bool is_compact_table() const {
         return !is_cql3_table();
     }
     bool is_static_compact_table() const {
-        return !is_super() && !is_dense() && !is_compound();
+        return !is_dense() && !is_compound();
     }
 
     const table_id& id() const {
@@ -709,10 +704,6 @@ public:
 
     cf_type type() const {
         return _raw._type;
-    }
-
-    bool is_super() const {
-        return _raw._type == cf_type::super;
     }
 
     gc_clock::duration gc_grace_seconds() const {
