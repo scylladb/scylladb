@@ -2117,11 +2117,14 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     sstable_id sid;
-    if (generation().is_uuid_based()) {
+    // Force a random sstable_id for testing purposes
+    bool random_sstable_identifier = utils::get_local_injector().is_enabled("random_sstable_identifier");
+    if (!random_sstable_identifier && generation().is_uuid_based()) {
         sid = sstable_id(generation().as_uuid());
     } else {
         sid = sstable_id(utils::UUID_gen::get_time_UUID());
-        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
+        auto msg = random_sstable_identifier ? "forced random sstable_id" : "has numerical generation";
+        sstlog.info("SSTable {} {}. SSTable identifier in scylla_metadata set to {}", get_filename(), msg, sid);
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
 
@@ -2540,8 +2543,11 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
-future<> sstable::snapshot(const sstring& dir) const {
-    return _storage->snapshot(*this, dir, storage::absolute_path::yes);
+future<generation_type> sstable::snapshot(const sstring& dir, bool use_sstable_identifier) const {
+    // Use the sstable identifier UUID if available to enable global de-duplication of sstables in backup.
+    generation_type gen = (use_sstable_identifier && _sstable_identifier) ? generation_type(_sstable_identifier->uuid()) : _generation;
+    co_await _storage->snapshot(*this, dir, storage::absolute_path::yes, gen);
+    co_return gen;
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {

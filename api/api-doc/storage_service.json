@@ -729,6 +729,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"use_sstable_identifier",
+                     "description":"Use the sstable identifier UUID, if available, rather than the sstable generation.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             },

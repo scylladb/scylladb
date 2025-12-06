@@ -146,7 +146,8 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         auto info = parse_scrub_options(ctx, std::move(req));
 
         if (!info.snapshot_tag.empty()) {
-            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, db::snapshot_ctl::skip_flush::no);
+            db::snapshot_options opts = {.skip_flush = false, .use_sstable_identifier = false};
+            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();

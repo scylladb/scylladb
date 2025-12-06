@@ -2020,12 +2020,16 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
-        auto sf = db::snapshot_ctl::skip_flush(strcasecmp(sfopt.c_str(), "true") == 0);
+        auto usiopt = req->get_query_param("use_sstable_identifier");
+        db::snapshot_options opts = {
+            .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
+            .use_sstable_identifier = strcasecmp(usiopt.c_str(), "true") == 0
+        };
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
         try {
             if (column_families.empty()) {
-                co_await snap_ctl.local().take_snapshot(tag, keynames, sf);
+                co_await snap_ctl.local().take_snapshot(tag, keynames, opts);
             } else {
                 if (keynames.empty()) {
                     throw httpd::bad_param_exception("The keyspace of column families must be specified");
@@ -2033,7 +2037,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 if (keynames.size() > 1) {
                     throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
                 }
-                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
+                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, opts);
             }
             co_return json_void();
         } catch (...) {
@@ -2068,7 +2072,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto info = parse_scrub_options(ctx, std::move(req));
 
         if (!info.snapshot_tag.empty()) {
-            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, db::snapshot_ctl::skip_flush::no);
+            db::snapshot_options opts = {.skip_flush = false, .use_sstable_identifier = false};
+            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
         }
 
         compaction::compaction_stats stats;
