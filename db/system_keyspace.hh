@@ -198,6 +198,7 @@ public:
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
+    static constexpr auto CLIENT_ROUTES = "client_routes";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -296,6 +297,7 @@ public:
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
     static schema_ptr view_building_tasks();
+    static schema_ptr client_routes();
 
     // auth
     static schema_ptr roles();
@@ -545,6 +547,17 @@ public:
         gms::inet_address listen_address;
     };
 
+    struct client_route {
+        sstring connection_id;
+        utils::UUID host_id;
+        sstring address;
+        // At least one of the ports should be specified
+        std::optional<int32_t> port;
+        std::optional<int32_t> tls_port;
+        std::optional<int32_t> alternator_port;
+        std::optional<int32_t> alternator_https_port;
+    };
+
     future<local_info> load_local_info();
     future<> save_local_info(local_info, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
 public:
@@ -583,6 +596,11 @@ public:
     future<std::optional<mutation>> get_view_building_processing_base_id_mutation();
     future<mutation> make_view_building_processing_base_id_mutation(api::timestamp_type ts, table_id base_id);
     future<mutation> make_remove_view_building_processing_base_id_mutation(api::timestamp_type ts);
+
+    // system.client_routes
+    future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, std::string_view connection_id, const utils::UUID& host_id);
+    future<mutation> make_update_client_route_mutation(api::timestamp_type ts, const client_route& cm);
+    future<std::vector<client_route>> get_client_routes() const;
 
     // CDC related functions
 

@@ -19,7 +19,7 @@ namespace cql_transport {
 
 class event {
 public:
-    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE };
+    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE, CLIENT_ROUTES_CHANGE };
 
     const event_type type;
 private:
@@ -28,6 +28,7 @@ public:
     class topology_change;
     class status_change;
     class schema_change;
+    class client_routes_change;
 };
 
 class event::topology_change : public event {
@@ -77,6 +78,22 @@ public:
     template <typename... Ts>
     schema_change(change_type change, target_type target, sstring keyspace, Ts... arguments)
         : schema_change(change, target, keyspace, std::vector<sstring>{std::move(arguments)...}) {}
+};
+
+class event::client_routes_change : public event {
+public:
+    enum class change_type { UPDATE_NODES };
+
+    const change_type change;
+    const std::vector<sstring> connection_ids;
+    const std::vector<sstring> host_ids;
+
+    client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids)
+        : event(event_type::CLIENT_ROUTES_CHANGE)
+        , change(change_type::UPDATE_NODES)
+        , connection_ids(connection_ids)
+        , host_ids(host_ids) 
+    { }
 };
 
 }

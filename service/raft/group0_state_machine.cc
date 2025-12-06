@@ -124,8 +124,38 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
     return false;
 }
 
-future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
+struct client_routes_update {
+    std::vector<sstring> connection_ids;
+    std::vector<sstring> host_ids;
+};
+
+void collect_client_routes_update(schema_ptr s, mutation& mut, storage_proxy& proxy, client_routes_update& client_routes_update) {
+    if (!proxy.data_dictionary().has_schema(db::system_keyspace::NAME, db::system_keyspace::CLIENT_ROUTES)) {
+        return;
+    }
+
+    auto s_client_routes = proxy.data_dictionary().find_schema(db::system_keyspace::NAME, db::system_keyspace::CLIENT_ROUTES);
+    if (mut.column_family_id() == s_client_routes->id()) {
+        const auto pk_components = mut.decorated_key()._key.explode(*s_client_routes);
+        if (!pk_components.empty()) {
+            auto conn_uuid = value_cast<sstring>(utf8_type->deserialize_value(pk_components[0]));
+            for (const rows_entry& re : mut.partition().clustered_rows()) {
+                const auto ck_components = re.key().explode(*s_client_routes);
+                if (ck_components.empty()) {
+                    continue;
+                }
+                auto host_uuid = value_cast<utils::UUID>(uuid_type->deserialize_value(ck_components[0]));
+                client_routes_update.connection_ids.push_back(conn_uuid);
+                client_routes_update.host_ids.push_back(fmt::to_string(host_uuid));
+            }
+        }
+    }
+}
+
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
+    client_routes_update routes_update;
+
     mutations.reserve(cms.size());
     bool need_system_topology_flush = false;
     try {
@@ -133,7 +163,10 @@ future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address fro
             auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
             auto& s = tbl.schema();
             auto mut = co_await to_mutation_gently(cm, s);
+
             need_system_topology_flush = need_system_topology_flush || should_flush_system_topology_after_applying(mut, proxy.data_dictionary());
+            collect_client_routes_update(s, mut, proxy, routes_update);
+
             mutations.emplace_back(co_await freeze_gently(mut), s);
         }
     } catch (replica::no_such_column_family& e) {
@@ -146,6 +179,11 @@ future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address fro
     if (need_system_topology_flush) {
         slogger.trace("write_mutations_to_database: flushing {}.{}", db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
         co_await proxy.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+    }
+
+    if (routes_update.connection_ids.size() > 0) {
+        slogger.trace("write_mutations_to_database: notify_client_routes_change connection_id={} host_ids={}", routes_update.connection_ids, routes_update.host_ids);
+        co_await storage_service.notify_client_routes_change(routes_update.connection_ids, routes_update.host_ids);
     }
 }
 
@@ -251,7 +289,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     [&] (topology_change& chng) -> future<> {
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
-        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
+        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
         co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
         co_await reload_modules(std::move(modules_to_reload));
     },
@@ -263,7 +301,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (write_mutations& muts) -> future<> {
         auto modules_to_reload = get_modules_to_reload(muts.mutations);
-        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
         co_await reload_modules(std::move(modules_to_reload));
     }
     ), cmd.change);

@@ -63,6 +63,8 @@
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
 
+#include "api/api-doc/client_routes.json.hh"
+
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
 
@@ -602,6 +604,161 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
 
 static
 future<json::json_return_type>
+rest_set_client_routes(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().client_routes) {
+        apilog.warn("set_client_routes: called before the cluster feature was enabled");
+        throw std::runtime_error("set_client_routes requires all nodes to support the CLIENT_ROUTES cluster feature");
+    }
+
+    rapidjson::Document root;
+    auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+    root.Parse(content.c_str());
+    if (!root.IsArray()) {
+        throw bad_param_exception("Body must be a JSON array");
+    }
+
+    co_await ss.invoke_on(0, [&group0_client, &root] (service::storage_service& ss) -> future<> {
+        int retries = 10;
+        while (true) {
+            try {
+                auto batch = service::group0_batch(co_await group0_client.start_operation(ss.get_abort_source()));
+
+                for (const auto& v : root.GetArray()) {
+                    if (!v.IsObject()) { throw bad_param_exception("Each element must be object"); }
+
+                    // Required string fields
+                    for (const auto& name : {"connection_id", "host_id", "address"}) {
+                        if (!v.HasMember(name)) {
+                            throw bad_param_exception(fmt::format("Missing '{}'", name));
+                        }
+                        if (!v[name].IsString()) {
+                            throw bad_param_exception(fmt::format("'{}' must be a string", name));
+                        }
+                    }
+
+                    // Optional integer port fields; capture only those provided.
+                    std::map<sstring, std::optional<int32_t>> port_map;
+                    for (const auto& name : {"port", "tls_port", "alternator_port", "alternator_https_port"}) {
+                        if (v.HasMember(name)) {
+                            if (!v[name].IsInt()) {
+                                throw bad_param_exception(fmt::format("'{}' must be an integer", name));
+                            }
+                            port_map[name] = v[name].GetInt();
+                        }
+                    }
+                    if (port_map.empty()) {
+                        throw bad_param_exception("At least one port field ('port', 'tls_port', 'alternator_port', 'alternator_https_port') must be specified");
+                    }
+
+                    db::system_keyspace::client_route route{
+                        {v["connection_id"].GetString(), v["connection_id"].GetStringLength()},
+                        utils::UUID{v["host_id"].GetString()}, // Valid UUID cannot have null terminator in the middle
+                        {v["address"].GetString(), v["address"].GetStringLength()},
+                        port_map["port"],
+                        port_map["tls_port"],
+                        port_map["alternator_port"],
+                        port_map["alternator_https_port"]
+                    };
+
+                    auto mut = co_await group0_client.sys_ks().make_update_client_route_mutation(batch.write_timestamp(), route);
+                    batch.add_mutation(std::move(mut), "update_client_route");
+                }
+                co_await std::move(batch).commit(group0_client, ss.get_abort_source(), {});
+            } catch (const ::service::group0_concurrent_modification&) {
+                apilog.warn("Failed to set client routes due to guard conflict, retries={}", retries);
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+            break;
+        }
+    });
+    co_return seastar::json::json_void();
+}
+
+static
+future<json::json_return_type>
+rest_delete_client_routes(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().client_routes) {
+        apilog.warn("delete_client_routes: called before the cluster feature was enabled");
+        throw std::runtime_error("delete_client_routes requires all nodes to support the CLIENT_ROUTES cluster feature");
+    }
+
+    rapidjson::Document root;
+    auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+    root.Parse(content.c_str());
+    if (!root.IsArray()) {
+        throw bad_param_exception("Body must be a JSON array");
+    }
+
+    co_await ss.invoke_on(0, [&group0_client, &root] (service::storage_service& ss) -> future<> {
+        int retries = 10;
+        while (true) {
+            try {
+                auto batch = service::group0_batch(co_await group0_client.start_operation(ss.get_abort_source()));
+
+                for (const auto& v : root.GetArray()) {
+                    if (!v.IsObject()) {
+                        throw bad_param_exception("Each element must be object");
+                    }
+                    if (!v.HasMember("connection_id")) {
+                        throw bad_param_exception("Missing 'connection_id'");
+                    }
+                    if (!v.HasMember("host_id")) {
+                        throw bad_param_exception("Missing 'host_id'");
+                    }
+                    if (!v["connection_id"].IsString()) {
+                        throw bad_param_exception("'connection_id' must be string");
+                    }
+                    if (!v["host_id"].IsString()) {
+                        throw bad_param_exception("'host_id' must be string");
+                    }
+
+                    const auto connection_id = sstring{v["connection_id"].GetString(), v["connection_id"].GetStringLength()};
+                    const auto host_id = utils::UUID{v["host_id"].GetString()}; 
+
+                    auto mut = co_await group0_client.sys_ks().make_remove_client_route_mutation(batch.write_timestamp(), connection_id, host_id);
+                    batch.add_mutation(std::move(mut), "remove_client_route");
+                }
+                co_await std::move(batch).commit(group0_client, ss.get_abort_source(), {});
+            } catch (const ::service::group0_concurrent_modification&) {
+                apilog.warn("Failed to delete client routes due to guard conflict, retries={}", retries);
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+            break;
+        }
+    });
+    co_return seastar::json::json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_client_routes(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().client_routes) {
+        apilog.warn("get_client_routes: called before the cluster feature was enabled");
+        throw std::runtime_error("get_client_routes requires all nodes to support the CLIENT_ROUTES cluster feature");
+    }
+    co_return co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<json::json_return_type> {
+        co_return json::json_return_type(stream_range_as_array(co_await group0_client.sys_ks().get_client_routes(), [](const db::system_keyspace::client_route & cm) {
+            seastar::httpd::client_routes_json::client_routes_entry obj;
+            obj.connection_id = cm.connection_id;
+            obj.host_id = fmt::to_string(cm.host_id);
+            obj.address = cm.address;
+            if (cm.port.has_value()) { obj.port = cm.port.value(); }
+            if (cm.tls_port.has_value()) { obj.tls_port = cm.tls_port.value(); }
+            if (cm.alternator_port.has_value()) { obj.alternator_port = cm.alternator_port.value(); }
+            if (cm.alternator_https_port.has_value()) { obj.alternator_https_port = cm.alternator_https_port.value(); }
+            return obj;
+        }));
+    });
+}
+
+static
+future<json::json_return_type>
 rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req) {
         bool filters_provided = false;
 
@@ -683,7 +840,7 @@ rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_servi
 
         std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
-                [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
+                [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry) {
             ss::maplist_mapper m;
             if (entry.first.start()) {
                 m.key.push(entry.first.start().value().value().to_sstring());
@@ -1876,6 +2033,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
     sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
     ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
+
+    seastar::httpd::client_routes_json::set_client_routes.set(r, rest_bind(rest_set_client_routes, ctx, ss, group0_client));
+    seastar::httpd::client_routes_json::delete_client_routes.set(r, rest_bind(rest_delete_client_routes, ctx, ss, group0_client));
+    seastar::httpd::client_routes_json::get_client_routes.set(r, rest_bind(rest_get_client_routes, ctx, ss, group0_client));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1953,6 +2114,10 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
     ss::drop_quarantined_sstables.unset(r);
+
+    seastar::httpd::client_routes_json::set_client_routes.unset(r);
+    seastar::httpd::client_routes_json::delete_client_routes.unset(r);
+    seastar::httpd::client_routes_json::get_client_routes.unset(r);
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
