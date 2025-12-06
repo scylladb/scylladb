@@ -640,14 +640,11 @@ async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logge
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
-
 async def collect_mutations(cql, server, manager, ks, cf):
     host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
     await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
-    ret = {}
+    ret = defaultdict(list)
     for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
-        if not frag.pk in ret:
-            ret[frag.pk] = []
         ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
     return ret
 
