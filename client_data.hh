@@ -12,6 +12,7 @@
 #include "seastarx.hh"
 
 #include <optional>
+#include <map>
 
 enum class client_type {
     cql = 0,
@@ -46,6 +47,7 @@ struct client_data {
     std::optional<sstring> ssl_protocol;
     std::optional<sstring> username;
     std::optional<sstring> scheduling_group_name;
+    std::optional<std::map<sstring, sstring>> client_options;
 
     sstring stage_str() const { return to_string(connection_stage); }
     sstring client_type_str() const { return to_string(ct); }

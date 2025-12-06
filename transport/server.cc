@@ -681,6 +681,7 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.client_options = _client_state.get_client_options();
 
     cd.ssl_enabled = _ssl_enabled;
     cd.ssl_protocol = _ssl_protocol;
@@ -953,6 +954,8 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
         _client_state.set_driver_name(driver_name_opt->second);
     }
+
+    _client_state.set_client_options(std::map<sstring, sstring>(options.begin(), options.end()));
 
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
@@ -1619,6 +1622,9 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
+    // CLIENT_OPTIONS value is a JSON string that can be used to pass clinet-specific configuration,
+    // e.g. CQL driver configuration.
+    opts.insert({"CLIENT_OPTIONS", ""});
     if (_server._config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
