@@ -11,7 +11,6 @@ import time
 from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 # much less than the streaming group.
 # Reproduces https://github.com/scylladb/scylladb/issues/21232
 @pytest.mark.asyncio
-@skip_mode('debug', 'the test needs to do some work which takes too much time in debug mode')
+@pytest.mark.skip_mode(mode='debug', reason='the test needs to do some work which takes too much time in debug mode')
 async def test_view_building_scheduling_group(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()
@@ -122,7 +121,7 @@ async def test_view_building_with_tablet_move(manager: ManagerClient, build_mode
 # of the base table). The state of the view table corresponding to the index
 # may become inconsistent with the base table because they got detached.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_during_drop_index(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()
@@ -153,7 +152,7 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
 # is completed eventually and is correct.
 # Reproduces #22989
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
     cmdline = ['--smp=4']
     cfg = {"commitlog_sync_period_in_ms": 1000}
@@ -200,7 +199,7 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
 # even if a build step is empty due to resharding.
 # Reproduces https://github.com/scylladb/scylladb/issues/26523
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_empty_build_step_after_reshard(manager: ManagerClient):
     server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'view=debug'])
     partitions = random.sample(range(1000), 129) # need more than 128 to allow the first build step to finish and save the progress
@@ -243,7 +242,7 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
 #
 # Reproduces scylladb/scylladb#26686.
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     """
     Scenario:
