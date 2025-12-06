@@ -922,7 +922,7 @@ compaction_group_ptr& storage_group::select_compaction_group(locator::tablet_ran
     return _main_cg;
 }
 
-void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept {
+void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const {
     action(_main_cg);
     for (auto& cg : _merging_groups) {
         action(cg);
