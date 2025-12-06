@@ -13,7 +13,8 @@ import ssl
 import tempfile
 import platform
 import urllib.parse
-from multiprocessing import Event, Process
+from concurrent.futures.thread import ThreadPoolExecutor
+from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test.pylib.runner import testpy_test_fixture_scope
@@ -186,15 +187,14 @@ async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Tes
                 await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
             finally:
                 await mgr.stop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, run_manager())
+            start_event.wait()
 
-        manager_process = Process(target=lambda: asyncio.run(run_manager()))
-        manager_process.start()
-        start_event.wait()
+            yield sock_path
 
-        yield sock_path
-
-        stop_event.set()
-        manager_process.join()
+            stop_event.set()
+            future.result()
 
 
 @pytest.fixture(scope=testpy_test_fixture_scope)
