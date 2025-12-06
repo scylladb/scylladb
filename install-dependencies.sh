@@ -38,6 +38,7 @@ debian_base_packages=(
     python3-aiohttp
     python3-pyparsing
     python3-colorama
+    python3-dev
     python3-tabulate
     python3-pytest
     python3-pytest-asyncio
@@ -65,6 +66,7 @@ debian_base_packages=(
     git-lfs
     e2fsprogs
     fuse3
+    libev-dev # for python driver
 )
 
 fedora_packages=(
@@ -90,6 +92,7 @@ fedora_packages=(
     patchelf
     python3
     python3-aiohttp
+    python3-devel
     python3-pip
     python3-file-magic
     python3-colorama
@@ -154,6 +157,8 @@ fedora_packages=(
     https://github.com/scylladb/cassandra-stress/releases/download/v3.18.1/cassandra-stress-java21-3.18.1-1.noarch.rpm
     elfutils
     jq
+
+    libev-devel # for python driver
 )
 
 fedora_python3_packages=(
