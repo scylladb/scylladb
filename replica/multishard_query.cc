@@ -782,14 +782,14 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
         return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, gc_state, std::move(result_builder_factory));
-    }).then(coroutine::lambda([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
+    }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.
             auto last_pos = *r.compaction_state->current_full_position();
             co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(last_pos));
         }
         co_return make_foreign(make_lw_shared<typename ResultBuilder::result_type>(std::move(r.result)));
-    })));
+    }));
     co_await ctx->stop();
     if (f.failed()) {
         co_return coroutine::exception(f.get_exception());
