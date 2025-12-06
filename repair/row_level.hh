@@ -99,6 +99,15 @@ public:
 
 using host2ip_t = std::function<future<gms::inet_address> (locator::host_id)>;
 
+struct repair_task_progress {
+    size_t requested;
+    size_t finished;
+    table_id table_uuid;
+    float progress() const {
+        return requested == 0 ? 1.0 : float(finished) / requested;
+    }
+};
+
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<service::topology_state_machine>& _tsm;
     sharded<gms::gossiper>& _gossiper;
@@ -222,6 +231,9 @@ private:
 public:
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
 
+
+    future<std::optional<repair_task_progress>> get_tablet_repair_task_progress(tasks::task_id task_uuid);
+
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
@@ -326,3 +338,12 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
+
+// A struct to hold the first and last token of a tablet.
+struct tablet_token_range {
+    int64_t first_token;
+    int64_t last_token;
+};
+
+// Function to count the number of ranges in ranges1 covered by the merged ranges of ranges2.
+future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2);
