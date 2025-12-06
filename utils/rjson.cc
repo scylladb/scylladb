@@ -423,6 +423,10 @@ rjson::value from_string(std::string_view view) {
     return rjson::value(view.data(), view.size(), the_allocator);
 }
 
+sstring to_sstring(const rjson::value& str) {
+    return sstring(str.GetString(), str.GetStringLength());
+}
+
 const rjson::value* find(const rjson::value& value, std::string_view name) {
     // Although FindMember() has a variant taking a StringRef, it ignores the
     // given length (see https://github.com/Tencent/rapidjson/issues/1649).
