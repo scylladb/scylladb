@@ -26,3 +26,8 @@ class position_in_partition {
     bound_weight get_bound_weight();
     std::optional<clustering_key_prefix> get_clustering_key_prefix();
 };
+
+class position_range {
+    position_in_partition start();
+    position_in_partition end();
+};
