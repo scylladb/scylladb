@@ -922,7 +922,7 @@ compaction_group_ptr& storage_group::select_compaction_group(locator::tablet_ran
     return _main_cg;
 }
 
-void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept {
+void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const {
     action(_main_cg);
     for (auto& cg : _merging_groups) {
         action(cg);
@@ -932,7 +932,7 @@ void storage_group::for_each_compaction_group(std::function<void(const compactio
     }
 }
 
-utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() noexcept {
+utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() {
     utils::small_vector<compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);
@@ -940,7 +940,7 @@ utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() 
     return cgs;
 }
 
-utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups() const noexcept {
+utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups() const {
     utils::small_vector<const_compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);

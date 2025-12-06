@@ -1958,4 +1958,35 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_for_each_compaction_group_exception_propagation) {
+    // Test that exceptions thrown from actions passed to for_each_compaction_group
+    // are properly propagated and not silently terminated.
+    // This test reproduces the issue where memory_limit_reached exceptions
+    // caused std::terminate because for_each_compaction_group was marked noexcept.
+    return do_with_cql_env_and_compaction_groups([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        auto& db = e.local_db();
+        auto s = db.find_schema("ks", "cf");
+        auto& table = db.find_column_family(s);
+        
+        // Get a storage group from the table
+        auto& sg = table.storage_group_for_token(dht::token::from_int64(0));
+        
+        // Test that an exception thrown from the action propagates correctly
+        bool exception_caught = false;
+        try {
+            sg.for_each_compaction_group([](const replica::compaction_group_ptr&) {
+                throw std::runtime_error("test exception");
+            });
+        } catch (const std::runtime_error& e) {
+            exception_caught = true;
+            BOOST_REQUIRE_EQUAL(e.what(), "test exception");
+        }
+        
+        BOOST_REQUIRE(exception_caught);
+        
+        return make_ready_future<>();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
