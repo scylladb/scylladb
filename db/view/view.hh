@@ -305,8 +305,7 @@ endpoints_to_update get_view_natural_endpoint(
     const locator::abstract_replication_strategy& replication_strategy,
     const dht::token& base_token,
     const dht::token& view_token,
-    bool use_legacy_self_pairing,
-    bool use_tablets_basic_rack_aware_view_pairing,
+    bool use_tablets,
     replica::cf_stats& cf_stats);
 
 /// Verify that the provided keyspace is eligible for storing materialized views.
