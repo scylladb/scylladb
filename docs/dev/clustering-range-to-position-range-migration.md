@@ -51,6 +51,12 @@ Existing converters:
 
 The `clustering_interval_set` class already demonstrates best practices - it uses `position_range` internally and provides conversion methods to/from `clustering_row_ranges`.
 
+Helper utilities in `query/position_range_utils.hh`:
+- `clustering_row_ranges_to_position_ranges()` - Batch convert clustering ranges to position ranges
+- `position_ranges_to_clustering_row_ranges()` - Batch convert position ranges to clustering ranges
+- `deoverlap_clustering_row_ranges()` - Safely deoverlap ranges using clustering_interval_set
+- `intersect_clustering_row_ranges()` - Safely intersect ranges using clustering_interval_set
+
 #### Migration Pattern
 
 ```cpp
