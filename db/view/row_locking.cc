@@ -153,14 +153,14 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             mylog.error("column_family::local_base_lock_holder::~local_base_lock_holder() can't find lock for partition", *pk);
             return;
         }
-        SCYLLA_ASSERT(&pli->first == pk);
+        scylla_assert(&pli->first == pk);
         if (cpk) {
             auto rli = pli->second._row_locks.find(*cpk);
             if (rli == pli->second._row_locks.end()) {
                 mylog.error("column_family::local_base_lock_holder::~local_base_lock_holder() can't find lock for row", *cpk);
                 return;
             }
-            SCYLLA_ASSERT(&rli->first == cpk);
+            scylla_assert(&rli->first == cpk);
             mylog.debug("releasing {} lock for row {} in partition {}", (row_exclusive ? "exclusive" : "shared"), *cpk, *pk);
             auto& lock = rli->second;
             if (row_exclusive) {
