@@ -1823,8 +1823,8 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         {
             auto ps = partition_slice_builder(*s)
                           .with_range(query::clustering_range {
-                              { },
-                              { },
+                              std::nullopt,
+                              std::nullopt,
                           }).build();
             run_tests(ps, { 0, 1, 2, 3, 4, 5, 6, 7 });
         }

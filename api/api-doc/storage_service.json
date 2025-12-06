@@ -933,7 +933,7 @@
                           "schema" :{
                               "type": "array",
                               "items": {
-                                  "type": "string"
+                                  "type": "sstable_to_restore"
                               }
                           }
                       },
@@ -3627,6 +3627,46 @@
             "ratio":{
                "type":"float",
                "description":"The resulting compression ratio (estimated on a random sample of files)"
+            }
+         }
+      },
+      "sstable_identification":{
+         "id":"sstable_identification",
+         "description":"sstable identification info",
+         "properties":{
+            "toc_filename":{
+               "type":"string",
+               "description":"the TOC filename of the sstable"
+            }
+         }
+      },
+      "sstable_tokens":{
+         "id":"sstable_tokens",
+         "description":"sstable token range",
+         "properties":{
+            "token_min":{
+               "type":"string",
+               "description":"the minimum token found in the sstable"
+            },
+            "token_max":{
+               "type":"string",
+               "description":"the maximum token found in the sstable"
+            }
+         }
+      },
+      "sstable_to_restore":{
+         "id":"sstable_to_restore",
+         "description":"SSTable to restore and its token range",
+         "properties":{
+            "identification":{
+               "type":"sstable_identification",
+               "required":true,
+               "description":"identification info of the sstable"
+            },
+            "tokens":{
+               "type":"sstable_tokens",
+               "required":false,
+               "description":"the token range of the sstable"
             }
          }
       }
