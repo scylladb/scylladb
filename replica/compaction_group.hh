@@ -305,7 +305,7 @@ public:
 
     uint64_t live_disk_space_used() const noexcept;
 
-    void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept;
+    void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups() noexcept;
     utils::small_vector<const_compaction_group_ptr, 3> compaction_groups() const noexcept;
 
