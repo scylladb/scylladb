@@ -525,6 +525,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     auto update_topology = [&] (locator::host_id id, const replica_state& rs) {
         tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
                                to_topology_node_state(rs.state), rs.shard_count);
+        tmptr->get_topology().find_node(id)->set_drained(rs.drained);
     };
 
     std::vector<future<>> sys_ks_futures;
@@ -5016,6 +5017,12 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
+future<> storage_service::abort_topology_request(utils::UUID request_id) {
+    co_await container().invoke_on(0, [request_id, this] (storage_service& ss) {
+        return _topology_state_machine.abort_request(*ss._group0, ss._group0_as, ss._feature_service, request_id);
+    });
+}
+
 future<> storage_service::wait_for_topology_not_busy() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     while (_topology_state_machine._topology.is_busy()) {
@@ -5023,6 +5030,10 @@ future<> storage_service::wait_for_topology_not_busy() {
         co_await _topology_state_machine.event.when();
         guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     }
+}
+
+bool storage_service::topology_global_queue_empty() const {
+    return !_topology_state_machine._topology.global_request.has_value();
 }
 
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
@@ -5228,7 +5239,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             request_id = _topology_state_machine._topology.global_request_id.value();
         } else if (!_topology_state_machine._topology.global_requests_queue.empty()) {
             request_id = _topology_state_machine._topology.global_requests_queue[0];
-            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id, true);
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
             curr_req = std::get<global_topology_request>(req_entry.request_type);
         } else {
             request_id = utils::UUID{};

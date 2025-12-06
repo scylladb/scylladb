@@ -20,12 +20,16 @@
 #include "utils/UUID.hh"
 #include "service/session.hh"
 #include "mutation/canonical_mutation.hh"
+#include "gms/feature_service.hh"
 
 namespace db {
     class system_keyspace;
 }
 
 namespace service {
+
+class raft_group0;
+class group0_guard;
 
 enum class node_state: uint16_t {
     none,                // the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
@@ -93,6 +97,8 @@ struct replica_state {
     std::set<sstring> supported_features;
     cleanup_status cleanup;
     utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
+    bool drained;
+    bool request_paused;
 };
 
 struct topology_features {
@@ -110,7 +116,7 @@ struct topology {
     enum class transition_state: uint16_t {
         join_group0,
         commit_cdc_generation,
-        tablet_draining,
+        tablet_draining, // deprecated, not set after feature_service::parallel_decommission is enabled.
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
@@ -152,6 +158,9 @@ struct topology {
 
     // Pending topology requests
     std::unordered_map<raft::server_id, topology_request> requests;
+
+    // Paused topology requests
+    std::unordered_map<raft::server_id, topology_request> paused_requests;
 
     // Holds parameters for a request per node and valid during entire
     // operation until the node becomes normal
@@ -242,6 +251,20 @@ struct topology_state_machine {
 
     future<> await_not_busy();
     future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry);
+
+    // Generates mutations that cancel a topology request which is active on the given node.
+    // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
+    // In case it's topology_request::join/replace, you must also call respond_to_joining_node().
+    void generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+                                        gms::feature_service& features,
+                                        const group0_guard& guard,
+                                        raft::server_id node,
+                                        sstring reason);
+
+    // Initiates abort of a topology request with a given ID.
+    // Returns a failed future if request is not abortable.
+    // Doesn't wait until request is done. Use wait_for_request_completion() for that.
+    future<> abort_request(raft_group0&, abort_source&, gms::feature_service&, utils::UUID request_id);
 };
 
 // Raft leader uses this command to drive bootstrap process on other nodes
