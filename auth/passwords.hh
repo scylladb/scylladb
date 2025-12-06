@@ -11,6 +11,7 @@
 #include <random>
 #include <stdexcept>
 
+#include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
@@ -75,10 +76,19 @@ sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
 
 ///
 /// Hash a password combined with an implementation-specific salt string.
+/// Deprecated in favor of `hash_with_salt_async`.
 ///
 /// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
 ///
-sstring hash_with_salt(const sstring& pass, const sstring& salt);
+[[deprecated("Use hash_with_salt_async instead")]] sstring hash_with_salt(const sstring& pass, const sstring& salt);
+
+///
+/// Async version of `hash_with_salt` that returns a future.
+/// If possible, hashing uses `coroutine::maybe_yield` to prevent reactor stalls.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
+seastar::future<sstring> hash_with_salt_async(const sstring& pass, const sstring& salt);
 
 } // namespace detail
 
@@ -107,6 +117,6 @@ sstring hash(const sstring& pass, RandomNumberEngine& g, scheme scheme) {
 ///
 /// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
 ///
-bool check(const sstring& pass, const sstring& salted_hash);
+seastar::future<bool> check(const sstring& pass, const sstring& salted_hash);
 
 } // namespace auth::passwords

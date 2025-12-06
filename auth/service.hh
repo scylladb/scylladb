@@ -27,7 +27,6 @@
 #include "cql3/description.hh"
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "utils/alien_worker.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
 #include "service/maintenance_mode.hh"
@@ -131,8 +130,7 @@ public:
             ::service::migration_manager&,
             const service_config&,
             maintenance_socket_enabled,
-            cache&,
-            utils::alien_worker&);
+            cache&);
 
     future<> start(::service::migration_manager&, db::system_keyspace&);
 
