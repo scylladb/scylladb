@@ -20,6 +20,7 @@ from test.pylib.util import unique_name, wait_all
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
+import statistics
 
 logger = logging.getLogger(__name__)
 
@@ -544,9 +545,17 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, obj
     servers = []
     host_ids = {}
 
+    cur_dc = 0
+    cur_rack = 0
     for s in range(topology.nodes):
-        dc = f'dc{s % topology.dcs}'
-        rack = f'rack{s % topology.racks}'
+        dc = f"dc{cur_dc}"
+        rack = f"rack{cur_rack}"
+        cur_dc += 1
+        if cur_dc >= topology.dcs:
+            cur_dc = 0
+            cur_rack += 1
+            if cur_rack >= topology.racks:
+                cur_rack = 0
         s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
         logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
         servers.append(s)
@@ -582,7 +591,7 @@ async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_ta
 async def take_snapshot(ks, servers, manager, logger):
     logger.info(f'Take snapshot and collect sstables lists')
     snap_name = unique_name('backup_')
-    sstables = []
+    sstables = dict()
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
         await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
@@ -590,51 +599,112 @@ async def take_snapshot(ks, servers, manager, logger):
         cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
         tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
         logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
-        sstables += tocs
+        sstables[s] = tocs
 
     return snap_name,sstables
 
-def compute_scope(topology, servers):
-    if topology.dcs > 1:
-        scope = 'dc'
-        r_servers = servers[:topology.dcs]
-    elif topology.racks > 1:
-        scope = 'rack'
-        r_servers = servers[:topology.racks]
-    else:
-        scope = 'node'
-        r_servers = servers
-
-    return scope,r_servers
-
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, primary_replica_only, log_marks):
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only, log_marks):
     logger.info(f'Check the data is back')
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only)
 
-    logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
-        log, mark = log_marks[s.server_id]
-        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)', from_mark=mark)
-        streamed_to = set([ str(host_ids[s.server_id]) ] + [ r[1].group(1) for r in res ])
-        scope_nodes = set([ str(host_ids[s.server_id]) ])
-        # See comment near merge_tocs() above for explanation of servers list filtering below
-        if scope == 'rack':
-            rf = get_replication(cql, ks)[s.datacenter]
-            if type(rf) is list:
-                scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] if s.rack in rf])
-            else:
-                scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
-        elif scope == 'dc':
-            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
-        logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
-        assert streamed_to == scope_nodes
+    host_ids_per_dc = defaultdict(list)
+    host_ids_per_dc_rack = dict()
+    servers_by_host_id = dict()
+    for s in servers:
+        host = host_ids[s.server_id]
+        host_ids_per_dc[s.datacenter].append(host)
+        host_ids_per_dc_rack.setdefault(s.datacenter, defaultdict(list))[s.rack].append(host)
+        servers_by_host_id[host] = s
 
-async def do_restore(ks, cf, s, toc_names, scope, prefix, object_storage, manager, logger, primary_replica_only = False):
-    logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
-    tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
-    status = await manager.api.wait_task(s.ip_addr, tid)
-    assert (status is not None) and (status['state'] == 'done')
+    logger.info(f'Validate streaming directions')
+    for s in servers:
+        streamed_to = defaultdict(int)
+        log, mark = log_marks[s.server_id]
+        res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
+        for r in res:
+            target_host_id = r[1].group('target_host_id')
+            if scope == 'all':
+                assert target_host_id in servers_by_host_id.keys()
+            elif scope == 'dc':
+                assert servers_by_host_id[target_host_id].datacenter == s.datacenter
+            elif scope == 'rack':
+                assert servers_by_host_id[target_host_id].datacenter == s.datacenter
+                assert servers_by_host_id[target_host_id].rack == s.rack
+            elif scope == 'node':
+                assert target_host_id == str(host_ids[s.server_id])
+            streamed_to[target_host_id] += 1
+
+        # validate balance only when rf == #racks
+        if topology.rf != topology.racks:
+            logger.info(f'Skipping balance checks since rf != racks ({topology.rf} != {topology.racks})')
+            continue
+
+        if scope == 'all':
+            assert set(streamed_to.keys()).issubset(set(host_ids.values()))
+            assert len(streamed_to) == topology.rf * topology.dcs
+        elif scope == 'dc':
+            # it's guaranteed the node replicated only within the datacenter by asserts above
+            assert set(streamed_to.keys()).issubset(set(host_ids_per_dc[s.datacenter]))
+            assert len(streamed_to) == topology.rf
+        elif scope == 'rack' and topology.rf == topology.racks:
+            assert set(streamed_to.keys()).issubset(set(host_ids_per_dc_rack[s.datacenter][s.rack]))
+            assert len(streamed_to) == 1
+
+        # asses balance
+        streamed_to_counts = streamed_to.values()
+        assert len(streamed_to_counts) > 0
+        mean_count = statistics.mean(streamed_to_counts)
+        max_deviation = max(abs(count - mean_count) for count in streamed_to_counts)
+        if not primary_replica_only:
+            assert max_deviation == 0, f'if primary_replica_only is False, streaming should be perfectly balanced: {streamed_to}'
+            continue
+
+        assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
+
+async def do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only = False):
+    logger.info(f'Restoring {servers=} with {sstables=} scope={scope}')
+    sstables_per_server = defaultdict(list)
+    # rf_rack_valid can be True also with rack lists
+    rf_rack_valid = topology.rf == topology.racks
+    if scope == 'all' or scope == 'dc' or not rf_rack_valid:
+        sstables_per_dc = defaultdict(list)
+        for s, sstables_list in sstables.items():
+            sstables_per_dc[s.datacenter].extend(sstables_list)
+        servers_per_dc = defaultdict(list)
+        for s in servers:
+            servers_per_dc[s.datacenter].append(s)
+        
+        for dc, sstables_in_dc in sstables_per_dc.items():
+            for s in servers_per_dc[dc]:
+                if scope == 'node':
+                    # If not rf_rack_valid, each node should restore data from all sstables in the DC
+                    # Otherwise, as done in the case below, each node restore data from all sstables in its rack
+                    # (since it is ensured that every rack has a replica of each mutation)
+                    sstables_per_server[s] = sstables_in_dc
+                else:
+                    sstables_per_server[s] = sstables[s]
+    elif scope == 'rack' or scope == 'node':
+        servers_per_dc_rack = dict()
+        sstables_per_dc_rack = dict()
+        for s, sstables_list in sstables.items():
+            servers_per_dc_rack.setdefault(s.datacenter, defaultdict(list))[s.rack].append(s)
+            sstables_per_dc_rack.setdefault(s.datacenter, defaultdict(list))[s.rack].extend(sstables_list)
+        for dc, racks in sstables_per_dc_rack.items(): 
+            for rack, sstables_in_rack in racks.items():
+                if scope == 'rack':
+                    assert topology.rf == topology.racks
+                    for s in servers_per_dc_rack[dc][rack]:
+                        sstables_per_server[s] = sstables[s]
+                else:
+                    assert scope == 'node'
+                    for s in servers_per_dc_rack[dc][rack]:
+                        sstables_per_server[s] = sstables_in_rack
+    else:
+        raise f"do_restore: {scope=} not supported"
+    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only) for s, sstables in sstables_per_server.items()))
+    if primary_replica_only:
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all')
 
 async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger):
     logger.info(f'Backup to {snap_name}')
@@ -677,6 +747,19 @@ async def mark_all_logs(manager, servers):
         log_marks[s.server_id] = (log, await log.mark())
     return log_marks
 
+def create_schema(ks, cf, min_tablet_count=None):
+    schema = f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int )"
+    if min_tablet_count is not None:
+        schema += f" WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
+    schema += ';'
+    return schema
+
+async def do_restore_server(ks, cf, s, toc_names, scope, prefix, object_storage, manager, logger, primary_replica_only):
+    logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
+    tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
+    status = await manager.api.wait_task(s.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -710,18 +793,25 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
     await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
-    logger.info(f'Re-initialize keyspace')
-    cql.execute(f'DROP KEYSPACE {ks}')
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-    cql.execute(schema)
+    for scope in ['all', 'dc', 'rack', 'node']:
+        # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
+        # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
+        # is initially created and an arbitrary subset or the rack at restore time.
+        if scope == 'rack' and topology.rf != topology.racks:
+            logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
+            continue
+        pros = [False] if scope == 'node' else [False, True]
+        for pro in pros:
+            logger.info(f'Re-initialize keyspace')
+            cql.execute(f'DROP KEYSPACE {ks}')
+            cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+            cql.execute(schema)
 
-    scope,r_servers = compute_scope(topology, servers)
+            log_marks = await mark_all_logs(manager, servers)
 
-    log_marks = await mark_all_logs(manager, servers)
+            await do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=pro)
 
-    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger) for s in r_servers))
-
-    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope, False, log_marks=log_marks)
+            await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
@@ -870,21 +960,19 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    _,r_servers = compute_scope(topology, servers)
-
-    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
+    for i, s in enumerate(servers):
         log = await manager.server_open_log(s.server_id)
         res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
         nodes_by_operation = defaultdict(list)
         for r in res:
             nodes_by_operation[r[1].group(1)].append(r[1].group(2))
 
-        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers if s.rack == servers[i].rack ])
         for op, nodes in nodes_by_operation.items():
             logger.info(f'Operation {op} streamed to nodes {nodes}')
             assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
@@ -924,14 +1012,12 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    _,r_servers = compute_scope(topology, servers)
-
-    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
+    for i, s in enumerate(servers):
         log = await manager.server_open_log(s.server_id)
         res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
         streamed_to = set([ r[1].group(1) for r in res ])
@@ -970,21 +1056,19 @@ async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, 
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    _,r_servers = compute_scope(topology, servers)
-
-    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
+    for i, s in enumerate(servers):
         log = await manager.server_open_log(s.server_id)
         res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
         nodes_by_operation = defaultdict(list)
         for r in res:
             nodes_by_operation[r[1].group(1)].append(r[1].group(2))
 
-        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers if s.datacenter == servers[i].datacenter ])
         for op, nodes in nodes_by_operation.items():
             logger.info(f'Operation {op} streamed to nodes {nodes}')
             assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
@@ -1026,7 +1110,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
 
     r_servers = servers
 
-    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
