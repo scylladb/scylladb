@@ -1027,7 +1027,7 @@ void server_impl::send_message(server_id id, Message m) {
         } else if constexpr (std::is_same_v<T, append_request>) {
             _stats.append_entries_sent++;
              _append_request_status[id].count++;
-             _append_request_status[id].f = _append_request_status[id].f.then([this, cm = std::move(m), cid = id] () noexcept -> future<> {
+             _append_request_status[id].f = _append_request_status[id].f.then(coroutine::lambda([this, cm = std::move(m), cid = id] () noexcept -> future<> {
                 // We need to copy everything from the capture because it cannot be accessed after co-routine yields.
                 server_impl* server = this;
                 auto m = std::move(cm);
@@ -1041,7 +1041,7 @@ void server_impl::send_message(server_id id, Message m) {
                 if (server->_append_request_status[id].count == 0) {
                    server->_append_request_status.erase(id);
                 }
-            });
+            }));
         } else if constexpr (std::is_same_v<T, vote_request>) {
             _stats.vote_request_sent++;
             _rpc->send_vote_request(id, m);

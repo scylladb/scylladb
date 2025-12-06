@@ -419,7 +419,7 @@ subscription::~subscription() {
     //
     // If we immediately register the same listener after deregistering it, we may have a problem.
     // Hence we require each listener to be registered at most once.
-    _fd._impl->_destroy_subscriptions = _fd._impl->_destroy_subscriptions.then([l_ = _listener, &fd = _fd] () -> future<> {
+    _fd._impl->_destroy_subscriptions = _fd._impl->_destroy_subscriptions.then(coroutine::lambda([l_ = _listener, &fd = _fd] () -> future<> {
         auto l = l_;
         try {
             co_await fd.container().invoke_on_all([l] (failure_detector& fd) {
@@ -428,7 +428,7 @@ subscription::~subscription() {
         } catch (...) {
             logger.error("unexpected exception when deregistering listener {}: {}", fmt::ptr(l), std::current_exception());
         }
-    });
+    }));
 }
 
 void failure_detector::impl::add_listener(listener_id id, clock::interval_t threshold, seastar::shard_id shard) {
