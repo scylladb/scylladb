@@ -404,10 +404,7 @@ const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
                 computed_columns(),
                 dropped_columns(),
                 indexes(),
-                scylla_tables(),
-                db::system_keyspace::legacy::column_families(),
-                db::system_keyspace::legacy::columns(),
-                db::system_keyspace::legacy::triggers()}) {
+                scylla_tables()}) {
             SCYLLA_ASSERT(s->clustering_key_size() > 0);
             auto&& first_column_name = s->clustering_column_at(0).name_as_text();
             SCYLLA_ASSERT(first_column_name == "table_name"
@@ -2839,26 +2836,6 @@ void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view
     }
 }
 
-
-namespace legacy {
-
-table_schema_version schema_mutations::digest() const {
-    md5_hasher h;
-    const db::schema_features no_features;
-    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, no_features);
-    db::schema_tables::feed_hash_for_schema_digest(h, _columns, no_features);
-    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
-}
-
-future<schema_mutations> read_table_mutations(sharded<service::storage_proxy>& proxy,
-    sstring keyspace_name, sstring table_name, schema_ptr s)
-{
-    mutation cf_m = co_await read_schema_partition_for_table(proxy, s, keyspace_name, table_name);
-    mutation col_m = co_await read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(), keyspace_name, table_name);
-    co_return schema_mutations{std::move(cf_m), std::move(col_m)};
-}
-
-} // namespace legacy
 
 static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);

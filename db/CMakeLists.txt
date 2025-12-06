@@ -10,7 +10,6 @@ target_sources(db
     schema_applier.cc
     schema_tables.cc
     cql_type_parser.cc
-    legacy_schema_migrator.cc
     commitlog/commitlog.cc
     commitlog/commitlog_replayer.cc
     commitlog/commitlog_entry.cc

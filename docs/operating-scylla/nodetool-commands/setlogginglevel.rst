@@ -110,7 +110,6 @@ To display the log classes (output changes with each version so your display may
    keys
    keyspace_utils
    large_data
-   legacy_schema_migrator
    lister
    load_balancer
    load_broadcaster
