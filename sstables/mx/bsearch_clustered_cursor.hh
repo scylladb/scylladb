@@ -284,6 +284,9 @@ public:
         , _clustering_parser(s, permit, _ctr.clustering_column_value_fix_legths(), true)
         , _block_parser(s, permit, _ctr.clustering_column_value_fix_legths())
         , _permit(std::move(permit))
+        , _as(abstract_formatter([s] (fmt::format_context& ctx) {
+            fmt::format_to(ctx.out(), "cached_promoted_index {}.{}", s.ks_name(), s.cf_name());
+        }))
     { }
 
     ~cached_promoted_index() {

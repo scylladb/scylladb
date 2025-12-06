@@ -17,6 +17,7 @@
 #include "utils/assert.hh"
 #include "utils/entangled.hh"
 #include "utils/memory_limit_reached.hh"
+#include "utils/abstract_formatter.hh"
 
 namespace logalloc {
 
@@ -442,6 +443,7 @@ class allocating_section {
     size_t _minimum_lsa_emergency_reserve = 0;
     int64_t _remaining_std_bytes_until_decay = s_bytes_per_decay;
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
+    abstract_formatter _name;
 private:
     struct guard {
         tracker::impl& _tracker;
@@ -453,6 +455,8 @@ private:
     void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
+    allocating_section() = default;
+    explicit allocating_section(abstract_formatter name) : _name(std::move(name)) {}
 
     void set_lsa_reserve(size_t) noexcept;
     void set_std_reserve(size_t) noexcept;
