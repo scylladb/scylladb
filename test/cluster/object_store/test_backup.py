@@ -575,10 +575,10 @@ async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_ta
 
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
 
-    schema = f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int )"
-    if min_tablet_count:
-        schema += f"WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
-    schema += ';'
+    if schema is None:
+        if min_tablet_count is not None:
+            logger.info(f'Creating schema with min_tablet_count={min_tablet_count}')
+        schema = create_schema(ks, cf, min_tablet_count)
     cql.execute(schema)
 
     stmt = cql.prepare(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES (?, ?)")
@@ -603,10 +603,14 @@ async def take_snapshot(ks, servers, manager, logger):
 
     return snap_name,sstables
 
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only, log_marks):
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only, log_marks, different_min_tablet_count=False):
     logger.info(f'Check the data is back')
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only)
+
+    if different_min_tablet_count:
+        logger.info(f'Skipping streaming directions checks, we restored with a different min_tablet_count, so streaming is not predictable')
+        return
 
     host_ids_per_dc = defaultdict(list)
     host_ids_per_dc_rack = dict()
@@ -802,16 +806,18 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
             continue
         pros = [False] if scope == 'node' else [False, True]
         for pro in pros:
-            logger.info(f'Re-initialize keyspace')
-            cql.execute(f'DROP KEYSPACE {ks}')
-            cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-            cql.execute(schema)
+            for restored_min_tablet_count in [256, 512, 1024]:
+                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=512')
+                cql.execute(f'DROP KEYSPACE {ks}')
+                cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+                schema = create_schema(ks, cf, restored_min_tablet_count)
+                cql.execute(schema)
 
-            log_marks = await mark_all_logs(manager, servers)
+                log_marks = await mark_all_logs(manager, servers)
 
-            await do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=pro)
+                await do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=pro)
 
-            await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks)
+                await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks, different_min_tablet_count=(restored_min_tablet_count != 512))
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
