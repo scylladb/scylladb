@@ -1096,7 +1096,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
 
     # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
