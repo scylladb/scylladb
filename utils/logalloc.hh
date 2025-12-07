@@ -9,6 +9,10 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <string_view>
+#include <functional>
+#include <fmt/format.h>
 #include <seastar/core/memory.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -19,6 +23,28 @@
 #include "utils/memory_limit_reached.hh"
 
 namespace logalloc {
+
+// Forward declaration for use in allocating_section_namer
+class schema;
+
+// Helper class to format allocating section names without intermediate string allocation
+// This is a formattable object that can be passed directly to fmt logger
+class allocating_section_namer {
+    std::function<void(fmt::memory_buffer&)> _formatter;
+public:
+    allocating_section_namer() = default;
+    
+    template<typename Func>
+    explicit allocating_section_namer(Func&& f) : _formatter(std::forward<Func>(f)) {}
+    
+    void format_to(fmt::memory_buffer& buf) const {
+        if (_formatter) {
+            _formatter(buf);
+        }
+    }
+    
+    explicit operator bool() const noexcept { return bool(_formatter); }
+};
 
 struct occupancy_stats;
 class region;
@@ -442,6 +468,7 @@ class allocating_section {
     size_t _minimum_lsa_emergency_reserve = 0;
     int64_t _remaining_std_bytes_until_decay = s_bytes_per_decay;
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
+    allocating_section_namer _namer; // Optional namer for debugging
 private:
     struct guard {
         tracker::impl& _tracker;
@@ -453,6 +480,8 @@ private:
     void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
+    allocating_section() = default;
+    explicit allocating_section(allocating_section_namer namer) : _namer(std::move(namer)) {}
 
     void set_lsa_reserve(size_t) noexcept;
     void set_std_reserve(size_t) noexcept;
@@ -541,6 +570,15 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }
+
+template <> struct fmt::formatter<logalloc::allocating_section_namer> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const logalloc::allocating_section_namer& namer, fmt::format_context& ctx) const {
+        fmt::memory_buffer buf;
+        namer.format_to(buf);
+        return fmt::format_to(ctx.out(), "{}", std::string_view(buf.data(), buf.size()));
+    }
+};
 
 template <> struct fmt::formatter<logalloc::occupancy_stats> : fmt::formatter<string_view> {
     auto format(const logalloc::occupancy_stats& stats, fmt::format_context& ctx) const {
