@@ -542,6 +542,7 @@ public:
     // Returns the range tombstone for the key range adjacent to the cursor's position from the side of smaller keys.
     // Excludes the range for the row itself. That information is returned by range_tombstone_for_row().
     // It's possible that range_tombstone() is empty and range_tombstone_for_row() is not empty.
+    // Note that this is different from the meaning of rows_entry::range_tombstone(), which includes the row itself.
     tombstone range_tombstone() const { return _range_tombstone; }
 
     // Can be called when cursor is pointing at a row.
