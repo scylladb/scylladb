@@ -233,7 +233,7 @@ private:
         if (_scope == stream_scope::node && !sstables.empty() && sstables.front()->storage_options().is_object_storage_type()) {
             llog.info("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
             llog.info("Memory diagnostic before download\n{}", memory::generate_memory_diagnostics_report());
-            return download_fully_contained_sstables(std::move(sstables), std::move(progress)).then([this](auto downloaded_ssts) -> future<> {
+            return download_fully_contained_sstables(std::move(sstables), std::move(progress));/*.then([this](auto downloaded_ssts) -> future<> {
                 auto dwnld_ssts = std::move(downloaded_ssts);
 
                 for (size_t i = 0; i < dwnld_ssts.size(); ++i) {
@@ -260,17 +260,17 @@ private:
                             }
                         });
                 }
-            });
+            });*/
         }
         return stream_sstables(pr, std::move(sstables), std::move(progress));
     }
 
-    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables,
+    /*future<sst_classification_info>*/ future <> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables,
                                                                                    shared_ptr<stream_progress> progress) const {
         constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
         constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
         const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
-        sst_classification_info downloaded_sstables(smp::count);
+        // sst_classification_info downloaded_sstables(smp::count);
         dht::auto_refreshing_sharder sharder(_table.shared_from_this());
         for (const auto& sstable : sstables) {
             auto components = sstable->all_components();
@@ -322,16 +322,39 @@ private:
                     std::vector<unsigned> shards = sst->get_shards_for_this_sstable();
                     SCYLLA_ASSERT(shards.size() == 1);
                     llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                    downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
+                    // downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
                     co_await sst->destroy();
                     sst = {};
+                    co_await smp::submit_to(shards.front(),
+                                            [this,
+                                             from = this_shard_id(),
+                                             ks = _table.schema()->ks_name(),
+                                             cf = _table.schema()->cf_name(),
+                                             min_info = minimal_sst_info{gen, descriptor.version, descriptor.format}] -> future<> {
+                                                llog.info("Adding downloaded SSTable to the table {} on shard {}, submitted from shard {}",
+                                                          _table.schema()->cf_name(),
+                                                          this_shard_id(),
+                                                          from);
+                                                llog.debug("Loading SSTable on shard {}", this_shard_id());
+                                                auto& db = _db.local();
+                                                auto& table = db.find_column_family(ks, cf);
+                                                auto sst = table.get_sstables_manager().make_sstable(table.schema(),
+                                                                                                     table.get_storage_options(),
+                                                                                                     min_info._generation,
+                                                                                                     sstables::sstable_state::normal,
+                                                                                                     min_info._version,
+                                                                                                     min_info._format);
+                                                sst->set_sstable_level(0);
+                                                co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
+                                                co_await table.add_sstable_and_update_cache(sst);
+                                            });
                 }
             }
             if (progress) {
                 progress->advance(1);
             }
         }
-        co_return downloaded_sstables;
+        // co_return downloaded_sstables;
     }
 
     bool tablet_in_scope(locator::tablet_id) const;
