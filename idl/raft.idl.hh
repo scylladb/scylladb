@@ -129,6 +129,6 @@ struct direct_fd_ping_reply {
     std::variant<std::monostate, service::wrong_destination, service::group_liveness_info> result;
 };
 
-verb [[with_client_info, cancellable]] direct_fd_ping (raft::server_id dst_id) -> service::direct_fd_ping_reply;
+verb [[with_client_info, with_timeout, cancellable]] direct_fd_ping (raft::server_id dst_id) -> service::direct_fd_ping_reply;
 
 } // namespace service

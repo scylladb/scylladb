@@ -1640,7 +1640,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             fd.start(
                 std::ref(fd_pinger), std::ref(fd_clock),
                 service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count(),
-                service::direct_fd_clock::base::duration{std::chrono::milliseconds{cfg->direct_failure_detector_ping_timeout_in_ms()}}.count()).get();
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{cfg->direct_failure_detector_ping_timeout_in_ms()}}.count(), dbcfg.gossip_scheduling_group).get();
 
             auto stop_fd = defer_verbose_shutdown("direct_failure_detector", [] {
                 fd.stop().get();
