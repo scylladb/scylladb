@@ -86,23 +86,22 @@ static bool tablet_id_provided(const locator::tablet_task_type& task_type) {
 auto migration_tasks(locator::token_metadata_ptr tmptr) {
     // migration tasks are shared for co-located tables, therefore we iterate over table groups
     // and return the base table as a representative of its group.
-    auto tables = tmptr->tablets().all_table_groups()
-        | std::views::transform([] (const auto& g) { return g.first; });
-
-    auto tasks_view = tables
-        | std::views::transform([&](table_id table) {
-            auto& tmap = tmptr->tablets().get_tablet_map_view(table);
-            return tmap.tablets()
+    return tmptr->tablets().all_base_tables()
+        | std::views::transform([&](const auto& pair) {
+            auto table = pair.first;
+            auto& tmap = pair.second;
+            return tmap.tablet_ids()
+                | std::views::transform([&tmap](auto&& id) {
+                    return std::make_pair(id, std::cref(tmap.get_tablet_info(id)));
+                })
                 | std::views::filter([](const auto& pair) {
-                    return pair.second.migration_task_info().is_valid();
+                    return pair.second.migration_task_info.is_valid();
                 })
                 | std::views::transform([table](const auto& pair) {
-                    return std::make_tuple(table, pair.first, pair.second.migration_task_info());
+                    return std::make_tuple(table, pair.first, pair.second.migration_task_info);
                 });
         })
         | std::views::join;
-
-    return tasks_view;
 }
 
 // iterator over all valid repair tasks
@@ -133,17 +132,13 @@ auto repair_tasks(locator::token_metadata_ptr tmptr) {
 // returns tuples of (table_id, task_info)
 auto resize_tasks(locator::token_metadata_ptr tmptr) {
     // resize tasks are shared for co-located tables, therefore we iterate over table groups.
-    auto table_groups = tmptr->tablets().all_table_groups()
-        | std::views::filter([&tmptr](const auto& group_pair) {
-            auto& tmap = tmptr->tablets().get_tablet_map_view(group_pair.first);
-            return tmap.resize_task_info().is_valid();
+    return tmptr->tablets().all_base_tables()
+        | std::views::filter([](const auto& pair) {
+            return pair.second.resize_task_info().is_valid();
         })
-        | std::views::transform([&tmptr](const auto& group_pair) {
-            auto& tmap = tmptr->tablets().get_tablet_map_view(group_pair.first);
-            return std::make_tuple(group_pair.first, tmap.resize_task_info());
+        | std::views::transform([](const auto& pair) {
+            return std::make_tuple(pair.first, pair.second.resize_task_info());
         });
-
-    return table_groups;
 }
 
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {

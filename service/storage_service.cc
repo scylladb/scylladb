@@ -3302,8 +3302,7 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
             change.open_sessions.insert(session);
         }
 
-        for (auto&& [table, tables] : tmptr->tablets().all_table_groups()) {
-            const auto& tmap = tmptr->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : tmptr->tablets().all_base_tables()) {
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 if (trinfo.session_id) {
                     auto id = session_id(trinfo.session_id);

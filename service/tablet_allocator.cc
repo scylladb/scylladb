@@ -882,13 +882,13 @@ class load_balancer {
     uint64_t _minimal_tablet_size = service::default_target_tablet_size / 100;
 
 private:
-    tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+    tablet_replica_set get_replicas_for_tablet_load(const shared_tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
         // optimistically assuming that they will succeed.
         return trinfo ? trinfo->next : ti.replicas;
     }
 
-    tablet_replica_set sorted_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+    tablet_replica_set sorted_replicas_for_tablet_load(const shared_tablet_info& ti, const tablet_transition_info* trinfo) const {
         auto set = get_replicas_for_tablet_load(ti, trinfo);
         std::ranges::sort(set, std::less<tablet_replica>());
         return set;
@@ -941,7 +941,7 @@ private:
 
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
-    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+    get_migration_streaming_infos(const locator::topology& topology, const shared_tablet_map& tmap, const migration_vector& infos) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
             auto& ti = tmap.get_tablet_info(info.tablet.tablet);
@@ -1113,8 +1113,7 @@ public:
 
     future<> consider_scheduled_load(node_load_map& nodes) {
         const locator::topology& topo = _tm->get_topology();
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
@@ -1131,7 +1130,7 @@ public:
 
         for (const tablet_migration_info& tmi : mplan.migrations()) {
             co_await coroutine::maybe_yield();
-            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
+            auto& tmap = tablet_meta.get_shared_tablet_map(tmi.tablet.table);
             auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
             auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
             apply_load(nodes, streaming_info);
@@ -1402,21 +1401,20 @@ public:
         migration_plan plan;
         table_resize_plan resize_plan;
 
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
             if (!tmap.needs_merge()) {
                 continue;
             }
 
             // Also filter out replicas that don't belong to the DC being worked on.
-            auto get_replicas = [this, &nodes] (const tablet_desc& t) {
+            auto get_replicas = [this, &nodes] (const shared_tablet_desc& t) {
                 auto ret = sorted_replicas_for_tablet_load(*t.info, t.transition);
                 const auto [first, last] = std::ranges::remove_if(ret, [&] (tablet_replica r) { return !nodes.contains(r.host); });
                 ret.erase(first, last);
                 return ret;
             };
 
-            auto migrating = [this, table] (const tablet_desc& t) {
+            auto migrating = [this, table] (const shared_tablet_desc& t) {
                 return bool(t.transition) || _scheduled_tablets.contains(global_tablet_id{table, t.tid});
             };
             auto rack_of = [&topo = _tm->get_topology()] (tablet_replica tr) -> const sstring& {
@@ -1497,7 +1495,7 @@ public:
                 return tablet_migration_info{kind, gid, src, dst};
             };
 
-            co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
+            co_await tmap.for_each_sibling_tablets([&] (shared_tablet_desc t1, std::optional<shared_tablet_desc> t2_opt) -> future<> {
                 // Be optimistic about migrating tablets, as if they succeeded.
                 // Merge finalization will have to recheck that all sibling tablets are co-located.
 
@@ -1805,7 +1803,7 @@ public:
         };
 
         for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto& tmap = _tm->tablets().get_shared_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
 
             auto tablet_options = combine_tablet_options(
@@ -2044,7 +2042,7 @@ public:
                 continue;
             }
 
-            auto& tmap = _tm->tablets().get_tablet_map(table);
+            auto& tmap = _tm->tablets().get_shared_tablet_map(table);
             const auto& table_group = _tm->tablets().all_table_groups().at(table);
 
             auto finalize_decision = [&] {
@@ -2337,7 +2335,7 @@ public:
         }
     }
 
-    void maybe_erase_colocated_candidate(shard_load& shard_info, const tablet_map& tmap, global_tablet_id tablet) {
+    void maybe_erase_colocated_candidate(shard_load& shard_info, const shared_tablet_map& tmap, global_tablet_id tablet) {
         if (!tmap.needs_merge()) {
             return;
         }
@@ -2350,7 +2348,7 @@ public:
         erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
     }
 
-    void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
+    void erase_candidates(node_load_map& nodes, const shared_tablet_map& tmap, const migration_tablet_set& tablets) {
       // FIXME: indentation.
       for (auto tablet : tablets.tablets()) {
         auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
@@ -2586,7 +2584,7 @@ public:
 
             auto mig = get_migration_info(tablets, tablet_transition_kind::intranode_migration,
                                           tablet_replica{host, src}, tablet_replica{host, dst});
-            auto& tmap = tmeta.get_tablet_map(tablets.table());
+            auto& tmap = tmeta.get_shared_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
             if (!can_accept_load(nodes, mig_streaming_info)) {
@@ -2635,7 +2633,7 @@ public:
     // replication constraints (no increase in replica co-location on nodes, racks).
     // Returns std::nullopt if it does not and the movement is allowed.
     std::optional<skip_info> check_constraints(node_load_map& nodes,
-                                               const locator::tablet_map& tmap,
+                                               const locator::shared_tablet_map& tmap,
                                                node_load& src_info,
                                                node_load& dst_info,
                                                global_tablet_id tablet,
@@ -2752,7 +2750,7 @@ public:
     using skip_info_vector = std::vector<std::pair<skip_info, migration_tablet_set>>;
     std::optional<skip_info_vector>
     check_constraints(node_load_map& nodes,
-                      const locator::tablet_map& tmap,
+                      const locator::shared_tablet_map& tmap,
                       node_load& src_info,
                       node_load& dst_info,
                       migration_tablet_set tablet_set,
@@ -3239,7 +3237,7 @@ public:
             src = candidate.src;
             dst = candidate.dst;
 
-            auto& tmap = tmeta.get_tablet_map(source_tablets.table());
+            auto& tmap = tmeta.get_shared_tablet_map(source_tablets.table());
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 lblogger.debug("No more candidates. Load would be inverted.");
                 _stats.for_dc(dc).stop_load_inversion++;
@@ -3345,14 +3343,14 @@ public:
     }
 
     class sibling_tablets_replicas_processor {
-        const tablet_desc _t1;
-        const std::optional<tablet_desc> _t2;
+        const shared_tablet_desc _t1;
+        const std::optional<shared_tablet_desc> _t2;
         tablet_replica_set _t1_replicas;
         tablet_replica_set _t2_replicas;
         tablet_replica_set::iterator _current_t1;
         tablet_replica_set::iterator _current_t2;
     public:
-        sibling_tablets_replicas_processor(const tablet_desc t1, const std::optional<tablet_desc> t2,
+        sibling_tablets_replicas_processor(const shared_tablet_desc t1, const std::optional<shared_tablet_desc> t2,
                                            tablet_replica_set t1_replicas, tablet_replica_set t2_replicas)
             : _t1(std::move(t1))
             , _t2(std::move(t2))
@@ -3453,10 +3451,8 @@ public:
 
         // Compute tablet load on nodes.
 
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
-
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const shared_tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 // Check if any replica is on a node which has left.
@@ -3582,17 +3578,17 @@ public:
         _disk_used_per_table.clear();
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto& tmap = _tm->tablets().get_shared_tablet_map(table);
             uint64_t total_tablet_count = 0;
             uint64_t total_tablet_sizes = 0;
 
-            auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
+            auto get_replicas = [this] (std::optional<shared_tablet_desc> t) -> tablet_replica_set {
                 return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
             };
-            auto migrating = [&] (std::optional<tablet_desc> t) {
+            auto migrating = [&] (std::optional<shared_tablet_desc> t) {
                 return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
-            auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
+            auto maybe_apply_load = [&] (std::optional<shared_tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
                     apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
                 }
@@ -3602,7 +3598,7 @@ public:
             // even though each tablet replica will be migrated independently. Next invocation of load balancer is able to exclude both
             // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
             // they're not co-located if only one of them completed migration.
-            co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
+            co_await tmap.for_each_sibling_tablets([&, table = table] (shared_tablet_desc t1, std::optional<shared_tablet_desc> t2) -> future<> {
                 maybe_apply_load(t1);
                 maybe_apply_load(t2);
 
@@ -3811,7 +3807,7 @@ public:
     }
 
     // Allocates new tablets for a table which is not co-located with another table.
-    tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
+    shared_tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();

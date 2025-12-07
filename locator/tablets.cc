@@ -119,11 +119,11 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
     , reads(get_selector_for_reads(stage))
 { }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo) {
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const shared_tablet_info& tinfo, const tablet_migration_info& trinfo) {
     return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo));
 }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const shared_tablet_info& tinfo, const tablet_transition_info& trinfo) {
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
         case tablet_transition_kind::intranode_migration:
@@ -216,7 +216,7 @@ std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet
     );
 }
 
-std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+std::optional<tablet_replica> get_leaving_replica(const shared_tablet_info& tinfo, const tablet_transition_info& trinfo) {
     auto leaving = substract_sets(tinfo.replicas, trinfo.next);
     if (leaving.empty()) {
         return {};
@@ -239,11 +239,11 @@ bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tab
     return false;
 }
 
-tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
+tablet_replica_set get_new_replicas(const shared_tablet_info& tinfo, const tablet_migration_info& mig) {
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
-tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter) {
+tablet_replica_set get_primary_replicas(const locator::shared_tablet_map& tablet_map, tablet_id tid, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter) {
     const auto& info = tablet_map.get_tablet_info(tid);
     const auto* transition = tablet_map.get_tablet_transition_info(tid);
 
@@ -286,7 +286,7 @@ tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, t
     }
 }
 
-tablet_transition_info migration_to_transition_info(const tablet_info& ti, const tablet_migration_info& mig) {
+tablet_transition_info migration_to_transition_info(const shared_tablet_info& ti, const tablet_migration_info& mig) {
     return tablet_transition_info {
             tablet_transition_stage::allow_write_both_read_old,
             mig.kind,
@@ -328,6 +328,14 @@ future<locator::tablet_map_view> tablet_metadata::get_tablet_map_ptr(table_id id
         // lightweight since it only copies the shared ptr, not the map itself.
         const auto& tmap = _tablets.at(id);
         co_return tablet_map_view(co_await tmap.shared.copy(), co_await tmap.per_table.copy());
+    } catch (const std::out_of_range&) {
+        throw_with_backtrace<no_such_tablet_map>(id);
+    }
+}
+
+const shared_tablet_map& tablet_metadata::get_shared_tablet_map(table_id id) const {
+    try {
+        return *_tablets.at(id).shared;
     } catch (const std::out_of_range&) {
         throw_with_backtrace<no_such_tablet_map>(id);
     }

@@ -1313,7 +1313,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return true;
     }
 
-    future<> for_each_tablet_group_transition(std::function<void(const locator::tablet_map&,
+    future<> for_each_tablet_group_transition(std::function<void(const locator::shared_tablet_map&,
                                                            table_id,
                                                            const locator::table_group_set&,
                                                            locator::tablet_id,
@@ -1321,7 +1321,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto tm = get_token_metadata_ptr();
         for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
             co_await coroutine::maybe_yield();
-            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            const auto& tmap = tm->tablets().get_shared_tablet_map(base_table);
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 func(tmap, base_table, tables, tablet, trinfo);
@@ -1334,7 +1334,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_migration_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
-        const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
+        const auto& tmap = get_token_metadata_ptr()->tablets().get_shared_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
@@ -1451,7 +1451,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // The tablets of several tables may be co-located and share the same tablet map, and in
         // particular their transitions are shared. Therefore, each transition must be handled for
         // all tablets in a co-location group at once.
-        co_await for_each_tablet_group_transition([&] (const locator::tablet_map& tmap,
+        co_await for_each_tablet_group_transition([&] (const locator::shared_tablet_map& tmap,
                                                  table_id base_table,
                                                  const locator::table_group_set& tables,
                                                  locator::tablet_id tid,
@@ -2014,7 +2014,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     // Migrates tablet size from leaving to pending host after migration,
     // or creates a new tablet size on pending host after a rebuild
-    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
+    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::shared_tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             lw_shared_ptr<locator::load_stats> new_load_stats;
             auto& tinfo = tmap.get_tablet_info(gid.tablet);
@@ -2119,7 +2119,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, base_table_id, locator::resize_decision{});
 
-            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(base_table_id);
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_shared_tablet_map(base_table_id);
 
             for (auto table_id : tm->tablets().all_table_groups().at(base_table_id)) {
                 _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tmap, new_tablet_map);
