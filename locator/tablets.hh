@@ -371,7 +371,7 @@ struct tablet_transition_info {
 };
 
 // Returns the leaving replica for a given transition.
-std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
+std::optional<tablet_replica> get_leaving_replica(const shared_tablet_info&, const tablet_transition_info&);
 
 // True if the tablet is transitioning and it's in a stage that follows the stage
 // where we clean up the tablet on the given replica.
@@ -387,12 +387,6 @@ struct tablet_migration_info {
 
 class tablet_map;
 
-/// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
-tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
-// If filter returns true, the replica can be chosen as primary replica.
-tablet_replica_set get_primary_replicas(const locator::tablet_map&, tablet_id, const locator::topology&, std::function<bool(const tablet_replica&)> filter);
-tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
-
 /// Describes streaming required for a given tablet transition.
 constexpr int tablet_migration_stream_weight_default = 1;
 constexpr int tablet_migration_stream_weight_repair = 2;
@@ -405,8 +399,8 @@ struct tablet_migration_streaming_info {
     int stream_weight = tablet_migration_stream_weight_default;
 };
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const shared_tablet_info&, const tablet_transition_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const shared_tablet_info&, const tablet_migration_info&);
 bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_view& tinfo);
 
 // Describes if a given token is located at either left or right side of a tablet's range
@@ -559,6 +553,8 @@ struct tablet_desc {
     const tablet_info* info; // cannot be null.
     const tablet_transition_info* transition; // null if there's no transition.
 };
+
+using shared_tablet_desc = tablet_desc;
 
 struct tablet_desc_view {
     tablet_id tid;
@@ -1007,6 +1003,7 @@ public:
     // Gets shared ownership of tablet map
     future<tablet_map_view> get_tablet_map_ptr(table_id id) const;
     const tablet_map_view& get_tablet_map_view(table_id id) const;
+    const shared_tablet_map& get_shared_tablet_map(table_id id) const;
     bool has_tablet_map(table_id id) const;
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
@@ -1018,6 +1015,18 @@ public:
     // get all tables by co-location groups. the key is the base table and the value
     // is the set of all co-located tables in the group (including the base table).
     const table_group_map& all_table_groups() const { return _table_groups; }
+
+    // returns a view of all base tables with their shared tablet maps.
+    // similarly to all_table_groups, this is useful for iterating over all co-location groups where we
+    // operate on each group and its shared tablet map.
+    auto all_base_tables() const {
+        return _table_groups
+            | std::views::transform([this](const auto& group) {
+                const table_id& base = group.first;
+                const auto& tmap = _tablets.at(base).shared;
+                return std::make_pair(base, std::cref(*tmap));
+            });
+    }
 
     table_id get_base_table(table_id id) const;
     bool is_base_table(table_id id) const;
@@ -1058,6 +1067,12 @@ struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
     std::pair<dht::token, dht::token> token_range;
 };
+
+/// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
+tablet_replica_set get_new_replicas(const shared_tablet_info&, const tablet_migration_info&);
+// If filter returns true, the replica can be chosen as primary replica.
+tablet_replica_set get_primary_replicas(const locator::shared_tablet_map&, tablet_id, const locator::topology&, std::function<bool(const tablet_replica&)> filter);
+tablet_transition_info migration_to_transition_info(const shared_tablet_info&, const tablet_migration_info&);
 
 /// Split a list of ranges, such that conceptually each input range is
 /// intersected with each tablet range.
