@@ -297,13 +297,13 @@ public:
 
     const dht::token_range& token_range() const noexcept;
 
-    size_t memtable_count() const noexcept;
+    size_t memtable_count() const;
 
     const compaction_group_ptr& main_compaction_group() const noexcept;
     const std::vector<compaction_group_ptr>& split_ready_compaction_groups() const;
     compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
 
-    uint64_t live_disk_space_used() const noexcept;
+    uint64_t live_disk_space_used() const;
 
     void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups();
@@ -430,7 +430,7 @@ public:
     virtual storage_group& storage_group_for_token(dht::token) const = 0;
     virtual utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const = 0;
 
-    virtual locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept = 0;
+    virtual locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const = 0;
     virtual bool all_storage_groups_split() = 0;
     virtual future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
