@@ -210,9 +210,9 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     auto sgs = storage_groups_for_token_range(token_range);
     reserve_fn(std::ranges::fold_left(sgs | std::views::transform(std::mem_fn(&storage_group::memtable_count)), uint64_t(0), std::plus{}));
     for (auto& sg : sgs) {
-        for (auto& cg : sg->compaction_groups_immediate()) {
+        sg->for_each_compaction_group([&] (const compaction_group_ptr &cg) {
             add_memtables_from_cg(*cg);
-        }
+        });
     }
 }
 
@@ -423,15 +423,27 @@ bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
 }
 
 api::timestamp_type storage_group::min_memtable_timestamp() const {
-    return std::ranges::min(compaction_groups_immediate() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type storage_group::min_memtable_live_timestamp() const {
-    return std::ranges::min(compaction_groups_immediate() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_live_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type storage_group::min_memtable_live_row_marker_timestamp() const {
-    return std::ranges::min(compaction_groups_immediate() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_row_marker_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_live_row_marker_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type table::min_memtable_timestamp() const {
@@ -2019,10 +2031,9 @@ future<std::vector<compaction::compaction_group_view*>> table::get_compaction_gr
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
         co_await coroutine::maybe_yield();
-        auto cgs = sg->compaction_groups_immediate();
-        for (auto& cg : cgs) {
+        sg->for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
             ret.push_back(&cg->view_for_unrepaired_data());
-        }
+        });
     }
     co_return ret;
 }
@@ -2491,9 +2502,11 @@ future<> table::drop_quarantined_sstables() {
 }
 
 bool storage_group::no_compacted_sstable_undeleted() const {
-    return std::ranges::all_of(compaction_groups_immediate(), [] (const_compaction_group_ptr& cg) {
-        return cg->compacted_undeleted_sstables().empty();
+    auto ret = true;
+    for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
+        ret &= cg->compacted_undeleted_sstables().empty();
     });
+    return ret;
 }
 
 // Gets the list of all sstables in the column family, including ones that are
@@ -2757,9 +2770,9 @@ void compaction_group::clear_sstables() {
 }
 
 void storage_group::clear_sstables() {
-    for (auto cg : compaction_groups_immediate()) {
+    for_each_compaction_group([] (const compaction_group_ptr& cg) {
         cg->clear_sstables();
-    }
+    });
 }
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
@@ -3487,7 +3500,11 @@ size_t compaction_group::memtable_count() const noexcept {
 }
 
 size_t storage_group::memtable_count() const {
-    return std::ranges::fold_left(compaction_groups_immediate() | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
+    size_t count = 0;
+    for_each_compaction_group([&count] (const compaction_group_ptr& cg) {
+        count += cg->memtable_count();
+    });
+    return count;
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
@@ -3536,9 +3553,11 @@ bool storage_group::compaction_disabled() const {
     // Compaction group that has been stopped will be excluded, since the group will not be available for a caller
     // to disable compaction explicitly on it, e.g. on truncate, and the caller might want to perform a check
     // that compaction was disabled on all groups. Stopping a group is equivalent to disabling compaction on it.
-    return std::ranges::all_of(compaction_groups_immediate()
-            | std::views::filter(std::not_fn(&compaction_group::stopped)), [] (const_compaction_group_ptr& cg) {
-        return cg->compaction_disabled(); });
+    bool all_disabled = true;
+    for_each_compaction_group([&all_disabled] (const compaction_group_ptr& cg) {
+        all_disabled &= cg->stopped() || cg->compaction_disabled();
+    });
+    return all_disabled;
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -4323,11 +4342,11 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
     auto& sg = storage_group_for_token(token);
     std::vector<mutation_source> mss;
     mss.reserve(sg.memtable_count());
-    for (auto& cg : sg.compaction_groups_immediate()) {
+    sg.for_each_compaction_group([&mss] (const compaction_group_ptr &cg) {
         for (auto& mt : *cg->memtables()) {
             mss.emplace_back(mt->as_data_source());
         }
-    }
+    });
     return mss;
 }
 
