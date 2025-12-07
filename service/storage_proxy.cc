@@ -6688,10 +6688,11 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
         }
     };
 
-    auto request = seastar::make_shared<read_cas_request>();
+    auto request = std::make_unique<read_cas_request>();
+    auto* request_ptr = request.get();
 
-    return cas(std::move(s), std::move(cas_shard), request, cmd, std::move(partition_ranges), std::move(query_options),
-            cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([request] (bool is_applied) mutable {
+    return cas(std::move(s), std::move(cas_shard), *request_ptr, cmd, std::move(partition_ranges), std::move(query_options),
+            cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([request = std::move(request)] (bool is_applied) mutable {
         return make_ready_future<coordinator_query_result>(std::move(request->res));
     });
 }
@@ -6754,11 +6755,13 @@ static mutation_write_failure_exception read_failure_to_write(read_failure_excep
  * NOTE: `cmd` argument can be nullptr, in which case it's guaranteed that this function would not perform
  * any reads of committed values (in case user of the function is not interested in them).
  *
+ * NOTE: The `request` object must be guaranteed to be alive until the returned future is resolved.
+ *
  * WARNING: the function must be called on a shard that owns the key cas() operates on.
  * The cas_shard must be created *before* selecting the shard, to protect against
  * concurrent tablet migrations.
  */
-future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts) {
@@ -6859,7 +6862,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
                 qr = std::move(cqr.query_result);
             }
 
-            auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot), cdc_opts);
+            auto mutation = request.apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot), cdc_opts);
             condition_met = true;
             if (!mutation) {
                 if (write) {
