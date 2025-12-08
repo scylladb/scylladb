@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_first_completed
 from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
 
@@ -575,7 +576,7 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, obj
 
     return servers,host_ids
 
-async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_tablet_count=None, schema=None):
+async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_tablet_count=None, schema=None, consistency_level=ConsistencyLevel.ALL):
     cql = manager.get_cql()
     logger.info(f'Create keyspace, {topology=}')
     keys = range(num_keys)
@@ -592,7 +593,11 @@ async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_ta
         schema += f"WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
     schema += ';'
     cql.execute(schema)
-    await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ('{k}', {k});") for k in keys))
+
+    stmt = cql.prepare(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES (?, ?)")
+    if consistency_level is not None:
+        stmt.consistency_level = consistency_level
+    await asyncio.gather(*(cql.run_async(stmt, (str(k), k)) for k in keys))
 
     return schema, keys, replication_opts
 
