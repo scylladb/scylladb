@@ -1180,7 +1180,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
+
+        return exec_global_command(std::move(guard), 
+            raft_topology_cmd::command::barrier_and_drain,
+            _topo_sm._topology.ignored_nodes,
+            drop_guard_and_retake::yes);
     }
 
     // Represents a two-state state machine which changes monotonically
