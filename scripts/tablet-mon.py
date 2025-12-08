@@ -390,9 +390,11 @@ dark_green = (195, 215, 195)
 light_red = (255, 200, 200)
 light_green = (200, 255, 200)
 light_gray = (240, 240, 240)
+scylla_blue = (87, 209, 229)
 
 tablet_colors = {
     (Tablet.STATE_NORMAL, None): GRAY,
+    (Tablet.STATE_NORMAL, 'repair'): scylla_blue,
     (Tablet.STATE_JOINING, 'allow_write_both_read_old'): dark_green,
     (Tablet.STATE_LEAVING, 'allow_write_both_read_old'): dark_red,
     (Tablet.STATE_JOINING, 'write_both_read_old'): dark_green,
@@ -532,6 +534,8 @@ def update_from_cql(initial=False):
                 state = (Tablet.STATE_JOINING, tablet.stage)
             elif replica in leaving:
                 state = (Tablet.STATE_LEAVING, tablet.stage)
+            elif tablet.stage == 'repair':
+                state = (Tablet.STATE_NORMAL, tablet.stage)
             else:
                 state = (Tablet.STATE_NORMAL, None)
 
