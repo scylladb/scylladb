@@ -957,12 +957,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             req = std::get<global_topology_request>(req_entry.request_type);
         }
         
-        // Set start_time when we begin executing the request
-        topology_request_tracking_mutation_builder rtbuilder(req_id);
-        rtbuilder.set("start_time", db_clock::now());
-        co_await update_topology_state(std::move(guard), {rtbuilder.build()}, "set start_time for global request");
-        guard = co_await start_operation();
-        
         switch (req) {
         case global_topology_request::new_cdc_generation: {
             rtlogger.info("new CDC generation requested");
@@ -982,9 +976,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                    .set_global_topology_request(req)
                    .set_global_topology_request_id(req_id)
                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+            
+            // Set start_time when we begin executing the request
+            topology_request_tracking_mutation_builder rtbuilder(req_id);
+            rtbuilder.set("start_time", db_clock::now());
+            
             auto reason = ::format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
-            co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+            co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build(), rtbuilder.build()}, reason);
         }
         break;
         case global_topology_request::cleanup:
@@ -1075,6 +1074,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                          .del_global_topology_request_id()
                                                          .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                                                          .build()));
+            // Set start_time when we begin executing the request
+            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
+                                                         .set("start_time", db_clock::now())
+                                                         .build()));
             updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
@@ -1095,7 +1098,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                    .set_global_topology_request_id(req_id)
                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                    .set_session(session_id(req_id));
-            co_await update_topology_state(std::move(guard), {builder.build()}, "TRUNCATE TABLE requested");
+            
+            // Set start_time when we begin executing the request
+            topology_request_tracking_mutation_builder rtbuilder(req_id);
+            rtbuilder.set("start_time", db_clock::now());
+            
+            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, "TRUNCATE TABLE requested");
         }
         break;
         }
@@ -3286,6 +3294,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             topology_mutation_builder builder(guard.write_timestamp());
             builder.del_global_topology_request();
             if (_feature_service.topology_global_request_queue) {
+                // Set start_time when we begin executing the request
+                topology_request_tracking_mutation_builder start_rtbuilder(*global_request_id);
+                start_rtbuilder.set("start_time", db_clock::now());
+                muts.emplace_back(start_rtbuilder.build());
+                
                 topology_request_tracking_mutation_builder rtbuilder(*global_request_id);
                 builder.del_global_topology_request_id()
                        .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, *global_request_id);
