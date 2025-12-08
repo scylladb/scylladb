@@ -274,4 +274,33 @@ public:
     }
 };
 
+// Serializable representation of column_specification for RPC
+// The type is serialized as its string name and can be parsed back via db::marshal::type_parser
+struct column_specification_serialized {
+    sstring ks_name;
+    sstring cf_name;
+    sstring column_name;
+    sstring type_name;  // Serialized form of data_type, parseable via type_parser
+};
+
+// Serializable representation of metadata for RPC
+struct metadata_serialized {
+    uint32_t flags;
+    std::vector<column_specification_serialized> column_specs;
+    uint32_t column_count;
+    std::optional<service::pager::paging_state> paging_state;
+};
+
+// Serializable representation of result_set for RPC
+struct result_set_serialized {
+    metadata_serialized metadata;
+    utils::chunked_vector<std::vector<bytes_opt>> rows;
+};
+
+// Convert result_set to its serialized form
+result_set_serialized serialize_result_set(const result_set& rs);
+
+// Convert serialized form back to result_set
+result_set deserialize_result_set(result_set_serialized&& serialized);
+
 }
