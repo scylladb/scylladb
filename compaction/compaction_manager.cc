@@ -2290,8 +2290,12 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
-    if (!can_proceed(&t)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
+    // Throw an error if split cannot be performed due to e.g. out of space prevention.
+    // We don't want to prevent split because compaction is temporarily disabled on a view only for synchronization,
+    // which is uneeded against new sstables that aren't part of any set yet, so never use can_proceed(&t) here.
+    if (is_disabled()) {
+        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(format("Cannot split {} because manager has compaction disabled, " \
+                                                                                         "reason might be out of space prevention", sst->get_filename()))));
     }
     std::vector<sstables::shared_sstable> ret;
 
