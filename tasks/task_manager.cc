@@ -21,6 +21,7 @@
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/UUID_gen.hh"
 #include "service/storage_service.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
@@ -559,6 +560,7 @@ future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_int
                 .table = task->get_status().table,
                 .entity = task->get_status().entity,
                 .shard = task->get_status().shard,
+                .creation_time = db_clock::time_point(utils::UUID_gen::unix_timestamp(task->id().uuid())),
                 .start_time = task->get_status().start_time,
                 .end_time = task->get_status().end_time,
             });

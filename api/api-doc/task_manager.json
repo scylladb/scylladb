@@ -349,9 +349,13 @@
                "type":"long",
                "description":"The shard the task is running on"
             },
+            "creation_time":{
+               "type":"datetime",
+               "description":"The creation time of the task (when it was queued); extracted from the task_id UUID"
+            },
             "start_time":{
                "type":"datetime",
-               "description":"The start time of the task; unspecified (equal to epoch) when state == created"
+               "description":"The start time of the task (when execution began); unspecified (equal to epoch) when state == created"
             },
             "end_time":{
                "type":"datetime",
@@ -398,13 +402,17 @@
                "type":"boolean",
                "description":"Boolean flag indicating whether the task can be aborted"
             },
+            "creation_time":{
+               "type":"datetime",
+               "description":"The creation time of the task (when it was queued); extracted from the task_id UUID"
+            },
             "start_time":{
                "type":"datetime",
-               "description":"The start time of the task"
+               "description":"The start time of the task (when execution began); unspecified (equal to epoch) when state == created"
             },
             "end_time":{
                "type":"datetime",
-               "description":"The end time of the task (unspecified when the task is not completed)"
+               "description":"The end time of the task (when execution completed); unspecified (equal to epoch) when the task is not completed"
             },
             "error":{
                "type":"string",

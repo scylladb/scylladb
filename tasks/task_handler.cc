@@ -10,6 +10,7 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/UUID_gen.hh"
 
 #include <seastar/core/with_timeout.hh>
 
@@ -18,6 +19,11 @@
 namespace tasks {
 
 using task_status_variant = std::variant<tasks::task_manager::foreign_task_ptr, tasks::task_manager::task::task_essentials>;
+
+static db_clock::time_point get_creation_time_from_task_id(task_id id) {
+    // Task IDs are timeuuids (version 1 UUIDs), so we can extract the timestamp from them
+    return db_clock::time_point(utils::UUID_gen::unix_timestamp(id.uuid()));
+}
 
 static future<task_status> get_task_status(task_manager::task_ptr task) {
     auto host_id = task->get_module()->get_task_manager().get_host_id();
@@ -29,6 +35,7 @@ static future<task_status> get_task_status(task_manager::task_ptr task) {
         .scope = local_task_status.scope,
         .state = local_task_status.state,
         .is_abortable = task->is_abortable(),
+        .creation_time = get_creation_time_from_task_id(local_task_status.id),
         .start_time = local_task_status.start_time,
         .end_time = local_task_status.end_time,
         .error = local_task_status.error,
@@ -173,6 +180,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                     .scope = task.task_status.scope,
                     .state = task.task_status.state,
                     .is_abortable = task.abortable,
+                    .creation_time = get_creation_time_from_task_id(task.task_status.id),
                     .start_time = task.task_status.start_time,
                     .end_time = task.task_status.end_time,
                     .error = task.task_status.error,

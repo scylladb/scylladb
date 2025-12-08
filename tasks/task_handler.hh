@@ -26,6 +26,7 @@ struct task_status {
     std::string scope;
     task_manager::task_state state;
     is_abortable is_abortable;
+    db_clock::time_point creation_time;
     db_clock::time_point start_time;
     db_clock::time_point end_time;
     std::string error;
@@ -51,6 +52,7 @@ struct task_stats {
     std::string table;
     std::string entity;
     unsigned shard;
+    db_clock::time_point creation_time;
     db_clock::time_point start_time;
     db_clock::time_point end_time;
 };

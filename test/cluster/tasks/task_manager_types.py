@@ -38,6 +38,7 @@ class TaskStats(NamedTuple):
     entity: str
     sequence_number: SequenceNum
     shard: int
+    creation_time: str
     start_time: str
     end_time: str
 
@@ -54,6 +55,7 @@ class TaskStatus(NamedTuple):
     entity: str
     sequence_number: SequenceNum
     is_abortable: bool
+    creation_time: str
     start_time: str
     end_time: str
     error: str
