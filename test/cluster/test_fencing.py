@@ -12,7 +12,7 @@ from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
 from test.cluster.conftest import skip_mode
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, get_topology_version
 from test.pylib.scylla_cluster import ScyllaVersionDescription
 import pytest
 import logging
@@ -42,13 +42,6 @@ async def set_fence_version(manager: ManagerClient, host: Host, new_version: int
     await manager.cql.run_async("update system.topology set fence_version=%s where key = 'topology'",
                                 parameters=[new_version],
                                 host=host)
-
-
-async def get_version(manager: ManagerClient, host: Host):
-    rows = await manager.cql.run_async(
-        "select version from system.topology where key = 'topology'",
-        host=host)
-    return rows[0].version
 
 
 def send_errors_metric(metrics: ScyllaMetrics):
@@ -107,7 +100,7 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
     # causing topology_state_load on it to see the decremented version and report broken invariants.
     await manager.api.cleanup_all(servers[2].ip_addr)
 
-    version = await get_version(manager, host2)
+    version = await get_topology_version(cql, host2)
     logger.info(f"version on host2 {version}")
 
     await set_version(manager, host2, version - 1)
@@ -165,7 +158,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, [s0, s2], time.time() + 60)
 
     host2 = host_by_server(hosts, s2)
-    new_version = (await get_version(manager, host2)) + 1
+    new_version = (await get_topology_version(cql, host2)) + 1
     logger.info(f"Set version and fence_version to {new_version} on node {host2}")
     await set_version(manager, host2, new_version)
     await set_fence_version(manager, host2, new_version)
