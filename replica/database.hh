@@ -1372,7 +1372,8 @@ public:
 
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
-    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
+    // If leave_unsealead is set, all the destination sstables will be left unsealed.
+    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
     friend class compaction_group;
     friend class compaction::compaction_task_impl;

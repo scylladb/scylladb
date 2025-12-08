@@ -1322,7 +1322,7 @@ future<utils::chunked_vector<sstables::shared_sstable>> table::take_sstable_set_
 }
 
 future<utils::chunked_vector<sstables::entry_descriptor>>
-table::clone_tablet_storage(locator::tablet_id tid) {
+table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     utils::chunked_vector<sstables::entry_descriptor> ret;
     auto holder = async_gate().hold();
 
@@ -1334,7 +1334,7 @@ table::clone_tablet_storage(locator::tablet_id tid) {
     // by compaction while we are waiting for the lock.
     auto deletion_guard = co_await get_sstable_list_permit();
     co_await sg.make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-        ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed));
     });
     co_return ret;
 }
