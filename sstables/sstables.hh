@@ -709,7 +709,7 @@ private:
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
-    future<> read_toc() noexcept;
+    future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
 
     void write_summary() {
