@@ -1110,6 +1110,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/migration_manager.cc',
                 'service/tablet_allocator.cc',
                 'service/storage_proxy.cc',
+                'service/forward_cql_service.cc',
                 'query_ranges_to_vnodes.cc',
                 'service/mapreduce_service.cc',
                 'service/paxos/proposal.cc',
@@ -1506,7 +1507,8 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/gossip.idl.hh',
         'idl/migration_manager.idl.hh',
         "idl/node_ops.idl.hh",
-        "idl/tasks.idl.hh"
+        "idl/tasks.idl.hh",
+        "idl/forward_cql.idl.hh",
         ]
 
 scylla_tests_generic_dependencies = [

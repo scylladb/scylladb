@@ -89,6 +89,12 @@ rate_limit_exception::rate_limit_exception(const sstring& ks, const sstring& cf,
     , rejected_by_coordinator(rejected_by_coordinator_)
     { }
 
+rate_limit_exception::rate_limit_exception(sstring message, db::operation_type op_type_, bool rejected_by_coordinator_) noexcept
+    : cassandra_exception(exception_code::RATE_LIMIT_ERROR, std::move(message))
+    , op_type(op_type_)
+    , rejected_by_coordinator(rejected_by_coordinator_)
+    { }
+
 prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id) noexcept
     : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID {} found.", id)}
     , id{id}

@@ -575,8 +575,9 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     });
 
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
-        std::move(partition_key_bind_indices));
+    auto ps = std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, std::move(partition_key_bind_indices));
+    ps->requires_forwarding = strong_consistency::is_strongly_consistent(db, schema->ks_name());
+    return ps;
 }
 
 ::shared_ptr<cql3::statements::modification_statement>

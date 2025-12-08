@@ -50,6 +50,7 @@ public:
     const std::vector<seastar::lw_shared_ptr<column_specification>> bound_names;
     const std::vector<uint16_t> partition_key_bind_indices;
     std::vector<sstring> warnings;
+    bool requires_forwarding = false;  // Set if keyspace is strongly consistent
 private:
     cql_metadata_id_type _metadata_id;
 

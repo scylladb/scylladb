@@ -283,6 +283,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     schedule_raft_groups_deletion(false);
 }
 
+bool groups_manager::has_raft_group(raft::group_id group_id) const {
+    return _raft_groups.contains(group_id);
+}
+
 future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
     if (this_shard_id() != 0 || !_features.strongly_consistent_tables) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");

@@ -79,4 +79,20 @@ uint32_t modification_statement::get_bound_terms() const {
 bool modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return _statement->depends_on(ks_name, cf_name);
 }
+
+const sstring& modification_statement::keyspace() const {
+    return _statement->keyspace();
+}
+
+const sstring& modification_statement::column_family() const {
+    return _statement->column_family();
+}
+
+db::timeout_clock::duration modification_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return _statement->get_timeout(state, options);
+}
+
+dht::partition_range_vector modification_statement::build_partition_keys(const query_options& options, const cql3::statements::modification_statement::json_cache_opt& json_cache) const {
+    return _statement->build_partition_keys(options, json_cache);
+}
 }

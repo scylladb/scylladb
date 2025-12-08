@@ -92,6 +92,9 @@ public:
     // and does not wait for their completion.
     void update(locator::token_metadata_ptr new_tm);
 
+    // Can be used before acquiring a server to check if a raft group exists if the caller can handle its absence.
+    bool has_raft_group(raft::group_id group_id) const;
+
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(raft::group_id group_id);
 

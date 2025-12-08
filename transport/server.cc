@@ -47,6 +47,7 @@
 #include "enum_set.hh"
 #include "service/query_state.hh"
 #include "service/client_state.hh"
+#include "service/forward_cql_service.hh"
 #include "exceptions/exceptions.hh"
 #include "client_data.hh"
 #include "cql3/query_processor.hh"
@@ -1152,6 +1153,23 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
 }
 
 static future<cql_server::process_fn_return_type>
+process_query_forwarding(
+        sharded<cql3::query_processor>& qp,
+        ::shared_ptr<cql3::cql_statement> stmt,
+        std::unique_ptr<cql_query_state> q_state,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        tracing::trace_state_ptr trace_state,
+        cql3::dialect dialect) {
+    auto& query_state = q_state->query_state;
+    auto& options = *q_state->options;
+    auto prep_result = co_await qp.local().prepare(sstring(stmt->raw_cql_statement), query_state, dialect);
+    auto prepared_id = cql_transport::messages::result_message::prepared::cql::get_id(prep_result);
+    auto response = co_await qp.local().execute_forwarding_statement(stmt, prepared_id, query_state, options, stream, version);
+    co_return cql_server::process_fn_return_type(make_foreign(std::move(response)));
+}
+
+static future<cql_server::process_fn_return_type>
 process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
@@ -1182,7 +1200,23 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    tracing::trace(query_state.get_trace_state(), "Parsing a statement");
+    auto prepared = qp.local().get_statement(query.assume_value(), query_state.get_client_state(), dialect);
+    auto stmt = prepared->statement;
+
+    if (stmt->get_bound_terms() != options.get_values_count()) {
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
+                stmt->get_bound_terms(),
+                options.get_values_count());
+        throw exceptions::invalid_request_exception(msg);
+    }
+    options.prepare(prepared->bound_names);
+
+    if (prepared->requires_forwarding) {
+        return process_query_forwarding(qp, std::move(stmt), std::move(q_state), stream, version, std::move(trace_state), dialect);
+    }
+
+    return qp.local().execute_direct_without_checking_exception_message(std::move(prepared), query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
         } else if (msg->is_exception()) {
@@ -1301,6 +1335,15 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     if (init_trace) {
         tracing::add_prepared_query_options(trace_state, options);
+    }
+
+    // Check if statement requires forwarding to raft group leader
+    if (prepared->requires_forwarding) {
+        tracing::trace(trace_state, "Forwarding statement to raft group leader");
+        return qp.local().execute_forwarding_statement(stmt, id, query_state, options, stream, version)
+            .then([q_state = std::move(q_state)] (auto response) mutable {
+                return cql_server::process_fn_return_type(make_foreign(std::move(response)));
+            });
     }
 
     tracing::trace(trace_state, "Processing a statement");

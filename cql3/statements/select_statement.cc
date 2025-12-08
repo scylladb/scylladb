@@ -2472,7 +2472,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
 
     stmt->_may_use_token_aware_routing = partition_key_bind_indices.size() != 0;
-    return make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    auto ps = make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    ps->requires_forwarding = strong_consistency::is_strongly_consistent(db, schema->ks_name());
+    return ps;
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

@@ -34,6 +34,14 @@ public:
     uint32_t get_bound_terms() const override;
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+
+    const sstring& keyspace() const;
+
+    const sstring& column_family() const;
+
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
+
+    dht::partition_range_vector build_partition_keys(const query_options& options, const cql3::statements::modification_statement::json_cache_opt& json_cache) const;
 };
 
 }

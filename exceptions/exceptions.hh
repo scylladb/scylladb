@@ -219,6 +219,12 @@ struct read_failure_exception_with_timeout : public read_failure_exception {
         , _timeout(timeout_)
         , _timeout_exception(ks, cf, consistency_, received_, block_for_, data_present_)
     { }
+
+    read_failure_exception_with_timeout(sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_, seastar::lowres_clock::time_point timeout_) noexcept
+        : read_failure_exception{msg, consistency_, received_, failures_, block_for_, data_present_}
+        , _timeout(timeout_)
+        , _timeout_exception(msg, consistency_, received_, block_for_, data_present_)
+    { }
 };
 
 struct overloaded_exception : public cassandra_exception {
@@ -232,6 +238,7 @@ struct rate_limit_exception : public cassandra_exception {
     bool rejected_by_coordinator;
 
     rate_limit_exception(const sstring& ks, const sstring& cf, db::operation_type op_type_, bool rejected_by_coordinator_) noexcept;
+    rate_limit_exception(sstring msg, db::operation_type op_type_, bool rejected_by_coordinator_) noexcept;
 };
 
 class request_validation_exception : public cassandra_exception {

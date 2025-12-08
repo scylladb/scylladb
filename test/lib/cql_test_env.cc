@@ -79,6 +79,7 @@
 #include "init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
+#include "service/forward_cql_service.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -181,6 +182,7 @@ private:
     sharded<repair_service> _repair;
     sharded<streaming::stream_manager> _stream_manager;
     sharded<service::mapreduce_service> _mapreduce_service;
+    sharded<service::forward_cql_service> _forward_cql_service;
     sharded<direct_failure_detector::failure_detector> _fd;
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
@@ -954,6 +956,9 @@ private:
                 std::ref(_db), std::ref(_feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
+            _forward_cql_service.start(std::ref(_ms), std::ref(_qp), std::ref(_proxy), std::ref(_groups_manager)).get();
+            auto stop_forward_cql_service = defer_verbose_shutdown("forward cql service", [this] { _forward_cql_service.stop().get(); });
+
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
                 _sc_coordinator.stop().get();
@@ -998,7 +1003,7 @@ private:
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
                 qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client, 
-                    _sc_coordinator.local());
+                    _sc_coordinator.local(), _forward_cql_service.local());
             }).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();

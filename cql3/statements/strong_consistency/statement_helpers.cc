@@ -20,10 +20,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
 {
     const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
     if (target.host != my_host_id) {
-        throw exceptions::invalid_request_exception(format(
-            "Strongly consistent queries can be executed only on the leader node, "
-            "leader id {}, current host id {}",
-            target.host, my_host_id));
+        throw not_a_leader_exception(target.host, target.shard);
     }
     auto&& func_values_cache = const_cast<cql3::query_options&>(options).take_cached_pk_function_calls();
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
