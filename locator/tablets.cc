@@ -1376,6 +1376,7 @@ void tablet_aware_replication_strategy::process_tablet_options(abstract_replicat
                                                                replication_strategy_params params) {
     if (ars._uses_tablets) {
         _initial_tablets = params.initial_tablets.value_or(0);
+        _consistency = params.consistency.value_or(data_dictionary::consistency_config_option::eventual);
         mark_as_per_table(ars);
     }
 }
