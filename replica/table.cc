@@ -1346,10 +1346,10 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
 }
 
 future<>
-table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy offstrategy,
+table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable& sst, sstables::offstrategy offstrategy,
                                        bool trigger_compaction) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
+    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () mutable noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         if (!offstrategy) {
@@ -1361,6 +1361,8 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
+        // Reseting sstable ptr to inform the caller the sstable has been loaded successfully.
+        sst = nullptr;
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
         return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
     });
@@ -1372,7 +1374,7 @@ table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstable
         auto& cg = compaction_group_for_sstable(sst);
         // Hold gate to make share compaction group is alive.
         auto holder = cg.async_gate().hold();
-        co_await do_add_sstable_and_update_cache(cg, std::move(sst), offstrategy, trigger_compaction);
+        co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
     }
 }
 
@@ -1389,6 +1391,55 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
         co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
     }
     trigger_compaction();
+}
+
+future<std::vector<sstables::shared_sstable>>
+table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
+                                        std::function<future<>(sstables::shared_sstable)> on_add,
+                                        sstables::offstrategy offstrategy) {
+    std::vector<sstables::shared_sstable> ret, ssts;
+    std::exception_ptr ex;
+    try {
+        bool trigger_compaction = offstrategy == sstables::offstrategy::no;
+        auto& cg = compaction_group_for_sstable(new_sst);
+        // This prevents compaction group from being considered empty until the holder is released.
+        // Helpful for tablet split, where split is acked for a table when all pre-split groups are empty.
+        auto sstable_add_holder = cg.sstable_add_gate().hold();
+
+        ret = ssts = co_await maybe_split_new_sstable(new_sst);
+        // on sucessful split, input sstable is unlinked.
+        new_sst = nullptr;
+        for (auto& sst : ssts) {
+            auto& cg = compaction_group_for_sstable(sst);
+            // Hold gate to make sure compaction group is alive.
+            auto holder = cg.async_gate().hold();
+            co_await on_add(sst);
+            // If do_add_sstable_and_update_cache() throws after sstable has been loaded, the pointer
+            // sst passed by reference will be set to nullptr, so it won't be unlinked in the exception
+            // handler below.
+            co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
+            sst = nullptr;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        // on failed split, input sstable is unlinked here.
+        if (new_sst) {
+            tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
+            co_await new_sst->unlink();
+        }
+        // on failure after sucessful split, sstables not attached yet will be unlinked
+        co_await coroutine::parallel_for_each(ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+            if (sst) {
+                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                co_await sst->unlink();
+            }
+        });
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return std::move(ret);
 }
 
 future<>

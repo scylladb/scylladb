@@ -606,6 +606,18 @@ public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
+
+    // Restricted to new sstables produced by external processes such as repair.
+    // The sstable might undergo split if table is in split mode.
+    // If no need for split, the input sstable will only be attached to the sstable set.
+    // If split happens, the output sstables will be attached and the input sstable unlinked.
+    // On failure, the input sstable is unlinked and exception propagated to the caller.
+    // The on_add callback will be called on all sstables to be added into the set.
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
+                                     std::function<future<>(sstables::shared_sstable)> on_add,
+                                     sstables::offstrategy offstrategy = sstables::offstrategy::no);
+
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
     void set_truncation_time(db_clock::time_point truncated_at) noexcept {
@@ -723,7 +735,9 @@ private:
         return _config.enable_cache && _schema->caching_options().enabled();
     }
     void update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept;
-    future<> do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy, bool trigger_compaction);
+    // This function can throw even if the sstable was added into the set. When the sstable was successfully
+    // added, the sstable ptr @sst will be set to nullptr. Allowing caller to optionally discard the sstable.
+    future<> do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable& sst, sstables::offstrategy, bool trigger_compaction);
     future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction);
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
