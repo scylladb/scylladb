@@ -836,13 +836,14 @@ future<std::vector<sstring>> sstable::read_and_parse_toc(file f) {
 
 // This is small enough, and well-defined. Easier to just read it all
 // at once
-future<> sstable::read_toc() noexcept {
+future<> sstable::read_toc(sstable_open_config cfg) noexcept {
     if (_recognized_components.size()) {
         co_return;
     }
 
     try {
-        co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
+        auto toc_type = cfg.unsealed_sstable ? component_type::TemporaryTOC : component_type::TOC;
+        co_await do_read_simple(toc_type, [&] (version_types v, file f) -> future<> {
             auto comps = co_await read_and_parse_toc(f);
             for (auto& c: comps) {
                 // accept trailing newlines
@@ -1725,7 +1726,7 @@ void sstable::disable_component_memory_reload() {
 }
 
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
-    co_await read_toc();
+    co_await read_toc(cfg);
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
     co_await read_scylla_metadata();
