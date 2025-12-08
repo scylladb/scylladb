@@ -312,6 +312,12 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
     }
     auto req = i->second;
 
+    // Request will not be considered as failed if reason is empty.
+    if (reason.empty()) {
+        tsmlogger.warn("Request {} canceled without specifying a reason, at: {}", request_id, seastar::current_backtrace());
+        reason = "canceled";
+    }
+
     tsmlogger.info("Will cancel {} request {} for node {}: {}", req, request_id, node, reason);
 
     topology_mutation_builder builder(guard.write_timestamp());
