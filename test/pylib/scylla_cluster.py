@@ -789,7 +789,7 @@ class ScyllaServer:
 
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT and not self.stop_event.is_set():
             assert self.cmd is not None
-            if self.cmd.returncode:
+            if self.cmd.returncode is not None:
                 self.cmd = None
                 if expected_error is not None:
                     with self.log_filename.open("r", encoding="utf-8") as log_file:
