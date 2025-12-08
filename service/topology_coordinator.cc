@@ -956,6 +956,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
             req = std::get<global_topology_request>(req_entry.request_type);
         }
+        
+        // Set start_time when we begin executing the request
+        topology_request_tracking_mutation_builder rtbuilder(req_id);
+        rtbuilder.set("start_time", db_clock::now());
+        co_await update_topology_state(std::move(guard), {rtbuilder.build()}, "set start_time for global request");
+        guard = co_await start_operation();
+        
         switch (req) {
         case global_topology_request::new_cdc_generation: {
             rtlogger.info("new CDC generation requested");
