@@ -64,7 +64,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
             for server in servers:
                 await manager.api.disable_autocompaction(server.ip_addr, ks)
 
-            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text", " WITH speculative_retry = 'NONE'") as cf:
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
