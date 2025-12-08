@@ -19,6 +19,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
+#include "seastar/coroutine/exception.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "service/topology_mutation.hh"
@@ -138,6 +139,7 @@ bool cql3::statements::alter_keyspace_statement::changes_tablets(query_processor
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     using namespace cql_transport;
+    bool unknown_keyspace = false;
     try {
         event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
         auto ks = qp.db().find_keyspace(_name);
@@ -158,8 +160,12 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         //       when in reality nothing or only schema is being changed
         if (changes_tablets(qp)) {
             if (!qp.proxy().features().topology_global_request_queue && !qp.topology_global_queue_empty()) {
-                return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(
-                        exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
+                co_await coroutine::return_exception(
+                    exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
+            }
+            if (qp.proxy().features().rack_list_rf && co_await qp.ongoing_rf_change(mc.guard(),_name)) {
+                co_await coroutine::return_exception(
+                        exceptions::invalid_request_exception(format("Another RF change for this keyspace {} ongoing, please retry.", _name)));
             }
             qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
@@ -242,10 +248,15 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 target_type,
                 keyspace());
         mc.add_mutations(std::move(muts), "CQL alter keyspace");
-        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), warnings));
+        co_return std::make_tuple(std::move(ret), warnings);
     } catch (data_dictionary::no_such_keyspace& e) {
-        return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+        unknown_keyspace = true;
     }
+    if (unknown_keyspace) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception("Unknown keyspace " + _name));
+    }
+    std::unreachable();
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

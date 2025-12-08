@@ -1375,6 +1375,34 @@ public:
     }
 };
 
+future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstring ks) const {
+    auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
+        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
+            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::keyspace_rf_change &&
+            req_entry.new_keyspace_rf_change_ks_name.has_value() && req_entry.new_keyspace_rf_change_ks_name.value() == ks;
+    };
+    if (_topology_state_machine._topology.global_request_id.has_value()) {
+        auto req_id = _topology_state_machine._topology.global_request_id.value();
+        if (co_await ongoing_ks_rf_change(req_id)) {
+            co_return true;
+        }
+    }
+    for (auto request_id : _topology_state_machine._topology.paused_rf_change_requests) {
+        if (co_await ongoing_ks_rf_change(request_id)) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
+        if (co_await ongoing_ks_rf_change(request_id)) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return false;
+}
+
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
     if (params.replaced_id.has_value()) {
         throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
