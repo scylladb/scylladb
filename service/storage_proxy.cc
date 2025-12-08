@@ -623,17 +623,7 @@ private:
                         const auto erm = s->table().get_effective_replication_map();
 
                         // Note: blocks due to execution_stage in replica::database::apply()
-<<<<<<< HEAD
                         co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
-||||||| parent of df73f723a6 (storage_proxy: hold erms in replica handlers)
-                        co_await p->run_fenceable_write(s->table().get_effective_replication_map()->get_replication_strategy(),
-                            fence, src_addr,
-                            [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
-=======
-                        co_await p->run_fenceable_write(erm->get_replication_strategy(),
-                            fence, src_addr,
-                            [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
->>>>>>> df73f723a6 (storage_proxy: hold erms in replica handlers)
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                         // lots of unsent responses, which can OOM our shard.
                         //

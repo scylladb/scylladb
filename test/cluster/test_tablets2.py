@@ -13,7 +13,7 @@ from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrie
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
 from test.cluster.conftest import skip_mode
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -1836,14 +1836,7 @@ async def test_crash_on_missing_table_from_load_stats(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-<<<<<<< HEAD
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
-||||||| parent of df73f723a6 (storage_proxy: hold erms in replica handlers)
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
-=======
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
     """
     The test verifies that tablet replicas hold ERMS while processing requests,
@@ -1853,8 +1846,6 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
     checks that the tablet's global barrier waits for the replica handling that
     request to complete.
     """
-
->>>>>>> df73f723a6 (storage_proxy: hold erms in replica handlers)
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -1894,9 +1885,7 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
         replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
         await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
 
-        version_before_move = (await cql.run_async(
-            "select version from system.topology where key = 'topology'", 
-            host=hosts[0]))[0].version
+        version_before_move = await get_topology_version(cql, hosts[0])
 
         s0_mark = await s0_log.mark()
         migration_task = asyncio.create_task(

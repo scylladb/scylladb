@@ -1150,13 +1150,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-<<<<<<< HEAD
-    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
-||||||| parent of ffe3262e8d (global tablets barrier: require all nodes to ack barrier_and_drain)
-    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr) {
-=======
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr, bool drain_all_nodes = false) {
->>>>>>> ffe3262e8d (global tablets barrier: require all nodes to ack barrier_and_drain)
         auto version = _topo_sm._topology.version;
         bool drain_failed = false;
         try {
@@ -1188,11 +1182,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-<<<<<<< HEAD
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes());
-||||||| parent of ffe3262e8d (global tablets barrier: require all nodes to ack barrier_and_drain)
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
-=======
 
         // Let x be the current topology version, post-conditions of this barrier:
         // * there are no coordinators with versions < x and no such coordinators
@@ -1212,12 +1201,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // * some replicas could still be accepting new requests with versions == x - 1
 
         bool* const fenced = nullptr;
-        const auto drain_all_nodes = true;        
-        return global_token_metadata_barrier(std::move(guard), 
-            _topo_sm._topology.ignored_nodes,
+        const auto drain_all_nodes = true;
+        return global_token_metadata_barrier(std::move(guard),
+            _topo_sm._topology.get_excluded_nodes(),
             fenced,
             drain_all_nodes);
->>>>>>> ffe3262e8d (global tablets barrier: require all nodes to ack barrier_and_drain)
     }
 
     // Represents a two-state state machine which changes monotonically
