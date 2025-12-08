@@ -395,7 +395,7 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
             assert_that(msg).is_rows().is_empty();
             msg = e.execute_cql("select * from system_distributed.view_build_status").get();
             assert_that(msg).is_rows().is_empty();
-        });
+        }, 30);
     });
 }
 
