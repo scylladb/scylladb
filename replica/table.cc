@@ -1370,12 +1370,10 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    for (auto sst : co_await maybe_split_new_sstable(new_sst)) {
-        auto& cg = compaction_group_for_sstable(sst);
-        // Hold gate to make share compaction group is alive.
-        auto holder = cg.async_gate().hold();
-        co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
-    }
+    auto& cg = compaction_group_for_sstable(new_sst);
+    // Hold gate to make share compaction group is alive.
+    auto holder = cg.async_gate().hold();
+    co_await do_add_sstable_and_update_cache(cg, new_sst, offstrategy, trigger_compaction);
 }
 
 future<>
