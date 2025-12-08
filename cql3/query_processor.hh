@@ -20,6 +20,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/forwarding_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/dialect.hh"
 #include "exceptions/exceptions.hh"
@@ -47,6 +48,7 @@ class raft_group0_client;
 namespace broadcast_tables {
 struct query;
 }
+class forward_cql_service;
 }
 
 namespace cql3 {
@@ -155,7 +157,8 @@ public:
     ~query_processor();
 
     void start_remote(service::migration_manager&, service::mapreduce_service&,
-                      service::storage_service& ss, service::raft_group0_client&);
+                      service::storage_service& ss, service::raft_group0_client&,
+                      service::forward_cql_service&);
     future<> stop_remote();
 
     data_dictionary::database db() {
@@ -453,6 +456,9 @@ public:
     // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
     future<query::mapreduce_result>
     mapreduce(query::mapreduce_request, tracing::trace_state_ptr);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_forwarding_statement(const cql3::statements::forwarding_statement& stmt, service::query_state& query_state, const query_options& options);
 
     struct retry_statement_execution_error : public std::exception {};
 

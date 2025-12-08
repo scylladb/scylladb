@@ -17,7 +17,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
 #include "cql3/statements/broadcast_tables_select_statement.hh"
-
+#include "cql3/statements/forwarding_statement.hh"
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
@@ -2456,7 +2456,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
 
     stmt->_may_use_token_aware_routing = partition_key_bind_indices.size() != 0;
-    return make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    ::shared_ptr<cql3::cql_statement> maybe_strongly_consistent_stmt = stmt;
+    if (db.find_keyspace(keyspace()).is_strongly_consistent()) {
+        maybe_strongly_consistent_stmt = ::make_shared<cql3::statements::forwarding_statement>(std::move(stmt));
+    }
+    return make_unique<prepared_statement>(audit_info(), std::move(maybe_strongly_consistent_stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

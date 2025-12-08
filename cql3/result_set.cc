@@ -11,7 +11,9 @@
 #include <cstdint>
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
+#include "utils/managed_bytes.hh"
 #include "cql3/result_set.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 
