@@ -371,12 +371,17 @@ class compact_radix_tree:
             # Calculate the key size in bits
             # For uint32_t (column_id), this would be 32 bits
             key_bits = self.key_type.sizeof * 8
-            # leaf_depth = (key_bits + RADIX_BITS - 1) / RADIX_BITS - 1
+            
+            # Calculate leaf depth: the tree uses RADIX_BITS (7) bits per level
+            # leaf_depth = ceil(key_bits / RADIX_BITS) - 1
+            # The -1 accounts for the root level not being counted in depth
             leaf_depth = (key_bits + self.RADIX_BITS - 1) // self.RADIX_BITS - 1
             
-            # Extract prefix bits from node_prefix
-            prefix_len = node_prefix & self.RADIX_MASK
-            prefix_value = node_prefix & ~self.RADIX_MASK
+            # Extract prefix information from node_prefix
+            # Prefix encoding: lower RADIX_BITS contain the prefix length,
+            # upper bits contain the actual prefix value
+            prefix_len = node_prefix & self.RADIX_MASK  # Extract lower 7 bits for length
+            prefix_value = node_prefix & ~self.RADIX_MASK  # Extract upper bits for value
             
             # Update prefix with node's contribution
             current_prefix = prefix | prefix_value
@@ -497,9 +502,9 @@ class compact_radix_tree:
                     size = int(self.root['_size'])
                     layout = int(self.root['_base_layout'])
                     return f'compact_radix_tree with size={size}, layout={layout} @ {hex(int(self.root.address))} (elements not accessible, use debug build for full introspection)'
-                except:
+                except (gdb.error, gdb.MemoryError, ValueError, AttributeError):
                     return f'compact_radix_tree @ {hex(int(self.root.address))} (structure not fully accessible)'
-        except Exception as e:
+        except (gdb.error, gdb.MemoryError, ValueError, AttributeError) as e:
             # Fallback to simple representation
             return f'compact_radix_tree @ {hex(int(self.root.address))} (error: {e})'
 
