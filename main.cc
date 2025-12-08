@@ -21,6 +21,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
+#include "service/client_routes.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
@@ -1799,6 +1800,13 @@ sharded<locator::shared_token_metadata> token_metadata;
             api::set_server_stream_manager(ctx, stream_manager).get();
             auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
                 api::unset_server_stream_manager(ctx).get();
+            });
+
+            checkpoint(stop_signal, "initializing client routes service");
+            static sharded<service::client_routes_service> client_routes;
+            client_routes.start(std::ref(feature_service), std::ref(qp)).get();
+            auto stop_client_routes = defer_verbose_shutdown("client_routes", [&] {
+                client_routes.stop().get();
             });
 
             checkpoint(stop_signal, "initializing storage service");

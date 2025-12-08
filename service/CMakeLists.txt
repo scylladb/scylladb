@@ -3,6 +3,7 @@ target_sources(service
   PRIVATE
     broadcast_tables/experimental/lang.cc
     client_state.cc
+    client_routes.cc
     mapreduce_service.cc
     migration_manager.cc
     misc_services.cc
