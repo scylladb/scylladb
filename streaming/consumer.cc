@@ -63,7 +63,10 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 }
                 schema_ptr s = reader.schema();
 
+                // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
+                // left sealed on the table directory.
                 auto cfg = cf->get_sstables_manager().configure_writer(origin);
+                cfg.leave_unsealed = true;
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();
@@ -74,6 +77,9 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                             if (sstable_list_to_mark_as_repaired) {
                                 sstable_list_to_mark_as_repaired->insert(loading_sst);
                             }
+                        }
+                        if (loading_sst == sst) {
+                            co_await loading_sst->seal_sstable(cfg.backup);
                         }
                         co_return;
                     };
