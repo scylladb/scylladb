@@ -272,9 +272,24 @@ class compact_radix_tree:
     Provides iteration and indexing by key (typically column_id) similar to std_map.
     The tree stores key-value pairs where keys are unsigned integers.
     
-    Note: Due to GDB limitations and compiler optimizations, this implementation
-    uses a best-effort approach to traverse the tree structure. Some information
-    may not be available in optimized builds.
+    Example usage:
+        tree = compact_radix_tree(row['_cells'])
+        # Iterate over elements
+        for key, value in tree:
+            print(f"Column {key}: {value}")
+        # Access by key
+        cell = tree[column_id]
+        # Check if key exists
+        cell = tree.get(column_id, default=None)
+        # Get all keys
+        column_ids = tree.keys()
+    
+    Note: Due to GDB limitations and compiler optimizations, full tree traversal
+    is challenging. The implementation provides the std_map-like API but may not
+    be able to extract all elements in optimized builds. In such cases, consider:
+    - Using debug builds (-g -O0) for better introspection
+    - Examining the tree structure directly with GDB commands
+    - Using the C++ tree printer (compact_radix_tree::printer) in test code
     """
     
     def __init__(self, ref):
@@ -478,10 +493,15 @@ class compact_radix_tree:
             else:
                 # We know it's not empty but couldn't collect elements
                 # This happens when compiler optimizations prevent tree traversal
-                return f'compact_radix_tree @ {hex(int(self.root.address))} (structure not fully accessible)'
-        except:
+                try:
+                    size = int(self.root['_size'])
+                    layout = int(self.root['_base_layout'])
+                    return f'compact_radix_tree with size={size}, layout={layout} @ {hex(int(self.root.address))} (elements not accessible, use debug build for full introspection)'
+                except:
+                    return f'compact_radix_tree @ {hex(int(self.root.address))} (structure not fully accessible)'
+        except Exception as e:
             # Fallback to simple representation
-            return 'compact_radix_tree @ 0x%x' % int(self.root.address)
+            return f'compact_radix_tree @ {hex(int(self.root.address))} (error: {e})'
 
 
 class intrusive_btree:
