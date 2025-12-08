@@ -11,7 +11,10 @@
 #include <cstdint>
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
+#include "utils/managed_bytes.hh"
 #include "cql3/result_set.hh"
+#include "cql3/column_identifier.hh"
+#include "db/marshal/type_parser.hh"
 
 namespace cql3 {
 
@@ -186,6 +189,82 @@ make_empty_metadata() {
         return result;
     }();
     return empty_metadata_cache;
+}
+
+result_set_serialized serialize_result_set(const result_set& rs) {
+    const auto& md = rs.get_metadata();
+
+    std::vector<column_specification_serialized> col_specs;
+    col_specs.reserve(md.get_names().size());
+    for (const auto& col : md.get_names()) {
+        col_specs.push_back(column_specification_serialized{
+            .ks_name = col->ks_name,
+            .cf_name = col->cf_name,
+            .column_name = col->name->text(),
+            .type_name = col->type->name()
+        });
+    }
+
+    std::optional<service::pager::paging_state> paging_state_copy;
+    if (auto ps = md.paging_state()) {
+        paging_state_copy = *ps;
+    }
+
+    // Convert rows from managed_bytes_opt to bytes_opt
+    utils::chunked_vector<std::vector<bytes_opt>> rows;
+    rows.reserve(rs.rows().size());
+    for (const auto& row : rs.rows()) {
+        std::vector<bytes_opt> converted_row;
+        converted_row.reserve(row.size());
+        for (const auto& cell : row) {
+            converted_row.push_back(to_bytes_opt(cell));
+        }
+        rows.push_back(std::move(converted_row));
+    }
+
+    return result_set_serialized{
+        .metadata = metadata_serialized{
+            .flags = md.flags().mask(),
+            .column_specs = std::move(col_specs),
+            .column_count = md.column_count(),
+            .paging_state = std::move(paging_state_copy)
+        },
+        .rows = std::move(rows)
+    };
+}
+
+result_set deserialize_result_set(result_set_serialized&& serialized) {
+    std::vector<lw_shared_ptr<column_specification>> names;
+    names.reserve(serialized.metadata.column_specs.size());
+    for (auto& col : serialized.metadata.column_specs) {
+        auto type = db::marshal::type_parser::parse(col.type_name);
+        auto col_id = ::make_shared<column_identifier>(col.column_name, true);
+        names.push_back(make_lw_shared<column_specification>(
+            std::move(col.ks_name),
+            std::move(col.cf_name),
+            std::move(col_id),
+            std::move(type)
+        ));
+    }
+
+    lw_shared_ptr<const service::pager::paging_state> paging_state;
+    if (serialized.metadata.paging_state) {
+        paging_state = make_lw_shared<const service::pager::paging_state>(
+            std::move(*serialized.metadata.paging_state));
+    }
+
+    auto md = ::make_shared<metadata>(
+        metadata::flag_enum_set::from_mask(serialized.metadata.flags),
+        std::move(names),
+        serialized.metadata.column_count,
+        std::move(paging_state)
+    );
+
+    result_set rs(std::move(md));
+    for (auto& row : serialized.rows) {
+        rs.add_row(std::move(row));
+    }
+    return rs;
 }
 
 }
