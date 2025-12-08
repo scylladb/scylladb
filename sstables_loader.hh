@@ -160,3 +160,12 @@ struct tablet_sstable_collection {
     std::vector<sstables::shared_sstable> sstables_fully_contained;
     std::vector<sstables::shared_sstable> sstables_partially_contained;
 };
+
+// This function is intended for test purposes only.
+// It assigns the given sstables to the given tablet ranges based on token containment.
+// It returns a vector of tablet_sstable_collection, each containing the tablet range
+// and the sstables that are fully or partially contained within that range.
+// The prerequisite is the tablet ranges are sorted by the range in ascending order and non-overlapping.
+// Another prerequisite is that the sstables' token ranges are sorted by its `start` in descending order.
+future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                  std::vector<dht::token_range>&& tablets_ranges);

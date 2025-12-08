@@ -206,6 +206,8 @@ private:
 
     bool tablet_in_scope(locator::tablet_id) const;
 
+    friend future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                             std::vector<dht::token_range>&& tablets_ranges);
     // Pay attention, while working with tablet ranges, the `erm` must be held alive as long as we retrieve (and use here) tablet ranges from
     // the tablet map. This is already done when using `tablet_sstable_streamer` class but tread carefully if you plan to use this method somewhere else.
     static future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets(const std::vector<sstables::shared_sstable>& sstables,
@@ -844,4 +846,8 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
                                                                                        std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
     co_return task->id();
+}
+future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
+                                                                                  std::vector<dht::token_range>&& tablets_ranges) {
+    return tablet_sstable_streamer::get_sstables_for_tablets(sstables, std::move(tablets_ranges));
 }
