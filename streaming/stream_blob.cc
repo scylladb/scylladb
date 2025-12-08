@@ -53,7 +53,10 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
         co_await sst->load(erm->get_sharder(*t.schema()));
-        co_await t.add_sstable_and_update_cache(sst);
+        auto on_add = [] (sstables::shared_sstable) -> future<> {
+            return make_ready_future<>();
+        };
+        auto new_sstables = co_await t.add_new_sstable_and_update_cache(sst, on_add);
         blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
 
         if (state == sstables::sstable_state::staging) {
@@ -64,7 +67,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
             // so then, the view building coordinator can decide to process it once the migration
             // is finished.
             // (Instead of registering the sstable to view update generator which may process it immediately.)
-            co_await sharded_vbw.local().register_staging_sstable_tasks({sst}, t.schema()->id());
+            co_await sharded_vbw.local().register_staging_sstable_tasks(new_sstables, t.schema()->id());
         }
     });
 }
