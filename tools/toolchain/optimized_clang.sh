@@ -65,7 +65,7 @@ SCYLLA_BUILD_DIR_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_BUILD_DIR}"
 SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 
 # Which LLVM release to build in order to compile Scylla
-LLVM_CLANG_TAG=20.1.8
+LLVM_CLANG_TAG=21.1.6
 
 CLANG_ARCHIVE=$(cd "${SCYLLA_DIR}" && realpath -m "${CLANG_ARCHIVE}")
 
@@ -186,7 +186,3 @@ if [[ $? -ne 0 ]]; then
 fi
 set -e
 tar -C / -xpzf "${CLANG_ARCHIVE}"
-dnf remove -y clang clang-libs
-# above package removal might have removed those symbolic links, which will cause ccache not to work later on. Manually restore them.
-ln -sf /usr/bin/ccache /usr/lib64/ccache/clang
-ln -sf /usr/bin/ccache /usr/lib64/ccache/clang++
