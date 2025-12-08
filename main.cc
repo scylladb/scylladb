@@ -23,6 +23,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
+#include "service/client_routes.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
@@ -1793,6 +1794,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_cache.start(std::ref(qp)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [&] {
                 auth_cache.stop().get();
+            });
+
+            checkpoint(stop_signal, "initializing client routes service");
+            static sharded<service::client_routes_service> client_routes;
+            client_routes.start(std::ref(feature_service), std::ref(qp)).get();
+            auto stop_client_routes = defer_verbose_shutdown("client_routes", [&] {
+                client_routes.stop().get();
             });
 
             checkpoint(stop_signal, "initializing storage service");
