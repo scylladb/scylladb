@@ -235,9 +235,6 @@ public:
     const topology& get_topology() const;
     void debug_show() const;
 
-    /** Return the unique host ID for an end-point. */
-    host_id get_host_id(inet_address endpoint) const;
-
     /** @return a copy of the endpoint-to-id map for read-only operations */
     std::unordered_set<host_id> get_host_ids() const;
 
