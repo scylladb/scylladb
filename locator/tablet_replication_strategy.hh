@@ -26,6 +26,7 @@ class tablet_aware_replication_strategy : public per_table_replication_strategy 
 private:
     size_t _initial_tablets = 0;
     db::tablet_options _tablet_options;
+    data_dictionary::consistency_config_option _consistency = data_dictionary::consistency_config_option::eventual;
 protected:
     void validate_tablet_options(const abstract_replication_strategy&, const gms::feature_service&, const replication_strategy_config_options&) const;
     void process_tablet_options(abstract_replication_strategy&, replication_strategy_config_options&, replication_strategy_params);
@@ -60,6 +61,16 @@ public:
     virtual const replication_factor_data* get_replication_factor_data(const sstring& dc) const = 0;
 
     virtual bool is_rack_based(const sstring& dc) const = 0;
+
+    /// Returns the consistency level (eventual, local, global) for the keyspace.
+    [[nodiscard]] constexpr data_dictionary::consistency_config_option get_consistency() const {
+        return _consistency;
+    }
+
+    /// Returns whether the keyspace is strongly consistent.
+    [[nodiscard]] constexpr bool is_strong_consistent() const {
+        return get_consistency() != data_dictionary::consistency_config_option::eventual;
+    }
 };
 
 } // namespace locator
