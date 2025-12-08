@@ -12,8 +12,14 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
+<<<<<<< HEAD
 from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+||||||| parent of c785d242a7 (tests: extract get_topology_version helper)
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+=======
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version
+>>>>>>> c785d242a7 (tests: extract get_topology_version helper)
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -1894,9 +1900,7 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
         replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
         await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
 
-        version_before_move = (await cql.run_async(
-            "select version from system.topology where key = 'topology'", 
-            host=hosts[0]))[0].version
+        version_before_move = await get_topology_version(cql, hosts[0])
 
         s0_mark = await s0_log.mark()
         migration_task = asyncio.create_task(
