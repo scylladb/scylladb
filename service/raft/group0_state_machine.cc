@@ -272,12 +272,6 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // If we crash before appending the state ID, when we reapply the command after restart, the change will be applied because
     // the state ID was not yet appended so the above check will pass.
 
-    // TODO: reapplication of a command after a crash may require contacting a quorum (we need to learn that the command
-    // is committed from a leader). But we may want to ensure that group 0 state is consistent after restart even without
-    // access to quorum, which means we cannot allow partially applied commands. We need to ensure that either the entire
-    // change is applied and the state ID is updated or none of this happens.
-    // E.g. use a write-ahead-entry which contains all this information and make sure it's replayed during restarts.
-
     std::optional<storage_service::state_change_hint> topology_state_change_hint;
     modules_to_reload modules_to_reload;
 
