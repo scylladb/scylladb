@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, get_topology_version
 from cassandra import WriteFailure
 import pytest
 import logging
@@ -132,10 +132,7 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
         logger.info("Trigger topology_coordinator/write_both_read_new/after_barrier")
         await manager.api.message_injection(servers[0].ip_addr, "topology_coordinator/write_both_read_new/after_barrier")
         await bootstrap_task
-        rows = await cql.run_async(
-            "select version from system.topology where key = 'topology'",
-            host=hosts[0])
-        version_after_node2_bootstrap = rows[0].version
+        version_after_node2_bootstrap = await get_topology_version(cql, hosts[0])
         host1_id = await manager.get_host_id(servers[1].server_id)
 
         # Have a cleanup started by decommission and failed on global barrier wait for the stale write
