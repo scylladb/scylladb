@@ -266,3 +266,17 @@ async def test_keyspace_drop_during_data_sync_repair(manager):
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
 
     await manager.server_add(config=cfg)
+
+@pytest.mark.asyncio
+async def test_small_table_optimization_repair(manager):
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    await manager.api.repair(servers[0].ip_addr, "ks", "tbl", small_table_optimization=True)
+
+    rows = await cql.run_async(f"SELECT * from system.repair_history")
+    assert len(rows) == 1
