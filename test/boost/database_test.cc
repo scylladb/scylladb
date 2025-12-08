@@ -31,6 +31,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/rjson.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -38,6 +39,7 @@
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstable_version.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
@@ -51,6 +53,7 @@
 #include "db/system_keyspace.hh"
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -612,13 +615,13 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
     });
 }
 
-future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
+future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", db::snapshot_options opts = {}) {
     try {
         auto uuid = e.db().local().find_uuid(ks_name, cf_name);
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, opts);
     } catch (...) {
-        testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
-                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+        testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={} use_sstable_identifier={}: {}",
+                ks_name, cf_name, snapshot_name, opts.skip_flush, opts.use_sstable_identifier, std::current_exception());
         throw;
     }
 }
@@ -630,6 +633,37 @@ future<std::set<sstring>> collect_files(fs::path path) {
         ret.insert(de->name);
     }
     co_return ret;
+}
+
+static bool is_component(const sstring& fname, const sstring& suffix) {
+    return fname.ends_with(suffix);
+}
+
+static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, const sstring& suffix) {
+    // Verify manifest against the files in the snapshots dir
+    auto pred = [&suffix] (const sstring& fname) {
+        return is_component(fname, suffix);
+    };
+    return std::ranges::filter_view(all_files, pred) | std::ranges::to<std::set<sstring>>();
+}
+
+// Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
+static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir) {
+    sstring suffix = "-Data.db";
+    auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
+
+    std::set<sstring> sstables_in_manifest;
+    auto manifest_str = co_await util::read_entire_file_contiguous(snapshot_dir / "manifest.json");
+    auto manifest_json = rjson::parse(manifest_str);
+    auto& manifest_files = manifest_json["files"];
+    BOOST_REQUIRE(manifest_files.IsArray());
+    for (auto& f : manifest_files.GetArray()) {
+        if (is_component(f.GetString(), suffix)) {
+            sstables_in_manifest.insert(f.GetString());
+        }
+    }
+    testlog.debug("SSTables in manifest.json: {}", fmt::join(sstables_in_manifest, ", "));
+    BOOST_REQUIRE_EQUAL(sstables_in_snapshot, sstables_in_manifest);
 }
 
 static future<> snapshot_works(const std::string& table_name) {
@@ -651,6 +685,8 @@ static future<> snapshot_works(const std::string& table_name) {
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
+        validate_manifest(snapshot_dir, in_snapshot_dir).get();
+
         return make_ready_future<>();
     }, true);
 }
@@ -669,7 +705,8 @@ SEASTAR_TEST_CASE(index_snapshot_works) {
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
+        db::snapshot_options opts = {.skip_flush = true};
+        take_snapshot(e, "ks", "cf", "test", opts).get();
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -680,6 +717,41 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         BOOST_REQUIRE_EQUAL(in_snapshot_dir, std::set<sstring>({"manifest.json", "schema.cql"}));
         return make_ready_future<>();
     });
+}
+
+SEASTAR_TEST_CASE(snapshot_use_sstable_identifier_works) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return make_ready_future<>();
+#endif
+    sstring table_name = "cf";
+    // Force random sstable identifiers, otherwise the initial sstable_id is equal
+    // to the sstable generation and the test can't distinguish between them.
+    utils::get_local_injector().enable("random_sstable_identifier", false);
+    return do_with_some_data({table_name}, [table_name] (cql_test_env& e) -> future<> {
+        sstring tag = "test";
+        db::snapshot_options opts = {.use_sstable_identifier = true};
+        co_await take_snapshot(e, "ks", table_name, tag, opts);
+
+        auto& cf = e.local_db().find_column_family("ks", table_name);
+        auto table_directory = table_dir(cf);
+        auto snapshot_dir = table_directory / sstables::snapshots_dir / tag;
+        auto in_table_dir = co_await collect_files(table_directory);
+        // snapshot triggered a flush and wrote the data down.
+        BOOST_REQUIRE_GE(in_table_dir.size(), 9);
+        testlog.info("Files in table dir: {}", fmt::join(in_table_dir, ", "));
+
+        auto in_snapshot_dir = co_await collect_files(snapshot_dir);
+        testlog.info("Files in snapshot dir: {}", fmt::join(in_snapshot_dir, ", "));
+
+        in_table_dir.insert("manifest.json");
+        in_table_dir.insert("schema.cql");
+        // all files were copied and manifest was generated
+        BOOST_REQUIRE_EQUAL(in_table_dir.size(), in_snapshot_dir.size());
+        BOOST_REQUIRE_NE(in_table_dir, in_snapshot_dir);
+
+        co_await validate_manifest(snapshot_dir, in_snapshot_dir);
+    }, true);
 }
 
 SEASTAR_TEST_CASE(snapshot_list_okay) {
@@ -1456,7 +1528,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         }
         BOOST_REQUIRE(found);
 
-        co_await take_snapshot(e, "ks", "cf", "test", true /* skip_flush */);
+        co_await take_snapshot(e, "ks", "cf", "test", db::snapshot_options{.skip_flush = true});
 
         testlog.debug("Expected: {}", expected);
 

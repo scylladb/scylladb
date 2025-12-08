@@ -2810,26 +2810,26 @@ future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& shar
     });
 }
 
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, bool skip_flush) {
-    if (!skip_flush) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts) {
+    if (!opts.skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, uuid);
     }
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
+    co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag, opts);
 }
 
-future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), skip_flush] (auto& table_name) {
+future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), opts] (auto& table_name) {
         auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
-        return snapshot_table_on_all_shards(sharded_db, uuid, tag, skip_flush);
+        return snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
 }
 
-future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush) {
+future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, db::snapshot_options opts) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), opts] (const auto& pair) -> future<> {
         auto uuid = pair.second->id();
-        co_await snapshot_table_on_all_shards(sharded_db, uuid, tag, skip_flush);
+        co_await snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
 }
 
@@ -2951,7 +2951,12 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
+        // Use the sstable identifier in snapshot names to allow de-duplication of sstables
+        // at backup time even if they were migrated across shards or nodes and were renamed a given a new generation.
+        // We hard-code that here since we have no way to pass this option to auto-snapshot and
+        // it is always safe to use the sstable identifier for the sstable generation.
+        auto opts = db::snapshot_options{.use_sstable_identifier = true};
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name, opts);
     }
 
     co_await sharded_db.invoke_on_all([&] (database& db) {
