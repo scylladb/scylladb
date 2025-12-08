@@ -1,5 +1,6 @@
 import pytest
 import re
+import uuid
 
 # Convenience function to execute a scylla command in gdb, returning its
 # output as a string - or a gdb.error exception.
@@ -189,10 +190,11 @@ def coro_task(gdb, scylla_gdb):
             gdb.write(f'{name}\n')
     # This test fails sometimes, but rarely and unreliably.
     # We want to get a coredump from it the next time it fails.
-    # Sending a SIGSEGV should induce that.
     # https://github.com/scylladb/scylladb/issues/22501
-    gdb.execute("signal SIGSEGV")
-    raise gdb.error("No coroutine frames found with expected name")
+    tmpdir = request.config.getoption('scylla_tmp_dir')
+    core_filename = f"{tmpdir}/../scylla_gdb_coro_task-{uuid.uuid4()}.core"
+    gdb.execute(f"gcore {core_filename}")
+    raise gdb.error(f"No coroutine frames found with expected name. Dumped Scylla core to {core_filename}")
 
 def test_coro_frame(gdb, coro_task):
     # Note the offset by two words.
