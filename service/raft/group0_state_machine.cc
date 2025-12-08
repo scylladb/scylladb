@@ -244,7 +244,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         if (_in_memory_state_machine_enabled) {
-        co_await reload_modules(std::move(modules_to_reload));
+            co_await reload_modules(std::move(modules_to_reload));
         }
     },
     [&] (broadcast_table_query& query) -> future<> {
@@ -256,23 +256,23 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
         if (_in_memory_state_machine_enabled) {
-        co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
-        co_await reload_modules(std::move(modules_to_reload));
+            co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
+            co_await reload_modules(std::move(modules_to_reload));
         }
     },
     [&] (mixed_change& chng) -> future<> {
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         if (_in_memory_state_machine_enabled) {
-        co_await _ss.topology_transition();
-        co_await reload_modules(std::move(modules_to_reload));
+            co_await _ss.topology_transition();
+            co_await reload_modules(std::move(modules_to_reload));
         }
     },
     [&] (write_mutations& muts) -> future<> {
         auto modules_to_reload = get_modules_to_reload(muts.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
         if (_in_memory_state_machine_enabled) {
-        co_await reload_modules(std::move(modules_to_reload));
+            co_await reload_modules(std::move(modules_to_reload));
         }
     }
     ), cmd.change);
