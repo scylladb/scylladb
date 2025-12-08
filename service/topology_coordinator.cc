@@ -1074,11 +1074,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                          .del_global_topology_request_id()
                                                          .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                                                          .build()));
-            // Set start_time when we begin executing the request
+            // Set start_time when we begin executing the request and mark as done
             updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .set("start_time", db_clock::now())
-                                                         .build()));
-            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
 
