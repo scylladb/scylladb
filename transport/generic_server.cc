@@ -29,11 +29,8 @@ class counted_data_source_impl : public data_source_impl {
         if (_cpu_concurrency.stopped) {
             return fun();
         }
-        return futurize_invoke([this] () {
-            _cpu_concurrency.units.return_all();
-        }).then([fun = std::move(fun)] () {
-            return fun();
-        }).finally([this] () {
+        _cpu_concurrency.units.return_all();
+        return fun().finally([this] () {
             _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
         });
     };
@@ -60,11 +57,8 @@ class counted_data_sink_impl : public data_sink_impl {
         if (_cpu_concurrency.stopped) {
             return fun();
         }
-        return futurize_invoke([this] () {
-            _cpu_concurrency.units.return_all();
-        }).then([fun = std::move(fun)] () mutable {
-            return fun();
-        }).finally([this] () {
+        _cpu_concurrency.units.return_all();
+        return fun().finally([this] () {
             _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
         });
     };
