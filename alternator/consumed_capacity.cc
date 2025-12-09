@@ -9,6 +9,7 @@
 #include "consumed_capacity.hh"
 #include "error.hh"
 #include "utils/rjson.hh"
+#include <fmt/format.h>
 
 namespace alternator {
 
@@ -33,12 +34,12 @@ bool consumed_capacity_counter::should_add_capacity(const rjson::value& request)
     if (!return_consumed->IsString()) {
         throw api_error::validation("Non-string ReturnConsumedCapacity field in request");
     }
-    std::string consumed = rjson::to_string(*return_consumed);
+    std::string_view consumed = rjson::to_string_view(*return_consumed);
     if (consumed == "INDEXES") {
         throw api_error::validation("INDEXES consumed capacity is not supported");
     }
     if (consumed != "TOTAL") {
-        throw api_error::validation("Unknown consumed capacity "+ consumed);
+        throw api_error::validation(fmt::format("Unknown consumed capacity {}", consumed));
     }
     return true;
 }
