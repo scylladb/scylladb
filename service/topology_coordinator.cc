@@ -1261,7 +1261,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     seastar::named_gate _async_gate;
 
-    bool action_failed(background_action_holder& holder) const {
+    bool action_failed(const background_action_holder& holder) const {
         return holder && holder->failed();
     }
 
@@ -1523,6 +1523,37 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     return false;
             };
 
+            auto has_failures = [&] () {
+                if (action_failed(tablet_state.streaming) ||
+                    action_failed(tablet_state.rebuild_repair) ||
+                    action_failed(tablet_state.cleanup) ||
+                    action_failed(tablet_state.repair) ||
+                    action_failed(tablet_state.repair_update_compaction_ctrl)) {
+                    return true;
+                }
+                for (const auto& [stage, barrier] : tablet_state.barriers) {
+                    if (action_failed(barrier)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            auto maybe_cancel_drain = [&] {
+                auto maybe_leaving = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                if (!maybe_leaving) {
+                    return;
+                }
+                auto server = raft::server_id(maybe_leaving->host.uuid());
+                if (!_topo_sm._topology.paused_requests.contains(server) || !has_failures()) {
+                    return;
+                }
+                _topo_sm.generate_cancel_request_update(updates, _feature_service, guard, server,
+                    fmt::format("tablet draining failed: {}, {} -> {}", gid, *maybe_leaving, trinfo.pending_replica));
+            };
+
+            maybe_cancel_drain();
+
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
@@ -1606,11 +1637,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: {
-                    if (drain) {
-                        utils::get_local_injector().inject("stream_tablet_fail_on_drain",
-                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
-                    }
-
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         const bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
                         bool critical_disk_utilization = false;
