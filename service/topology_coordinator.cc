@@ -1528,6 +1528,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     return std::nullopt;
             };
 
+            auto maybe_cancel_drain = [&] (locator::tablet_replica replica, const sstring& reason) {
+                auto raft_server = raft::server_id(replica.host.uuid());
+                if (!_topo_sm._topology.paused_requests.contains(raft_server)) {
+                    return;
+                }
+                _topo_sm.generate_cancel_request_update(updates, _feature_service, guard, raft_server,
+                    fmt::format("tablet draining failed: {}, moving {} to {}, due to {}", gid, replica, trinfo.pending_replica, reason));
+            };
+
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
@@ -1611,11 +1620,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: {
-                    if (drain) {
-                        utils::get_local_injector().inject("stream_tablet_fail_on_drain",
-                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
-                    }
-
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         std::optional<sstring> rollback;
 
@@ -1630,6 +1634,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             critical_disk_utilization = (it != util.end() && it->second);
                             if (critical_disk_utilization) {
                                 rollback = fmt::format("critical disk utilization on {}", trinfo.pending_replica->host);
+                            }
+                        }
+
+                        auto maybe_leaving = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (maybe_leaving) {
+                            auto req = _topo_sm._topology.get_request(raft::server_id(maybe_leaving->host.uuid()));
+                            // We only cancel remove request on critical utilization to avoid failing remove operation
+                            // once migrations started before the node was marked as excluded are unblocked and roll back.
+                            if (req == topology_request::leave || critical_disk_utilization) {
+                                maybe_cancel_drain(*maybe_leaving, rollback ? *rollback : "streaming failed");
+                                if (!rollback) {
+                                    rollback = fmt::format("{} request for {} failed", req, maybe_leaving->host);
+                                }
                             }
                         }
 
