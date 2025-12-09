@@ -77,9 +77,9 @@ auth::certificate_authenticator::certificate_authenticator(cql3::query_processor
                         throw std::invalid_argument(fmt::format("Invalid source: {}", map.at(cfg_source_attr)));
                     }
                     continue;
-                } catch (std::out_of_range&) {
+                } catch (const std::out_of_range&) {
                     // just fallthrough
-                } catch (boost::regex_error&) {
+                } catch (const boost::regex_error&) {
                     std::throw_with_nested(std::invalid_argument(fmt::format("Invalid query expression: {}", map.at(cfg_query_attr))));
                 }
             }

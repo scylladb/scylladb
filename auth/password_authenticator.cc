@@ -337,13 +337,13 @@ future<authenticated_user> password_authenticator::authenticate(
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
         co_return username;
-    } catch (std::system_error &) {
+    } catch (const std::system_error &) {
         std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
-    } catch (exceptions::request_execution_exception& e) {
+    } catch (const exceptions::request_execution_exception& e) {
         std::throw_with_nested(exceptions::authentication_exception(e.what()));
-    } catch (exceptions::authentication_exception& e) {
+    } catch (const exceptions::authentication_exception& e) {
         std::throw_with_nested(e);
-    } catch (exceptions::unavailable_exception& e) {
+    } catch (const exceptions::unavailable_exception& e) {
         std::throw_with_nested(exceptions::authentication_exception(e.get_message()));
     } catch (...) {
         std::throw_with_nested(exceptions::authentication_exception("authentication failed"));

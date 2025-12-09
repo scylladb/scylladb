@@ -94,7 +94,7 @@ static future<> create_legacy_metadata_table_if_missing_impl(
         try {
             co_return co_await mm.announce(co_await ::service::prepare_new_column_family_announcement(qp.proxy(), table, ts),
                     std::move(group0_guard), format("auth: create {} metadata table", table->cf_name()));
-        } catch (exceptions::already_exists_exception&) {}
+        } catch (const exceptions::already_exists_exception&) {}
     }
 }
 

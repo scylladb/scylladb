@@ -192,7 +192,7 @@ future<> standard_role_manager::legacy_create_default_role_if_missing() {
                 {_superuser},
                 cql3::query_processor::cache_internal::no).discard_result();
         log.info("Created default superuser role '{}'.", _superuser);
-    } catch(const exceptions::unavailable_exception& e) {
+    } catch (const exceptions::unavailable_exception& e) {
         log.warn("Skipped default role setup: some nodes were not ready; will retry");
         throw e;
     }
