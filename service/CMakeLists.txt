@@ -19,6 +19,7 @@ target_sources(service
     qos/raft_service_level_distributed_data_accessor.cc
     strong_consistency/groups_manager.cc
     strong_consistency/state_machine.cc
+    strong_consistency/coordinator.cc
     raft/discovery.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
