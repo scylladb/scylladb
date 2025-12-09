@@ -198,6 +198,7 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 
 future<> view_building_worker::run_staging_sstables_registrator() {
     while (!_as.abort_requested()) {
+        bool sleep = false;
         try {
             auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
             co_await create_staging_sstable_tasks();
@@ -214,6 +215,14 @@ future<> view_building_worker::run_staging_sstables_registrator() {
             vbw_logger.warn("Got group0_concurrent_modification while creating staging sstable tasks");
         } catch (raft::request_aborted&) {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
+        } catch (...) {
+            vbw_logger.error("Exception while creating staging sstable tasks: {}", std::current_exception());
+            sleep = true;
+        }
+
+        if (sleep) {
+            vbw_logger.debug("Sleeping after exception.");
+            co_await seastar::sleep_abortable(1s, _as).handle_exception([] (auto x) { return make_ready_future<>(); });
         }
     }
 }
@@ -417,9 +426,12 @@ future<> view_building_worker::check_for_aborted_tasks() {
 
         auto my_host_id = vbw._db.get_token_metadata().get_topology().my_host_id();
         auto my_replica = locator::tablet_replica{my_host_id, this_shard_id()};
-        auto tasks_map = vbw._state._batch->tasks; // Potentially, we'll remove elements from the map, so we need a copy to iterate over it
-        for (auto& [id, t]: tasks_map) {
-            auto task_opt = building_state.get_task(t.base_id, my_replica, id);
+        auto it = vbw._state._batch->tasks.begin();
+        while (it != vbw._state._batch->tasks.end()) {
+            auto id = it->first;
+            auto task_opt = building_state.get_task(it->second.base_id, my_replica, id);
+
+            ++it; // Advance the iterator before potentially removing the entry from the map.
             if (!task_opt || task_opt->get().aborted) {
                 co_await vbw._state._batch->abort_task(id);
             }
@@ -449,7 +461,7 @@ static std::unordered_set<table_id> get_ids_of_all_views(replica::database& db, 
     }) | std::ranges::to<std::unordered_set>();;
 }
 
-// If `state::processing_base_table` is diffrent that the `view_building_state::currently_processed_base_table`,
+// If `state::processing_base_table` is different that the `view_building_state::currently_processed_base_table`,
 // clear the state, save and flush new base table
 future<> view_building_worker::state::update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as) {
     if (processing_base_table != building_state.currently_processed_base_table) {
@@ -571,8 +583,6 @@ future<> view_building_worker::batch::do_work() {
             break;
         }
     }
-
-    _vbw.local()._vb_state_machine.event.broadcast();
 }
 
 future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
@@ -774,13 +784,15 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
             tasks.insert({id, *task_opt});
         }
 #ifdef SEASTAR_DEBUG
-        auto& some_task = tasks.begin()->second;
-        for (auto& [_, t]: tasks) {
-            SCYLLA_ASSERT(t.base_id == some_task.base_id);
-            SCYLLA_ASSERT(t.last_token == some_task.last_token);
-            SCYLLA_ASSERT(t.replica == some_task.replica);
-            SCYLLA_ASSERT(t.type == some_task.type);
-            SCYLLA_ASSERT(t.replica.shard == this_shard_id());
+        {
+            auto& some_task = tasks.begin()->second;
+            for (auto& [_, t]: tasks) {
+                SCYLLA_ASSERT(t.base_id == some_task.base_id);
+                SCYLLA_ASSERT(t.last_token == some_task.last_token);
+                SCYLLA_ASSERT(t.replica == some_task.replica);
+                SCYLLA_ASSERT(t.type == some_task.type);
+                SCYLLA_ASSERT(t.replica.shard == this_shard_id());
+            }
         }
 #endif
 
@@ -810,25 +822,6 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
     co_await _state.clean_up_after_batch();
     co_return collect_completed_tasks();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }
 
