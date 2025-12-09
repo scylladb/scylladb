@@ -547,7 +547,6 @@ enum class scylla_metadata_type : uint32_t {
     ExtTimestampStats = 9,
     SSTableIdentifier = 10,
     Schema = 11,
-    ComponentsDigests = 12,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -572,24 +571,6 @@ struct sstable_identifier_type {
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(value); }
-};
-
-// Component digests stored in scylla metadata to track integrity of individual components
-struct components_digests {
-    std::optional<uint32_t> data_digest;
-    std::optional<uint32_t> compression_digest;
-    std::optional<uint32_t> filter_digest;
-    std::optional<uint32_t> statistics_digest;
-    std::optional<uint32_t> summary_digest;
-    std::optional<uint32_t> index_digest;
-    std::optional<uint32_t> toc_digest;
-    std::optional<uint32_t> partitions_digest;
-    std::optional<uint32_t> rows_digest;
-
-    template <typename Describer>
-    auto describe_type(sstable_version_types v, Describer f) {
-        return f(data_digest,compression_digest, filter_digest, statistics_digest, summary_digest, index_digest, toc_digest, partitions_digest, rows_digest);
-    }
 };
 
 // Types of large data statistics.
@@ -675,8 +656,7 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -710,13 +690,6 @@ struct scylla_metadata {
     sstable_id get_optional_sstable_identifier() const {
         auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
         return sid ? sid->value : sstable_id::create_null_id();
-    }
-    const components_digests get_components_digests() const {
-        auto cd = data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
-        if (!cd) {
-            return {};
-        }
-        return *cd;
     }
 
     template <typename Describer>

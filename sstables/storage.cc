@@ -204,13 +204,13 @@ void filesystem_storage::open(sstable& sst) {
                                     open_flags::create |
                                     open_flags::exclusive,
                                     options).get();
-    auto w = std::make_unique<crc32_digest_file_writer>(std::move(sink), sst.sstable_buffer_size, component_name(sst, component_type::TemporaryTOC));
+    auto w = file_writer(output_stream<char>(std::move(sink)), component_name(sst, component_type::TemporaryTOC));
 
     bool toc_exists = file_exists(fmt::to_string(sst.filename(component_type::TOC))).get();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
-        w->close();
+        w.close();
         remove_file(fmt::to_string(sst.filename(component_type::TemporaryTOC))).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
@@ -670,10 +670,15 @@ void object_storage_base::open(sstable& sst) {
     sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
-    auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
-    auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
-
-    sst.write_toc(std::move(w));
+    sst.write_toc(
+        file_writer(
+            output_stream<char>(
+                data_sink(
+                    std::make_unique<memory_data_sink>(bufs)
+                )
+            )
+        )
+    );
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
 }
 
