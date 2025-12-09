@@ -52,30 +52,21 @@ async def remove_error_on(manager: ManagerClient, error_name: str, servers: list
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-@pytest.mark.skip(reason="temporary, until migrations are failed on failure")
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
-
-    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-    marks = [await log.mark() for log in logs]
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-        logger.info("Populating table")
+        await inject_error_on(manager, "stream_tablet_move_to_cleanup", servers)
 
-        keys = range(256)
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        ip = servers[2].ip_addr
+        await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed.")
 
-        await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
-
-        await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
-
-        matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
-                from_mark=mark) for log, mark in zip(logs, marks)]
-        assert sum(len(x) for x in matches) == 1
+        node = (await cql.run_async(f"select draining, excluded, status from system.cluster_status where peer = '{ip}'"))[0]
+        assert node.draining == False and node.excluded == False and node.status == 'NORMAL'
 
 
 @pytest.mark.asyncio
