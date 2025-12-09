@@ -3059,6 +3059,36 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
         const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit)
 {
+    if (!cas_shard.this_shard()) {
+        _stats.shard_bounce_for_lwt++;
+        return container().invoke_on(cas_shard.shard(), _ssg,
+                    [cs = client_state.move_to_other_shard(),
+                    &mb = mutation_builders,
+                    &dk,
+                    ks = schema->ks_name(),
+                    cf = schema->cf_name(),
+                    gt = tracing::global_trace_state_ptr(trace_state),
+                    permit = std::move(permit)]
+                    (executor& self) mutable {
+            return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
+                                    trace_state = tracing::trace_state_ptr(gt), &self]
+                                    (service::client_state& client_state) mutable {
+                auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
+
+                // The desired_shard on the original shard remains alive for the duration
+                // of cas_write on this shard and prevents any tablet operations.
+                // However, we need a local instance of cas_shard on this shard
+                // to pass it to sp::cas, so we just create a new one.
+                service::cas_shard cas_shard(*schema, dk.token());
+
+                //FIXME: Instead of passing empty_service_permit() to the background operation,
+                // the current permit's lifetime should be prolonged, so that it's destructed
+                // only after all background operations are finished as well.
+                return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+            });
+        }).finally([desired_shard = std::move(cas_shard)]{});
+    }
+
     auto timeout = executor::default_timeout();
     auto op = std::make_unique<put_or_delete_item_cas_request>(schema, mutation_builders);
     auto* op_ptr = op.get();
@@ -3164,37 +3194,8 @@ future<> executor::do_batch_write(
             }).then([&e, desired_shard = std::move(desired_shard),
                  &client_state, trace_state = std::move(trace_state), permit = std::move(permit), this]() mutable
             {
-                if (desired_shard.this_shard()) {
-                    return cas_write(e.first.schema, std::move(desired_shard), e.first.dk, e.second, client_state, trace_state, permit);
-                } else {
-                    _stats.shard_bounce_for_lwt++;
-                    return container().invoke_on(desired_shard.shard(), _ssg,
-                                [cs = client_state.move_to_other_shard(),
-                                &mb = e.second,
-                                &dk = e.first.dk,
-                                ks = e.first.schema->ks_name(),
-                                cf = e.first.schema->cf_name(),
-                                gt =  tracing::global_trace_state_ptr(trace_state),
-                                permit = std::move(permit)]
-                                (executor& self) mutable {
-                        return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
-                                                trace_state = tracing::trace_state_ptr(gt), &self]
-                                                (service::client_state& client_state) mutable {
-                            auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
-
-                            // The desired_shard on the original shard remains alive for the duration
-                            // of cas_write on this shard and prevents any tablet operations.
-                            // However, we need a local instance of cas_shard on this shard
-                            // to pass it to sp::cas, so we just create a new one.
-                            service::cas_shard cas_shard(*schema, dk.token());
-
-                            //FIXME: Instead of passing empty_service_permit() to the background operation,
-                            // the current permit's lifetime should be prolonged, so that it's destructed
-                            // only after all background operations are finished as well.
-                            return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
-                        });
-                    }).finally([desired_shard = std::move(desired_shard)]{});
-                }
+                return cas_write(e.first.schema, std::move(desired_shard), e.first.dk,
+                    std::move(e.second), client_state, std::move(trace_state), std::move(permit));
             });
         }).finally([key_builders = std::move(key_builders)]{});
     }
