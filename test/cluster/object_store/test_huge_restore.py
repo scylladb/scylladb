@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from cassandra.query import SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 
+from test.cluster.conftest import key_provider
 from test.cluster.object_store.conftest import format_tuples
+from test.pylib.encryption_provider import make_key_provider_factory, KeyProvider
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
@@ -14,7 +16,7 @@ from test.pylib.util import unique_name
 logger = logging.getLogger(__name__)
 
 
-async def create_keyspace_and_table(manager, cql, servers, keyspace, table):
+async def create_keyspace_and_table(cql, keyspace, table):
     replication_opts = format_tuples({
         'class': 'NetworkTopologyStrategy',
         'replication_factor': '3'
@@ -86,14 +88,16 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
         'enable_user_defined_functions': False,
         'object_storage_endpoints': objconf,
         'experimental_features': ['keyspace-storage-options'],
-        'task_ttl_in_seconds': 300,
     }
-    d = tmp_path / "system_keys"
-    d.mkdir()
-    config = config | {
-        'system_key_directory': str(d),
-        'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'}
-    }
+    # d = tmp_path / "system_keys"
+    # d.mkdir()
+    # config = config | {
+    #     'system_key_directory': str(d),
+    #     'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'}
+    # }
+    # ciphers={"AES/CBC/PKCS5Padding": [128]}
+    async with make_key_provider_factory(KeyProvider.kms, tmp_path) as key_provider:
+        config = config | key_provider.configuration_parameters()
     cmd = ['--smp', '4', '-m', '32G', '--logger-log-level', 'sstables_loader=info:sstable=info']
     servers = await manager.servers_add(servers_num=3, config=config, cmdline=cmd, auto_rack_dc="dc1")
 
@@ -107,12 +111,12 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     keyspace = 'test_ks'
     table = 'test_cf'
     await create_keyspace_and_table(manager, cql, servers, keyspace, table)
-    insert_rows_mt(cql, keyspace, table, 2_000_000)
+    insert_rows_mt(cql, keyspace, table, 100_000)
 
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, keyspace)
-        await manager.api.repair(server.ip_addr, keyspace, table)
-        await manager.api.major_compaction(server.ip_addr)
+        # await manager.api.repair(server.ip_addr, keyspace, table)
+        # await manager.api.major_compaction(server.ip_addr)
 
     row_count = 0
     res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
@@ -140,7 +144,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     for server in servers:
         backup_tasks[server.server_id] = await manager.api.backup(
             server.ip_addr, keyspace, table, snapshot_name,
-            s3_storage.address, s3_storage.bucket_name, f'{prefix}/{server.server_id}'
+            # s3_storage.address, s3_storage.bucket_name, f'{prefix}/{server.server_id}'
+            s3_storage.address, s3_storage.bucket_name, f'{prefix}/foo'
         )
     for server in servers:
         status = await manager.api.wait_task(server.ip_addr, backup_tasks[server.server_id])
@@ -156,7 +161,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
         restore_task_ids[server.server_id] = await manager.api.restore(
             server.ip_addr, keyspace, table,
             s3_storage.address, s3_storage.bucket_name,
-            f'{prefix}/{server.server_id}', sstables[server.server_id], "node"
+            # f'{prefix}/{server.server_id}', sstables[server.server_id], "node"
+            f'{prefix}/foo', sstables[server.server_id], "node"
         )
 
     for server in servers:
@@ -172,3 +178,66 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
 @pytest.mark.asyncio
 async def test_large_restore(manager: ManagerClient, s3_storage, tmp_path):
     await do_direct_restore(manager, s3_storage, tmp_path)
+
+
+async def do_restore_from_files(manager: ManagerClient, s3_storage, tmp_path):
+    objconf = s3_storage.create_endpoint_conf()
+    config = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options']}
+    d = tmp_path / "system_keys"
+    d.mkdir()
+    config = config | {
+        'system_key_directory': str(d),
+        'user_info_encryption': {'enabled': False, 'key_provider': 'LocalFileSystemKeyProviderFactory'}
+    }
+    cmd = ['--smp', '4', '-m', '32G', '--logger-log-level', 'sstables_loader=debug:sstable=debug']
+    server = await manager.server_add(config=config, cmdline=cmd)
+
+    # Obtain the CQL interface from the manager.
+    cql = manager.get_cql()
+
+    # Create keyspace, table, and fill data
+    print("Creating keyspace and table, then inserting data...")
+
+    # 1) create table with N tablets.
+    keyspace = 'test_ks'
+    table = 'test_cf'
+    await create_keyspace_and_table(cql, keyspace, table)
+
+    tmp_dir = "/home/ernest.zaslavsky/Downloads/s3-sstables/"
+    prefix = unique_name('/test/streaming_')
+    s3_resource = s3_storage.get_resource()
+    bucket = s3_resource.Bucket(s3_storage.bucket_name)
+    sstables = []
+
+    print(f"Uploading files from '{tmp_dir}' to prefix '{prefix}':")
+
+    for root, _, files in os.walk(tmp_dir):
+        for file in files:
+            if file.endswith("-TOC.txt"):
+                sstables.append(file)
+            local_path = os.path.join(root, file)
+            s3_key = f"{prefix}/{file}"
+
+            print(f" - Uploading {local_path} to {s3_key}")
+            bucket.upload_file(local_path, s3_key)
+
+    restore_task_id = await manager.api.restore(
+        server.ip_addr, keyspace, table,
+        s3_storage.address, s3_storage.bucket_name,
+        prefix, sstables, "node"
+    )
+
+    status = await manager.api.wait_task(server.ip_addr, restore_task_id)
+    assert status and status.get(
+        'state') == 'done', f"Restore task failed on server {server.server_id}. Reason {status}"
+
+    res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
+
+    assert res[0].count == 10000000, f"number of rows after restore is incorrect: {res[0].count}"
+
+
+@pytest.mark.asyncio
+async def test_large_restore_from_directory(manager: ManagerClient, s3_storage, tmp_path):
+    await do_restore_from_files(manager, s3_storage, tmp_path)
