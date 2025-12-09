@@ -17,6 +17,7 @@
 #include "utils/composite_abort_source.hh"
 #include "utils/error_injection.hh"
 
+#include <chrono>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/sleep.hh>
@@ -201,8 +202,11 @@ void raft_group_registry::init_rpc_verbs() {
     });
 
     ser::raft_rpc_verbs::register_direct_fd_ping(&_ms,
-            [this] (const rpc::client_info&, raft::server_id dst) -> future<direct_fd_ping_reply> {
-        // XXX: update address map here as well?
+            [this] (const rpc::client_info&, rpc::opt_time_point timeout, raft::server_id dst) -> future<direct_fd_ping_reply> {
+
+        if (timeout && *timeout <= netw::messaging_service::clock_type::now()) {
+            throw timed_out_error{};
+        }
 
         if (_my_id != dst) {
             return make_ready_future<direct_fd_ping_reply>(direct_fd_ping_reply {
@@ -212,19 +216,10 @@ void raft_group_registry::init_rpc_verbs() {
             });
         }
 
-        return container().invoke_on(0, [] (raft_group_registry& me) -> future<direct_fd_ping_reply> {
-            bool group0_alive = false;
-            if (me._group0_id) {
-                auto* group0_server = me.find_server(*me._group0_id);
-                if (group0_server && group0_server->is_alive()) {
-                    group0_alive = true;
-                }
+        return make_ready_future<direct_fd_ping_reply>(direct_fd_ping_reply {
+            .result = service::group_liveness_info{
+                .group0_alive = _group0_is_alive,
             }
-            co_return direct_fd_ping_reply {
-                .result = service::group_liveness_info{
-                    .group0_alive = group0_alive,
-                }
-            };
         });
     });
 }
@@ -246,13 +241,24 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
-static void ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
-    if (!server_for_group.aborted) {
-        server_for_group.aborted = server_for_group.server->abort(std::move(reason))
-            .handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
-                rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
-            });
+void raft_group_registry::ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
+    if (server_for_group.aborted) {
+        return;
     }
+
+    if (server_for_group.gid == _group0_id) {
+        server_for_group.aborted = container().invoke_on_all([] (raft_group_registry& rg) {
+                rg._group0_is_alive = false;
+        });
+    } else {
+        server_for_group.aborted = make_ready_future<>();
+    }
+
+    server_for_group.aborted = server_for_group.aborted->then([&server_for_group, reason = std::move(reason)] () mutable {
+        return server_for_group.server->abort(std::move(reason));
+    }).handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
+        rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
+    });
 }
 
 future<> raft_group_registry::stop_server(raft::group_id gid, sstring reason) {
@@ -403,6 +409,12 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         co_await server.abort();
         std::rethrow_exception(ex);
     }
+
+    if (gid == _group0_id) {
+        co_await container().invoke_on_all([] (raft_group_registry& rg) {
+            rg._group0_is_alive = true;
+        });
+    }
 }
 
 void raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
@@ -532,11 +544,13 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
     }, "read_barrier", as, timeout);
 }
 
-future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
+future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) {
     auto dst_id = raft::server_id{id};
 
     try {
-        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, locator::host_id{id}, as, dst_id);
+        std::chrono::milliseconds timeout_ms = c.to_milliseconds(timeout);
+        netw::messaging_service::clock_type::time_point deadline = netw::messaging_service::clock_type::now() + timeout_ms;
+        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, locator::host_id{id}, deadline, as, dst_id);
         if (auto* wrong_dst = std::get_if<wrong_destination>(&reply.result)) {
             // FIXME: after moving to host_id based verbs we will not get `wrong_destination`
             //        any more since the connection will fail
@@ -568,5 +582,12 @@ future<> direct_fd_clock::sleep_until(direct_failure_detector::clock::timepoint_
 
     return sleep_abortable(t - n, as);
 }
+
+std::chrono::milliseconds direct_fd_clock::to_milliseconds(direct_failure_detector::clock::timepoint_t tp) const {
+    auto t = base::time_point{base::duration{tp}};
+    auto n = base::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(t - n);
+}
+
 
 } // end of namespace service
