@@ -70,6 +70,8 @@
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
 #include "service/raft/strong_consistency/sc_groups_manager.hh"
+#include "service/raft/strong_consistency/sc_groups_manager.hh"
+#include "service/raft/strong_consistency/sc_storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -165,6 +167,7 @@ private:
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     std::unique_ptr<service::sc_groups_manager> _sc_groups;
+    sharded<service::sc_storage_proxy> _sc_storage_proxy;
     sharded<service::storage_service> _ss;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
@@ -951,6 +954,11 @@ private:
                 _sc_groups->stop().get();
             });
 
+            _sc_storage_proxy.start(std::ref(_group0_registry), std::ref(_sys_ks)).get();
+            auto stop_sc_storage_proxy = defer_verbose_shutdown("raft storage proxy", [this] {
+                _sc_storage_proxy.stop().get();
+            });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -988,7 +996,8 @@ private:
             }).get();
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client);
+                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client, 
+                    _sc_storage_proxy.local());
             }).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
