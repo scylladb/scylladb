@@ -71,6 +71,7 @@
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -167,6 +168,7 @@ private:
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     sharded<service::strong_consistency::groups_manager> _groups_manager;
+    sharded<service::strong_consistency::coordinator> _sc_coordinator;
     sharded<service::storage_service> _ss;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
@@ -952,6 +954,11 @@ private:
                 std::ref(_db), std::ref(_feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
+            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();
+            auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
+                _sc_coordinator.stop().get();
+            });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -990,7 +997,8 @@ private:
             }).get();
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client);
+                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client, 
+                    _sc_coordinator.local());
             }).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
