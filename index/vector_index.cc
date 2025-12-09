@@ -24,7 +24,7 @@
 namespace secondary_index {
 
 template <int MAX>
-static void validate_unsigned_option(const sstring& value) {
+static void validate_positive_option(const sstring& value) {
     int num_value;
     size_t len;
     try {
@@ -36,8 +36,8 @@ static void validate_unsigned_option(const sstring& value) {
         throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
     }
 
-    if (num_value < 0 || num_value > MAX) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range [0 - {}]", value, MAX));
+    if (num_value <= 0 || num_value > MAX) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range [1 - {}]", value, MAX));
     }
 }
 
@@ -51,9 +51,9 @@ static void validate_similarity_function(const sstring& value) {
 
 const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
         {"similarity_function", validate_similarity_function},
-        {"maximum_node_connections", validate_unsigned_option<512>},
-        {"construction_beam_width", validate_unsigned_option<4096>},
-        {"search_beam_width", validate_unsigned_option<4096>},
+        {"maximum_node_connections", validate_positive_option<512>},
+        {"construction_beam_width", validate_positive_option<4096>},
+        {"search_beam_width", validate_positive_option<4096>},
     };
 
 bool vector_index::view_should_exist() const {
