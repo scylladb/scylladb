@@ -27,7 +27,6 @@ enum class component_type {
     TemporaryTOC,
     TemporaryStatistics,
     Scylla,
-    TemporaryScylla,
     Rows,
     Partitions,
     TemporaryHashes,
@@ -77,8 +76,6 @@ struct fmt::formatter<sstables::component_type> : fmt::formatter<string_view> {
             return formatter<string_view>::format("TemporaryStatistics", ctx);
         case Scylla:
             return formatter<string_view>::format("Scylla", ctx);
-        case TemporaryScylla:
-            return formatter<string_view>::format("TemporaryScylla", ctx);
         case Partitions:
             return formatter<string_view>::format("Partitions", ctx);
         case Rows:
