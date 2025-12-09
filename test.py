@@ -228,7 +228,7 @@ def parse_cmd_line() -> argparse.Namespace:
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
-    scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default=[], type=str,
+    scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
                                                 "'--logger-log-level raft=trace --default-log-level error'")
 
@@ -278,9 +278,6 @@ def parse_cmd_line() -> argparse.Namespace:
 
     args.tmpdir = os.path.abspath(args.tmpdir)
     prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
-
-    if args.extra_scylla_cmdline_options:
-        args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
 
     return args
 
