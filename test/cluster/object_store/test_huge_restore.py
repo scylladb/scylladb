@@ -8,7 +8,7 @@ from cassandra.query import SimpleStatement  # type: ignore # pylint: disable=no
 
 from test.cluster.conftest import key_provider
 from test.cluster.object_store.conftest import format_tuples
-from test.pylib.encryption_provider import make_key_provider_factory, KeyProvider
+from test.pylib.encryption_provider import KeyProviderFactory, KeyProvider, make_key_provider_factory, KMSKeyProviderFactory, LocalFileSystemKeyProviderFactory
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
@@ -82,7 +82,7 @@ async def get_snapshot_files(manager, server, keyspace, snapshot_name):
     ]
 
 
-async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
+async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path, key_provider):
     objconf = s3_storage.create_endpoint_conf()
     config = {
         'enable_user_defined_functions': False,
@@ -96,9 +96,9 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     #     'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'}
     # }
     # ciphers={"AES/CBC/PKCS5Padding": [128]}
-    async with make_key_provider_factory(KeyProvider.kms, tmp_path) as key_provider:
-        config = config | key_provider.configuration_parameters()
-    cmd = ['--smp', '4', '-m', '32G', '--logger-log-level', 'sstables_loader=info:sstable=info']
+    # async with make_key_provider_factory(KeyProvider.kms, tmp_path) as key_provider:
+    config = config | key_provider.configuration_parameters()
+    cmd = ['--smp', '4', '-m', '4G', '--logger-log-level', 'sstables_loader=info:sstable=info']
     servers = await manager.servers_add(servers_num=3, config=config, cmdline=cmd, auto_rack_dc="dc1")
 
     # Obtain the CQL interface from the manager.
@@ -110,7 +110,7 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     # 1) create table with N tablets.
     keyspace = 'test_ks'
     table = 'test_cf'
-    await create_keyspace_and_table(manager, cql, servers, keyspace, table)
+    await create_keyspace_and_table(cql, keyspace, table)
     insert_rows_mt(cql, keyspace, table, 100_000)
 
     for server in servers:
@@ -144,8 +144,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
     for server in servers:
         backup_tasks[server.server_id] = await manager.api.backup(
             server.ip_addr, keyspace, table, snapshot_name,
-            # s3_storage.address, s3_storage.bucket_name, f'{prefix}/{server.server_id}'
-            s3_storage.address, s3_storage.bucket_name, f'{prefix}/foo'
+            s3_storage.address, s3_storage.bucket_name, f'{prefix}/{server.server_id}'
+            # s3_storage.address, s3_storage.bucket_name, f'{prefix}/foo'
         )
     for server in servers:
         status = await manager.api.wait_task(server.ip_addr, backup_tasks[server.server_id])
@@ -161,8 +161,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
         restore_task_ids[server.server_id] = await manager.api.restore(
             server.ip_addr, keyspace, table,
             s3_storage.address, s3_storage.bucket_name,
-            # f'{prefix}/{server.server_id}', sstables[server.server_id], "node"
-            f'{prefix}/foo', sstables[server.server_id], "node"
+            f'{prefix}/{server.server_id}', sstables[server.server_id], "node"
+            # f'{prefix}/foo', sstables[server.server_id], "node"
         )
 
     for server in servers:
@@ -176,8 +176,8 @@ async def do_direct_restore(manager: ManagerClient, s3_storage, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_large_restore(manager: ManagerClient, s3_storage, tmp_path):
-    await do_direct_restore(manager, s3_storage, tmp_path)
+async def test_large_restore(manager: ManagerClient, s3_storage, tmp_path, key_provider):
+    await do_direct_restore(manager, s3_storage, tmp_path, key_provider)
 
 
 async def do_restore_from_files(manager: ManagerClient, s3_storage, tmp_path):
