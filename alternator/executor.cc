@@ -2362,7 +2362,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
-        bytes column_name = to_bytes(it->name.GetString());
+        bytes column_name = to_bytes(rjson::to_string_view(it->name));
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
@@ -4258,7 +4258,7 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
         attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const {
     for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
         // Note that it.key() is the name of the column, *it is the operation
-        bytes column_name = to_bytes(it->name.GetString());
+        bytes column_name = to_bytes(rjson::to_string_view(it->name));
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));

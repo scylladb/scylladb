@@ -833,6 +833,12 @@ to_bytes(bytes_view x) {
 }
 
 inline
+bytes
+to_bytes(std::string_view x) {
+    return to_bytes(to_bytes_view(x));
+}
+
+inline
 bytes_opt
 to_bytes_opt(bytes_view_opt bv) {
     if (bv) {
