@@ -2894,10 +2894,13 @@ future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
 static constexpr auto GROUP0_HISTORY_KEY = "history";
 
 future<utils::UUID> system_keyspace::get_last_group0_state_id() {
-    auto rs = co_await execute_cql(
-        format(
-            "SELECT state_id FROM system.{} WHERE key = '{}' LIMIT 1",
-            GROUP0_HISTORY, GROUP0_HISTORY_KEY));
+    return get_last_group0_state_id(GROUP0_HISTORY_KEY);
+}
+
+future<utils::UUID> system_keyspace::get_last_group0_state_id(std::string_view key) {
+    static const auto cql = format("SELECT state_id FROM system.{} WHERE key = ? LIMIT 1",
+        GROUP0_HISTORY);
+    auto rs = co_await execute_cql(cql, key);
     SCYLLA_ASSERT(rs);
     if (rs->empty()) {
         co_return utils::UUID{};
@@ -2906,19 +2909,28 @@ future<utils::UUID> system_keyspace::get_last_group0_state_id() {
 }
 
 future<bool> system_keyspace::group0_history_contains(utils::UUID state_id) {
-    auto rs = co_await execute_cql(
-        format(
-            "SELECT state_id FROM system.{} WHERE key = '{}' AND state_id = ?",
-            GROUP0_HISTORY, GROUP0_HISTORY_KEY),
-        state_id);
+    return group0_history_contains(state_id, GROUP0_HISTORY_KEY);
+}
+
+future<bool> system_keyspace::group0_history_contains(utils::UUID state_id, std::string_view group_key) {
+    static const auto cql = format(
+            "SELECT state_id FROM system.{} WHERE key = ? AND state_id = ?",
+            GROUP0_HISTORY, group_key);
+    auto rs = co_await execute_cql(cql, group_key, state_id);
     SCYLLA_ASSERT(rs);
     co_return !rs->empty();
 }
 
 mutation system_keyspace::make_group0_history_state_id_mutation(
         utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description) {
+    return make_group0_history_state_id_mutation(state_id, gc_older_than, description, GROUP0_HISTORY_KEY);
+}
+
+mutation system_keyspace::make_group0_history_state_id_mutation(
+        utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than,
+        std::string_view description, std::string_view group_key) {
     auto s = group0_history();
-    mutation m(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
+    mutation m(s, partition_key::from_singular(*s, group_key));
     auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, state_id));
     auto ts = utils::UUID_gen::micros_timestamp(state_id);
     row.apply(row_marker(ts));
@@ -2948,21 +2960,26 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
 }
 
 future<mutation> system_keyspace::get_group0_history(sharded<replica::database>& db) {
+    return get_group0_history(db, GROUP0_HISTORY_KEY);
+}
+
+future<mutation> system_keyspace::get_group0_history(sharded<replica::database>& db, std::string_view group_key) {
     auto s = group0_history();
-    auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY);
+
+    partition_key pk = partition_key::from_singular(*s, group_key);
+    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
+
+    auto rs = co_await db::system_keyspace::query_mutations(db,
+        db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY,
+        pr);
     SCYLLA_ASSERT(rs);
     auto& ps = rs->partitions();
-    for (auto& p: ps) {
-        auto mut = p.mut().unfreeze(s);
-        auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-        if (partition_key == GROUP0_HISTORY_KEY) {
-            co_return mut;
-        }
-        slogger.warn("get_group0_history: unexpected partition in group0 history table: {}", partition_key);
+    if (!ps.empty()) {
+        co_return ps.begin()->mut().unfreeze(s);
     }
 
-    slogger.warn("get_group0_history: '{}' partition not found", GROUP0_HISTORY_KEY);
-    co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
+    slogger.warn("get_group0_history: '{}' partition not found", group_key);
+    co_return mutation(s, std::move(pk));
 }
 
 future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
