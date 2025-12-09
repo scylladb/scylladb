@@ -110,6 +110,7 @@
 #include "db/virtual_tables.hh"
 
 #include "service/strong_consistency/sc_groups_manager.hh"
+#include "service/strong_consistency/sc_storage_proxy.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -1817,6 +1818,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sc_groups_manager.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing sc storage proxy");
+            sharded<service::sc_storage_proxy> sc_storage_proxy;
+            sc_storage_proxy.start(std::ref(sc_groups_manager), std::ref(db)).get();
+            auto stop_sc_storage_proxy = defer_verbose_shutdown("sc storage proxy", [&] {
+                sc_storage_proxy.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1845,7 +1853,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
             qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(mapreduce_service),
-                             std::ref(ss), std::ref(group0_client)).get();
+                             std::ref(ss), std::ref(group0_client), std::ref(sc_storage_proxy)).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
