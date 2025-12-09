@@ -593,10 +593,31 @@ public:
     // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     future<utils::UUID> get_last_group0_state_id();
+    future<utils::UUID> get_last_group0_state_id(std::string_view group_key);
 
     // Checks whether the group 0 history table contains the given state ID.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     future<bool> group0_history_contains(utils::UUID state_id);
+    future<bool> group0_history_contains(utils::UUID state_id, std::string_view group_key);
+
+    // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
+    //
+    // If `gc_older_than` is provided, the mutation will also contain a tombstone that clears all entries whose
+    // timestamps (contained in the state IDs) are older than `timestamp(state_id) - gc_older_than`.
+    // The duration must be non-negative and smaller than `timestamp(state_id)`.
+    //
+    // The mutation's timestamp is extracted from the state ID.
+    static mutation make_group0_history_state_id_mutation(
+            utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than,
+            std::string_view description);
+    static mutation make_group0_history_state_id_mutation(
+            utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than,
+            std::string_view description, std::string_view group_key);
+
+    // Obtain the contents of the group 0 history table in mutation form.
+    // Assumes that the history table exists, i.e. Raft feature is enabled.
+    static future<mutation> get_group0_history(sharded<replica::database>&);
+    static future<mutation> get_group0_history(sharded<replica::database>&, std::string_view group_key);
 
     // force_load_hosts is a set of hosts which must be loaded even if they are in the left state.
     future<service::topology> load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts);
@@ -613,20 +634,6 @@ public:
     // as the node will need to fetch definition of a CDC generation that was
     // previously created in raft topology mode.
     future<std::optional<cdc::topology_description>> read_cdc_generation_opt(utils::UUID id);
-
-    // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
-    //
-    // If `gc_older_than` is provided, the mutation will also contain a tombstone that clears all entries whose
-    // timestamps (contained in the state IDs) are older than `timestamp(state_id) - gc_older_than`.
-    // The duration must be non-negative and smaller than `timestamp(state_id)`.
-    //
-    // The mutation's timestamp is extracted from the state ID.
-    static mutation make_group0_history_state_id_mutation(
-            utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description);
-
-    // Obtain the contents of the group 0 history table in mutation form.
-    // Assumes that the history table exists, i.e. Raft feature is enabled.
-    static future<mutation> get_group0_history(sharded<replica::database>&);
 
     // If the `group0_schema_version` key in `system.scylla_local` is present (either live or tombstone),
     // returns the corresponding mutation. Otherwise returns nullopt.
