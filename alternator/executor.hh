@@ -227,8 +227,8 @@ private:
         tracing::trace_state_ptr trace_state,
         service_permit permit);
 
-    future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, dht::decorated_key dk, 
-        std::vector<put_or_delete_item>&& mutation_builders, service::client_state& client_state, 
+    future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
+        const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit);
 
 public:
