@@ -47,6 +47,7 @@ target_sources(cql3
     functions/aggregate_fcts.cc
     functions/castas_fcts.cc
     functions/error_injection_fcts.cc
+    statements/strong_consistency/modification_statement.cc
     statements/strong_consistency/statement_helpers.cc
     statements/cf_prop_defs.cc
     statements/cf_statement.cc
