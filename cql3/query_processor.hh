@@ -44,6 +44,10 @@ class query_state;
 class mapreduce_service;
 class raft_group0_client;
 
+namespace strong_consistency {
+class coordinator;
+}
+
 namespace broadcast_tables {
 struct query;
 }
@@ -155,7 +159,8 @@ public:
     ~query_processor();
 
     void start_remote(service::migration_manager&, service::mapreduce_service&,
-                      service::storage_service& ss, service::raft_group0_client&);
+                      service::storage_service& ss, service::raft_group0_client&,
+                      service::strong_consistency::coordinator&);
     future<> stop_remote();
 
     data_dictionary::database db() {
@@ -173,6 +178,9 @@ public:
     service::storage_proxy& proxy() {
         return _proxy;
     }
+
+    std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder>
+    acquire_strongly_consistent_coordinator();
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
