@@ -201,3 +201,7 @@ Glossary
        The name comes from two basic operations, multiply (MU) and rotate (R), used in its inner loop.
        The MurmurHash3 version used in ScyllaDB originated from `Apache Cassandra <https://commons.apache.org/proper/commons-codec/apidocs/org/apache/commons/codec/digest/MurmurHash3.html>`_, and is **not** identical to the `official MurmurHash3 calculation <https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/utils/MurmurHash.java#L31-L33>`_. More `here <https://github.com/russss/murmur3-cassandra>`_.
 
+    Colocated Table
+       An internal table of a special type in a :doc:`tablets </architecture/tablets>` enabled keyspace that is colocated with another base table, meaning it always has the same tablet replicas as the base table.
+       Current types of colocated tables include CDC log tables, local indexes, and materialized views that have the same partition key as their base table.
+
