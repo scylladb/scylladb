@@ -72,9 +72,9 @@ future<> controller::start_server() {
     return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
-static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
-    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, [&c = server.container()]() -> auto& { return c.local(); });
+static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
+    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
+        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); });
     });
 }
 
@@ -89,6 +89,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         socket_address addr;
         bool is_shard_aware;
         std::shared_ptr<seastar::tls::credentials_builder> cred;
+        bool proxy_protocol = false;
     };
 
     _listen_addresses.clear();
@@ -112,8 +113,9 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
     }
 
     // main should have made sure values are clean and neatish
+    std::shared_ptr<seastar::tls::credentials_builder> cred;
     if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
-        auto cred = std::make_shared<seastar::tls::credentials_builder>();
+        cred = std::make_shared<seastar::tls::credentials_builder>();
         utils::configure_tls_creds_builder(*cred, std::move(ceo)).get();
 
         logger.info("Enabling encrypted CQL connections between client and server");
@@ -130,18 +132,37 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         if (cfg.native_shard_aware_transport_port_ssl.is_set() &&
                 (!cfg.native_shard_aware_transport_port.is_set() ||
                 cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port())) {
-            configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
+            configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, cred});
             _listen_addresses.push_back(configs.back().addr);
         } else if (native_shard_aware_port_idx >= 0) {
-            configs[native_shard_aware_port_idx].cred = std::move(cred);
+            configs[native_shard_aware_port_idx].cred = cred;
         }
     }
 
-    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
-        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt);
+    // Proxy protocol ports (disabled by default, port 0 means disabled)
+    if (cfg.native_transport_port_proxy_protocol()) {
+        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_proxy_protocol()}, false, nullptr, true});
+        _listen_addresses.push_back(configs.back().addr);
+    }
+    if (cfg.native_shard_aware_transport_port_proxy_protocol()) {
+        configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_proxy_protocol()}, true, nullptr, true});
+        _listen_addresses.push_back(configs.back().addr);
+    }
+    if (cfg.native_transport_port_ssl_proxy_protocol() && cred) {
+        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl_proxy_protocol()}, false, cred, true});
+        _listen_addresses.push_back(configs.back().addr);
+    }
+    if (cfg.native_shard_aware_transport_port_ssl_proxy_protocol() && cred) {
+        configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl_proxy_protocol()}, true, cred, true});
+        _listen_addresses.push_back(configs.back().addr);
+    }
 
-        logger.info("Starting listening for CQL clients on {} ({}, {})"
+    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
+        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt, cfg.proxy_protocol);
+
+        logger.info("Starting listening for CQL clients on {} ({}, {}{})"
                 , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+                , cfg.proxy_protocol ? ", proxy-protocol" : ""
         );
     });
 }
