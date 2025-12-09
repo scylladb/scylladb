@@ -80,7 +80,7 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         // node doesn't support it yet.
         _topology_change_enabled = true;
     }))
-    , _in_memory_state_machine_enabled(false) {
+    , _in_memory_state_machine_enabled(utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
     _state_id_handler.run();
 }
 
@@ -155,6 +155,27 @@ static future<> notify_client_route_change_if_needed(storage_service& storage_se
     }
 }
 
+// Meant to be used only in error injections.
+static future<> maybe_partially_apply_cdc_generation_deletion_then_get_stuck(
+        std::function<future<>(utils::chunked_vector<frozen_mutation_and_schema>)> mutate,
+        const utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
+
+    auto is_cdc_generation_data_clearing_mutation = [] (const frozen_mutation_and_schema& fm_s) {
+        return fm_s.s->id() == db::system_keyspace::cdc_generations_v3()->id()
+                && !fm_s.fm.unfreeze(fm_s.s).partition().row_tombstones().empty();
+    };
+
+    if (std::any_of(mutations.begin(), mutations.end(), is_cdc_generation_data_clearing_mutation)) {
+        utils::chunked_vector<frozen_mutation_and_schema> filtered_mutations;
+        std::copy_if(mutations.begin(), mutations.end(), std::back_inserter(filtered_mutations), is_cdc_generation_data_clearing_mutation);
+        co_await mutate(std::move(filtered_mutations));
+        while (true) {
+            slogger.info("group0 has hung on error injection, waiting for the process to be killed");
+            co_await seastar::sleep(std::chrono::seconds(1));
+        }
+    }
+}
+
 future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
     client_routes_service::client_route_keys client_routes_update;
@@ -179,7 +200,13 @@ future<> write_mutations_to_database(storage_service& storage_service, storage_p
         throw std::runtime_error(::format("Error while applying mutations: {}", e));
     }
 
-    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    auto mutate = [&proxy] (utils::chunked_vector<frozen_mutation_and_schema> mutations) {
+        return proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    };
+    if (utils::get_local_injector().is_enabled("group0_simulate_partial_application_of_cdc_generation_deletion")) {
+        co_await maybe_partially_apply_cdc_generation_deletion_then_get_stuck(mutate, mutations);
+    }
+    co_await mutate(std::move(mutations));
 
     if (need_system_topology_flush) {
         slogger.trace("write_mutations_to_database: flushing {}.{}", db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
