@@ -606,8 +606,8 @@ public:
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f);
     future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
-    future<utils::chunked_vector<db_clock::time_point>> read_cdc_for_tablets_timestamps(const sstring &ks_name, const sstring &table_name, db_clock::time_point from = db_clock::time_point::min(), unsigned int limit = 10);
-    future<utils::chunked_vector<cdc::stream_id>> read_cdc_for_tablets_stream_ids_for_timestamp(const sstring &ks_name, const sstring &table_name, db_clock::time_point ts, unsigned int limit = 1000);
+    future<utils::chunked_vector<db_clock::time_point>> read_cdc_for_tablets_timestamps(const sstring &ks_name, const sstring &table_name, db_clock::time_point not_older_than = db_clock::time_point::min());
+    future<std::map<db_clock::time_point, cdc::streams_version>> read_cdc_for_tablets_versioned_streams(const sstring &ks_name, const sstring &table_name, db_clock::time_point not_older_than = db_clock::time_point::min());
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();

@@ -58,6 +58,7 @@ class schema_builder;
 namespace alternator {
 
 class rmw_operation;
+struct shard_id;
 
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
 bool is_alternator_keyspace(const sstring& ks_name);
@@ -132,8 +133,6 @@ using attrs_to_get = attribute_path_map<std::monostate>;
 namespace parsed {
 class expression_cache;
 }
-
-class stream_arn;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
@@ -223,9 +222,14 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr, const std::map<sstring, sstring> *tags = nullptr);
-    future<> describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
-    future<> describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
-
+    future<> describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
+    future<> describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
+    void describe_stream_finalize(std::map<db_clock::time_point, cdc::streams_version> topologies, std::optional<shard_id> shard_start, int limit, rjson::value &stream_desc);
+    
+    sstring get_table_name_from_stream_arn(std::string_view arn);
+    table_id get_cdc_log_table_id_from_stream_arn(std::string_view arn);
+    std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(std::string_view arn);
+    std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_request(const rjson::value &request);
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&, const std::map<sstring, sstring> *tags = nullptr);
 

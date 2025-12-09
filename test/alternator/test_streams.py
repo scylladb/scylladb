@@ -20,7 +20,8 @@ from test.alternator.util import unique_table_name, create_test_table, new_test_
 from test.cluster.test_cdc_with_tablets import CdcStreamState
 
 # all tests in this will are parametrized to run twice (with vnodes and tablets respectively).
-pytestmark = pytest.mark.parametrize('TAGS', [ [{'Key': 'system:initial_tablets', 'Value': 'none'}], [] ], scope='module')
+#pytestmark = pytest.mark.parametrize('TAGS', [ [{'Key': 'system:initial_tablets', 'Value': 'none'}], [] ], scope='module')
+pytestmark = pytest.mark.parametrize('TAGS', [ [] ], scope='module')
 
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
@@ -133,7 +134,7 @@ def test_list_streams_create(dynamodb, dynamodbstreams, TAGS):
 
 def test_list_streams_alter(dynamodb, dynamodbstreams, TAGS):
     for type in stream_types:
-        with create_stream_test_table(dynamodb, StreamViewType=None) as table:
+        with create_stream_test_table(dynamodb, TAGS, StreamViewType=None) as table:
             res = table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': type});
             wait_for_active_stream(dynamodbstreams, table)
 

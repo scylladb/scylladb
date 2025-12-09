@@ -552,6 +552,9 @@ read_entire_stream(input_stream<char>& inp, size_t length_limit) {
 }
 
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
+    thread_local unsigned int tl_request_identifier = 0;
+    unsigned int request_identifier, request_shard_id;
+
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
@@ -597,7 +600,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         req->get_protocol_name() == "https");
 
     if (slogger.is_enabled(log_level::trace)) {
-        slogger.trace("Request: {} {} {}", op, truncated_content_view(content, _max_users_query_size_in_trace_output).as_view(), req->_headers);
+        request_identifier = ++tl_request_identifier;
+        request_shard_id = seastar::this_shard_id();
+        slogger.trace("Request: {} {}:{} {} {}", op, request_identifier, request_shard_id, truncated_content_view(content, _max_users_query_size_in_trace_output).as_view(), req->_headers);
     }
     auto callback_it = _callbacks.find(op);
     if (callback_it == _callbacks.end()) {
@@ -623,7 +628,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto user = client_state.user();
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
-            units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
+            units = std::move(units), req = std::move(req), op = std::move(op), request_identifier, request_shard_id] () mutable -> future<executor::request_return_type> {
                 rjson::value json_request = co_await _json_parser.parse(std::move(content));
                 if (!json_request.IsObject()) {
                     co_return api_error::validation("Request content must be an object");
@@ -633,13 +638,13 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                 if (slogger.is_enabled(log_level::trace)) {
                     std::visit(overloaded_functor {
                         [&] (const std::string& str) {
-                            slogger.trace("Response: {}", str);
+                            slogger.trace("Response: {} {}:{} {}", op, request_identifier, request_shard_id, str);
                         },
                         [&] (const executor::body_writer& body_writer) {
-                            slogger.trace("Response: <body_writer>");
+                            slogger.trace("Response: {} {}:{} <body_writer>", op, request_identifier, request_shard_id);
                         },
                         [&] (const api_error& err) {
-                            slogger.trace("Response error: {} {}", err._type, err._msg);
+                            slogger.trace("Response error: {} {}:{} {} {}", op, request_identifier, request_shard_id, err._type, err._msg);
                         }
                     }, res);
                 }

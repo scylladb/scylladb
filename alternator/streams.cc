@@ -7,6 +7,7 @@
  */
 
 #include <type_traits>
+#include <regex>
 #include <boost/lexical_cast.hpp>
 #include <boost/io/ios_state.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
@@ -34,7 +35,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
 
-static logging::logger elogger("alternator-streams");
+extern logging::logger elogger;
 
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
@@ -431,7 +432,7 @@ using namespace std::chrono_literals;
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 
-future<> executor::describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
+future<> executor::describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
     std::optional<shard_id> shard_start;
     try {
         shard_start = rjson::get_opt<shard_id>(request, "ExclusiveStartShardId");
@@ -441,55 +442,120 @@ future<> executor::describe_stream_for_tablets(client_state& client_state, servi
         limit = 0;
     }
 
-    auto low_ts = db_clock::time_point::min();
-    if (shard_start) {
-        low_ts = std::max(low_ts, shard_start->time);
+    // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
+    elogger.info("QWERTY describe_stream_for_tablets ks={}, table={}, limit={}, ttl={}", bs->ks_name(), bs->cf_name(), limit, ttl.count());
+    auto low_ts = db_clock::now() - ttl;
+
+    auto topologies = co_await _system_keyspace.read_cdc_for_tablets_versioned_streams(bs->ks_name(), bs->cf_name(), low_ts);
+    for(auto &[ a, b ] : topologies) {
+        elogger.info("QWERTY topology {}", a);
+        for(auto &[ c, d ] : b.streams) {
+            elogger.info("QWERTY   stream {} ({})", c, d);
+        }
     }
-    auto timestamps = co_await _system_keyspace.read_cdc_for_tablets_timestamps(bs->ks_name(), bs->cf_name(), low_ts, std::min(10, limit));
+    describe_stream_finalize(std::move(topologies), shard_start, limit, stream_desc);
+}
+
+void executor::describe_stream_finalize(std::map<db_clock::time_point, cdc::streams_version> topologies, std::optional<shard_id> shard_start, int limit, rjson::value &stream_desc)
+{
+    auto db = _proxy.data_dictionary();
+    auto e = topologies.end();
+    auto prev = e;
     auto shards = rjson::empty_array();
+
     std::optional<shard_id> last;
 
-    for(auto timestamp : timestamps) {
-        auto stream_ids = co_await _system_keyspace.read_cdc_for_tablets_stream_ids_for_timestamp(bs->ks_name(), bs->cf_name(), timestamp, std::min(1000, limit));
-        if (stream_ids.empty()) {
-            continue;
-        }
+    auto i = topologies.begin();
+    // if we're a paged query, skip to the generation where we left of.
+    if (shard_start) {
+        i = topologies.find(shard_start->time);
+    }
 
-        std::sort(stream_ids.begin(), stream_ids.end(), [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
-            return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
-        });
+    // for parent-child stuff we need id:s to be sorted by token
+    // (see explanation above) since we want to find closest
+    // token boundary when determining parent.
+    // #7346 - we processed and searched children/parents in
+    // stored order, which is not necessarily token order,
+    // so the finding of "closest" token boundary (using upper bound)
+    // could give somewhat weird results.
+    static auto token_cmp = [](const std::pair<cdc::stream_id, db_clock::time_point>& id1, const std::pair<cdc::stream_id, db_clock::time_point>& id2) {
+        return id1.first.token() < id2.first.token();
+    };
 
-        auto lo = stream_ids.begin();
-        auto end = stream_ids.end();
+    // #7409 - shards must be returned in lexicographical order,
+    // normal bytes compare is string_traits<int8_t>::compare.
+    // thus bytes 0x8000 is less than 0x0000. By doing unsigned
+    // compare instead we inadvertently will sort in string lexical.
+    static auto id_cmp = [](const std::pair<cdc::stream_id, db_clock::time_point>& id1, const std::pair<cdc::stream_id, db_clock::time_point>& id2) {
+        return compare_unsigned(id1.first.to_bytes(), id2.first.to_bytes()) < 0;
+    };
+
+    // need a prev even if we are skipping stuff
+    if (i != topologies.begin()) {
+        prev = std::prev(i);
+    }
+
+    for (; limit > 0 && i != e; prev = i, ++i) {
+        auto& [ts, sv] = *i;
+
+        last = std::nullopt;
+
+        auto lo = sv.streams.begin();
+        auto end = sv.streams.end();
+
+        // #7409 - shards must be returned in lexicographical order,
+        std::sort(lo, end, id_cmp);
 
         if (shard_start) {
             // find next shard position
-            lo = std::upper_bound(lo, end, shard_start->id, [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
-                return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
-            });
+            lo = std::upper_bound(lo, end, std::pair<cdc::stream_id, db_clock::time_point>(shard_start->id, {}), id_cmp);
             shard_start = std::nullopt;
         }
 
-        while (lo != end && limit > 0) {
-            auto& id = *lo++;
+        if (lo != end && prev != e) {
+            // We want older stuff sorted in token order so we can find matching
+            // token range when determining parent shard.
+            std::stable_sort(prev->second.streams.begin(), prev->second.streams.end(), token_cmp);
+        }
+
+        while (lo != end) {
+            auto& id = lo->first;
+            auto& expired = lo->second;
+            ++lo;
 
             auto shard = rjson::empty_object();
 
-            last.emplace(timestamp, id);
+            if (prev != e) {
+                auto& pids = prev->second.streams;
+                auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const std::pair<cdc::stream_id, db_clock::time_point>& id) {
+                    return t < id.first.token();
+                });
+                if (pid != pids.begin()) {
+                    pid = std::prev(pid);
+                }
+                if (pid != pids.end()) {
+                    rjson::add(shard, "ParentShardId", shard_id(prev->first, pid->first));
+                }
+            }
+
+            last.emplace(ts, id);
             rjson::add(shard, "ShardId", *last);
             auto range = rjson::empty_object();
-            rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(timestamp.time_since_epoch())));
-            // NOTE: EndingSequenceNumber is optional and i've not found an efficient way to retrieve it, so we omit it for now.
+            rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
+            if (expired != db_clock::time_point::min()) {
+                rjson::add(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID((expired + confidence_interval(db)).time_since_epoch())));
+            }
 
             rjson::add(shard, "SequenceNumberRange", std::move(range));
             rjson::push_back(shards, std::move(shard));
             
-            --limit;
+            if (--limit == 0) {
+                break;
+            }
+
+            last = std::nullopt;
         }
-        if (limit <= 0) {
-            break;
-        }
-        last = std::nullopt;
+
     }
     if (last) {
         rjson::add(stream_desc, "LastEvaluatedShardId", *last);
@@ -498,9 +564,7 @@ future<> executor::describe_stream_for_tablets(client_state& client_state, servi
     rjson::add(stream_desc, "Shards", std::move(shards));
 }
 
-future<> executor::describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, alternator::stream_arn stream_arn, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
-    auto db = _proxy.data_dictionary();
-
+future<> executor::describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc) {
     std::optional<shard_id> shard_start;
     try {
         shard_start = rjson::get_opt<shard_id>(request, "ExclusiveStartShardId");
@@ -515,119 +579,72 @@ future<> executor::describe_stream_for_vnodes(client_state& client_state, servic
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
 
-    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, &stream_desc] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
-        auto e = topologies.end();
-        auto prev = e;
-        auto shards = rjson::empty_array();
+    auto topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
+    describe_stream_finalize(std::move(topologies), shard_start, limit, stream_desc);
+}
 
-        std::optional<shard_id> last;
+static std::regex arn_regex(R"(arn:aws:dynamodb:[^:]+:\d{12}:[^\/]+\/([^\/]+)\/[^\/]+\/.+)");
 
-        auto i = topologies.begin();
-        // if we're a paged query, skip to the generation where we left of.
-        if (shard_start) {
-            i = topologies.find(shard_start->time);
-        }
+sstring executor::get_table_name_from_stream_arn(std::string_view arn)
+{
+    std::cmatch re_match;
+    if (!std::regex_match(arn.data(), arn.data() + arn.size(), re_match, arn_regex)) {
+        throw api_error::validation(std::format("`{}` is not a valid StreamArn", arn));
+    }
+    return re_match[1].str();
+}
 
-        // for parent-child stuff we need id:s to be sorted by token
-        // (see explanation above) since we want to find closest
-        // token boundary when determining parent.
-        // #7346 - we processed and searched children/parents in
-        // stored order, which is not necessarily token order,
-        // so the finding of "closest" token boundary (using upper bound)
-        // could give somewhat weird results.
-        static auto token_cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
-            return id1.token() < id2.token();
-        };
+table_id executor::get_cdc_log_table_id_from_stream_arn(std::string_view arn)
+{
+    try {
+        return table_id(stream_arn{ arn });
+    }
+    catch(...) {
+    }
+    auto table_name = get_table_name_from_stream_arn(arn); // executor::KEYSPACE_NAME_PREFIX
+    auto ks_name = sstring{ executor::KEYSPACE_NAME_PREFIX } + table_name;
+    if (!cdc::is_log_name(table_name)) {
+        table_name = cdc::log_name(table_name);
+    }
+    try {
+        return _proxy.data_dictionary().find_schema(ks_name, table_name)->id();
+    } catch(data_dictionary::no_such_column_family&) {
+        throw api_error::resource_not_found(std::format("Invalid StreamArn - table {} not found", table_name));
+    }
+    // arn:aws:dynamodb:us-west-2:111122223333:table/TestTable/stream/2015-05-11T21:21:33.291
+}
 
-        // #7409 - shards must be returned in lexicographical order,
-        // normal bytes compare is string_traits<int8_t>::compare.
-        // thus bytes 0x8000 is less than 0x0000. By doing unsigned
-        // compare instead we inadvertently will sort in string lexical.
-        static auto id_cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
-            return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
-        };
+std::pair<schema_ptr, schema_ptr> executor::get_stream_schema_and_base_schema_from_arn(std::string_view arn) {
+    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
+    // I.e. unparsable arn -> error. 
+    auto stream_arn = get_cdc_log_table_id_from_stream_arn(arn);
 
-        // need a prev even if we are skipping stuff
-        if (i != topologies.begin()) {
-            prev = std::prev(i);
-        }
+    schema_ptr schema, bs;
+    try {
+        auto cf = _proxy.data_dictionary().find_column_family(table_id(stream_arn));
+        schema = cf.schema();
+        bs = cdc::get_base_table(_proxy.data_dictionary().real_database(), *schema);
+    } catch (std::exception &e) {
+        elogger.error("describe_stream: cannot find schema or base table for stream arn {}: {}", stream_arn, e);
+    }
+ 
+    // if (!schema) {
+    //     throw api_error::resource_not_found("Invalid StreamArn - schema not found");
+    // }
+    // if (!bs) {
+    //     throw api_error::resource_not_found("Invalid StreamArn - base table not found");
+    // }
+    // if (!is_alternator_keyspace(schema->ks_name())) {
+    //     throw api_error::resource_not_found("Invalid StreamArn - not an alternator keyspace");
+    // }
+    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
+        throw api_error::resource_not_found("Invalid StreamArn");
+    }
+    return { std::move(schema), std::move(bs) };
+}
 
-        for (; limit > 0 && i != e; prev = i, ++i) {
-            auto& [ts, sv] = *i;
-
-            last = std::nullopt;
-
-            auto lo = sv.streams.begin();
-            auto end = sv.streams.end();
-
-            // #7409 - shards must be returned in lexicographical order,
-            std::sort(lo, end, id_cmp);
-
-            if (shard_start) {
-                // find next shard position
-                lo = std::upper_bound(lo, end, shard_start->id, id_cmp);
-                shard_start = std::nullopt;
-            }
-
-            if (lo != end && prev != e) {
-                // We want older stuff sorted in token order so we can find matching
-                // token range when determining parent shard.
-                std::stable_sort(prev->second.streams.begin(), prev->second.streams.end(), token_cmp);
-            }
-
-            auto expired = [&]() -> std::optional<db_clock::time_point> {
-                auto j = std::next(i);
-                if (j == e) {
-                    return std::nullopt;
-                }
-                // add this so we sort of match potential 
-                // sequence numbers in get_records result.
-                return j->first + confidence_interval(db);
-            }();
-
-            while (lo != end) {
-                auto& id = *lo++;
-
-                auto shard = rjson::empty_object();
-
-                if (prev != e) {
-                    auto& pids = prev->second.streams;
-                    auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const cdc::stream_id& id) {
-                        return t < id.token();
-                    });
-                    if (pid != pids.begin()) {
-                        pid = std::prev(pid);
-                    }
-                    if (pid != pids.end()) {
-                        rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
-                    }
-                }
-
-                last.emplace(ts, id);
-                rjson::add(shard, "ShardId", *last);
-                auto range = rjson::empty_object();
-                rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
-                if (expired) {
-                    rjson::add(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(expired->time_since_epoch())));
-                }
-
-                rjson::add(shard, "SequenceNumberRange", std::move(range));
-                rjson::push_back(shards, std::move(shard));
-                
-                if (--limit == 0) {
-                    break;
-                }
-
-                last = std::nullopt;
-            }
-        }
-
-        if (last) {
-            rjson::add(stream_desc, "LastEvaluatedShardId", *last);
-        }
-
-        rjson::add(stream_desc, "Shards", std::move(shards));
-    });
+std::pair<schema_ptr, schema_ptr> executor::get_stream_schema_and_base_schema_from_request(const rjson::value &request) {
+    return get_stream_schema_and_base_schema_from_arn(rjson::get<std::string>(request, "StreamArn"));
 }
 
 future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
@@ -639,21 +656,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         throw api_error::validation("Limit must be 1 or more");
     }
 
-    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
-    // I.e. unparsable arn -> error. 
-    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
-
-    schema_ptr schema, bs;
-    try {
-        auto cf = _proxy.data_dictionary().find_column_family(table_id(stream_arn));
-        schema = cf.schema();
-        bs = cdc::get_base_table(_proxy.data_dictionary().real_database(), *schema);
-    } catch (...) {        
-    }
- 
-    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found("Invalid StreamArn");
-    }
+    auto [ schema, bs ] = get_stream_schema_and_base_schema_from_request(request);
 
     auto stream_desc = rjson::empty_object();
     auto& opts = bs->cdc_options();
@@ -688,10 +691,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // TODO: creation time
 
     if (schema->table().uses_tablets()) {
-        co_await describe_stream_for_tablets(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+        co_await describe_stream_for_tablets(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), limit, ttl, ret, stream_desc);
     }
     else {
-        co_await describe_stream_for_vnodes(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), std::move(stream_arn), limit, ttl, ret, stream_desc);
+        co_await describe_stream_for_vnodes(client_state, std::move(permit), std::move(request), std::move(schema), std::move(bs), limit, ttl, ret, stream_desc);
     }
 
     rjson::add(ret, "StreamDescription", std::move(stream_desc));
@@ -799,20 +802,14 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
         throw api_error::validation("Iterator of this type should not have sequence number");
     }
 
-    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
     auto db = _proxy.data_dictionary();
 
-    schema_ptr schema = nullptr;
+    auto [ schema, bs ] = get_stream_schema_and_base_schema_from_request(request);
     std::optional<shard_id> sid;
 
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
-    }
-    if (!schema || !cdc::get_base_table(db.real_database(), *schema) || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found("Invalid StreamArn");
     }
     if (!sid) {
         throw api_error::resource_not_found("Invalid ShardId");
@@ -842,7 +839,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             break;
     }
 
-    shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
+    shard_iterator iter(alternator::stream_arn(schema->id()), *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);

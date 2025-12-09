@@ -316,7 +316,8 @@ rjson::malformed_value::malformed_value(std::string_view name, const rjson::valu
 
 rjson::malformed_value::malformed_value(std::string_view name, std::string_view value)
     : error(seastar::format("Malformed value {} : {}", name, value))
-{}
+{
+}
 
 rjson::missing_value::missing_value(std::string_view name) 
     // TODO: using old message here, but as pointed out. 

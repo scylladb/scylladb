@@ -124,10 +124,10 @@ public:
  */ 
 class streams_version {
 public:
-    utils::chunked_vector<stream_id> streams;
+    utils::chunked_vector<std::pair<stream_id, db_clock::time_point>> streams;
     db_clock::time_point timestamp;
 
-    streams_version(utils::chunked_vector<stream_id> s, db_clock::time_point ts)
+    streams_version(utils::chunked_vector<std::pair<stream_id, db_clock::time_point>> s, db_clock::time_point ts)
         : streams(std::move(s))
         , timestamp(ts)
     {}
@@ -228,3 +228,12 @@ future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id tab
 table_streams::const_iterator get_new_base_for_gc(const table_streams&, std::chrono::seconds ttl);
 
 } // namespace cdc
+
+template <>
+struct fmt::formatter<cdc::stream_id> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const cdc::stream_id &id, FormatContext& ctx) const {
+        return std::format_to(ctx.out(), "stream_id<version={} index={} bytes={} token={}>", 
+            id.version(), id.index(), id.to_bytes(), id.token().to_sstring());
+    }
+};

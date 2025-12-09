@@ -63,6 +63,7 @@ def run_alternator_cmd(pid, dir):
     (cmd, env) = run_scylla_cmd(pid, dir)
     ip = run.pid_to_ip(pid)
     cmd += [
+        '--tablet-load-stats-refresh-interval-in-seconds', '1',
         '--alternator-address', ip,
         '--alternator-enforce-authorization', '1',
         '--alternator-write-isolation', 'only_rmw_uses_lwt',
