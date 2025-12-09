@@ -206,6 +206,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
 private:
+    client_options_cache_type _connection_options_keys_and_values;
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;

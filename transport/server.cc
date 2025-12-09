@@ -691,6 +691,7 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.client_options = _client_state.get_client_options();
 
     cd.ssl_enabled = _ssl_enabled;
     cd.ssl_protocol = _ssl_protocol;
@@ -963,6 +964,11 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
         _client_state.set_driver_name(driver_name_opt->second);
     }
+
+    // Store all received client options for later exposure in the system.clients 'client_options' column
+    // (a frozen map<text, text>). Options are cached to reduce memory overhead by deduplicating
+    // identical key/value sets across multiple connections (e.g., same driver name/version).
+    co_await _client_state.set_client_options(_server._connection_options_keys_and_values, options);
 
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
