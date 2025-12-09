@@ -1450,8 +1450,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
         std::map<sstring, replication_strategy_config_option> options;
         for (const auto& dc : option_dcs) {
             auto num_racks = node_count_per_rack.at(dc).size();
-            auto max_rf_factor = std::ranges::min(std::ranges::views::transform(node_count_per_rack.at(dc), [] (auto& x) { return x.second; }));
-            auto rf = num_racks * tests::random::get_int(1UL, max_rf_factor);
+            auto rf = num_racks;
             options.emplace(dc, fmt::to_string(rf));
         }
         return options;
@@ -1487,8 +1486,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     // Test tablets rack-aware base-view pairing
     auto base_token = dht::token::get_random_token();
     auto view_token = dht::token::get_random_token();
-    bool use_legacy_self_pairing = false;
-    bool use_tablets_basic_rack_aware_view_pairing = true;
+    bool use_tablets = true;
     const auto& base_replicas = base_tmap.get_tablet_info(base_tmap.get_tablet_id(base_token)).replicas;
     replica::cf_stats cf_stats;
     std::unordered_map<locator::host_id, locator::host_id> base_to_view_pairing;
@@ -1502,8 +1500,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             *ars_ptr,
             base_token,
             view_token,
-            use_legacy_self_pairing,
-            use_tablets_basic_rack_aware_view_pairing,
+            use_tablets,
             cf_stats).natural_endpoint;
 
         // view pair must be found
@@ -1523,181 +1520,6 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
         BOOST_REQUIRE_EQUAL(base_location.dc, view_location.dc);
         BOOST_REQUIRE_EQUAL(base_location.rack, view_location.rack);
     }
-}
-
-// Called in a seastar thread
-void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
-    auto my_address = gms::inet_address("localhost");
-
-    // Create the RackInferringSnitch
-    snitch_config cfg;
-    cfg.listen_address = my_address;
-    cfg.broadcast_address = my_address;
-    cfg.name = "RackInferringSnitch";
-    sharded<snitch_ptr> snitch;
-    snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
-    snitch.invoke_on_all(&snitch_ptr::start).get();
-
-    locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = my_address;
-    tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
-
-    std::map<sstring, size_t> node_count_per_dc;
-    std::map<sstring, std::map<sstring, size_t>> node_count_per_rack;
-    std::vector<ring_point> ring_points;
-
-    auto& random_engine = seastar::testing::local_random_engine;
-    unsigned shard_count = 2;
-    size_t num_dcs = 1 + tests::random::get_int(3);
-
-    // Generate a random cluster
-    double point = 1;
-    for (size_t dc = 0; dc < num_dcs; ++dc) {
-        sstring dc_name = fmt::format("{}", 100 + dc);
-        size_t num_racks = 2 + tests::random::get_int(4);
-        for (size_t rack = 0; rack < num_racks; ++rack) {
-            sstring rack_name = fmt::format("{}", 10 + rack);
-            size_t rack_nodes = 1 + tests::random::get_int(2);
-            for (size_t i = 1; i <= rack_nodes; ++i) {
-                ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
-                node_count_per_dc[dc_name]++;
-                node_count_per_rack[dc_name][rack_name]++;
-                point++;
-            }
-        }
-    }
-
-    testlog.debug("node_count_per_rack={}", node_count_per_rack);
-
-    // Initialize the token_metadata
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
-    auto stop_stm = deferred_stop(stm);
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
-        for (const auto& [ring_point, endpoint, id] : ring_points) {
-            std::unordered_set<token> tokens;
-            tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
-            co_await tm.update_normal_tokens(std::move(tokens), id);
-        }
-    }).get();
-
-    auto base_schema = schema_builder("ks", "base")
-        .with_column("k", utf8_type, column_kind::partition_key)
-        .with_column("v", utf8_type)
-        .build();
-
-    auto view_schema = schema_builder("ks", "view")
-        .with_column("v", utf8_type, column_kind::partition_key)
-        .with_column("k", utf8_type)
-        .build();
-
-    auto tmptr = stm.get();
-
-    // Create the replication strategy
-    auto make_random_options = [&] () {
-        auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-        std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, replication_strategy_config_option> options;
-        for (const auto& dc : option_dcs) {
-            auto num_racks = node_count_per_rack.at(dc).size();
-            auto rf = more_or_less ?
-                    tests::random::get_int(num_racks, node_count_per_dc[dc]) :
-                    tests::random::get_int(1UL, num_racks);
-            options.emplace(dc, fmt::to_string(rf));
-        }
-        return options;
-    };
-
-    auto options = make_random_options();
-    size_t tablet_count = 1 + tests::random::get_int(99);
-    testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
-    locator::replication_strategy_params params(options, tablet_count, std::nullopt);
-    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params, tmptr->get_topology());
-    auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
-    auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
-    auto base_table_id = base_schema->id();
-    testlog.debug("base_table_id={}", base_table_id);
-    auto view_table_id = view_schema->id();
-    auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1).get();
-    testlog.debug("view_table_id={}", view_table_id);
-
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        tm.tablets().set_tablet_map(base_table_id, co_await base_tmap.clone_gently());
-        tm.tablets().set_tablet_map(view_table_id, co_await view_tmap.clone_gently());
-    }).get();
-
-    tmptr = stm.get();
-    auto base_erm = tab_awr_ptr->make_replication_map(base_table_id, tmptr);
-    auto view_erm = tab_awr_ptr->make_replication_map(view_table_id, tmptr);
-
-    auto& topology = tmptr->get_topology();
-    testlog.debug("topology: {}", topology.get_datacenter_racks());
-
-    // Test tablets rack-aware base-view pairing
-    auto base_token = dht::token::get_random_token();
-    auto view_token = dht::token::get_random_token();
-    bool use_legacy_self_pairing = false;
-    bool use_tablets_basic_rack_aware_view_pairing = true;
-    const auto& base_replicas = base_tmap.get_tablet_info(base_tmap.get_tablet_id(base_token)).replicas;
-    replica::cf_stats cf_stats;
-    std::unordered_map<locator::host_id, locator::host_id> base_to_view_pairing;
-    std::unordered_map<locator::host_id, locator::host_id> view_to_base_pairing;
-    std::unordered_map<sstring, size_t> same_rack_pairs;
-    std::unordered_map<sstring, size_t> cross_rack_pairs;
-    for (const auto& base_replica : base_replicas) {
-        auto& base_host = base_replica.host;
-        auto view_ep_opt = db::view::get_view_natural_endpoint(
-            base_host,
-            base_erm,
-            view_erm,
-            *ars_ptr,
-            base_token,
-            view_token,
-            use_legacy_self_pairing,
-            use_tablets_basic_rack_aware_view_pairing,
-            cf_stats).natural_endpoint;
-
-        // view pair must be found
-        if (!view_ep_opt) {
-            BOOST_FAIL(format("Could not pair base_host={} base_token={} view_token={}", base_host, base_token, view_token));
-        }
-        BOOST_REQUIRE(view_ep_opt);
-        auto& view_ep = *view_ep_opt;
-
-        // Assert pairing uniqueness
-        auto [base_it, inserted_base_pair] = base_to_view_pairing.emplace(base_host, view_ep);
-        BOOST_REQUIRE(inserted_base_pair);
-        auto [view_it, inserted_view_pair] = view_to_base_pairing.emplace(view_ep, base_host);
-        BOOST_REQUIRE(inserted_view_pair);
-
-        auto& base_location = topology.find_node(base_host)->dc_rack();
-        auto& view_location = topology.find_node(view_ep)->dc_rack();
-
-        // Assert dc- and rack- aware pairing
-        BOOST_REQUIRE_EQUAL(base_location.dc, view_location.dc);
-
-        if (base_location.rack == view_location.rack) {
-            same_rack_pairs[base_location.dc]++;
-        } else {
-            cross_rack_pairs[base_location.dc]++;
-        }
-    }
-    for (const auto& [dc, rf_opt] : options) {
-        auto rf = locator::get_replication_factor(rf_opt);
-        BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf);
-    }
-}
-
-SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_lt_racks) {
-    test_complex_rack_aware_view_pairing_test(false);
-}
-
-SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_gt_racks) {
-    test_complex_rack_aware_view_pairing_test(true);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_rack_diff) {
