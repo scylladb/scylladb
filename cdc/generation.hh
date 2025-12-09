@@ -233,7 +233,11 @@ template <>
 struct fmt::formatter<cdc::stream_id> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const cdc::stream_id &id, FormatContext& ctx) const {
-        return std::format_to(ctx.out(), "stream_id<version={} index={} bytes={} token={}>", 
-            id.version(), id.index(), id.to_bytes(), id.token().to_sstring());
+        fmt::format_to(ctx.out(), "{} ", id.token());
+
+        for (auto b : id.to_bytes()) {
+            fmt::format_to(ctx.out(), "{:02x}", (unsigned char)b);
+        }
+        return ctx.out();
     }
 };

@@ -459,7 +459,8 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
                 index += 1
 
         iterators = {}
-
+        shard_parents_map = {}
+        root_shard_ids = []
         while len(retrieved_items) < len(expected_items):
             desc = dynamodbstreams.describe_stream(StreamArn=arn)
 
@@ -468,6 +469,16 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
 
                 for shard in shards:
                     shard_id = shard['ShardId']
+                    parent_shard_id = shard.get('ParentShardId', None)
+                    end = shard['SequenceNumberRange'].get('EndingSequenceNumber', '')
+                    if parent_shard_id is None:
+                        root_shard_ids.append(shard_id)
+                        print(f'QWERTY !! {shard_id} {end:12} -> {parent_shard_id}')
+                    elif shard_id in shard_parents_map:
+                        assert shard_parents_map[shard_id] == parent_shard_id
+                    else:
+                        shard_parents_map[shard_id] = parent_shard_id
+                        print(f'QWERTY !! {shard_id} {end:12} -> {parent_shard_id}')
                     if shard_id not in iterators:
                         start = shard['SequenceNumberRange']['StartingSequenceNumber']
                         iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
@@ -506,6 +517,25 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
             pv = previous_values.get(p, -1)
             assert pv < e
             previous_values[p] = e
+        
+        assert len(root_shard_ids) == init_table_count
+
+        have_parents = set()
+        for (shard_id, parent_shard_id) in shard_parents_map.items():
+            have_parents.add(parent_shard_id)
+        def get_path(shard_id):
+            path = [ shard_id ]
+            current_shard_id = shard_id
+            while True:
+                parent_shard_id = shard_parents_map.get(current_shard_id, None)
+                if parent_shard_id is None:
+                    return path
+                path.append(parent_shard_id)
+                current_shard_id = parent_shard_id
+        for r in shard_parents_map:
+            if r not in have_parents:
+                path = get_path(r)
+                assert len(path) == len(tablet_multipliers)
 
 def test_get_records(dynamodb, dynamodbstreams, TAGS):
     # TODO: add tests for storage/transactionable variations and global/local index

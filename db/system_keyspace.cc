@@ -2490,7 +2490,7 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
 
     std::map<db_clock::time_point, std::unordered_map<cdc::stream_id, db_clock::time_point>> temp_result;
     
-    slogger.info("QWERTY starting read_cdc_for_tablets_versioned_streams ks_name={}, table_name={}, not_older_than={}", ks_name, table_name, not_older_than.time_since_epoch().count());
+    slogger.info("QWERTY starting read_cdc_for_tablets_versioned_streams ks_name={}, table_name={}, not_older_than={:x}", ks_name, table_name, not_older_than.time_since_epoch().count());
     co_await _qp.query_internal(stream_id_query,
                 db::consistency_level::ONE,
                 data_value_list{ ks_name, table_name },
@@ -2500,7 +2500,7 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
         auto stream_state = cdc::read_stream_state(row.get_as<int8_t>("stream_state"));
         auto ts = row.get_as<db_clock::time_point>("timestamp");
         
-        slogger.info("QWERTY stream_id={}, stream_state={}, ts={}", stream_id, (int)stream_state, ts.time_since_epoch().count());
+        slogger.info("QWERTY stream_id={}, stream_state={}, ts={:x}", stream_id, (int)stream_state, ts.time_since_epoch().count());
         if (ts < not_older_than) {
             co_return stop_iteration::no;
         }
@@ -2521,7 +2521,7 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
         utils::chunked_vector<std::pair<cdc::stream_id, db_clock::time_point>> streams;
         for (auto& [stream_id, closing_ts] : streams_map) {
             streams.emplace_back(stream_id, closing_ts);
-            slogger.info("QWERTY final stream_id={}, closing_ts={} for ts={}", stream_id, closing_ts, ts);
+            slogger.info("QWERTY final stream_id={}, closing_ts={:x} for ts={:x}", stream_id, closing_ts.time_since_epoch().count(), ts.time_since_epoch().count());
         }
         result.insert_or_assign(ts, cdc::streams_version{ std::move(streams), ts });
     }

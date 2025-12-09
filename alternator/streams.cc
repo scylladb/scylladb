@@ -450,7 +450,7 @@ future<> executor::describe_stream_for_tablets(client_state& client_state, servi
     for(auto &[ a, b ] : topologies) {
         elogger.info("QWERTY topology {}", a);
         for(auto &[ c, d ] : b.streams) {
-            elogger.info("QWERTY   stream {} ({})", c, d);
+            elogger.info("QWERTY   stream {} ({:x})", c, d.time_since_epoch().count());
         }
     }
     describe_stream_finalize(std::move(topologies), shard_start, limit, stream_desc);
@@ -542,7 +542,7 @@ void executor::describe_stream_finalize(std::map<db_clock::time_point, cdc::stre
             rjson::add(shard, "ShardId", *last);
             auto range = rjson::empty_object();
             rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
-            if (expired != db_clock::time_point::min()) {
+            if (expired.time_since_epoch().count() > 0) {
                 rjson::add(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID((expired + confidence_interval(db)).time_since_epoch())));
             }
 
