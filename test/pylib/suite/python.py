@@ -76,7 +76,7 @@ class PythonTestSuite(TestSuite):
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-            cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options)
+            cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
             # 1. the defaults
