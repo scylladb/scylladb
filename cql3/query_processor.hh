@@ -43,6 +43,7 @@ class migration_manager;
 class query_state;
 class mapreduce_service;
 class raft_group0_client;
+class sc_storage_proxy;
 
 namespace broadcast_tables {
 struct query;
@@ -155,7 +156,8 @@ public:
     ~query_processor();
 
     void start_remote(service::migration_manager&, service::mapreduce_service&,
-                      service::storage_service& ss, service::raft_group0_client&);
+                      service::storage_service& ss, service::raft_group0_client&,
+                      service::sc_storage_proxy&);
     future<> stop_remote();
 
     data_dictionary::database db() {
@@ -173,6 +175,8 @@ public:
     service::storage_proxy& proxy() {
         return _proxy;
     }
+
+    std::pair<std::reference_wrapper<service::sc_storage_proxy>, gate::holder> acquire_sc_storage_proxy();
 
     cql_stats& get_cql_stats() {
         return _cql_stats;

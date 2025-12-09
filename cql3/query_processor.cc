@@ -47,8 +47,10 @@ const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono
 
 struct query_processor::remote {
     remote(service::migration_manager& mm, service::mapreduce_service& fwd,
-           service::storage_service& ss, service::raft_group0_client& group0_client)
+           service::storage_service& ss, service::raft_group0_client& group0_client,
+           service::sc_storage_proxy& _sc_storage_proxy)
             : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client)
+            , sc_storage_proxy(_sc_storage_proxy)
             , gate("query_processor::remote")
     {}
 
@@ -56,6 +58,7 @@ struct query_processor::remote {
     service::mapreduce_service& mapreducer;
     service::storage_service& ss;
     service::raft_group0_client& group0_client;
+    service::sc_storage_proxy& sc_storage_proxy;
 
     seastar::named_gate gate;
 };
@@ -509,9 +512,15 @@ query_processor::~query_processor() {
     }
 }
 
+std::pair<std::reference_wrapper<service::sc_storage_proxy>, gate::holder> query_processor::acquire_sc_storage_proxy() {
+    auto [r, h] = remote();
+    return {r.get().sc_storage_proxy, std::move(h)};
+}
+
 void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer,
-                                   service::storage_service& ss, service::raft_group0_client& group0_client) {
-    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client);
+                                   service::storage_service& ss, service::raft_group0_client& group0_client,
+                                   service::sc_storage_proxy& sc_storage_proxy) {
+    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client, sc_storage_proxy);
 }
 
 future<> query_processor::stop_remote() {
