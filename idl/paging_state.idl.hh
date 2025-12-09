@@ -13,6 +13,7 @@
 #include "idl/token.idl.hh"
 #include "idl/keys.idl.hh"
 #include "idl/uuid.idl.hh"
+#include "idl/position_in_partition.idl.hh"
 
 namespace db {
 enum class read_repair_decision : uint8_t {
@@ -21,19 +22,6 @@ enum class read_repair_decision : uint8_t {
   DC_LOCAL,
 };
 }
-
-enum class bound_weight : int8_t {
-    before_all_prefixed = -1,
-    equal = 0,
-    after_all_prefixed = 1,
-}
-
-enum class partition_region : uint8_t {
-    partition_start,
-    static_row,
-    clustered,
-    partition_end,
-};
 
 namespace service {
 namespace pager {
