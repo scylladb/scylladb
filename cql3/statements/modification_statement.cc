@@ -29,6 +29,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "cql3/statements/strong_consistency/sc_modification_statement.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -561,6 +562,15 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
 
     auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
         auto result = prepare(db, meta, stats);
+
+        // We called validation::validate_column_family above,
+        // the function is not async -> ks must exist here.
+        if (const auto ks_meta = db.find_keyspace(schema->ks_name()).metadata();
+            ks_meta->consistency_option() == data_dictionary::consistency_config_option::local)
+        {
+            return ::make_shared<cql3::statements::strong_consistency::sc_modification_statement>(std::move(result));
+        }
+
         if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
             return result->prepare_for_broadcast_tables();
         }
