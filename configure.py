@@ -2528,7 +2528,7 @@ def write_build_file(f,
                 # In debug/sanitize modes, we compile with fsanitizers,
                 # so must use the same options during the link:
                 if '-DSANITIZE' in modes[mode]['cxxflags']:
-                    f.write('   libs = -fsanitize=address -fsanitize=undefined\n')
+                    f.write('   libs = -fsanitize=address -fsanitize=undefined -lubsan\n')
                 else:
                     f.write('   libs =\n')
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
