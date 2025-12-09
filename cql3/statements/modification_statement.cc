@@ -29,6 +29,8 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "cql3/statements/strong_consistency/modification_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -561,6 +563,11 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
 
     auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
         auto result = prepare(db, meta, stats);
+
+        if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+            return ::make_shared<strong_consistency::modification_statement>(std::move(result));
+        }
+
         if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
             return result->prepare_for_broadcast_tables();
         }
