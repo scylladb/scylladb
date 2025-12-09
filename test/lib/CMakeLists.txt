@@ -1,5 +1,8 @@
 add_library(test-lib STATIC)
 target_sources(test-lib
+  PUBLIC
+    boost_test_tree_lister.cc
+    boost_tree_lister_injector.cc
   PRIVATE
     cql_assertions.cc
     dummy_sharder.cc
