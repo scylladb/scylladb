@@ -256,7 +256,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
         } else {
             co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
         }
-    } catch (exceptions::request_execution_exception& e) {
+    } catch (const exceptions::request_execution_exception& e) {
         alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
     }
 }
@@ -293,13 +293,13 @@ future<> default_authorizer::revoke_all_legacy(const resource& resource) {
                                 [resource](auto ep) {
                     try {
                         std::rethrow_exception(ep);
-                    } catch (exceptions::request_execution_exception& e) {
+                    } catch (const exceptions::request_execution_exception& e) {
                         alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
                     }
 
                 });
             });
-        } catch (exceptions::request_execution_exception& e) {
+        } catch (const exceptions::request_execution_exception& e) {
             alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
             return make_ready_future();
         }

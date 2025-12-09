@@ -81,7 +81,7 @@ public:
         }).handle_exception([](auto ep) {
             try {
                 std::rethrow_exception(ep);
-            } catch (exceptions::authentication_exception&) {
+            } catch (const exceptions::authentication_exception&) {
                 // return anon user
                 return make_ready_future<authenticated_user>(anonymous_user());
             }
@@ -126,7 +126,7 @@ public:
             virtual bytes evaluate_response(bytes_view client_response) override {
                 try {
                     return _sasl->evaluate_response(client_response);
-                } catch (exceptions::authentication_exception&) {
+                } catch (const exceptions::authentication_exception&) {
                     _complete = true;
                     return {};
                 }
@@ -141,7 +141,7 @@ public:
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);
-                        } catch (exceptions::authentication_exception&) {
+                        } catch (const exceptions::authentication_exception&) {
                             // return anon user
                             return make_ready_future<authenticated_user>(anonymous_user());
                         }
