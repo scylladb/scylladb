@@ -1632,6 +1632,10 @@ bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
+bool locator::tablet_task_info::is_auto_repair_request() const {
+    return request_type == locator::tablet_task_type::auto_repair;
+}
+
 bool locator::tablet_task_info::selected_by_filters(const tablet_replica& replica, const topology& topo) const {
     if (!repair_hosts_filter.empty() && !repair_hosts_filter.contains(replica.host)) {
         return false;
