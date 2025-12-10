@@ -11,5 +11,10 @@
 #include "service/raft/raft_state_machine.hh"
 
 namespace service {
+    struct sc_raft_command {
+        utils::chunked_vector<canonical_mutation> mutations;
+        utils::UUID prev_state_id;
+        utils::UUID new_state_id;
+    };
     std::unique_ptr<raft_state_machine> make_sc_state_machine();
 }
