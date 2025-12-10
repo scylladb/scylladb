@@ -13,6 +13,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <stdexcept>
+#include <unordered_map>
+#include <seastar/core/metrics.hh>
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
@@ -20,6 +22,7 @@
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
 #include "service/qos/service_level_controller.hh"
+#include "locator/tablets.hh"
 
 namespace db {
 class system_keyspace;
@@ -98,5 +101,31 @@ future<> run_topology_coordinator(
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
+
+class tablet_ops_metrics {
+private:
+    seastar::metrics::metric_groups _metrics;
+public:
+    struct tablet_ops_stats {
+        uint64_t failed;
+        uint64_t succeeded;
+    };
+    std::unordered_map<locator::tablet_task_type, tablet_ops_stats> stats;
+public:
+    tablet_ops_metrics();
+    void inc_failed(locator::tablet_task_type type) {
+        if (type == locator::tablet_task_type::none) {
+            return;
+        }
+        stats[type].failed++;
+    }
+    void inc_succeeded(locator::tablet_task_type type) {
+        if (type == locator::tablet_task_type::none) {
+            return;
+        }
+        stats[type].succeeded++;
+    }
+};
+
 
 }
