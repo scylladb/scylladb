@@ -387,4 +387,27 @@ SEASTAR_TEST_CASE(select_from_vector_indexed_table) {
             enable_tablets(db_config_with_auth()));
 }
 
+SEASTAR_TEST_CASE(select_from_vector_search_system_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                create_user_if_not_exists(env, bob);
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM system.group0_history").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                });
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM system.versions").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                });
+                cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM system.group0_history");
+                });
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM system.versions");
+                });
+            },
+            db_config_with_auth());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

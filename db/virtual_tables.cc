@@ -605,8 +605,8 @@ public:
     }
 
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "versions");
-        return schema_builder(system_keyspace::NAME, "versions", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::VERSIONS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::VERSIONS, std::make_optional(id))
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("version", utf8_type)
             .with_column("build_mode", utf8_type)
