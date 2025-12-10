@@ -70,3 +70,61 @@ future<std::vector<service::client_routes_service::client_route_entry>> service:
     }
     co_return result;
 }
+
+seastar::future<> service::client_routes_service::set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
+    auto guard = co_await _group0_client.start_operation(_abort_source, service::raft_timeout{});
+    utils::chunked_vector<canonical_mutation> cmuts;
+
+    for (auto& entry : route_entries) {
+        auto mut = co_await make_update_client_route_mutation(guard.write_timestamp(), entry);
+        cmuts.emplace_back(std::move(mut));
+    }
+    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "insert client routes");
+    co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
+}
+
+seastar::future<> service::client_routes_service::delete_client_routes_inner(const std::vector<service::client_routes_service::client_route_key>& route_keys) {
+    auto guard = co_await _group0_client.start_operation(_abort_source, service::raft_timeout{});
+    utils::chunked_vector<canonical_mutation> cmuts;
+
+    for (const auto& route_key : route_keys) {
+        auto mut = co_await make_remove_client_route_mutation(guard.write_timestamp(), route_key);
+        cmuts.emplace_back(std::move(mut));
+    }
+
+    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "delete client routes");
+    co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
+}
+
+seastar::future<> service::client_routes_service::set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
+    return container().invoke_on(0, [route_entries = std::move(route_entries)] (service::client_routes_service& cr) -> future<> {
+        return cr.with_retry([&] {
+            return cr.set_client_routes_inner(route_entries);
+        });
+    });
+}
+
+seastar::future<> service::client_routes_service::delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys) {
+    return container().invoke_on(0, [route_keys = std::move(route_keys)] (service::client_routes_service& cr) -> future<> {
+        return cr.with_retry([&] {
+            return cr.delete_client_routes_inner(route_keys);
+        });
+    });
+}
+
+template <typename Func>
+seastar::future<> service::client_routes_service::with_retry(Func&& func) const {
+    int retries = 10;
+    while (true) {
+        try {
+            co_await func();
+        } catch (const ::service::group0_concurrent_modification&) {
+            crlogger.warn("Failed to set client routes due to guard conflict, retries={}", retries);
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+        break;
+    }
+}

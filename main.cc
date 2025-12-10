@@ -1798,7 +1798,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing client routes service");
             static sharded<service::client_routes_service> client_routes;
-            client_routes.start(std::ref(feature_service), std::ref(qp)).get();
+            client_routes.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(group0_client), std::ref(qp)).get();
             auto stop_client_routes = defer_verbose_shutdown("client_routes", [&] {
                 client_routes.stop().get();
             });
@@ -2198,6 +2198,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         });
                     });
             }).get();
+
+            api::set_server_client_routes(ctx, client_routes).get();
+            auto stop_cr_api = defer_verbose_shutdown("client routes API", [&ctx] {
+                api::unset_server_client_routes(ctx).get();
+            });
 
             checkpoint(stop_signal, "join cluster");
             // Allow abort during join_cluster since bootstrap or replace
