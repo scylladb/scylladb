@@ -37,6 +37,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     friend class raft_server;
 
+    struct term_info {
+        // The Raft term this structure describes.
+        raft::term_t term;
+
+        // The last timestamp used for mutations in this term.
+        // std::nullopt indicates that the current replica is not the leader in this term.
+        std::optional<api::timestamp_type> last_timestamp;
+    };
+
     struct raft_group_state {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
@@ -48,6 +57,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // when a tablet is migrated back to this node before deinitialization completes.
         // Subsequent operations wait for the previous one to complete.
         shared_future<> server_control_op = make_ready_future<>();
+
+        std::optional<term_info> term_info = std::nullopt;
+        condition_variable term_info_cond = condition_variable();
+        future<> term_info_updater = make_ready_future<>();
     };
 
     netw::messaging_service& _ms;
@@ -67,6 +80,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
     void schedule_raft_groups_deletion(bool all);
+
+    future<> term_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
     future<> wait_for_groups_to_start();
 
@@ -114,6 +129,20 @@ public:
     raft::server& server() {
         return *_state.server;
     }
+
+    // Possible results:
+    //   timestamp_with_term - timestamp to use for a new mutation request
+    //   raft::not_a_leader - this node is not a leader
+    //   need_wait_for_leader - the caller needs to wait on the specified future and then retry `begin_mutate`
+    struct timestamp_with_term {
+        api::timestamp_type timestamp;
+        raft::term_t term;
+    };
+    struct need_wait_for_leader {
+        future<> future;
+    };
+    using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
+    begin_mutate_result begin_mutate();
 };
 
 }
