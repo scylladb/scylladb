@@ -200,6 +200,7 @@ public:
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
     static constexpr auto CLIENT_ROUTES = "client_routes";
+    static constexpr auto VERSIONS = "versions";
 
     // auth
     static constexpr auto ROLES = "roles";
