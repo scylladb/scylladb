@@ -11,7 +11,7 @@ This document tracks the conversion of `SCYLLA_ASSERT` to the new `scylla_assert
 - **Unsafe conversions (noexcept)**: ~187
 - **Unsafe conversions (destructors)**: ~36
 - **Safe conversions possible**: ~668
-- **Converted so far**: 54
+- **Converted so far**: 112
 
 ## Safe vs Unsafe Contexts
 
@@ -143,6 +143,26 @@ For contexts that cannot be converted:
     - Lines 6490, 6491: Tablet streaming operations
     - Line 7512: Join node response handler
     - **Unsafe (kept as SCYLLA_ASSERT)**: Lines 3398, 5760, 5775 (noexcept functions)
+
+12. **sstables/** (58 conversions across 22 files)
+    - **sstables/trie/bti_node_reader.cc** (6): Node reading operations
+    - **sstables/mx/writer.cc** (6): MX format writing
+    - **sstables/sstable_set.cc** (5): SSTable set management
+    - **sstables/compressor.cc** (5): Compression/decompression
+    - **sstables/trie/trie_writer.hh** (4): Trie writing
+    - **sstables/downsampling.hh** (4): Downsampling operations
+    - **sstables/storage.{cc,hh}** (6): Storage operations
+    - **sstables/sstables_manager.{cc,hh}** (6): SSTable lifecycle management
+    - **sstables/trie/writer_node.{hh,impl.hh}** (4): Trie node writing
+    - **sstables/trie/bti_key_translation.cc** (2): Key translation
+    - **sstables/sstable_directory.cc** (2): Directory management
+    - **sstables/trie/trie_writer.cc** (1): Trie writer implementation
+    - **sstables/trie/trie_traversal.hh** (1): Trie traversal
+    - **sstables/sstables.cc** (1): Core SSTable operations
+    - **sstables/partition_index_cache.hh** (1): Index caching
+    - **sstables/generation_type.hh** (1): Generation management
+    - **sstables/compress.{cc,hh}** (2): Compression utilities
+    - **sstables/exceptions.hh** (1): Comment update
 
 ## Testing
 
