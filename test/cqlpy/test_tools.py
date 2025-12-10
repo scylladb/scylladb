@@ -117,21 +117,23 @@ def clustering_table_with_collection(cql, keyspace):
 
 def clustering_table_with_udt(cql, keyspace):
     table = util.unique_name()
-    create_type_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type1 (f1 int, f2 text)"
-    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+    create_type1_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type1 (f1 int, f2 text)"
+    create_type2_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type2 (f1 int, f2 frozen<type1>)"
+    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type2, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
-    cql.execute(create_type_schema)
+    cql.execute(create_type1_schema)
+    cql.execute(create_type2_schema)
     cql.execute(create_table_schema)
 
     for pk in range(0, 10):
         for ck in range(0, 10):
-            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{f1: 100, f2: 'asd'}})")
+            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{f1: 100, f2: {{f1: 1, f2: 'asd'}}}})")
         if pk == 5:
             nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
-    return table, "; ".join((create_type_schema, create_table_schema))
+    return (table, f'{keyspace}.type2', f'{keyspace}.type1'), "; ".join((create_type1_schema, create_type2_schema, create_table_schema))
 
 
 def table_with_counters(cql, keyspace):
@@ -165,7 +167,13 @@ def get_sstables_for_table(data_dir, keyspace, table):
 
 @contextlib.contextmanager
 def scylla_sstable(table_factory, cql, ks, data_dir, s3_server=None, copy_to_s3=False, everywhere=False):
-    table, schema = table_factory(cql, ks)
+    symbols, schema = table_factory(cql, ks)
+    if type(symbols) is tuple:
+        table = symbols[0]
+        types = symbols[1:]
+    else:
+        table = symbols
+        types = []
 
     schema_file = os.path.join(data_dir, "..", "test_tools_schema.cql")
     with open(schema_file, "w") as f:
@@ -184,6 +192,8 @@ def scylla_sstable(table_factory, cql, ks, data_dir, s3_server=None, copy_to_s3=
         yield (table, schema_file, sstables)
     finally:
         cql.execute(f"DROP TABLE {ks}.{table}")
+        for t in types:
+            cql.execute(f"DROP TYPE {t}")
         os.unlink(schema_file)
 
 
@@ -2085,14 +2095,16 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
 
     expected_results = {}
 
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+    with scylla_sstable(clustering_table_with_udt, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
         for schema_table in ('columns', 'tables', 'scylla_tables'):
             expected_results[schema_table] = query_system_schema(schema_table, table)
 
         table_name = table
         dumped_schema = subprocess.check_output([scylla_path, "sstable", f"dump-schema", "--schema-file", schema_file, sstables[0]], text=True)
 
-    cql.execute(dumped_schema)
+    for statement in map(str.strip, dumped_schema.split(';')):
+        if statement:
+            cql.execute(statement)
 
     try:
         for schema_table in ('columns', 'tables', 'scylla_tables'):
