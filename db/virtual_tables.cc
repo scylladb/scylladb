@@ -766,7 +766,7 @@ class clients_table : public streaming_virtual_table {
 
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
         // Collect
-        using client_data_vec = utils::chunked_vector<client_data>;
+        using client_data_vec = utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>;
         using shard_client_data = std::vector<client_data_vec>;
         std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
         cd_vec.resize(smp::count);
@@ -806,13 +806,13 @@ class clients_table : public streaming_virtual_table {
         for (unsigned i = 0; i < smp::count; i++) {
             for (auto&& ps_cdc : *cd_vec[i]) {
                 for (auto&& cd : ps_cdc) {
-                    if (cd_map.contains(cd.ip)) {
-                        cd_map[cd.ip].emplace_back(std::move(cd));
+                    if (cd_map.contains(cd->ip)) {
+                        cd_map[cd->ip].emplace_back(std::move(cd));
                     } else {
-                        dht::decorated_key key = make_partition_key(cd.ip);
+                        dht::decorated_key key = make_partition_key(cd->ip);
                         if (this_shard_owns(key) && contains_key(qr.partition_range(), key)) {
-                            ips.insert(decorated_ip{std::move(key), cd.ip});
-                            cd_map[cd.ip].emplace_back(std::move(cd));
+                            ips.insert(decorated_ip{std::move(key), cd->ip});
+                            cd_map[cd->ip].emplace_back(std::move(cd));
                         }
                     }
                     co_await coroutine::maybe_yield();
@@ -825,38 +825,38 @@ class clients_table : public streaming_virtual_table {
             co_await result.emit_partition_start(dip.key);
             auto& clients = cd_map[dip.ip];
 
-            std::ranges::sort(clients, [] (const client_data& a, const client_data& b) {
-                return a.port < b.port || a.client_type_str() < b.client_type_str();
+            std::ranges::sort(clients, [] (const foreign_ptr<std::unique_ptr<client_data>>& a, const foreign_ptr<std::unique_ptr<client_data>>& b) {
+                return a->port < b->port || a->client_type_str() < b->client_type_str();
             });
 
             for (const auto& cd : clients) {
-                clustering_row cr(make_clustering_key(cd.port, cd.client_type_str()));
-                set_cell(cr.cells(), "shard_id", cd.shard_id);
-                set_cell(cr.cells(), "connection_stage", cd.stage_str());
-                if (cd.driver_name) {
-                    set_cell(cr.cells(), "driver_name", *cd.driver_name);
+                clustering_row cr(make_clustering_key(cd->port, cd->client_type_str()));
+                set_cell(cr.cells(), "shard_id", cd->shard_id);
+                set_cell(cr.cells(), "connection_stage", cd->stage_str());
+                if (cd->driver_name) {
+                    set_cell(cr.cells(), "driver_name", *cd->driver_name);
                 }
-                if (cd.driver_version) {
-                    set_cell(cr.cells(), "driver_version", *cd.driver_version);
+                if (cd->driver_version) {
+                    set_cell(cr.cells(), "driver_version", *cd->driver_version);
                 }
-                if (cd.hostname) {
-                    set_cell(cr.cells(), "hostname", *cd.hostname);
+                if (cd->hostname) {
+                    set_cell(cr.cells(), "hostname", *cd->hostname);
                 }
-                if (cd.protocol_version) {
-                    set_cell(cr.cells(), "protocol_version", *cd.protocol_version);
+                if (cd->protocol_version) {
+                    set_cell(cr.cells(), "protocol_version", *cd->protocol_version);
                 }
-                if (cd.ssl_cipher_suite) {
-                    set_cell(cr.cells(), "ssl_cipher_suite", *cd.ssl_cipher_suite);
+                if (cd->ssl_cipher_suite) {
+                    set_cell(cr.cells(), "ssl_cipher_suite", *cd->ssl_cipher_suite);
                 }
-                if (cd.ssl_enabled) {
-                    set_cell(cr.cells(), "ssl_enabled", *cd.ssl_enabled);
+                if (cd->ssl_enabled) {
+                    set_cell(cr.cells(), "ssl_enabled", *cd->ssl_enabled);
                 }
-                if (cd.ssl_protocol) {
-                    set_cell(cr.cells(), "ssl_protocol", *cd.ssl_protocol);
+                if (cd->ssl_protocol) {
+                    set_cell(cr.cells(), "ssl_protocol", *cd->ssl_protocol);
                 }
-                set_cell(cr.cells(), "username", cd.username ? *cd.username : sstring("anonymous"));
-                if (cd.scheduling_group_name) {
-                    set_cell(cr.cells(), "scheduling_group", *cd.scheduling_group_name);
+                set_cell(cr.cells(), "username", cd->username ? *cd->username : sstring("anonymous"));
+                if (cd->scheduling_group_name) {
+                    set_cell(cr.cells(), "scheduling_group", *cd->scheduling_group_name);
                 }
                 co_await result.emit_row(std::move(cr));
             }

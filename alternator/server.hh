@@ -107,7 +107,7 @@ public:
     // table "system.clients" is read. It is expected to generate a list of
     // clients connected to this server (on this shard). This function is
     // called by alternator::controller::get_client_data().
-    future<utils::chunked_vector<client_data>> get_client_data();
+    future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
 private:
     void set_routes(seastar::httpd::routes& r);
     // If verification succeeds, returns the authenticated user's username
