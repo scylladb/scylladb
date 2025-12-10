@@ -10,6 +10,7 @@ import re
 import requests
 import socket
 import struct
+from test.cqlpy import nodetool
 from test.cqlpy.util import cql_session
 
 def get_protocol_error_metrics(host) -> int:
@@ -58,8 +59,48 @@ def try_connect(host, port, creds, protocol_version):
     with cql_with_protocol(host, port, creds, protocol_version) as session:
         return 1 if session else 0
 
+@pytest.fixture
+def debug_exceptions_logging(request, cql):
+    def _read_level() -> str | None:
+        try:
+            level = nodetool.getlogginglevel(cql, "exception")
+            if level:
+                level = level.strip().strip('"').lower()
+            return level
+        except Exception as exc:
+            print(f"Failed to read exception logger level: {exc}")
+            return None
+
+    def _set_and_verify(level: str) -> bool:
+        try:
+            nodetool.setlogginglevel(cql, "exception", level)
+        except Exception as exc:
+            print(f"Failed to set exception logger level to '{level}': {exc}")
+            return False
+
+        observed = _read_level()
+        if observed == level:
+            return True
+
+        print(f"Exception logger level observed as '{observed}' while expecting '{level}'")
+        return False
+
+    def _restore_logging():
+        if not enabled and previous_level is None:
+            return
+
+        target_level = previous_level or "info"
+        _set_and_verify(target_level)
+
+    previous_level = _read_level()
+    enabled = _set_and_verify("debug")
+
+    yield
+    _restore_logging()
+
 # If there is a protocol version mismatch, the server should
 # raise a protocol error, which is counted in the metrics.
+<<<<<<< HEAD
 def test_protocol_version_mismatch(scylla_only, request):
     host = request.config.getoption("--host")
     port = request.config.getoption("--port")
@@ -72,6 +113,15 @@ def test_protocol_version_mismatch(scylla_only, request):
 
     run_count = 100
     cpp_exception_threshold = 10
+||||||| parent of 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
+def test_protocol_version_mismatch(scylla_only, request, host):
+    run_count = 100
+    cpp_exception_threshold = 10
+=======
+def test_protocol_version_mismatch(scylla_only, debug_exceptions_logging, request, host):
+    run_count = 200
+    cpp_exception_threshold = 20
+>>>>>>> 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -165,17 +215,9 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
     finally:
         s.close()
 
-@pytest.fixture
-def no_ssl(request):
-    if request.config.getoption("--ssl"):
-        pytest.skip("skipping non-SSL test on SSL-enabled run")
-    yield
-
-# Test if the error is raised when sending a malformed BATCH message
-# containing an invalid BATCH kind.
-def test_invalid_kind_in_batch_message(scylla_only, no_ssl, request):
-    host = request.config.getoption("--host")
-
+<<<<<<< HEAD
+||||||| parent of 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
+def _test_impl(host, flag):
     run_count = 100
     cpp_exception_threshold = 10
 
@@ -183,24 +225,160 @@ def test_invalid_kind_in_batch_message(scylla_only, no_ssl, request):
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
 
     for _ in range(run_count):
-        _protocol_error_impl(host, trigger_bad_batch=True)
+        kwargs = {flag: True}
+        _protocol_error_impl(host, **kwargs)
 
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, f"Expected protocol errors to increase after running test with {flag}"
 
     cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
-    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, f"Expected C++ protocol errors to not increase after running test with {flag}"
 
+=======
+def _test_impl(host, flag):
+    run_count = 200
+    cpp_exception_threshold = 20
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+
+    for _ in range(run_count):
+        kwargs = {flag: True}
+        _protocol_error_impl(host, **kwargs)
+
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, f"Expected protocol errors to increase after running test with {flag}"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, f"Expected C++ protocol errors to not increase after running test with {flag}"
+
+>>>>>>> 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
+@pytest.fixture
+def no_ssl(request):
+    if request.config.getoption("--ssl"):
+        pytest.skip("skipping non-SSL test on SSL-enabled run")
+    yield
+
+<<<<<<< HEAD
+# Test if the error is raised when sending a malformed BATCH message
+# containing an invalid BATCH kind.
+def test_invalid_kind_in_batch_message(scylla_only, no_ssl, request):
+    host = request.config.getoption("--host")
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# Malformed BATCH with an invalid kind triggers a protocol error.
+def test_invalid_kind_in_batch_message(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_bad_batch")
+=======
+# Malformed BATCH with an invalid kind triggers a protocol error.
+def test_invalid_kind_in_batch_message(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_bad_batch")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
+    run_count = 100
+    cpp_exception_threshold = 10
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# Send OPTIONS during AUTHENTICATE to trigger auth-state error.
+def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_unexpected_auth")
+=======
+# Send OPTIONS during AUTHENTICATE to trigger auth-state error.
+def test_unexpected_message_during_auth(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_unexpected_auth")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# STARTUP with an invalid/missing string-map entry should produce a protocol error.
+def test_process_startup_invalid_string_map(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_startup_invalid_string_map")
+=======
+# STARTUP with an invalid/missing string-map entry should produce a protocol error.
+def test_process_startup_invalid_string_map(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_startup_invalid_string_map")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
+    for _ in range(run_count):
+        _protocol_error_impl(host, trigger_bad_batch=True)
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# STARTUP with unknown COMPRESSION option should produce a protocol error.
+def test_unknown_compression_algorithm(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_unknown_compression")
+=======
+# STARTUP with unknown COMPRESSION option should produce a protocol error.
+def test_unknown_compression_algorithm(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_unknown_compression")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# QUERY long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_query_internal_malformed_query(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_query_internal_malformed_query")
+=======
+# QUERY long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_query_internal_malformed_query(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_query_internal_malformed_query")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# QUERY options malformed: PAGE_SIZE flag set but page_size truncated triggers protocol error.
+def test_process_query_internal_fail_read_options(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_query_internal_fail_read_options")
+=======
+# QUERY options malformed: PAGE_SIZE flag set but page_size truncated triggers protocol error.
+def test_process_query_internal_fail_read_options(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_query_internal_fail_read_options")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+
+<<<<<<< HEAD
 # Test if the error is raised when sending an unexpected AUTH_RESPONSE
 # message during the authentication phase.
 def test_unexpected_message_during_auth(scylla_only, no_ssl, request):
     host = request.config.getoption("--host")
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# PREPARE long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_prepare_malformed_query(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_prepare_malformed_query")
+=======
+# PREPARE long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_prepare_malformed_query(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_prepare_malformed_query")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
 
+<<<<<<< HEAD
     run_count = 100
     cpp_exception_threshold = 10
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# EXECUTE cache-key malformed: short-bytes length > provided bytes triggers protocol error.
+def test_process_execute_internal_malformed_cache_key(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_execute_internal_malformed_cache_key")
+=======
+# EXECUTE cache-key malformed: short-bytes length > provided bytes triggers protocol error.
+def test_process_execute_internal_malformed_cache_key(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_execute_internal_malformed_cache_key")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
 
+<<<<<<< HEAD
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
+||||||| parent of c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
+# REGISTER malformed string list: declared string length > provided bytes triggers protocol error.
+def test_process_register_malformed_string_list(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_register_malformed_string_list")
+=======
+# REGISTER malformed string list: declared string length > provided bytes triggers protocol error.
+def test_process_register_malformed_string_list(scylla_only, no_ssl, debug_exceptions_logging, host):
+    _test_impl(host, "trigger_process_register_malformed_string_list")
+>>>>>>> c30b326033 (test: cqlpy: test_protocol_exceptions.py: enable debug exception logging)
 
     for _ in range(run_count):
         _protocol_error_impl(host, trigger_unexpected_auth=True)
@@ -214,11 +392,21 @@ def test_unexpected_message_during_auth(scylla_only, no_ssl, request):
 # Test if the protocol exceptions do not decrease after running the test.
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
+<<<<<<< HEAD
 def test_no_protocol_exceptions(scylla_only, no_ssl, request):
     host = request.config.getoption("--host")
 
     run_count = 100
     cpp_exception_threshold = 10
+||||||| parent of 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
+def test_no_protocol_exceptions(scylla_only, no_ssl, host):
+    run_count = 100
+    cpp_exception_threshold = 10
+=======
+def test_no_protocol_exceptions(scylla_only, no_ssl, debug_exceptions_logging, host):
+    run_count = 200
+    cpp_exception_threshold = 20
+>>>>>>> 807fc68dc5 (test: cqlpy: test_protocol_exceptions.py: increase cpp exceptions threshold)
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
