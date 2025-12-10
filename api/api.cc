@@ -37,6 +37,7 @@
 #include "raft.hh"
 #include "gms/gossip_address_map.hh"
 #include "service_levels.hh"
+#include "client_routes.hh"
 
 logging::logger apilog("api");
 
@@ -67,9 +68,11 @@ future<> set_server_init(http_context& ctx) {
         rb02->set_api_doc(r);
         rb02->register_api_file(r, "swagger20_header");
         rb02->register_api_file(r, "metrics");
+        rb02->register_api_file(r, "client_routes");
         rb->register_function(r, "system",
                 "The system related API");
         rb02->add_definitions_file(r, "metrics");
+        rb02->add_definitions_file(r, "client_routes");
         set_system(ctx, r);
         rb->register_function(r, "error_injection",
             "The error injection API");
@@ -127,6 +130,16 @@ future<> set_server_storage_service(http_context& ctx, sharded<service::storage_
 
 future<> unset_server_storage_service(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_storage_service(ctx, r); });
+}
+
+future<> set_server_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr) {
+    return ctx.http_server.set_routes([&ctx, &cr] (routes& r) {
+        set_client_routes(ctx, r, cr);
+    });
+}
+
+future<> unset_server_client_routes(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_client_routes(ctx, r); });
 }
 
 future<> set_load_meter(http_context& ctx, service::load_meter& lm) {
