@@ -53,6 +53,7 @@
 #include "mutation/canonical_mutation.hh"
 #include "mutation/async_utils.hh"
 #include <seastar/core/on_internal_error.hh>
+#include "service/raft/strong_consistency/sc_groups_manager.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
@@ -210,7 +211,8 @@ storage_service::storage_service(abort_source& abort_source,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
     std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
-    utils::disk_space_monitor* disk_space_monitor
+    utils::disk_space_monitor* disk_space_monitor,
+    sc_groups_manager* sc_groups
     )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -249,6 +251,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_building_state_machine(view_building_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
         , _disk_space_monitor(disk_space_monitor)
+        , _sc_groups(sc_groups)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
@@ -3394,6 +3397,19 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
     });
 }
 
+future<> storage_service::start_tablet_raft_servers(const token_metadata_change& change) {
+    // For now, we start Raft servers for tablets only on shard 0
+    const auto shard_id = this_shard_id();
+    SCYLLA_ASSERT(shard_id == 0);
+
+    if (!_feature_service.strongly_consistent_tables) {
+        return make_ready_future<>();
+    }
+    return _sc_groups->start_raft_servers(
+            change.pending_table_erms[shard_id],
+            change.pending_token_metadata_ptr[shard_id]->get_my_id());
+}
+
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
     SCYLLA_ASSERT(this_shard_id() == 0);
     slogger.debug("Replicating token_metadata to all cores");
@@ -3421,6 +3437,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     db_schema_getter getter{_db};
     auto change = co_await prepare_token_metadata_change(tmptr, getter);
+
+    co_await start_tablet_raft_servers(change);
+
     co_await container().invoke_on_all([&change] (storage_service& ss) {
         ss.commit_token_metadata_change(change);
     });

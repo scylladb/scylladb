@@ -69,6 +69,7 @@
 #include "debug.hh"
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
+#include "service/raft/strong_consistency/sc_groups_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -163,6 +164,7 @@ private:
     sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
+    std::unique_ptr<service::sc_groups_manager> _sc_groups;
     sharded<service::storage_service> _ss;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
@@ -944,6 +946,11 @@ private:
             _auth_cache.start(std::ref(_qp)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _sc_groups = std::make_unique<service::sc_groups_manager>(_ms.local(), _group0_registry.local(), _qp.local());
+            auto stop_sc_groups = defer_verbose_shutdown("sc groups manager", [this] {
+                _sc_groups->stop().get();
+            });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -966,7 +973,8 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*_disk_space_monitor_shard0)
+                only_on_shard0(&*_disk_space_monitor_shard0),
+                only_on_shard0(_sc_groups.get())
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
