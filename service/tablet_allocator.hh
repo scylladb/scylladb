@@ -16,6 +16,13 @@
 
 namespace service {
 
+struct auto_repair_stats {
+    // Number of tablets with auto repair enabled
+    size_t enabled_nr = 0;
+    // Number of tabelts with auto repair enabled that currently needs repair.
+    size_t needs_repair_nr = 0;
+};
+
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
     uint64_t migrations_produced = 0;
@@ -64,6 +71,8 @@ struct load_balancer_cluster_stats {
     uint64_t resizes_emitted = 0;
     uint64_t resizes_revoked = 0;
     uint64_t resizes_finalized = 0;
+    uint64_t auto_repair_needs_repair_nr = 0;
+    uint64_t auto_repair_enabled_nr = 0;
 };
 
 using dc_name = sstring;
