@@ -2234,8 +2234,35 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
     }
 }
 
+void dump_if_user_type(const data_type& t) {
+    if (t->is_user_type()) {
+        const auto udt = dynamic_pointer_cast<const user_type_impl>(t);
+
+        for (const auto& field_udt : udt->get_all_referenced_user_types()) {
+            dump_if_user_type(field_udt);
+        }
+
+        const auto udt_desc = udt->describe(cql3::with_create_statement::yes);
+        fmt::print(std::cout, "{}\n", udt_desc.create_statement.value().linearize());
+    } else if (t->is_collection()) {
+        const auto collection = dynamic_pointer_cast<const collection_type_impl>(t);
+
+        dump_if_user_type(collection->name_comparator());
+        dump_if_user_type(collection->value_comparator());
+    } else if (t->is_tuple()) {
+        const auto tuple = dynamic_pointer_cast<const tuple_type_impl>(t);
+
+        for (const auto& elem_type : tuple->all_types()) {
+            dump_if_user_type(elem_type);
+        }
+    }
+}
+
 void dump_schema_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    for (const auto& col : schema->all_columns_in_select_order()) {
+        dump_if_user_type(col.type);
+    }
     auto schema_desc = schema->describe({.type = schema_describe_helper::type::table}, cql3::describe_option::STMTS);
     fmt::print(std::cout, "{}\n", schema_desc.create_statement.value().linearize());
 }
