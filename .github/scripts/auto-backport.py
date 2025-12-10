@@ -50,7 +50,7 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
         if is_draft:
             backport_pr.add_to_labels("conflicts")
             pr_comment = f"@{pr.user.login} - This PR was marked as draft because it has conflicts\n"
-            pr_comment += "Please resolve them and mark this PR as ready for review"
+            pr_comment += "Please resolve them and remove the 'conflicts' label. The PR will be made ready for review automatically."
             backport_pr.create_issue_comment(pr_comment)
         logging.info(f"Assigned PR to original author: {pr.user}")
         return backport_pr
