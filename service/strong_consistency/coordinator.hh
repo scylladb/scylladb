@@ -24,6 +24,9 @@ using value_or_redirect = std::variant<T, need_redirect>;
 class coordinator : public peering_sharded_service<coordinator> {
     groups_manager& _groups_manager;
     replica::database& _db;
+
+    struct operation_ctx;
+    future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema, const dht::token& token);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db);
 
