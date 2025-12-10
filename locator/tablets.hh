@@ -563,11 +563,11 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
-    repair_scheduler_config _repair_scheduler_config;
+    std::optional<repair_scheduler_config> _repair_scheduler_config;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info, repair_scheduler_config repair_scheduler_config)
+        resize_decision resize_decision, tablet_task_info resize_task_info, std::optional<repair_scheduler_config> repair_scheduler_config)
         : _tablets(std::move(tablets))
         , _log2_tablets(log2_tablets)
         , _transitions(std::move(transitions))
@@ -712,13 +712,13 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
-    const locator::repair_scheduler_config& repair_scheduler_config() const;
+    const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
-    void set_repair_scheduler_config(locator::repair_scheduler_config config);
+    void set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
