@@ -6317,4 +6317,33 @@ SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable) {
     });
 }
 
+SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut1});
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        auto on_add = [] (sstables::shared_sstable) { throw std::runtime_error("fail to seal"); return make_ready_future<>(); };
+        BOOST_REQUIRE_THROW(table->add_new_sstable_and_update_cache(sst, on_add).get(), std::runtime_error);
+
+        // Verify new sstable was unlinked on failure.
+        BOOST_REQUIRE(!file_exists(sst->get_filename(sstables::component_type::Data).format()).get());
+
+        auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1});
+        auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1});
+        BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
+
+        // Verify both sstables are unlinked on failure.
+        BOOST_REQUIRE(!file_exists(sst2->get_filename(sstables::component_type::Data).format()).get());
+        BOOST_REQUIRE(!file_exists(sst3->get_filename(sstables::component_type::Data).format()).get());
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
