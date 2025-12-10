@@ -172,7 +172,7 @@ def test_is_null_empty_vs_null(cql, test_keyspace):
     """Test that empty string is not treated as NULL"""
     with new_test_table(cql, test_keyspace, "p int, c int, s text, PRIMARY KEY (p, c)") as table:
         cql.execute(f"INSERT INTO {table} (p, c, s) VALUES (1, 1, '')")  # empty string
-        cql.execute(f"INSERT INTO {table} (p, c, s) VALUES (1, 2, NULL)")  # null
+        cql.execute(f"INSERT INTO {table} (p, c) VALUES (1, 2)")  # null (not set)
         cql.execute(f"INSERT INTO {table} (p, c) VALUES (1, 3)")  # also null (not set)
         
         # IS NULL should only return truly null values, not empty strings

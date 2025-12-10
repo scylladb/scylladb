@@ -99,7 +99,8 @@ extern bool index_supports_some_column(
 
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS) || (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
+           (op == oper_t::NEQ) || (op == oper_t::NOT_IN) ||
+           (op == oper_t::IS) || (op == oper_t::IS_NOT);  // null-checking operators
 }
 
 inline auto find_needs_filtering(const expression& e) {
@@ -1488,7 +1489,7 @@ void statement_restrictions::add_is_null_restriction(const expr::binary_operator
 
     // For materialized views, IS NOT NULL is mandatory on primary key columns
     if (for_view && restr.op != expr::oper_t::IS_NOT) {
-        throw exceptions::invalid_request_exception(format("Only IS NOT NULL is supported in materialized view creation, not IS NULL"));
+        throw exceptions::invalid_request_exception(format("Restriction '{}' is not supported in materialized view creation. Only IS NOT NULL is allowed.", restr));
     }
 
     // For regular queries (non-views), we handle IS NULL and IS NOT NULL as filtering restrictions
