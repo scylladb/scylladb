@@ -224,7 +224,13 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
     }
 
-    if (cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) {
+    static const std::unordered_set<auth::resource> vector_search_system_resources = {
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
+    };
+
+    if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||
+        (cmd.permission == auth::permission::SELECT && vector_search_system_resources.contains(cmd.resource))) {
 
         co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({auth::permission_set::of<auth::permission::SELECT, auth::permission::VECTOR_SEARCH_INDEXING>(), cmd.resource});
 

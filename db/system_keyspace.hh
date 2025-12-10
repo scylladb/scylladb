@@ -198,6 +198,7 @@ public:
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
+    static constexpr auto VERSIONS = "versions";
 
     // auth
     static constexpr auto ROLES = "roles";
