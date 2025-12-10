@@ -1065,7 +1065,7 @@ public:
     }
 
     // Can be called on any shard.
-    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override {
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) override {
         try {
             co_await invoke_abortable_on(0, [this, id] (abort_source& as) {
                 return _rpc.ping(raft::server_id{id}, as);
@@ -1126,6 +1126,10 @@ public:
         } catch (abort_requested_exception&) {
             throw sleep_aborted{};
         }
+    }
+
+    virtual std::chrono::milliseconds to_milliseconds(timepoint_t tp) const override {
+        throw std::logic_error("to_milliseconds is not implemented");
     }
 };
 
@@ -1436,7 +1440,7 @@ public:
         // _fd_service must be started before raft server,
         // because as soon as raft server is started, it may start adding endpoints to the service.
         // _fd_service is using _server's RPC, but not until the first endpoint is added.
-        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count(), fd_ping_timeout.count());
+        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count(), fd_ping_timeout.count(), seastar::current_scheduling_group());
         _fd_subscription.emplace(co_await _fd_service->local().register_listener(*_fd_listener, _fd_convict_threshold.count()));
         co_await _server->start();
     }
