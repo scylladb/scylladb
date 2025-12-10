@@ -6938,6 +6938,46 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     slogger.info("Deleted tablet repair request by API request table_id={} tablet_task_id={}", table, tablet_task_id);
 }
 
+future<> storage_service::config_repair_tablet_request(table_id table, bool auto_repair_enabled, std::chrono::seconds auto_repair_threshold) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.config_repair_tablet_request(table, auto_repair_enabled, auto_repair_threshold);
+        });
+    }
+
+    if (!_feature_service.tablet_repair_scheduler) {
+        throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
+    }
+
+    slogger.info("Starting tablet repair config by API request table_id={} auto_repair_enabled={} auto_repair_threshold={}",
+            table, auto_repair_enabled, auto_repair_threshold);
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        utils::chunked_vector<canonical_mutation> updates;
+
+        locator::repair_scheduler_config config = {
+            .auto_repair_enabled = auto_repair_enabled,
+            .auto_repair_threshold = auto_repair_threshold,
+        };
+        updates.emplace_back(
+            replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                .set_repair_scheduler_config(config)
+                .build());
+
+        sstring reason = format("Repair tablet config by API request table_id={}", table);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+    slogger.info("Finished tablet repair config by API request table_id={} auto_repair_enabled={} auto_repair_threshold={}",
+            table, auto_repair_enabled, auto_repair_threshold);
+}
+
+
 future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force) {
     auto holder = _async_gate.hold();
 

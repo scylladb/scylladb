@@ -1665,6 +1665,20 @@ rest_del_tablet_replica(http_context& ctx, sharded<service::storage_service>& ss
 
 static
 future<json::json_return_type>
+rest_config_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto auto_repair_threshold = std::chrono::seconds(validate_int(req->get_query_param("auto_repair_threshold")));
+    auto auto_repair_enabled = validate_bool(req->get_query_param("auto_repair_enabled"));
+    auto ks = req->get_query_param("ks");
+    auto table = req->get_query_param("table");
+    validate_table(ctx.db.local(), ks, table);
+    auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+    co_await ss.local().config_repair_tablet_request(table_id, auto_repair_enabled, auto_repair_threshold);
+    co_return json_void();
+}
+
+
+static
+future<json::json_return_type>
 rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto tokens_param = split(req->get_query_param("tokens"), ",");
         utils::chunked_vector<dht::token> tokens;
@@ -1872,6 +1886,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
     ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
     ss::repair_tablet.set(r, rest_bind(rest_repair_tablet, ctx, ss));
+    ss::config_repair_tablet.set(r, rest_bind(rest_config_repair_tablet, ctx, ss));
     ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
     ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
     sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
@@ -1945,6 +1960,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);
     ss::raft_topology_get_cmd_status.unset(r);
+    ss::config_repair_tablet.unset(r);
     ss::move_tablet.unset(r);
     ss::add_tablet_replica.unset(r);
     ss::del_tablet_replica.unset(r);

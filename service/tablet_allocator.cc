@@ -27,6 +27,8 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <absl/container/flat_hash_map.h>
+#include <fmt/format.h>
+#include <fmt/chrono.h>
 
 using namespace locator;
 using namespace replica;
@@ -248,6 +250,15 @@ struct migration_candidate {
     migration_badness badness;
 };
 
+struct repair_plan {
+	locator::global_tablet_id gid;
+	locator::tablet_info tinfo;
+	dht::token_range range;
+	dht::token last_token;
+	db_clock::duration repair_time_diff;
+	bool is_user_reuqest;
+};
+
 }
 
 template<>
@@ -279,6 +290,16 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
             fmt::format_to(ctx.out(), " (bad!)");
         }
         fmt::format_to(ctx.out(), "}}");
+        return ctx.out();
+    }
+};
+
+template<>
+struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::repair_plan& p, FormatContext& ctx) const {
+        auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
+		fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
         return ctx.out();
     }
 };
@@ -821,9 +842,39 @@ public:
         return (it != _table_load_stats->tables.end()) ? &it->second : nullptr;
     }
 
+    bool is_auto_repair_enabled(const std::optional<locator::repair_scheduler_config>& config) {
+        // if there is no per table configuration, use the yaml config.
+        return config ? config->auto_repair_enabled : _db.get_config().auto_repair_enabled_for_no_per_table_cfg_tablet_tables();
+    }
+
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const locator::repair_scheduler_config& config, const db_clock::time_point& now, db_clock::duration& diff) {
-        co_return false;
+            const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now, db_clock::duration& diff) {
+        std::chrono::seconds repair_time_threshold;
+        if (!config) {
+            // No per table configuration. Use the yaml config.
+            auto enabled = _db.get_config().auto_repair_enabled_for_no_per_table_cfg_tablet_tables();
+            if (!enabled) {
+                lblogger.trace("Skipped tablet auto repair for tablet={} reason=no_per_table_config_global_disabled", gid);
+                co_return false;
+            }
+            auto threshold = _db.get_config().auto_repair_threshold_for_no_per_table_cfg_tablet_tables();
+            repair_time_threshold = std::chrono::seconds(threshold);
+        } else {
+            // Use per table confiugration.
+            if (!config->auto_repair_enabled) {
+                lblogger.trace("Skipped tablet auto repair for tablet={} reason=disabled_by_per_table_config", gid);
+                co_return false;
+            }
+            repair_time_threshold = config->auto_repair_threshold;
+        }
+        auto& last_repair_time = info.repair_time;
+        diff = now - last_repair_time;
+        lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
+                gid, diff, info.repair_time, repair_time_threshold);
+        if (diff < repair_time_threshold) {
+            co_return false;
+        }
+        co_return true;
     }
 
     future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
@@ -889,20 +940,12 @@ public:
             apply_load(nodes, streaming_info);
         }
 
-        struct repair_plan {
-            locator::global_tablet_id gid;
-            locator::tablet_info tinfo;
-            dht::token_range range;
-            dht::token last_token;
-            db_clock::duration repair_time_diff;
-        };
-
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
-            auto& config = tmap.repair_scheduler_config();
+            auto config = tmap.get_repair_scheduler_config();
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
@@ -951,7 +994,7 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff});
+                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
             });
         }
 
@@ -959,8 +1002,16 @@ public:
         // picking which tablet to repair, e.g., higher repair priority
         // specified by user, tablet with higher purgeable tombstone ratio.
         std::sort(plans.begin(), plans.end(), [] (const repair_plan& x, const repair_plan& y) {
+            if (x.is_user_reuqest != y.is_user_reuqest) {
+                return x.is_user_reuqest > y.is_user_reuqest;
+            }
             return x.repair_time_diff > y.repair_time_diff;
         });
+
+
+        if (utils::get_local_injector().enter("tablet_dump_repair_plan")) {
+            lblogger.info("dump_repair_plans=[{}]", fmt::join(plans, ","));
+        }
 
         auto trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
                 locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
@@ -972,6 +1023,11 @@ public:
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
             }
+        }
+
+        if (utils::get_local_injector().enter("tablet_skip_repair_plan")) {
+            lblogger.info("Skip repair plan due to error injection=tablet_skip_repair_plan");
+            co_return tablet_repair_plan();
         }
 
         co_return ret;
