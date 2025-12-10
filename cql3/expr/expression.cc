@@ -327,7 +327,7 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
             case oper_t::CONTAINS_KEY:
             case oper_t::LIKE:
             case oper_t::IS:
-            case oper_t::IS_NOT: // IS and IS_NOT don't really belong here, luckily this is never reached.
+            case oper_t::IS_NOT: // IS and IS_NOT operators are handled separately in their dedicated evaluation functions
                 throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
             case oper_t::EQ:
                 return !sides_bytes.first == !sides_bytes.second;

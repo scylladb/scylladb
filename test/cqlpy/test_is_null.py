@@ -85,9 +85,9 @@ def test_is_not_null_with_prepared_statement(cql, table1):
 def test_is_null_combined_with_other_restrictions(cql, table1):
     """Test IS NULL combined with other WHERE conditions"""
     cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES (5, 1, 10, 'a')")
-    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES (5, 2, 20, NULL)")
-    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES (5, 3, 30, NULL)")
-    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES (5, 4, NULL, 'd')")
+    cql.execute(f"INSERT INTO {table1} (p, c, v) VALUES (5, 2, 20)")  # s is null
+    cql.execute(f"INSERT INTO {table1} (p, c, v) VALUES (5, 3, 30)")  # s is null
+    cql.execute(f"INSERT INTO {table1} (p, c, s) VALUES (5, 4, 'd')")  # v is null
     
     # Combine IS NULL with value comparison
     result = list(cql.execute(f"SELECT * FROM {table1} WHERE p = 5 AND c > 1 AND s IS NULL ALLOW FILTERING"))
@@ -141,7 +141,7 @@ def test_is_null_with_invalid_syntax(cql, table1):
 
 def test_null_equality_returns_empty(cql, table1):
     """Test that WHERE x = null returns no results (as per SQL semantics)"""
-    cql.execute(f"INSERT INTO {table1} (p, c, v) VALUES (8, 1, NULL)")
+    cql.execute(f"INSERT INTO {table1} (p, c) VALUES (8, 1)")  # v is null
     cql.execute(f"INSERT INTO {table1} (p, c, v) VALUES (8, 2, 10)")
     
     # x = null should return nothing (not the same as IS NULL)
