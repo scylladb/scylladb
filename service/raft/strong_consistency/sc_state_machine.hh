@@ -13,5 +13,10 @@
 #include "utils/chunked_vector.hh"
 
 namespace service {
+    struct sc_raft_command {
+        utils::chunked_vector<canonical_mutation> mutations;
+        utils::UUID prev_state_id;
+        utils::UUID new_state_id;
+    };
     std::unique_ptr<raft_state_machine> make_sc_state_machine();
 }
