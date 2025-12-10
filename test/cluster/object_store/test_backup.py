@@ -588,6 +588,12 @@ async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_ta
 
     return schema, keys, replication_opts
 
+async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primary_replica_only, prefix, object_storage):
+    logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
+    tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
+    status = await manager.api.wait_task(s.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+
 async def take_snapshot(ks, servers, manager, logger):
     logger.info(f'Take snapshot and collect sstables lists')
     snap_name = unique_name('backup_')
@@ -666,8 +672,8 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
 
         assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
 
-async def do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only = False):
-    logger.info(f'Restoring {servers=} with {sstables=} scope={scope}')
+async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix = None, object_storage = None, primary_replica_only = False, load_fn=do_restore_server):
+    logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
     sstables_per_server = defaultdict(list)
     # rf_rack_valid can be True also with rack lists
     rf_rack_valid = topology.rf == topology.racks
@@ -682,8 +688,8 @@ async def do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_
         for dc, sstables_in_dc in sstables_per_dc.items():
             for s in servers_per_dc[dc]:
                 if scope == 'node':
-                    # If not rf_rack_valid, each node should restore data from all sstables in the DC
-                    # Otherwise, as done in the case below, each node restore data from all sstables in its rack
+                    # If not rf_rack_valid, each node should load data from all sstables in the DC
+                    # Otherwise, as done in the case below, each node load data from all sstables in its rack
                     # (since it is ensured that every rack has a replica of each mutation)
                     sstables_per_server[s] = sstables_in_dc
                 else:
@@ -705,8 +711,9 @@ async def do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_
                     for s in servers_per_dc_rack[dc][rack]:
                         sstables_per_server[s] = sstables_in_rack
     else:
-        raise f"do_restore: {scope=} not supported"
-    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only) for s, sstables in sstables_per_server.items()))
+        raise f"do_load_sstables: {scope=} not supported"
+
+    await asyncio.gather(*(load_fn(manager, logger, ks, cf, s, sstables, scope, primary_replica_only, prefix, object_storage) for s, sstables in sstables_per_server.items()))
     if primary_replica_only:
         await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all')
 
@@ -757,12 +764,6 @@ def create_schema(ks, cf, min_tablet_count=None):
         schema += f" WITH tablets = {{'min_tablet_count': {min_tablet_count}}}"
     schema += ';'
     return schema
-
-async def do_restore_server(ks, cf, s, toc_names, scope, prefix, object_storage, manager, logger, primary_replica_only):
-    logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
-    tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
-    status = await manager.api.wait_task(s.ip_addr, tid)
-    assert (status is not None) and (status['state'] == 'done')
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
@@ -815,7 +816,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
                 log_marks = await mark_all_logs(manager, servers)
 
-                await do_restore(ks, cf, servers, topology, sstables, scope, prefix, object_storage, manager, logger, primary_replica_only=pro)
+                await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
 
                 await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks, different_min_tablet_count=(restored_min_tablet_count != 512))
 
@@ -966,7 +967,7 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
+    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
@@ -1018,7 +1019,7 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
+    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
@@ -1062,7 +1063,7 @@ async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, 
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in servers))
+    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
 
@@ -1116,7 +1117,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
 
     r_servers = servers
 
-    await asyncio.gather(*(do_restore_server(ks, cf, s, sstables[s], scope, prefix, object_storage, manager, logger, primary_replica_only=True) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in r_servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
