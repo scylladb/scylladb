@@ -13,6 +13,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <stdexcept>
+#include <unordered_map>
+#include <seastar/core/metrics.hh>
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
@@ -98,5 +100,26 @@ future<> run_topology_coordinator(
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
+
+class tablet_ops_metrics {
+private:
+    seastar::metrics::metric_groups _metrics;
+public:
+    enum class tablet_ops_kind {
+        user_repair,
+        auto_repair,
+    };
+    std::unordered_map<tablet_ops_kind, uint64_t> failed;
+    std::unordered_map<tablet_ops_kind, uint64_t> succeeded;
+public:
+    tablet_ops_metrics();
+    void inc_failed(tablet_ops_kind kind) {
+        failed[kind]++;
+    }
+    void inc_succeeded(tablet_ops_kind kind) {
+        succeeded[kind]++;
+    }
+};
+
 
 }
