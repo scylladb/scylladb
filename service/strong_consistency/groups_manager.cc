@@ -67,6 +67,19 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 {
 }
 
+auto raft_server::begin_mutate() -> begin_mutate_result {
+    const auto term = _state.server->get_current_term();
+    if (!_state.term_info || _state.term_info->term != term) {
+        return need_wait_for_leader{};
+    }
+    if (!_state.term_info->last_timestamp) {
+        return raft::not_a_leader{_state.server->current_leader()};
+    }
+    const auto new_ts = std::max(api::new_timestamp(), *_state.term_info->last_timestamp + 1);
+    _state.term_info->last_timestamp = new_ts;
+    return timestamp_with_term{new_ts, term};
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, gms::feature_service& features)
@@ -140,7 +153,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     state.server_op = when_all_succeed(state.server_op.get_future(), state.gate->close()).discard_result()
         .then([this, &state, id] {
             state.server = nullptr;
-            return _raft_gr.abort_server(id);
+            return when_all_succeed(_raft_gr.abort_server(id), std::move(state.term_info_updater)).discard_result();
         })
         .then([this, id, &state, g = state.gate] {
             _raft_gr.destroy_server(id);
@@ -182,6 +195,55 @@ future<> groups_manager::wait_for_groups_to_start() {
     }
 }
 
+future<> groups_manager::term_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
+    try {
+        const auto schema = _db.find_schema(tablet.table);
+        const auto server_id = state.server->id();
+
+        while (true) {
+            const auto current_term = state.server->get_current_term();
+            const auto current_leader = state.server->current_leader();
+
+            if (!current_leader || (state.term_info && state.term_info->term == current_term)) {
+                logger.debug("term_info_updater({}-{}): waiting for state change, term {}",
+                    tablet, gid, current_term);
+                co_await state.server->wait_for_state_change(nullptr);
+                continue;
+            }
+
+            if (current_leader != server_id) {
+                logger.debug("term_info_updater({}-{}): replica {} is not a leader, current leader {}", 
+                    tablet, gid, server_id, current_leader);
+                state.term_info = term_info {
+                    .term = current_term,
+                    .last_timestamp = std::nullopt
+                };
+            } else {
+                logger.debug("term_info_updater({}-{}): current term {}, running read_barrier()",
+                    tablet, gid,
+                    current_term);
+                co_await state.server->read_barrier(nullptr);
+                state.term_info = term_info {
+                    .term = current_term,
+                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                };
+                logger.debug("term_info_updater({}-{}): read_barrier() completed, "
+                    "new term_info term {}, last_timestamp {}",
+                    tablet, gid,
+                    state.term_info->term,
+                    state.term_info->last_timestamp);
+            }
+            state.term_info_cond.broadcast();
+        }
+    } catch (const raft::request_aborted&) {
+        // thrown from read_barrier() and wait_for_state_change() when then tablet leaves this shard
+    } catch (const raft::stopped_error&) {
+        // thrown from read_barrier() and wait_for_state_change() when then tablet leaves this shard
+    } catch (const replica::no_such_column_family&) {
+        // thrown from find_schema() and schema->table() when the table is dropped
+    }
+}
+
 void groups_manager::update(token_metadata_ptr new_tm) {
     if (this_shard_id() != 0) {
         return;
@@ -213,6 +275,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             })
             .then([this, &state, tablet, id] {
                 state.server = &_raft_gr.get_server(id);
+                state.term_info_updater = term_info_updater(state, tablet, id);
                 logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
             });
     });
