@@ -65,11 +65,11 @@ nodetool_cmd.conf = False
 
 # Run the external "nodetool" executable (can be overridden by the NODETOOL
 # environment variable). Only call this if the REST API doesn't work.
-def run_nodetool(cql, *args):
+def run_nodetool(cql, *args, **subprocess_kwargs):
     # TODO: We may need to change this function or its callers to add proper
     # support for testing on multi-node clusters.
     host = cql.cluster.contact_points[0]
-    subprocess.run([nodetool_cmd(), '-h', host, *args])
+    return subprocess.run([nodetool_cmd(), '-h', host, *args], **subprocess_kwargs)
 
 def flush(cql, table):
     ks, cf = table.split('.')
@@ -154,6 +154,28 @@ def disablebinary(cql):
         requests.delete(f'{rest_api_url(cql)}/storage_service/native_transport')
     else:
         run_nodetool(cql, "disablebinary")
+
+def getlogginglevel(cql, logger):
+    if has_rest_api(cql):
+        resp = requests.get(f'{rest_api_url(cql)}/system/logger/{logger}')
+        if resp.ok:
+            return resp.text.strip()
+        raise RuntimeError(f"failed to fetch logging level for {logger}: {resp.status_code} {resp.text}")
+
+    result = run_nodetool(
+        cql,
+        "getlogginglevels",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        parts = stripped.split()
+        if len(parts) >= 2 and parts[0] == logger:
+            return parts[-1]
+
+    raise RuntimeError(f"logger {logger} not found in getlogginglevels output")
 
 def setlogginglevel(cql, logger, level):
     if has_rest_api(cql):
