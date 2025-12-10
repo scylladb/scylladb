@@ -496,7 +496,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
             return make_ready_future<>();
         }
         // Should be empty, since an SSTable that belongs to this shard is not remote.
-        SCYLLA_ASSERT(shard_id != this_shard_id());
+        scylla_assert(shard_id != this_shard_id());
         dirlog.debug("Moving {} unshared SSTables of {}.{} to shard {} ", info_vec.size(), _schema->ks_name(), _schema->cf_name(), shard_id);
         return source_directory.invoke_on(shard_id, &sstables::sstable_directory::load_foreign_sstables, std::move(info_vec));
     });
@@ -540,7 +540,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
     dirlog.debug("Collecting {} output SSTables (remote={})", resharded_sstables.size(), remote_ok);
     return parallel_for_each(std::move(resharded_sstables), [this, remote_ok] (sstables::shared_sstable sst) {
         auto shards = sst->get_shards_for_this_sstable();
-        SCYLLA_ASSERT(shards.size() == 1);
+        scylla_assert(shards.size() == 1);
         auto shard = shards[0];
 
         if (shard == this_shard_id()) {

@@ -31,7 +31,7 @@ public:
 [[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename);
 [[noreturn, gnu::noinline]] void on_bti_parse_error(uint64_t pos);
 
-// Use this instead of SCYLLA_ASSERT() or assert() in code that is used while parsing SSTables.
+// Use this instead of scylla_assert() or assert() in code that is used while parsing SSTables.
 // SSTables can be corrupted either by ScyllaDB itself or by a freak accident like cosmic background
 // radiation hitting the disk the wrong way. Either way a corrupt SSTable should not bring down the
 // whole server. This method will call on_internal_error() if the condition is false.

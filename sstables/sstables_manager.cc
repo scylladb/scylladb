@@ -55,9 +55,9 @@ sstables_manager::sstables_manager(
 }
 
 sstables_manager::~sstables_manager() {
-    SCYLLA_ASSERT(_closing);
-    SCYLLA_ASSERT(_active.empty());
-    SCYLLA_ASSERT(_undergoing_close.empty());
+    scylla_assert(_closing);
+    scylla_assert(_active.empty());
+    scylla_assert(_undergoing_close.empty());
 }
 
 void sstables_manager::subscribe(sstables_manager_event_handler& handler) {

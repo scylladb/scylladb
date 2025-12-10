@@ -251,7 +251,7 @@ void compression::discard_hidden_options() {
 }
 
 compressor& compression::get_compressor() const {
-    SCYLLA_ASSERT(_compressor);
+    scylla_assert(_compressor);
     return *_compressor.get();
 }
 

@@ -8,6 +8,7 @@
 
 #include "bti_node_reader.hh"
 #include "bti_node_type.hh"
+#include "utils/assert.hh"
 
 namespace sstables::trie {
 
@@ -448,37 +449,37 @@ seastar::future<> bti_node_reader::load(int64_t pos, const reader_permit& permit
 }
 
 trie::load_final_node_result bti_node_reader::read_node(int64_t pos) {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_read_node(pos, sp);
 }
 
 trie::node_traverse_result bti_node_reader::walk_down_along_key(int64_t pos, const_bytes key) {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_walk_down_along_key(pos, sp, key);
 }
 
 trie::node_traverse_sidemost_result bti_node_reader::walk_down_leftmost_path(int64_t pos) {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_walk_down_leftmost_path(pos, sp);
 }
 
 trie::node_traverse_sidemost_result bti_node_reader::walk_down_rightmost_path(int64_t pos) {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_walk_down_rightmost_path(pos, sp);
 }
 
 trie::get_child_result bti_node_reader::get_child(int64_t pos, int child_idx, bool forward) const {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_get_child(pos, sp, child_idx, forward);
 }
 
 const_bytes bti_node_reader::get_payload(int64_t pos) const {
-    SCYLLA_ASSERT(cached(pos));
+    scylla_assert(cached(pos));
     auto sp = _cached_page->get_view().subspan(pos % cached_file::page_size);
     return bti_get_payload(pos, sp);
 }

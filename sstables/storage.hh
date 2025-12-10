@@ -83,13 +83,13 @@ class storage {
 
     // Internal, but can also be used by tests
     virtual future<> change_dir_for_test(sstring nd) {
-        SCYLLA_ASSERT(false && "Changing directory not implemented");
+        scylla_assert(false && "Changing directory not implemented");
     }
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const {
-        SCYLLA_ASSERT(false && "Direct links creation not implemented");
+        scylla_assert(false && "Direct links creation not implemented");
     }
     virtual future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) {
-        SCYLLA_ASSERT(false && "Direct move not implemented");
+        scylla_assert(false && "Direct move not implemented");
     }
 
 public:

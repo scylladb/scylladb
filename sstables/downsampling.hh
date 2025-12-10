@@ -44,14 +44,14 @@ public:
      * @return A list of `sampling_level` unique indices between 0 and `sampling_level`
      */
     static const std::vector<int>& get_sampling_pattern(int sampling_level) {
-        SCYLLA_ASSERT(sampling_level > 0 && sampling_level <= BASE_SAMPLING_LEVEL);
+        scylla_assert(sampling_level > 0 && sampling_level <= BASE_SAMPLING_LEVEL);
         auto& entry = _sample_pattern_cache[sampling_level-1];
         if (!entry.empty()) {
             return entry;
         }
 
         if (sampling_level <= 1) {
-            SCYLLA_ASSERT(_sample_pattern_cache[0].empty());
+            scylla_assert(_sample_pattern_cache[0].empty());
             _sample_pattern_cache[0].push_back(0);
             return _sample_pattern_cache[0];
         }
@@ -96,7 +96,7 @@ public:
      * @return a list of original indexes for current summary entries
      */
     static const std::vector<int>& get_original_indexes(int sampling_level) {
-        SCYLLA_ASSERT(sampling_level > 0 && sampling_level <= BASE_SAMPLING_LEVEL);
+        scylla_assert(sampling_level > 0 && sampling_level <= BASE_SAMPLING_LEVEL);
         auto& entry = _original_index_cache[sampling_level-1];
         if (!entry.empty()) {
             return entry;
@@ -128,7 +128,7 @@ public:
      * @return the number of partitions before the next index summary entry, inclusive on one end
      */
     static int get_effective_index_interval_after_index(int index, int sampling_level, int min_index_interval) {
-        SCYLLA_ASSERT(index >= -1);
+        scylla_assert(index >= -1);
         const std::vector<int>& original_indexes = get_original_indexes(sampling_level);
         if (index == -1) {
             return original_indexes[0] * min_index_interval;
