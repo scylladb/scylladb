@@ -5,7 +5,7 @@
 #
 from contextlib import asynccontextmanager
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.conftest import skip_mode
@@ -485,6 +485,10 @@ async def test_colocated_tables_gc_mode(manager: ManagerClient):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
             await cql.run_async(f"INSERT INTO {table}(pk, v) VALUES(0, 0)")
             await cql.run_async(f"UPDATE {table} SET v = 1 WHERE pk = 0 IF v = 0")
+
+            # ensure paxos state table is created on all nodes
+            await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
+
             ks_name, cf_name = table.split('.')
             table_name = f"{ks_name}.\"{cf_name}$paxos\""
             check_tombstone_gc_mode_timeout(cql, table_name)
