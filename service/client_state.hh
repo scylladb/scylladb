@@ -103,8 +103,8 @@ private:
     private volatile String keyspace;
 #endif
     std::optional<auth::authenticated_user> _user;
-    std::optional<sstring> _driver_name, _driver_version;
-    std::optional<std::list<std::pair<client_options_cache_entry_type, client_options_cache_entry_type>>> _client_options;
+    std::optional<client_options_cache_entry_type> _driver_name, _driver_version;
+	std::optional<std::list<std::pair<client_options_cache_entry_type, client_options_cache_entry_type>>> _client_options;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
     bool _control_connection = false;
@@ -153,11 +153,13 @@ public:
         return _control_connection = true;
     }
 
-    std::optional<sstring> get_driver_name() const {
+    std::optional<client_options_cache_entry_type> get_driver_name() const {
         return _driver_name;
     }
-    void set_driver_name(sstring driver_name) {
-        _driver_name = std::move(driver_name);
+    future<> set_driver_name(client_options_cache_type& keys_and_values_cache, const sstring& driver_name) {
+        _driver_name = co_await keys_and_values_cache.get_or_load(driver_name, [] (const client_options_cache_key_type&) {
+            return make_ready_future<empty_t>(empty_t{});
+        });
     }
 
     const auto& get_client_options() const {
@@ -168,11 +170,16 @@ public:
         client_options_cache_type& keys_and_values_cache,
         const std::unordered_map<sstring, sstring>& client_options);
 
-    std::optional<sstring> get_driver_version() const {
+    std::optional<client_options_cache_entry_type> get_driver_version() const {
         return _driver_version;
     }
-    void set_driver_version(sstring driver_version) {
-        _driver_version = std::move(driver_version);
+    future<> set_driver_version(
+        client_options_cache_type& keys_and_values_cache,
+        const sstring& driver_version)
+    {
+        _driver_version = co_await keys_and_values_cache.get_or_load(driver_version, [] (const client_options_cache_key_type&) {
+            return make_ready_future<empty_t>(empty_t{});
+        });
     }
 
     client_state(external_tag,

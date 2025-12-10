@@ -55,6 +55,7 @@ class server : public peering_sharded_service<server> {
     // though it isn't really relevant for Alternator which defines its own
     // timeouts separately. We can create this object only once.
     updateable_timeout_config _timeout_config;
+    client_options_cache_type _connection_options_keys_and_values;
 
     alternator_callbacks_map _callbacks;
 
@@ -88,7 +89,7 @@ class server : public peering_sharded_service<server> {
     // is called when reading the "system.clients" virtual table.
     struct ongoing_request {
         socket_address _client_address;
-        sstring _user_agent;
+        client_options_cache_entry_type _user_agent;
         sstring _username;
         scheduling_group _scheduling_group;
         bool _is_https;

@@ -835,10 +835,10 @@ class clients_table : public streaming_virtual_table {
                 set_cell(cr.cells(), "shard_id", cd->shard_id);
                 set_cell(cr.cells(), "connection_stage", cd->stage_str());
                 if (cd->driver_name) {
-                    set_cell(cr.cells(), "driver_name", *cd->driver_name);
+                    set_cell(cr.cells(), "driver_name", cd->driver_name->key());
                 }
                 if (cd->driver_version) {
-                    set_cell(cr.cells(), "driver_version", *cd->driver_version);
+                    set_cell(cr.cells(), "driver_version", cd->driver_version->key());
                 }
                 if (cd->hostname) {
                     set_cell(cr.cells(), "hostname", *cd->hostname);
