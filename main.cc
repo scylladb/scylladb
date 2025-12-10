@@ -1791,7 +1791,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting auth cache");
-            auth_cache.start(std::ref(qp)).get();
+            auth_cache.start(std::ref(qp), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [&] {
                 auth_cache.stop().get();
             });
