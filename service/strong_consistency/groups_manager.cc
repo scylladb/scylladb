@@ -67,6 +67,31 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 {
 }
 
+auto raft_server::begin_mutate() -> begin_mutate_result {
+    const auto leader = _state.server->current_leader();
+    if (!leader) {
+        return need_wait_for_leader{_state.server->wait_for_leader(nullptr)};
+    }
+    if (leader != _state.server->id()) {
+        return raft::not_a_leader{leader};
+    }
+    const auto term = _state.server->get_current_term();
+    if (!_state.leader_info || _state.leader_info->term != term) {
+        // We are the leader, but the leader_info_updater fiber hasn't processed
+        // the state change yet (leader_info is either empty or stale).
+        //
+        // We must wait for the updater to catch up. It is safe to wait on
+        // leader_info_cond because the updater fiber guarantees a broadcast
+        // after every state change wake-up. This ensures we will not deadlock,
+        // even if the raft server state changes again (e.g., we lose leadership)
+        // before the updater gets a chance to run.
+        return need_wait_for_leader{_state.leader_info_cond.wait()};
+    }
+    const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
+    _state.leader_info->last_timestamp = new_ts;
+    return timestamp_with_term{new_ts, term};
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, gms::feature_service& features)
@@ -140,6 +165,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await state.server_control_op.get_future();
         co_await g->close();
         co_await _raft_gr.abort_server(id);
+        co_await std::move(state.leader_info_updater);
 
         _raft_gr.destroy_server(id);
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -180,6 +206,53 @@ future<> groups_manager::wait_for_groups_to_start() {
     }
 }
 
+future<> groups_manager::leader_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
+    try {
+        const auto schema = _db.find_schema(tablet.table);
+        const auto server_id = state.server->id();
+
+        while (true) {
+            const auto current_term = state.server->get_current_term();
+            const auto current_leader = state.server->current_leader();
+
+            if (current_leader == server_id) {
+                logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
+                    tablet, gid,
+                    current_term);
+                co_await state.server->read_barrier(nullptr);
+                state.leader_info = leader_info {
+                    .term = current_term,
+                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                };
+                logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
+                    "new leader term {}, last_timestamp {}",
+                    tablet, gid,
+                    state.leader_info->term,
+                    state.leader_info->last_timestamp);
+            } else if (state.leader_info) {
+                logger.debug("leader_info_updater({}-{}): this replica {} is no longer a leader, current leader {}",
+                    tablet, gid, server_id, current_leader);
+                state.leader_info = std::nullopt;
+            }
+            state.leader_info_cond.broadcast();
+
+            co_await state.server->wait_for_state_change(nullptr);
+        }
+    } catch (const raft::request_aborted&) {
+        // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
+        logger.debug("leader_info_updater({}-{}): got raft::request_aborted {}",
+            tablet, gid, std::current_exception());
+    } catch (const raft::stopped_error&) {
+        // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
+        logger.debug("leader_info_updater({}-{}): got raft::stopped_error {}",
+            tablet, gid, std::current_exception());
+    } catch (const replica::no_such_column_family&) {
+        // thrown from find_schema() and schema->table() when the table is dropped
+        logger.debug("leader_info_updater({}-{}): got replica::no_such_column_family {}",
+            tablet, gid, std::current_exception());
+    }
+}
+
 void groups_manager::update(token_metadata_ptr new_tm) {
     if (this_shard_id() != 0 || !_features.strongly_consistent_tables) {
         return;
@@ -209,6 +282,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             co_await state.server_control_op.get_future();
             co_await start_raft_group(tablet, id, std::move(new_tm));
             state.server = &_raft_gr.get_server(id);
+            state.leader_info_updater = leader_info_updater(state, tablet, id);
             logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
         });
     });

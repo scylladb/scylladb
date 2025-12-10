@@ -27,7 +27,7 @@ class raft_server;
 /// that the raft::server instance and its associated state managed by groups_manager cannot be
 /// stopped or destroyed while the returned raft_server object is alive.
 ///
-/// Runs a background fiber (term_info_updater) per group that monitors the raft::server state
+/// Runs a background fiber (leader_info_updater) per group that monitors the raft::server state
 /// and computes the next write timestamp as soon as the server becomes leader.
 /// This allows write requests to proceed without waiting for read_barrier(),
 /// which would otherwise be needed to compute the timestamp.
@@ -36,6 +36,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     class rpc_impl;
 
     friend class raft_server;
+
+    struct leader_info {
+        // The Raft term this structure describes.
+        raft::term_t term;
+
+        // The last timestamp used for mutations in this term.
+        api::timestamp_type last_timestamp;
+    };
 
     struct raft_group_state {
         bool has_tablet = false;
@@ -48,6 +56,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // when a tablet is migrated back to this node before deinitialization completes.
         // Subsequent operations wait for the previous one to complete.
         shared_future<> server_control_op = make_ready_future<>();
+
+        // Populated only when this node thinks it's a tablet raft group leader.
+        std::optional<leader_info> leader_info = std::nullopt;
+        condition_variable leader_info_cond = condition_variable();
+        future<> leader_info_updater = make_ready_future<>();
     };
 
     netw::messaging_service& _ms;
@@ -66,6 +79,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
     void schedule_raft_groups_deletion(bool all);
+
+    future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
     future<> wait_for_groups_to_start();
 
@@ -113,6 +128,20 @@ public:
     raft::server& server() {
         return *_state.server;
     }
+
+    // Possible results:
+    //   timestamp_with_term - timestamp to use for a new mutation request
+    //   raft::not_a_leader - this node is not a leader
+    //   need_wait_for_leader - the caller needs to wait on the specified future and then retry `begin_mutate`
+    struct timestamp_with_term {
+        api::timestamp_type timestamp;
+        raft::term_t term;
+    };
+    struct need_wait_for_leader {
+        future<> future;
+    };
+    using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
+    begin_mutate_result begin_mutate();
 };
 
 }
