@@ -67,6 +67,19 @@ sc_raft_server::sc_raft_server(sc_groups_manager::raft_group_state& state, gate:
 {
 }
 
+auto sc_raft_server::begin_mutate() -> future<begin_mutate_result> {
+    const auto current_term = _state.server->get_current_term();
+    if (_state.leader_state && _state.leader_state->term == current_term) {
+        const auto new_ts = std::max(api::new_timestamp(), _state.leader_state->last_timestamp + 1);
+        _state.leader_state->last_timestamp = new_ts;
+        return make_ready_future<begin_mutate_result>(_state.leader_state->term, new_ts);
+    }
+    if (_state.server->current_leader() && !_state.server->is_leader()) {
+        return make_ready_future<begin_mutate_result>(current_term, std::nullopt);
+    }
+    return _state.leader_state_cond.wait().then([this]{ return begin_mutate(); });
+}
+
 sc_groups_manager::sc_groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, gms::feature_service& features)
@@ -138,7 +151,7 @@ void sc_groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_gro
     state.server_op = when_all_succeed(state.server_op.get_future(), state.gate->close()).discard_result()
         .then([this, &state, id] {
             state.server = nullptr;
-            return _raft_gr.abort_server(id);
+            return when_all_succeed(_raft_gr.abort_server(id), std::move(state.leader_state_fiber)).discard_result();
         })
         .then([this, id, &state, g = state.gate] {
             _raft_gr.destroy_server(id);
@@ -161,6 +174,71 @@ void sc_groups_manager::schedule_raft_groups_deletion(bool all) {
             schedule_raft_group_deletion(group_id, group_state);
         }
         it = next;
+    }
+}
+
+future<> sc_groups_manager::leader_state_fiber(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
+    try {
+        auto schema = _db.find_schema(tablet.table);
+        while (true) {
+            const auto current_term = state.server->get_current_term();
+            const auto is_leader = state.server->is_leader();
+            if (is_leader && (!state.leader_state || state.leader_state->term != current_term)) {
+                logger.debug("leader_state_fiber({}-{}): leader state term {}, current term {}, running read_barrier()",
+                    tablet, gid,
+                    state.leader_state ? state.leader_state->term : raft::term_t(0),
+                    current_term);
+                co_await state.server->read_barrier(nullptr);
+                if (state.server->get_current_term() != current_term) {
+                    continue;
+                }
+
+                state.leader_state = leader_state {
+                    .term = current_term,
+                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                };
+                logger.debug("leader_state_fiber({}-{}): read_barrier() completed, "
+                    "new leader_state term {}, last_timestamp {}",
+                    tablet, gid,
+                    state.leader_state->term,
+                    state.leader_state->last_timestamp);
+
+                state.leader_state_cond.broadcast();
+            }
+
+            const auto current_leader = state.server->current_leader();
+            if (!is_leader && current_leader) {
+                logger.debug("leader_state_fiber({}-{}): current leader {}", 
+                    tablet, gid, current_leader);
+                state.leader_state_cond.broadcast();
+            }
+
+            logger.debug("leader_state_fiber({}-{}): waiting for state change, term {}",
+                tablet, gid, current_term);
+            co_await state.server->wait_for_state_change(nullptr);
+        }
+    } catch (const raft::request_aborted&) {
+        // thrown from read_barrier() and wait_for_state_change() when then tablet leaves this shard
+    } catch (const raft::stopped_error&) {
+        // thrown from read_barrier() and wait_for_state_change() when then tablet leaves this shard
+    } catch (const replica::no_such_column_family&) {
+        // thrown from find_schema() and schema->table() when the table is dropped
+    }
+}
+
+future<> sc_groups_manager::wait_for_groups_to_start() {
+    while (true) {
+        const auto it = std::ranges::find_if(_raft_groups, [](const auto& p) {
+            auto& state = p.second;
+            return !state.server && !state.gate->is_closed();
+        });
+        if (it == _raft_groups.end()) {
+            break;
+        }
+
+        const auto& [id, state] = *it;
+        logger.info("waiting for group {} to start", id);
+        co_await state.server_op.get_future();
     }
 }
 
@@ -195,6 +273,7 @@ void sc_groups_manager::update(token_metadata_ptr new_tm) {
             })
             .then([this, &state, tablet, id] {
                 state.server = &_raft_gr.get_server(id);
+                state.leader_state_fiber = leader_state_fiber(state, tablet, id);
                 logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
             });
     });

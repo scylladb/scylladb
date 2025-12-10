@@ -23,11 +23,19 @@ class sc_groups_manager: public peering_sharded_service<sc_groups_manager> {
 
     friend class sc_raft_server;
 
+    struct leader_state {
+        raft::term_t term;
+        api::timestamp_type last_timestamp;
+    };
+
     struct raft_group_state {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
         shared_future<> server_op = make_ready_future<>();
+        std::optional<leader_state> leader_state = std::nullopt;
+        condition_variable leader_state_cond = condition_variable();
+        future<> leader_state_fiber = make_ready_future<>();
     };
 
     netw::messaging_service& _ms;
@@ -47,6 +55,8 @@ class sc_groups_manager: public peering_sharded_service<sc_groups_manager> {
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
     void schedule_raft_groups_deletion(bool all);
+
+    future<> leader_state_fiber(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
     future<> wait_for_groups_to_start();
 
@@ -86,6 +96,11 @@ public:
     raft::server& server() {
         return *_state.server;
     }
+
+    // Waits for a leader. Returns the timestamp to be used for the new mutation,
+    // or nullopt if the current server is not the leader for the current term.
+    using begin_mutate_result = std::pair<raft::term_t, std::optional<api::timestamp_type>>;
+    future<begin_mutate_result> begin_mutate();
 };
 
 }
