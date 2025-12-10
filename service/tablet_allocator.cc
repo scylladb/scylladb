@@ -136,17 +136,6 @@ db::tablet_options combine_tablet_options(R&& opts) {
     return combined_opts;
 }
 
-static std::unordered_set<locator::tablet_id> split_string_to_tablet_id(std::string_view s, char delimiter) {
-    auto tokens_view = s | std::views::split(delimiter)
-		 | std::views::transform([](auto&& range) {
-			 return std::string_view(&*range.begin(), std::ranges::distance(range));
-		 })
-		 | std::views::transform([](std::string_view sv) {
-			 return locator::tablet_id(std::stoul(std::string(sv)));
-		 });
-    return std::unordered_set<locator::tablet_id>{tokens_view.begin(), tokens_view.end()};
-}
-
 // Used to compare different migration choices in regard to impact on load imbalance.
 // There is a total order on migration_badness such that better migrations are ordered before worse ones.
 struct migration_badness {
@@ -904,8 +893,6 @@ public:
             co_await coroutine::maybe_yield();
             auto& config = tmap.repair_scheduler_config();
             auto now = db_clock::now();
-            auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
-            auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
                 // Skip tablet that is in transitions.
@@ -923,11 +910,6 @@ public:
                 // Skip the tablet that has excluded replica node.
                 auto& tinfo = tmap.get_tablet_info(id);
                 if (tablet_has_excluded_node(topo, tinfo)) {
-                    co_return;
-                }
-
-                if (skip_tablets.contains(id)) {
-                    lblogger.debug("Skipped tablet repair for tablet={} by error injector", gid);
                     co_return;
                 }
 

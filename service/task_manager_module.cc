@@ -10,7 +10,6 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
-#include "repair/row_level.hh"
 #include "service/task_manager_module.hh"
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
@@ -109,16 +108,6 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
             co_await coroutine::maybe_yield();
             tid = tmap.next_tablet(*tid);
         }
-    }
-
-    // Check if the task id is present in the repair task table
-    auto progress = co_await _ss._repair.local().get_tablet_repair_task_progress(task_id);
-    if (progress && progress->requested > 0) {
-        co_return tasks::virtual_task_hint{
-            .table_id = progress->table_uuid,
-            .task_type = locator::tablet_task_type::user_repair,
-            .tablet_id = std::nullopt,
-        };
     }
     co_return std::nullopt;
 }
@@ -254,20 +243,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     size_t sched_nr = 0;
     auto tmptr = _ss.get_token_metadata_ptr();
     auto& tmap = tmptr->tablets().get_tablet_map(table);
-    bool repair_task_finished = false;
-    bool repair_task_pending = false;
     if (is_repair_task(task_type)) {
-        auto progress = co_await _ss._repair.local().get_tablet_repair_task_progress(id);
-        if (progress) {
-            res.status.progress.completed = progress->finished;
-            res.status.progress.total = progress->requested;
-            res.status.progress_units = "tablets";
-            if (progress->requested > 0 && progress->requested == progress->finished) {
-                repair_task_finished = true;
-            } if (progress->requested > 0 && progress->requested > progress->finished) {
-                repair_task_pending = true;
-            }
-        }
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             auto& task_info = info.repair_task_info;
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
@@ -299,17 +275,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         res.status.state = sched_nr == 0 ? tasks::task_manager::task_state::created : tasks::task_manager::task_state::running;
         co_return res;
     }
-
-    if (repair_task_pending) {
-        // When repair_task_pending is true, the res.tablets will be empty iff the request is aborted by user.
-        res.status.state = res.tablets.empty() ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::running;
-        co_return res;
-    }
-    if (repair_task_finished) {
-        res.status.state = tasks::task_manager::task_state::done;
-        co_return res;
-    }
-
+    // FIXME: Show finished tasks.
     co_return std::nullopt;
 }
 

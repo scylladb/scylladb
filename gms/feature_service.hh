@@ -143,7 +143,6 @@ public:
 
     gms::feature tablet_incremental_repair { *this, "TABLET_INCREMENTAL_REPAIR"sv };
     gms::feature tablet_repair_scheduler { *this, "TABLET_REPAIR_SCHEDULER"sv };
-    gms::feature tablet_repair_tasks_table { *this, "TABLET_REPAIR_TASKS_TABLE"sv };
     gms::feature tablet_merge { *this, "TABLET_MERGE"sv };
     gms::feature tablet_rack_aware_view_pairing { *this, "TABLET_RACK_AWARE_VIEW_PAIRING"sv };
 
