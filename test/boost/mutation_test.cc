@@ -2748,7 +2748,7 @@ private:
         if (!t) {
             return true;
         }
-        return t.timestamp < _max_purgeable.timestamp;
+        return t.timestamp < _max_purgeable.timestamp();
     }
     bool is_tombstone_purgeable(const tombstone& t) {
         return t.deletion_time < _gc_before && can_gc(t);
