@@ -35,14 +35,13 @@ static const class_registrator<auth::authenticator
     , cql3::query_processor&
     , ::service::raft_group0_client&
     , ::service::migration_manager&
-    , auth::cache&
-    , utils::alien_worker&> cert_auth_reg(CERT_AUTH_NAME);
+    , auth::cache&> cert_auth_reg(CERT_AUTH_NAME);
 
 enum class auth::certificate_authenticator::query_source {
     subject, altname
 };
 
-auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, auth::cache&, utils::alien_worker&)
+auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, auth::cache&)
     : _queries([&] {
         auto& conf = qp.db().get_config();
         auto queries = conf.auth_certificate_role_queries();

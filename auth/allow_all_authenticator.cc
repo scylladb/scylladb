@@ -9,7 +9,6 @@
 #include "auth/allow_all_authenticator.hh"
 
 #include "service/migration_manager.hh"
-#include "utils/alien_worker.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
@@ -23,7 +22,6 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::raft_group0_client&,
         ::service::migration_manager&,
-        cache&,
-        utils::alien_worker&> registration("org.apache.cassandra.auth.AllowAllAuthenticator");
+        cache&> registration("org.apache.cassandra.auth.AllowAllAuthenticator");
 
 }
