@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <seastar/core/abort_source.hh>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -15,6 +16,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/semaphore.hh>
 
 #include <absl/container/flat_hash_map.h>
 
@@ -41,7 +43,7 @@ public:
         version_tag_t version; // used for seamless cache reloads
     };
 
-    explicit cache(cql3::query_processor& qp) noexcept;
+    explicit cache(cql3::query_processor& qp, abort_source& as) noexcept;
     lw_shared_ptr<const role_record> get(const role_name_t& role) const noexcept;
     future<> load_all();
     future<> load_roles(std::unordered_set<role_name_t> roles);
@@ -52,6 +54,8 @@ private:
     roles_map _roles;
     version_tag_t _current_version;
     cql3::query_processor& _qp;
+    semaphore _loading_sem;
+    abort_source& _as;
 
     future<lw_shared_ptr<role_record>> fetch_role(const role_name_t& role) const;
     future<> prune_all() noexcept;

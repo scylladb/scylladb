@@ -943,7 +943,7 @@ private:
             _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
-            _auth_cache.start(std::ref(_qp)).get();
+            _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),

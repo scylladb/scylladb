@@ -15,6 +15,7 @@
 #include "db/system_keyspace.hh"
 #include "schema/schema.hh"
 #include <iterator>
+#include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/format.hh>
 
@@ -22,9 +23,11 @@ namespace auth {
 
 logging::logger logger("auth-cache");
 
-cache::cache(cql3::query_processor& qp) noexcept
+cache::cache(cql3::query_processor& qp, abort_source& as) noexcept
     : _current_version(0)
-    , _qp(qp) {
+    , _qp(qp)
+    , _loading_sem(1)
+    , _as(as) {
 }
 
 lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) const noexcept {
@@ -116,6 +119,8 @@ future<> cache::load_all() {
         co_return;
     }
     SCYLLA_ASSERT(this_shard_id() == 0);
+    auto units = co_await get_units(_loading_sem, 1, _as);
+
     ++_current_version;
 
     logger.info("Loading all roles");
@@ -146,6 +151,9 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
     if (legacy_mode(_qp)) {
         co_return;
     }
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    auto units = co_await get_units(_loading_sem, 1, _as);
+
     for (const auto& name : roles) {
         logger.info("Loading role {}", name);
         auto role = co_await fetch_role(name);
