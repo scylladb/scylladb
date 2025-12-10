@@ -8,19 +8,26 @@
  */
 #pragma once
 
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/sharded.hh>
+
 #include "gms/feature_service.hh"
 #include "mutation/mutation.hh"
-#include <seastar/core/sharded.hh>
+#include "service/raft/raft_group0_client.hh"
 
 namespace service {
 
 class client_routes_service : public seastar::peering_sharded_service<client_routes_service> {
 public:
     client_routes_service(
+        abort_source& abort_source,
         gms::feature_service& feature_service,
+        service::raft_group0_client& group0_client,
         cql3::query_processor& qp
     )
-    : _feature_service(feature_service)
+    : _abort_source(abort_source)
+    , _feature_service(feature_service)
+    , _group0_client(group0_client)
     , _qp(qp) { }
 
     struct client_route_key {
@@ -55,9 +62,18 @@ public:
     future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, const service::client_routes_service::client_route_key& key);
     future<mutation> make_update_client_route_mutation(api::timestamp_type ts, const client_route_entry& entry);
     future<std::vector<client_route_entry>> get_client_routes() const;
+    seastar::future<> set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
+    seastar::future<> delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys);
 
 private:
+    seastar::future<> set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
+    seastar::future<> delete_client_routes_inner(const std::vector<service::client_routes_service::client_route_key>& route_keys);
+    template <typename Func>
+    seastar::future<> with_retry(Func&& func) const;
+
+    abort_source& _abort_source;
     gms::feature_service& _feature_service;
+    service::raft_group0_client& _group0_client;
     cql3::query_processor& _qp;
 };
 

@@ -69,6 +69,7 @@ target_sources(api
   PRIVATE
     api.cc
     cache_service.cc
+    client_routes.cc
     collectd.cc
     column_family.cc
     commitlog.cc
