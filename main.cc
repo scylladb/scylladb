@@ -108,6 +108,7 @@
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
+#include "service/raft/strong_consistency/sc_groups_manager.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -1798,6 +1799,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auth_cache.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing tablet raft groups manager");
+            service::sc_groups_manager sc_groups_manager{messaging.local(), raft_gr.local(), qp.local()};
+
+            auto stop_sc_groups_manager = defer_verbose_shutdown("tablet raft groups manager", [&] {
+                sc_groups_manager.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1809,7 +1817,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(auth_cache),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*disk_space_monitor_shard0)
+                only_on_shard0(&*disk_space_monitor_shard0),
+                only_on_shard0(&sc_groups_manager)
             ).get();
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
