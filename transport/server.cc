@@ -2308,11 +2308,11 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
     return _response_metadata_id.value();
 }
 
-future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
-    utils::chunked_vector<client_data> ret;
+future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> cql_server::get_client_data() {
+    utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>> ret;
     co_await for_each_gently([&ret] (const generic_server::connection& c) {
         const connection& conn = dynamic_cast<const connection&>(c);
-        ret.emplace_back(conn.make_client_data());
+        ret.emplace_back(make_foreign(std::make_unique<client_data>(conn.make_client_data())));
     });
     co_return ret;
 }

@@ -234,7 +234,7 @@ public:
         return scheduling_group_get_specific<cql_sg_stats>(_stats_key).get_cql_opcode_stats(op);
     }
 
-    future<utils::chunked_vector<client_data>> get_client_data();
+    future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
     future<> update_connections_scheduling_group();
     future<> update_connections_service_level_params();
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();

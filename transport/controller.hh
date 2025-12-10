@@ -77,7 +77,7 @@ public:
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
-    virtual future<utils::chunked_vector<client_data>> get_client_data() override;
+    virtual future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() override;
     future<> update_connections_scheduling_group();
 
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();

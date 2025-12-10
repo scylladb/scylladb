@@ -353,7 +353,7 @@ future<> controller::set_cql_ready(bool ready) {
     return _gossiper.local().add_local_application_state(gms::application_state::RPC_READY, gms::versioned_value::cql_ready(ready));
 }
 
-future<utils::chunked_vector<client_data>> controller::get_client_data() {
+future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> controller::get_client_data() {
     return _server ? _server->local().get_client_data() : protocol_server::get_client_data();
 }
 

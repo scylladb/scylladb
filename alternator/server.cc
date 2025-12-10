@@ -985,10 +985,10 @@ client_data server::ongoing_request::make_client_data() const {
     return cd;
 }
 
-future<utils::chunked_vector<client_data>> server::get_client_data() {
-    utils::chunked_vector<client_data> ret;
+future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> server::get_client_data() {
+    utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>> ret;
     co_await _ongoing_requests.for_each_gently([&ret] (const ongoing_request& r) {
-        ret.emplace_back(r.make_client_data());
+        ret.emplace_back(make_foreign(std::make_unique<client_data>(r.make_client_data())));
     });
     co_return ret;
 }
