@@ -76,7 +76,11 @@ void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& sta
         sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
             stats.resizes_revoked),
         sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
-            stats.resizes_finalized)
+            stats.resizes_finalized),
+        sm::make_counter("auto_repair_needs_repair_nr", sm::description("number of tablets with auto repair enabled that currently needs repair"),
+            stats.auto_repair_needs_repair_nr),
+        sm::make_counter("auto_repair_enabled_nr", sm::description("number of tablets with auto repair enabled"),
+            stats.auto_repair_enabled_nr)
     });
 }
 
@@ -1053,6 +1057,7 @@ public:
         if (diff < repair_time_threshold) {
             co_return false;
         }
+        stats.needs_repair_nr++;
         co_return true;
     }
 
@@ -1147,15 +1152,21 @@ public:
         // Consider load that is about to be scheduled
         co_await consider_planned_load(nodes, mplan);
 
+        service::auto_repair_stats auto_repair_stats;
+
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
             auto config = tmap.get_repair_scheduler_config();
+            auto auto_repair_enabled = is_auto_repair_enabled(config);
             auto now = db_clock::now();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
+                if (auto_repair_enabled) {
+                    auto_repair_stats.enabled_nr++;
+                }
                 // Skip tablet that is in transitions.
                 auto* tti = tmap.get_tablet_transition_info(id);
                 if (tti) {
@@ -1187,7 +1198,7 @@ public:
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
@@ -1197,6 +1208,9 @@ public:
                 plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
             });
         }
+
+        _stats.for_cluster().auto_repair_needs_repair_nr = auto_repair_stats.needs_repair_nr;
+        _stats.for_cluster().auto_repair_enabled_nr = auto_repair_stats.enabled_nr;
 
         // TODO: we could add other factors in addition to the repair time when
         // picking which tablet to repair, e.g., higher repair priority
