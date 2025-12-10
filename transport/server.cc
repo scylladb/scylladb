@@ -959,10 +959,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     }
 
     if (auto driver_ver_opt = options.find("DRIVER_VERSION"); driver_ver_opt != options.end()) {
-        _client_state.set_driver_version(driver_ver_opt->second);
+        co_await _client_state.set_driver_version(_server._connection_options_keys_and_values, driver_ver_opt->second);
     }
     if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
-        _client_state.set_driver_name(driver_name_opt->second);
+        co_await _client_state.set_driver_name(_server._connection_options_keys_and_values, driver_name_opt->second);
     }
 
     // Store all received client options for later exposure in the system.clients 'client_options' column

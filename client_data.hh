@@ -53,8 +53,8 @@ struct client_data {
     client_connection_stage connection_stage = client_connection_stage::established;
     int32_t shard_id;  /// ID of server-side shard which is processing the connection.
 
-    std::optional<sstring> driver_name;
-    std::optional<sstring> driver_version;
+    std::optional<client_options_cache_entry_type> driver_name;
+    std::optional<client_options_cache_entry_type> driver_version;
     std::optional<sstring> hostname;
     std::optional<int32_t> protocol_version;
     std::optional<sstring> ssl_cipher_suite;
