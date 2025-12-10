@@ -49,7 +49,8 @@ sc_groups_manager::sc_groups_manager(netw::messaging_service& ms,
 future<> sc_groups_manager::start_raft_server(table_id table_id, locator::tablet_id tablet_id,
     raft::group_id gid, raft::server_id server_id, const locator::tablet_info& tablet_info)
 {
-    auto state_machine = make_sc_state_machine();
+    auto state_machine = make_sc_state_machine(table_id, tablet_id, gid, 
+        _qp.proxy().local_db(), _qp.proxy().system_keyspace());
     auto rpc = std::make_unique<rpc_impl>(*state_machine, _ms, _raft_gr.failure_detector(), gid, server_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
