@@ -161,9 +161,18 @@ auto coordinator::query(schema_ptr schema,
         db::timeout_clock::time_point timeout
     ) -> future<query_result_type>
 {
-    (void)_groups_manager;
-    (void)_db;
-    throw std::runtime_error("not implemented");
+    auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token());
+    if (const auto* redirect = get_if<need_redirect>(&op_result)) {
+        co_return *redirect;
+    }
+    auto& op = get<operation_ctx>(op_result);
+
+    co_await op.raft_server.server().read_barrier(nullptr);
+
+    auto [result, cache_temp] = co_await _db.query(schema, cmd,
+        query::result_options::only_result(), ranges, trace_state, timeout);
+
+    co_return std::move(result);
 }
 
 }
