@@ -59,7 +59,7 @@ ScyllaDB nodetool cluster repair command supports the following options:
 
   ::
 
-     nodetool cluster repair --incremental-mode regular
+     nodetool cluster repair --incremental-mode disabled
 
 - ``keyspace`` executes a repair on a specific keyspace. The default is all keyspaces.
 
