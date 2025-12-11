@@ -335,6 +335,16 @@ public:
     /*!
      * \brief iterate over all cql results using paging with a custom query_state (for timeout control)
      *
+     * You can use placeholders in the query, the statement will only be prepared once.
+     *
+     * query_string - the cql string, can contain placeholders
+     * cl - consistency level of the query
+     * query_state - query state with custom timeout configuration
+     * values - values to be substituted for the placeholders in the query
+     * page_size - maximum page size
+     * f - a function to be run on each row of the query result,
+     *     if the function returns stop_iteration::yes the iteration will stop
+     *
      * \note This function is optimized for convenience, not performance.
      */
     future<> query_internal(
@@ -523,6 +533,9 @@ private:
     /*!
      * \brief run a query using paging with a custom query_state (for timeout control)
      *
+     * state - internal query state containing prepared statement and options
+     * query_state - query state with custom timeout configuration
+     *
      * \note Optimized for convenience, not performance.
      */
     future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state, service::query_state& query_state);
@@ -538,6 +551,11 @@ private:
 
     /*!
      * \brief iterate over all results using paging with a custom query_state (for timeout control)
+     *
+     * state - internal query state containing prepared statement and options
+     * query_state - query state with custom timeout configuration
+     * f - a function to be run on each row of the query result,
+     *     if the function returns stop_iteration::yes the iteration will stop
      *
      * \note Optimized for convenience, not performance.
      */
