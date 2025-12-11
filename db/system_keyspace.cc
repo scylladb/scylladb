@@ -2486,9 +2486,9 @@ future<utils::chunked_vector<db_clock::time_point>> system_keyspace::read_cdc_fo
 }
 
 future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::read_cdc_for_tablets_versioned_streams(const sstring &ks_name, const sstring &table_name, db_clock::time_point not_older_than) {
-    static const sstring stream_id_query = format("SELECT stream_id, timestamp, stream_state FROM {}.{} WHERE keyspace_name = ? and table_name = ?", NAME, CDC_STREAMS);
+    static const sstring stream_id_query = format("SELECT stream_id, stream_state, timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ?", NAME, CDC_STREAMS);
 
-    std::map<db_clock::time_point, std::unordered_map<cdc::stream_id, db_clock::time_point>> temp_result;
+    std::map<db_clock::time_point, utils::chunked_vector<cdc::stream_id>> temp_result;
     
     slogger.info("QWERTY starting read_cdc_for_tablets_versioned_streams ks_name={}, table_name={}, not_older_than={:x}", ks_name, table_name, not_older_than.time_since_epoch().count());
     co_await _qp.query_internal(stream_id_query,
@@ -2496,33 +2496,24 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
                 data_value_list{ ks_name, table_name },
                 1000,
                 [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-        auto stream_id = cdc::stream_id{ row.get_as<bytes>("stream_id") };
         auto stream_state = cdc::read_stream_state(row.get_as<int8_t>("stream_state"));
+        if (stream_state != cdc::stream_state::current) {
+            co_return stop_iteration::no;
+        }
+        auto stream_id = cdc::stream_id{ row.get_as<bytes>("stream_id") };
         auto ts = row.get_as<db_clock::time_point>("timestamp");
         
-        slogger.info("QWERTY stream_id={}, stream_state={}, ts={:x}", stream_id, (int)stream_state, ts.time_since_epoch().count());
+        slogger.info("QWERTY stream_id={}, ts={:x}", stream_id, ts.time_since_epoch().count());
         if (ts < not_older_than) {
             co_return stop_iteration::no;
         }
-        if (stream_state == cdc::stream_state::closed) {
-            auto it = temp_result.insert({ ts, {} }).first;
-            auto it2 = it->second.insert({ stream_id, {} }).first;
-            it2->second = ts;
-        }
-        else if (stream_state == cdc::stream_state::current) {
-            auto it = temp_result.insert({ ts, {} }).first;
-            it->second.insert({ stream_id, {} });
-        }
+        
+        temp_result[ts].push_back(stream_id);
         co_return stop_iteration::no;
     });
 
     std::map<db_clock::time_point, cdc::streams_version> result;
-    for (auto& [ts, streams_map] : temp_result) {
-        utils::chunked_vector<std::pair<cdc::stream_id, db_clock::time_point>> streams;
-        for (auto& [stream_id, closing_ts] : streams_map) {
-            streams.emplace_back(stream_id, closing_ts);
-            slogger.info("QWERTY final stream_id={}, closing_ts={:x} for ts={:x}", stream_id, closing_ts.time_since_epoch().count(), ts.time_since_epoch().count());
-        }
+    for (auto& [ts, streams] : temp_result) {
         result.insert_or_assign(ts, cdc::streams_version{ std::move(streams), ts });
     }
     slogger.info("QWERTY completed");

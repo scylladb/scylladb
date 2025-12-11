@@ -124,10 +124,10 @@ public:
  */ 
 class streams_version {
 public:
-    utils::chunked_vector<std::pair<stream_id, db_clock::time_point>> streams;
+    utils::chunked_vector<stream_id> streams;
     db_clock::time_point timestamp;
 
-    streams_version(utils::chunked_vector<std::pair<stream_id, db_clock::time_point>> s, db_clock::time_point ts)
+    streams_version(utils::chunked_vector<stream_id> s, db_clock::time_point ts)
         : streams(std::move(s))
         , timestamp(ts)
     {}

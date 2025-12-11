@@ -721,8 +721,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     }
 
     std::map<db_clock::time_point, cdc::streams_version> result;
-    std::map<db_clock::time_point, cdc::streams_version>::iterator previous_sv = result.end();
-    co_await max_concurrent_for_each(first, timestamps.rend(), 5, [this, &ctx, &result, &previous_sv] (db_clock::time_point ts) -> future<> {
+    co_await max_concurrent_for_each(first, timestamps.rend(), 5, [this, &ctx, &result] (db_clock::time_point ts) -> future<> {
         auto streams_cql = co_await _qp.execute_internal(
                 format("SELECT streams FROM {}.{} WHERE time = ?", NAME, CDC_DESC_V2),
                 quorum_if_many(ctx.num_token_owners),
@@ -730,33 +729,13 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
                 { ts },
                 cql3::query_processor::cache_internal::no);
 
-        utils::chunked_vector<std::pair<cdc::stream_id, db_clock::time_point>> ids;
+        utils::chunked_vector<cdc::stream_id> ids;
         for (auto& row : *streams_cql) {
-            std::vector<cdc::stream_id> streams;
-            row.get_list_data<bytes>("streams", std::back_inserter(streams));
-            for(auto &s : streams) {
-                ids.push_back({ s, {} });
-            }
+            row.get_list_data<bytes>("streams", std::back_inserter(ids));
             co_await coroutine::maybe_yield();
         }
 
-        // auto expired = [&]() -> std::optional<db_clock::time_point> {
-        //     auto j = std::next(i);
-        //     if (j == e) {
-        //         return std::nullopt;
-        //     }
-        //     // add this so we sort of match potential 
-        //     // sequence numbers in get_records result.
-        //     return j->first + confidence_interval(db);
-        // }();
-
-        if (previous_sv != result.end()) {
-            for(auto &entry : previous_sv->second.streams) {
-                entry.second = ts;
-            }
-        }
-        auto it = result.insert({ ts, cdc::streams_version{std::move(ids), ts} });
-        previous_sv = it.first;
+        result.insert({ ts, cdc::streams_version{std::move(ids), ts} });
     });
 
     co_return result;

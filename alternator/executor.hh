@@ -45,6 +45,7 @@ namespace service {
 
 namespace cdc {
     class metadata;
+    class streams_version;
 }
 
 namespace gms {
@@ -222,9 +223,9 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr, const std::map<sstring, sstring> *tags = nullptr);
-    future<> describe_stream_for_vnodes(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
-    future<> describe_stream_for_tablets(client_state& client_state, service_permit permit, rjson::value request, schema_ptr schema, schema_ptr bs, int limit, std::chrono::seconds ttl, rjson::value &ret, rjson::value &stream_desc);
-    void describe_stream_finalize(std::map<db_clock::time_point, cdc::streams_version> topologies, std::optional<shard_id> shard_start, int limit, rjson::value &stream_desc);
+    future<std::map<db_clock::time_point, cdc::streams_version>> calculate_stream_topologies_for_vnodes(const schema &sch, const schema &bs, std::chrono::seconds ttl);
+    future<std::map<db_clock::time_point, cdc::streams_version>> calculate_stream_topologies_for_tablets(const schema &sch, const schema &bs, std::chrono::seconds ttl);
+    void describe_stream_finalize(std::map<db_clock::time_point, cdc::streams_version> topologies, std::optional<shard_id> shard_start, std::optional<shard_id> shard_filter, int limit, rjson::value &stream_desc);
     
     sstring get_table_name_from_stream_arn(std::string_view arn);
     table_id get_cdc_log_table_id_from_stream_arn(std::string_view arn);
