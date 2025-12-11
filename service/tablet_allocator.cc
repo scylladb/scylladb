@@ -1573,6 +1573,18 @@ public:
                     });
                 }
 
+                // Node which is draining is either being decommissioned or removed.
+                // If involved node is excluded, co-locating migration will surely fail, so it's pointless.
+                // We should wait until the node is removed.
+                // Also, it can fail the removenode request, as failure of this migration is interpreted as
+                // draining failure.
+                // In case of decommission, draining is more important than co-location, so postponing is good.
+                if (nodes.at(dst.host).drained || nodes.at(src.host).drained) {
+                    lblogger.debug("Co-locating migration ({}, {}) -> ({}, {}) involves draining nodes, postponing",
+                        t2_id, src, t1_id, dst);
+                    return make_ready_future<>();
+                }
+
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
                 auto skip = check_constraints(src, dst);
                 if (skip) {
