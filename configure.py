@@ -1695,6 +1695,13 @@ deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vect
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
 
+boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
+
+for key in deps.keys():
+    for prefix in boost_tests_prefixes:
+        if key.startswith(prefix):
+            deps[key] += ["test/lib/boost_tree_lister_injector.cc", "test/lib/boost_test_tree_lister.cc"]
+
 wasm_deps = {}
 
 wasm_deps['wasm/return_input.wat'] = 'test/resource/wasm/rust/return_input.rs'
