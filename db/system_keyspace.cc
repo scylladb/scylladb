@@ -2580,7 +2580,7 @@ future<utils::chunked_vector<canonical_mutation>> system_keyspace::get_update_re
     auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), ts,
             {entry.task_uuid.uuid(), repair_task_operation_to_string(entry.operation),
             entry.first_token, entry.last_token, entry.timestamp, entry.table_uuid.uuid()});
-    utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+    utils::chunked_vector<canonical_mutation> cmuts(muts.begin(), muts.end());
     co_return cmuts;
 }
 
