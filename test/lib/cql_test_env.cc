@@ -954,7 +954,7 @@ private:
                 _sc_groups->stop().get();
             });
 
-            _sc_storage_proxy.start(std::ref(_group0_registry), std::ref(_sys_ks)).get();
+            _sc_storage_proxy.start(std::ref(_group0_registry), std::ref(_sys_ks), std::ref(_db)).get();
             auto stop_sc_storage_proxy = defer_verbose_shutdown("raft storage proxy", [this] {
                 _sc_storage_proxy.stop().get();
             });

@@ -34,7 +34,7 @@ future<::shared_ptr<result_message>> sc_select_statement::do_execute(query_proce
         options.get_timestamp(state));
     const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto [proxy, holder] = qp.acquire_sc_storage_proxy();
-    auto query_result = co_await proxy.get().query(*_query_schema, *read_command,
+    auto query_result = co_await proxy.get().query(_query_schema, *read_command,
         key_ranges, state.get_trace_state(), timeout);
     if (const auto* redirect = query_result.get_if_redirect()) {
         const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
