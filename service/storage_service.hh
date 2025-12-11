@@ -17,6 +17,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
+#include "service/client_routes.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/topology_guard.hh"
@@ -202,6 +203,7 @@ private:
     sharded<locator::snitch_ptr>& _snitch;
     sharded<qos::service_level_controller>& _sl_controller;
     auth::cache& _auth_cache;
+    sharded<client_routes_service>& _client_routes;
 
     // Engaged on shard 0 before `join_cluster`.
     service::raft_group0* _group0;
@@ -269,6 +271,7 @@ public:
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
         auth::cache& auth_cache,
+        sharded<client_routes_service>& _client_routes,
         topology_state_machine& topology_state_machine,
         db::view::view_building_state_machine& view_building_state_machine,
         tasks::task_manager& tm,
@@ -1138,6 +1141,8 @@ public:
     future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
     future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
     void set_train_dict_callback(decltype(_train_dict));
+    seastar::future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
+
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

@@ -127,7 +127,7 @@ static std::vector<service::client_routes_service::client_route_key> parse_delet
 
 static
 future<json::json_return_type>
-rest_delete_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr,  std::unique_ptr<http::request> req) {
+rest_delete_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr, std::unique_ptr<http::request> req) {
     validate_client_routes_endpoint(cr, "delete_client_routes");
 
     rapidjson::Document root;
