@@ -220,14 +220,14 @@ async def test_tablet_repair_sstable_skipped_read_metrics(manager: ManagerClient
 
     await insert_keys(cql, ks, 0, 100)
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     skipped_bytes = get_incremental_repair_sst_skipped_bytes(servers[0])
     read_bytes = get_incremental_repair_sst_read_bytes(servers[0])
     # Nothing to skip. Repair all data.
     assert skipped_bytes == 0
     assert read_bytes > 0
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     skipped_bytes2 = get_incremental_repair_sst_skipped_bytes(servers[0])
     read_bytes2 = get_incremental_repair_sst_read_bytes(servers[0])
     # Skip all. Nothing to repair
@@ -236,7 +236,7 @@ async def test_tablet_repair_sstable_skipped_read_metrics(manager: ManagerClient
 
     await insert_keys(cql, ks, 200, 300)
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     skipped_bytes3 = get_incremental_repair_sst_skipped_bytes(servers[0])
     read_bytes3 = get_incremental_repair_sst_read_bytes(servers[0])
     # Both skipped and read bytes should grow
@@ -272,7 +272,7 @@ async def test_tablet_incremental_repair(manager: ManagerClient):
     assert get_sstables_repaired_at(map0, token) == sstables_repaired_at
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     map1 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
     logging.info(f'map1={map1}')
     # Check sstables_repaired_at is increased by 1
@@ -288,7 +288,7 @@ async def test_tablet_incremental_repair(manager: ManagerClient):
         assert len(enable) == 1
 
     # Second repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     map2 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
     logging.info(f'map2={map2}')
     # Check sstables_repaired_at is increased by 1
@@ -313,7 +313,7 @@ async def test_tablet_incremental_repair_error(manager: ManagerClient):
     # Repair should not finish with error
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
     try:
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, timeout=10)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental', timeout=10)
         assert False # Check the tablet repair is not supposed to finish
     except TimeoutError:
         logger.info("Repair timeout as expected")
@@ -329,7 +329,7 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
     token = -1
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     # 1 add 0 skip 1 mark
     for log in logs:
         sst_add, sst_skip, sst_mark = await get_sst_status("First", log)
@@ -355,7 +355,7 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
         else:
             assert False # Wrong ops
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
     # 1 add 1 skip 1 mark
     for log in logs:
@@ -394,7 +394,7 @@ async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
     # Insert more keys
     await insert_keys(cql, ks, current_key, current_key + nr_keys)
@@ -402,7 +402,7 @@ async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
     current_key += nr_keys
 
     # Second repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
     # Insert more keys and flush to get 2 more sstables
     for _ in range(2):
@@ -436,7 +436,7 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 1
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 1
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 2
 
     # Insert more keys
@@ -445,7 +445,7 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     current_key += nr_keys
 
     # Second repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 3
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 3
 
     # Insert more keys and flush to get 2 more sstables
     for _ in range(2):
@@ -505,7 +505,7 @@ async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(ma
 
     await manager.server_start(servers[1].server_id)
 
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
     scylla_path = get_scylla_path(cql)
 
@@ -521,8 +521,8 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 1
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 2
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 1
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 2
 
     # Insert more keys
     await insert_keys(cql, ks, current_key, current_key + nr_keys)
@@ -532,7 +532,7 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     # Second repair
     await inject_error_on(manager, "repair_tablet_no_update_sstables_repair_at", servers)
     # some sstable repaired_at = 3, but sstables_repaired_at = 2
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 2
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 2
     await inject_error_off(manager, "repair_tablet_no_update_sstables_repair_at", servers)
 
     scylla_path = get_scylla_path(cql)
@@ -561,8 +561,8 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 1
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 2
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 1
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 2
 
     # Insert more keys
     await insert_keys(cql, ks, current_key, current_key + nr_keys)
@@ -574,7 +574,7 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
     last_tokens = [t.last_token for t in replicas]
     for t in last_tokens[0::2]:
         logging.info(f"Start repair for token={t}");
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", t) # sstables_repaired_at 3
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", t, incremental_mode='incremental') # sstables_repaired_at 3
 
     scylla_path = get_scylla_path(cql)
 
@@ -595,7 +595,7 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys, cmdline)
 
     # First repair
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token) # sstables_repaired_at 1
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 1
 
     # Insert more keys
     await insert_keys(cql, ks, current_key, current_key + nr_keys)
@@ -659,12 +659,17 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
         assert read1 == 0
         assert skip2 == 0
         assert read2 > 0
-    await do_repair_and_check(None, 1, rf'Starting tablet repair by API .* incremental_mode=incremental.*', check1)
+    await do_repair_and_check('incremental', 1, rf'Starting tablet repair by API .* incremental_mode=incremental.*', check1)
 
     def check2(skip1, read1, skip2, read2):
         assert skip1 == skip2
         assert read1 == read2
     await do_repair_and_check('disabled', 0, rf'Starting tablet repair by API .* incremental_mode=disabled.*', check2)
+
+    # FIXME: Incremental repair is disabled by default due to
+    # https://github.com/scylladb/scylladb/issues/26041 and
+    # https://github.com/scylladb/scylladb/issues/27414
+    await do_repair_and_check(None, 0, rf'Starting tablet repair by API .* incremental_mode=disabled.*', check2)
 
     def check3(skip1, read1, skip2, read2):
         assert skip1 < skip2
@@ -677,14 +682,14 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
     await do_repair_and_check('full', 1, rf'Starting tablet repair by API .* incremental_mode=full.*', check4)
 
 @pytest.mark.asyncio
-async def test_tablet_repair_tablet_time_metrics(manager: ManagerClient):
+async def test_incremental_repair_tablet_time_metrics(manager: ManagerClient):
     servers, _, _, ks, _, _, _, _, _, token = await preapre_cluster_for_incremental_repair(manager)
     time1 = 0
     time2 = 0
 
     for s in servers:
         time1 += get_repair_tablet_time_ms(s)
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     for s in servers:
         time2 += get_repair_tablet_time_ms(s)
 
@@ -694,7 +699,7 @@ async def test_tablet_repair_tablet_time_metrics(manager: ManagerClient):
 # Reproducer for https://github.com/scylladb/scylladb/issues/26346
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_repair_finishes_when_tablet_skips_end_repair_stage(manager):
+async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(manager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
@@ -719,7 +724,7 @@ async def test_repair_finishes_when_tablet_skips_end_repair_stage(manager):
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_repair_rejoin_do_tablet_operation(manager):
+async def test_incremental_repair_rejoin_do_tablet_operation(manager):
     cmdline = ['--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline)
 
