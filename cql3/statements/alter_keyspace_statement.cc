@@ -165,8 +165,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
             service::topology_mutation_builder builder(ts);
             service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, qp.proxy().features().topology_requests_type_column};
-            rtbuilder.set("done", false)
-                     .set("start_time", db_clock::now());
+            rtbuilder.set("done", false);
             if (!qp.proxy().features().topology_global_request_queue) {
                 builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
                 builder.set_global_topology_request_id(global_request_id);

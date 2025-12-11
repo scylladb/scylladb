@@ -4940,7 +4940,6 @@ future<> storage_service::do_clusterwide_vnodes_cleanup() {
             builder.queue_global_topology_request_id(request_id);
             topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
             rtbuilder.set("done", false)
-                     .set("start_time", db_clock::now())
                      .set("request_type", global_topology_request::cleanup);
             muts.push_back(rtbuilder.build());
         } else {
@@ -5265,7 +5264,6 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
                 topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
                 builder.queue_global_topology_request_id(request_id);
                 rtbuilder.set("done", false)
-                         .set("start_time", db_clock::now())
                          .set("request_type", global_topology_request::new_cdc_generation);
                 muts.push_back(rtbuilder.build());
             } else {

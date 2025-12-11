@@ -14,6 +14,7 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
+#include "utils/UUID_gen.hh"
 #include <variant>
 #include "utils/overloaded_functor.hh"
 
@@ -90,6 +91,7 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_help
         .scope = "cluster",
         .state = get_state(entry),
         .is_abortable = co_await is_abortable(std::move(hint)),
+        .creation_time = db_clock::time_point(utils::UUID_gen::unix_timestamp(id.uuid())),
         .start_time = entry.start_time,
         .end_time = entry.end_time,
         .error = entry.error,
@@ -167,6 +169,7 @@ future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
             .table = "",
             .entity = "",
             .shard = 0,
+            .creation_time = db_clock::time_point(utils::UUID_gen::unix_timestamp(id)),
             .start_time = entry.start_time,
             .end_time = entry.end_time
         };

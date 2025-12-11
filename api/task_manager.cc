@@ -55,6 +55,7 @@ tm::task_status make_status(tasks::task_status status, sharded<gms::gossiper>& g
     res.scope = status.scope;
     res.state = status.state;
     res.is_abortable = bool(status.is_abortable);
+    res.creation_time = get_time(status.creation_time);
     res.start_time = get_time(status.start_time);
     res.end_time = get_time(status.end_time);
     res.error = status.error;
@@ -83,6 +84,7 @@ tm::task_stats make_stats(tasks::task_stats stats) {
     res.table = stats.table;
     res.entity = stats.entity;
     res.shard = stats.shard;
+    res.creation_time = get_time(stats.creation_time);
     res.start_time = get_time(stats.start_time);
     res.end_time = get_time(stats.end_time);;
     return res;
