@@ -332,6 +332,19 @@ public:
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
+    /*!
+     * \brief iterate over all cql results using paging with a custom query_state (for timeout control)
+     *
+     * \note This function is optimized for convenience, not performance.
+     */
+    future<> query_internal(
+            const sstring& query_string,
+            db::consistency_level cl,
+            service::query_state& query_state,
+            const data_value_list& values,
+            int32_t page_size,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+
     /*
      * \brief iterate over all cql results using paging
      * An overload of query_internal without query parameters
@@ -508,12 +521,29 @@ private:
     future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state);
 
     /*!
+     * \brief run a query using paging with a custom query_state (for timeout control)
+     *
+     * \note Optimized for convenience, not performance.
+     */
+    future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state, service::query_state& query_state);
+
+    /*!
      * \brief iterate over all results using paging, accept a function that returns a future
      *
      * \note Optimized for convenience, not performance.
      */
     future<> for_each_cql_result(
             cql3::internal_query_state& state,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+
+    /*!
+     * \brief iterate over all results using paging with a custom query_state (for timeout control)
+     *
+     * \note Optimized for convenience, not performance.
+     */
+    future<> for_each_cql_result(
+            cql3::internal_query_state& state,
+            service::query_state& query_state,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     /*!

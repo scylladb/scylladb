@@ -926,6 +926,59 @@ query_processor::execute_paged_internal(internal_query_state& state) {
 }
 
 future<::shared_ptr<untyped_result_set>>
+query_processor::execute_paged_internal(internal_query_state& state, service::query_state& query_state) {
+    state.p->statement->validate(*this, service::client_state::for_internal_calls());
+    ::shared_ptr<cql_transport::messages::result_message> msg =
+      co_await state.p->statement->execute(*this, query_state, *state.opts, std::nullopt);
+
+    class visitor : public result_message::visitor_base {
+        internal_query_state& _state;
+        query_processor& _qp;
+    public:
+        visitor(internal_query_state& state, query_processor& qp) : _state(state), _qp(qp) {
+        }
+        virtual ~visitor() = default;
+        void visit(const result_message::rows& rmrs) override {
+            auto& rs = rmrs.rs();
+            if (rs.get_metadata().paging_state()) {
+                bool done = !rs.get_metadata().flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
+
+                if (done) {
+                    _state.more_results = false;
+                } else {
+                    const service::pager::paging_state& st = *rs.get_metadata().paging_state();
+                    lw_shared_ptr<service::pager::paging_state> shrd = make_lw_shared<service::pager::paging_state>(st);
+                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), shrd);
+                    _state.p = _qp.prepare_internal(_state.query_string);
+                }
+            } else {
+                _state.more_results = false;
+            }
+        }
+    };
+    visitor v(state, *this);
+    if (msg != nullptr) {
+        msg->accept(v);
+    }
+
+    co_return ::make_shared<untyped_result_set>(msg);
+}
+
+future<> query_processor::for_each_cql_result(
+        cql3::internal_query_state& state,
+        service::query_state& query_state,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
+    do {
+        auto msg = co_await execute_paged_internal(state, query_state);
+        for (auto& row : *msg) {
+            if ((co_await f(row)) == stop_iteration::yes) {
+                co_return;
+            }
+        }
+    } while (has_more_results(state));
+}
+
+future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
@@ -1200,6 +1253,17 @@ future<> query_processor::query_internal(
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     auto query_state = create_paged_state(query_string, cl, values, page_size);
     co_return co_await for_each_cql_result(query_state, std::move(f));
+}
+
+future<> query_processor::query_internal(
+        const sstring& query_string,
+        db::consistency_level cl,
+        service::query_state& query_state,
+        const data_value_list& values,
+        int32_t page_size,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
+    auto paged_state = create_paged_state(query_string, cl, values, page_size);
+    co_return co_await for_each_cql_result(paged_state, query_state, std::move(f));
 }
 
 future<> query_processor::query_internal(

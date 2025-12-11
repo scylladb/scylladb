@@ -884,15 +884,6 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             ::service::client_state cs(::service::client_state::internal_tag{}, tc);
             ::service::query_state qs(cs, empty_service_permit());
 
-            auto rows = co_await qp.execute_internal(
-                    seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
-                    db::consistency_level::ALL,
-                    qs,
-                    {},
-                    cql3::query_processor::cache_internal::no);
-            if (rows->empty()) {
-                continue;
-            }
             std::vector<sstring> col_names;
             for (const auto& col : schema->all_columns()) {
                 col_names.push_back(col.name_as_cql_string());
@@ -901,7 +892,14 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             for (size_t i = 1; i < col_names.size(); ++i) {
                 val_binders_str += ", ?";
             }
-            for (const auto& row : *rows) {
+
+            co_await qp.query_internal(
+                    seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
+                    db::consistency_level::ALL,
+                    qs,
+                    {},
+                    1000,
+                    [&](const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
                 std::vector<data_value_or_unset> values;
                 for (const auto& col : schema->all_columns()) {
                     if (row.has(col.name_as_text())) {
@@ -925,7 +923,8 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                             format("expecting single insert mutation, got {}", muts.size()));
                 }
                 co_yield std::move(muts[0]);
-            }
+                co_return stop_iteration::no;
+            });
         }
         co_yield co_await sys_ks.make_auth_version_mutation(ts,
                 db::system_keyspace::auth_version_t::v2);
