@@ -252,8 +252,9 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
 
 @pytest.mark.asyncio
 async def test_get_object_store_endpoints(manager: ManagerClient, object_storage):
+    a_ep_name='http://a'
     objconf = object_storage.create_endpoint_conf()
-    badconf = MinioServer.create_conf('a', 123, 'bad_region')
+    badconf = MinioServer.create_conf(a_ep_name, 'bad_region')
     cfg = {'object_storage_endpoints': objconf + badconf}
 
     print('Scylla returns the object storage endpoints')
@@ -264,25 +265,26 @@ async def test_get_object_store_endpoints(manager: ManagerClient, object_storage
     del objconf[0]['name']
     del badconf[0]['name']
     assert json.loads(endpoints[object_storage.address]) == objconf[0]
-    assert json.loads(endpoints['a']) == badconf[0]
+    assert json.loads(endpoints[a_ep_name]) == badconf[0]
 
     print('Check that system.config contains the object storage endpoints')
     cql = manager.get_cql()
     res = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'object_storage_endpoints';").one().value)
-    assert object_storage.address in res and 'a' in res
+    assert object_storage.address in res and a_ep_name in res
     assert json.loads(res[object_storage.address]) == objconf[0]
-    assert json.loads(res['a']) == badconf[0]
+    assert json.loads(res[a_ep_name]) == badconf[0]
 
+    b_ep_name = 'http://b'
     print('Update config with a new endpoint and SIGHUP Scylla to reload configuration')
-    new_endpoint = MinioServer.create_conf('b', 456, 'good_region')
+    new_endpoint = MinioServer.create_conf(b_ep_name, 'good_region')
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', new_endpoint)
-    await wait_for_config(manager, server, 'object_storage_endpoints', {'b': '{ "port": 456, "use_https": false, "aws_region": "good_region", "iam_role_arn": "" }'})
+    await wait_for_config(manager, server, 'object_storage_endpoints', {b_ep_name: '{ "type": "s3", "aws_region": "good_region", "iam_role_arn": "" }'})
 
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
     storage_opts = format_tuples(type=f'{object_storage.type}',
-                                 endpoint='a',
+                                 endpoint=a_ep_name,
                                  bucket=object_storage.bucket_name)
     with pytest.raises(ConfigurationException):
         cql.execute((f'CREATE KEYSPACE random_ks WITH'
@@ -290,7 +292,7 @@ async def test_get_object_store_endpoints(manager: ManagerClient, object_storage
 
     print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
     storage_opts = format_tuples(type=f'{object_storage.type}',
-                                 endpoint='b',
+                                 endpoint=b_ep_name,
                                  bucket=object_storage.bucket_name)
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
