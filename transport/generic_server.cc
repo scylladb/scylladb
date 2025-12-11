@@ -412,16 +412,14 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                                 [conn, protocol](const sstring& cipher_suite) mutable {
                                     conn->_ssl_protocol = protocol;
                                     conn->_ssl_cipher_suite = cipher_suite;
-                                    return make_ready_future<bool>(true);
                                 });
                         }).handle_exception([this, conn](std::exception_ptr ep) {
                             _logger.warn("Inspecting TLS connection failed: {}", ep);
-                            return make_ready_future<bool>(false);
                         })
-                    : make_ready_future<bool>(true)
-                ).then([conn] (bool ok){
+                    : make_ready_future<>()
+                ).then([conn] {
                     // Block while monitoring for lifetime/errors.
-                    return ok ? conn->process() : make_ready_future<>();
+                    return conn->process();
                 }).then_wrapped([this, conn](auto f) {
                     try {
                         f.get();
