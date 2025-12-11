@@ -1,5 +1,5 @@
 # AUTH
-auth/* @nuivall @ptrsmrn
+auth/* @nuivall
 
 # CACHE
 row_cache* @tgrabiec
@@ -25,11 +25,11 @@ compaction/* @raphaelsc
 transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @nuivall @ptrsmrn
+cql3/* @tgrabiec @nuivall
 
 # COUNTERS
-counters* @nuivall @ptrsmrn
-tests/counter_test* @nuivall @ptrsmrn
+counters* @nuivall
+tests/counter_test* @nuivall
 
 # DOCS
 docs/* @annastuchlik @tzach
