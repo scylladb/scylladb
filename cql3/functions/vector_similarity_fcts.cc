@@ -61,6 +61,54 @@ std::vector<data_type> vector_similarity_fct::provide_arg_types(
     return {type, type};
 }
 
+float similarity_cosine_fct::compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+    float dot_product = 0.0f;
+    float norm_a = 0.0f;
+    float norm_b = 0.0f;
+
+    for (size_t i = 0; i < v1.size(); ++i) {
+        float a = value_cast<float>(v1[i]);
+        float b = value_cast<float>(v2[i]);
+
+        dot_product += a * b;
+        norm_a += a * a;
+        norm_b += b * b;
+    }
+
+    float result_if_zero[2][2];
+    result_if_zero[0][0] = 1 - dot_product / (std::sqrt(norm_a) * std::sqrt(norm_b));
+    result_if_zero[0][1] = result_if_zero[1][0] = 1;
+    result_if_zero[1][1] = 0;
+    return result_if_zero[norm_a == 0][norm_b == 0];
+}
+
+float similarity_euclidean_fct::compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+    float sum = 0.0f;
+
+    for (size_t i = 0; i < v1.size(); ++i) {
+        float a = value_cast<float>(v1[i]);
+        float b = value_cast<float>(v2[i]);
+
+        float diff = a - b;
+        sum += diff * diff;
+    }
+
+    return sum;
+}
+
+float similarity_dot_product_fct::compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+    float dot_product = 0.0f;
+
+    for (size_t i = 0; i < v1.size(); ++i) {
+        float a = value_cast<float>(v1[i]);
+        float b = value_cast<float>(v2[i]);
+
+        dot_product += a * b;
+    }
+
+    return dot_product;
+}
+
 bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) {
     if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param) {
             return !param;
@@ -68,7 +116,25 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
         throw exceptions::invalid_request_exception("Vector similarity functions cannot be executed with null arguments");
     }
 
-    return std::nullopt; // Unimplemented
+    const auto& types = arg_types();
+    data_value v1 = types[0]->deserialize(*parameters[0]);
+    data_value v2 = types[1]->deserialize(*parameters[1]);
+
+    auto get_vector_elements = [](const data_value& dv) -> const std::vector<data_value>& {
+        return value_cast<std::vector<data_value>>(dv);
+    };
+
+    const auto& v1_elements = get_vector_elements(v1);
+    const auto& v2_elements = get_vector_elements(v2);
+
+    if (v1_elements.size() != v2_elements.size()) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Vector similarity functions require both vectors to have the same dimension, but found vector<float, {}> and vector<float, {}>",
+                        v1_elements.size(), v2_elements.size()));
+    }
+
+    float result = compute_similarity(v1_elements, v2_elements);
+    return float_type->decompose(result);
 }
 
 bytes_opt similarity_cosine_fct::execute(std::span<const bytes_opt> parameters) {
