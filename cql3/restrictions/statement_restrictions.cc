@@ -1492,8 +1492,16 @@ void statement_restrictions::add_is_null_restriction(const expr::binary_operator
         throw exceptions::invalid_request_exception(format("Restriction '{}' is not supported in materialized view creation. Only IS NOT NULL is allowed.", restr));
     }
 
-    // For regular queries (non-views), we handle IS NULL and IS NOT NULL as filtering restrictions
-    // They will be evaluated during query execution
+    // Add the restriction to the appropriate category based on column type
+    // This ensures proper filtering checks are applied
+    const column_definition* def = lhs_col_def->col;
+    if (def->is_partition_key()) {
+        _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
+    } else if (def->is_clustering_key()) {
+        _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
+    } else {
+        _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
+    }
 }
 
 void statement_restrictions::add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
