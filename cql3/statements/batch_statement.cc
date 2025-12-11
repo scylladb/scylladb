@@ -31,9 +31,13 @@ logging::logger batch_statement::_logger("BatchStatement");
 
 timeout_config_selector
 timeout_for_type(batch_statement::type t) {
-    return t == batch_statement::type::COUNTER
-            ? &timeout_config::counter_write_timeout
-            : &timeout_config::write_timeout;
+    if (t == batch_statement::type::COUNTER) {
+        return &timeout_config::counter_write_timeout;
+    } else if (t == batch_statement::type::GROUP0) {
+        return &timeout_config::other_timeout;
+    } else {
+        return &timeout_config::write_timeout;
+    }
 }
 
 db::timeout_clock::duration batch_statement::get_timeout(const service::client_state& state, const query_options& options) const {
@@ -90,6 +94,11 @@ future<> batch_statement::check_access(query_processor& qp, const service::clien
     });
 }
 
+bool batch_statement::needs_guard(query_processor& qp, service::query_state& state) const
+{
+    return _type == type::GROUP0;
+}
+
 void batch_statement::validate()
 {
     if (_attrs->is_time_to_live_set()) {
@@ -104,6 +113,22 @@ void batch_statement::validate()
         if (_type == type::COUNTER) {
             throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter BATCH");
         }
+        if (_type == type::GROUP0) {
+            throw exceptions::invalid_request_exception("Cannot provide custom timestamp for GROUP0 BATCH");
+        }
+    }
+
+    if (_type == type::GROUP0) {
+        if (_has_conditions) {
+            throw exceptions::invalid_request_exception("Cannot use conditions in GROUP0 BATCH");
+        }
+        // Validate that all statements target system keyspace tables managed by group0
+        for (auto& s : _statements) {
+            if (s.statement->keyspace() != "system") {
+                throw exceptions::invalid_request_exception("GROUP0 BATCH can only modify system keyspace tables");
+            }
+        }
+        return;
     }
 
     bool has_counters = std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
@@ -235,6 +260,9 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
         query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
+    if (_type == type::GROUP0) {
+        return execute_group0_batch(qp, state, options, std::move(guard));
+    }
     return execute_without_checking_exception_message(qp, state, options, std::move(guard))
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
@@ -283,6 +311,39 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 make_shared<cql_transport::messages::result_message::void_message>());
     });
+}
+
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_group0_batch(
+        query_processor& qp,
+        service::query_state& query_state, const query_options& options,
+        std::optional<service::group0_guard> guard) const
+{
+    if (!guard) {
+        throw exceptions::invalid_request_exception("GROUP0 BATCH requires a guard");
+    }
+
+    auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    
+    // Create group0_batch and get the timestamp from it
+    service::group0_batch mc{std::move(guard)};
+    auto now = mc.write_timestamp();
+    
+    // Get mutations from all statements
+    auto mutations = co_await get_mutations(qp, options, timeout, false, now, query_state);
+    
+    // Add mutations to the group0_batch
+    mc.add_mutations(std::move(mutations), format("CQL GROUP0 BATCH: \"{}\"", raw_cql_statement));
+    
+    // Announce the batch via group0
+    auto description = format("CQL GROUP0 BATCH: \"{}\"", raw_cql_statement);
+    auto [remote_, holder] = qp.remote();
+    auto [m, g] = co_await std::move(mc).extract();
+    
+    if (!m.empty()) {
+        co_await remote_.get().mm.announce(std::move(m), std::move(g), description);
+    }
+    
+    co_return make_shared<cql_transport::messages::result_message::void_message>();
 }
 
 future<coordinator_result<>> batch_statement::execute_without_conditions(
