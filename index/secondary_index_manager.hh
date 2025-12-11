@@ -103,7 +103,7 @@ public:
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
     virtual bool view_should_exist() const = 0;
-    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
+    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs, const data_dictionary::database& db) = 0;
     virtual table_schema_version index_version(const schema& schema) = 0;
 };
 

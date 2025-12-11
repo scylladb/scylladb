@@ -119,7 +119,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
             throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
         }
         auto custom_index = (*custom_index_factory)();
-        custom_index->validate(*schema, *_properties, targets, db.features());
+        custom_index->validate(*schema, *_properties, targets, db.features(), db);
         _properties->index_version = custom_index->index_version(*schema);
     }
 
