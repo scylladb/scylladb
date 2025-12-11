@@ -887,42 +887,8 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
-    state.p->statement->validate(*this, service::client_state::for_internal_calls());
     auto qs = query_state_for_internal_call();
-    ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
-
-    class visitor : public result_message::visitor_base {
-        internal_query_state& _state;
-        query_processor& _qp;
-    public:
-        visitor(internal_query_state& state, query_processor& qp) : _state(state), _qp(qp) {
-        }
-        virtual ~visitor() = default;
-        void visit(const result_message::rows& rmrs) override {
-            auto& rs = rmrs.rs();
-            if (rs.get_metadata().paging_state()) {
-                bool done = !rs.get_metadata().flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
-
-                if (done) {
-                    _state.more_results = false;
-                } else {
-                    const service::pager::paging_state& st = *rs.get_metadata().paging_state();
-                    lw_shared_ptr<service::pager::paging_state> shrd = make_lw_shared<service::pager::paging_state>(st);
-                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), shrd);
-                    _state.p = _qp.prepare_internal(_state.query_string);
-                }
-            } else {
-                _state.more_results = false;
-            }
-        }
-    };
-    visitor v(state, *this);
-    if (msg != nullptr) {
-        msg->accept(v);
-    }
-
-    co_return ::make_shared<untyped_result_set>(msg);
+    return execute_paged_internal(state, qs);
 }
 
 future<::shared_ptr<untyped_result_set>>
