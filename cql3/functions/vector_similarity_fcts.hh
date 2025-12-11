@@ -26,6 +26,8 @@ public:
 
     virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
 
+    virtual float compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) = 0;
+
     static std::vector<data_type> provide_arg_types(
             const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args, const data_dictionary::database& db);
 };
@@ -37,6 +39,8 @@ public:
     }
 
     virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
+
+    virtual float compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) override;
 };
 
 
@@ -47,6 +51,8 @@ public:
     }
 
     virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
+
+    virtual float compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) override;
 };
 
 class similarity_dot_product_fct : public vector_similarity_fct {
@@ -56,6 +62,8 @@ public:
     }
 
     virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
+
+    virtual float compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) override;
 };
 
 } // namespace functions
