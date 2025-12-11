@@ -105,14 +105,69 @@ def test_is_null_combined_with_other_restrictions(cql, table1):
     assert result[0].c == 4
 
 
-def test_is_null_clustering_key(cql, table1):
-    """Test that IS NULL on clustering key requires ALLOW FILTERING"""
-    p = unique_key_int()
-    cql.execute(f"INSERT INTO {table1} (p, c, v) VALUES ({p}, 1, 10)")
+def test_is_null_on_partition_key(cql, table1):
+    """Test IS NULL and IS NOT NULL on partition key columns
     
-    # IS NULL on clustering key should work with ALLOW FILTERING
+    Key columns can never be null, so:
+    - IS NULL should always return no rows
+    - IS NOT NULL should always be true (may not require ALLOW FILTERING)
+    """
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES ({p}, 1, 10, 'a')")
+    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES ({p}, 2, 20, 'b')")
+    
+    # IS NULL on partition key should return no rows (keys can never be null)
+    result = list(cql.execute(f"SELECT * FROM {table1} WHERE p IS NULL ALLOW FILTERING"))
+    assert len(result) == 0
+    
+    # IS NOT NULL on partition key should match all rows
+    # Since partition keys can never be null, this is always true
+    result = list(cql.execute(f"SELECT * FROM {table1} WHERE p IS NOT NULL ALLOW FILTERING"))
+    # This returns all rows from all partitions, so we should at least see our 2 rows
+    assert len([r for r in result if r.p == p]) == 2
+
+
+def test_is_null_on_clustering_key(cql, table1):
+    """Test IS NULL and IS NOT NULL on clustering key columns
+    
+    Key columns can never be null, so:
+    - IS NULL should always return no rows
+    - IS NOT NULL should always be true (may not require ALLOW FILTERING)
+    """
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES ({p}, 1, 10, 'a')")
+    cql.execute(f"INSERT INTO {table1} (p, c, v, s) VALUES ({p}, 2, 20, 'b')")
+    
+    # IS NULL on clustering key should return no rows (keys can never be null)
+    result = list(cql.execute(f"SELECT * FROM {table1} WHERE p = {p} AND c IS NULL ALLOW FILTERING"))
+    assert len(result) == 0
+    
+    # IS NOT NULL on clustering key with partition key specified
+    # Since clustering keys can never be null, this is always true
     result = list(cql.execute(f"SELECT * FROM {table1} WHERE p = {p} AND c IS NOT NULL ALLOW FILTERING"))
-    assert len(result) == 1
+    assert len(result) == 2
+
+
+def test_is_null_on_compound_partition_key(cql, test_keyspace):
+    """Test IS NULL and IS NOT NULL on compound partition key columns"""
+    with new_test_table(cql, test_keyspace, "p1 int, p2 int, c int, v int, PRIMARY KEY ((p1, p2), c)") as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 2, 20)")
+        
+        # IS NULL on first partition key component should return no rows
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE p1 IS NULL ALLOW FILTERING"))
+        assert len(result) == 0
+        
+        # IS NULL on second partition key component should return no rows
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE p2 IS NULL ALLOW FILTERING"))
+        assert len(result) == 0
+        
+        # IS NOT NULL on partition key components should match all rows
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE p1 IS NOT NULL ALLOW FILTERING"))
+        assert len(result) == 2
+        
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE p2 IS NOT NULL ALLOW FILTERING"))
+        assert len(result) == 2
 
 
 def test_is_null_without_filtering_error(cql, table1):
