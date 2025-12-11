@@ -10,6 +10,7 @@
 
 #include "utils/chunked_vector.hh"
 #include "mutation/mutation.hh"
+#include "query/query-result.hh"
 
 namespace service {
 
@@ -59,6 +60,13 @@ public:
     using mutatations_gen = noncopyable_function<utils::chunked_vector<mutation>(api::timestamp_type)>;
     future<sc_operation_result<>> mutate(const schema& schema, const dht::token& token, 
         mutatations_gen&& mutatations_gen);
+
+    future<sc_operation_result<lw_shared_ptr<query::result>>> query(const schema& schema,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout
+    );
 };
 
 }

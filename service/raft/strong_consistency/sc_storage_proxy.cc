@@ -94,4 +94,14 @@ future<sc_operation_result<>> sc_storage_proxy::mutate(const schema& schema, con
     co_await raft_server.add_entry(std::move(raft_cmd), raft::wait_type::applied, nullptr);
     co_return sc_operation_result<>::result();
 }
+
+future<sc_operation_result<lw_shared_ptr<query::result>>> sc_storage_proxy::query(const schema& schema,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout
+    )
+{
+    throw std::runtime_error("not implemented");
+}
 }
