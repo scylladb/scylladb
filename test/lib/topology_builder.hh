@@ -259,18 +259,15 @@ public:
         return h;
     }
 
-    void set_node_state(locator::host_id id, service::node_state state) {
+    void modify_topology(std::function<void(service::topology_mutation_builder&)> func) {
         abort_source as;
         auto& client = _env.get_raft_group0_client();
         while (true) {
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
-            builder.with_node(raft::server_id(id.uuid()))
-                    .set("node_state", state);
+            func(builder);
             service::topology_change change({builder.build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
-                                                                    format("node {} state={}", id, state));
-            testlog.info("Changing node {} state={}", id, state);
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "modify_topology()");
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
                 break;
@@ -278,6 +275,22 @@ public:
                 testlog.warn("Concurrent modification detected, retrying");
             }
         }
+    }
+
+    void set_node_state(locator::host_id id, service::node_state state) {
+        modify_topology([&](service::topology_mutation_builder& builder) {
+            testlog.info("Changing node {} state={}", id, state);
+            builder.with_node(raft::server_id(id.uuid()))
+                   .set("node_state", state);
+        });
+    }
+
+    void set_drained(locator::host_id id, bool drained) {
+        modify_topology([&](service::topology_mutation_builder& builder) {
+            testlog.info("Changing node {} drained={}", id, drained);
+            builder.with_node(raft::server_id(id.uuid()))
+                   .set("drained", drained);
+        });
     }
 
     const std::vector<locator::host_id>& hosts() const {
