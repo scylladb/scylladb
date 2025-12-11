@@ -18,7 +18,7 @@ jobs:
             
             // Regular expression pattern to check for "Fixes" prefix
             // Adjusted to dynamically insert the repository full name
-            const pattern = `Fixes:? (?:#|${repo.replace('/', '\\/')}#|https://github\\.com/${repo.replace('/', '\\/')}/issues/)(\\d+)`;
+            const pattern = `Fixes:? ((?:#|${repo.replace('/', '\\/')}#|https://github\\.com/${repo.replace('/', '\\/')}/issues/)(\\d+)|([A-Z]+-\\d+))`;
             const regex = new RegExp(pattern);
             
             if (!regex.test(body)) {
