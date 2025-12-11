@@ -528,17 +528,15 @@ private:
      *
      * \note Optimized for convenience, not performance.
      */
-    future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state);
-
     /*!
-     * \brief run a query using paging with a custom query_state (for timeout control)
+     * \brief run a query using paging with an optional custom query_state (for timeout control)
      *
      * state - internal query state containing prepared statement and options
-     * query_state - query state with custom timeout configuration
+     * query_state - optional query state with custom timeout configuration (defaults to internal query state)
      *
      * \note Optimized for convenience, not performance.
      */
-    future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state, service::query_state& query_state);
+    future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state, service::query_state* query_state = nullptr);
 
     /*!
      * \brief iterate over all results using paging, accept a function that returns a future

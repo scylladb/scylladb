@@ -886,16 +886,11 @@ future<> query_processor::for_each_cql_result(
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::execute_paged_internal(internal_query_state& state) {
-    auto qs = query_state_for_internal_call();
-    return execute_paged_internal(state, qs);
-}
-
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_paged_internal(internal_query_state& state, service::query_state& query_state) {
+query_processor::execute_paged_internal(internal_query_state& state, service::query_state* query_state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
+    auto qs = query_state ? *query_state : query_state_for_internal_call();
     ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, query_state, *state.opts, std::nullopt);
+      co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
@@ -935,7 +930,7 @@ future<> query_processor::for_each_cql_result(
         service::query_state& query_state,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
     do {
-        auto msg = co_await execute_paged_internal(state, query_state);
+        auto msg = co_await execute_paged_internal(state, &query_state);
         for (auto& row : *msg) {
             if ((co_await f(row)) == stop_iteration::yes) {
                 co_return;
