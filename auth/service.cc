@@ -934,7 +934,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             start_operation_func,
             std::move(gen),
             as,
-            std::nullopt);
+            get_raft_timeout());
 }
 
 }
