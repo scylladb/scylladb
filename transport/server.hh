@@ -40,6 +40,7 @@
 #include "exceptions/exceptions.hh"
 #include "db/operation_type.hh"
 #include "service/maintenance_mode.hh"
+#include "service/client_routes.hh"
 
 namespace cql3 {
 
@@ -317,6 +318,7 @@ private:
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
         std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
         std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
+        std::unique_ptr<cql_server::response> make_client_routes_change_event(const cql_transport::event::client_routes_change& event) const;
         std::unique_ptr<cql_server::response> make_autheticate(int16_t, std::string_view, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
@@ -385,6 +387,7 @@ class cql_server::event_notifier : public service::migration_listener,
     std::set<cql_server::connection*> _topology_change_listeners;
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
+    std::set<cql_server::connection*> _client_routes_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
 
     // We want to delay sending NEW_NODE CQL event to clients until the new node
@@ -427,6 +430,8 @@ public:
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
     virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) override;
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) override;
+
+    virtual void on_client_routes_change(const service::client_routes_service::client_route_keys& client_route_keys) override;
 };
 
 inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }

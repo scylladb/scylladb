@@ -58,6 +58,7 @@ public:
     }
 
     void serialize(const event::schema_change& event, uint8_t version);
+    void serialize(const event::client_routes_change& event, uint8_t version);
     void write_byte(uint8_t b);
     void write_int(int32_t n);
     placeholder<int32_t> write_int_placeholder();
