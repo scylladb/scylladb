@@ -54,19 +54,20 @@ public:
 class sc_storage_proxy: public peering_sharded_service<sc_storage_proxy> {
     raft_group_registry& _raft_groups;
     db::system_keyspace& _sys_ks;
+    replica::database& _db;
 public:
-    sc_storage_proxy(raft_group_registry& raft_groups, db::system_keyspace& sys_ks);
+    sc_storage_proxy(raft_group_registry& raft_groups, db::system_keyspace& sys_ks, replica::database& db);
 
     using mutatations_gen = noncopyable_function<utils::chunked_vector<mutation>(api::timestamp_type)>;
     future<sc_operation_result<>> mutate(const schema& schema, const dht::token& token, 
         mutatations_gen&& mutatations_gen);
 
-    future<sc_operation_result<lw_shared_ptr<query::result>>> query(const schema& schema,
+    using query_result_type = sc_operation_result<lw_shared_ptr<query::result>>;
+    future<query_result_type> query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout
-    );
+        db::timeout_clock::time_point timeout);
 };
 
 }

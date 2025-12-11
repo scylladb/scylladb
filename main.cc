@@ -1809,7 +1809,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing sc storage proxy");
             sharded<service::sc_storage_proxy> sc_storage_proxy;
-            sc_storage_proxy.start(std::ref(raft_gr), std::ref(sys_ks)).get();
+            sc_storage_proxy.start(std::ref(raft_gr), std::ref(sys_ks), std::ref(db)).get();
             auto stop_sc_storage_proxy = defer_verbose_shutdown("sc storage proxy", [&] {
                 sc_storage_proxy.stop().get();
             });
