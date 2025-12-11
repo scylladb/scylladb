@@ -17,18 +17,22 @@
 
 namespace service {
 
+class endpoint_lifecycle_notifier;
+
 class client_routes_service : public seastar::peering_sharded_service<client_routes_service> {
 public:
     client_routes_service(
         abort_source& abort_source,
         gms::feature_service& feature_service,
         service::raft_group0_client& group0_client,
-        cql3::query_processor& qp
+        cql3::query_processor& qp,
+        endpoint_lifecycle_notifier& elc_notif
     )
     : _abort_source(abort_source)
     , _feature_service(feature_service)
     , _group0_client(group0_client)
-    , _qp(qp) { }
+    , _qp(qp)
+    , _lifecycle_notifier(elc_notif) { }
 
     struct client_route_key {
         sstring connection_id;
@@ -65,6 +69,9 @@ public:
     seastar::future<> set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
     seastar::future<> delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys);
 
+
+    // notifications
+    seastar::future<> notify_client_routes_change(const client_route_keys& client_route_keys);
 private:
     seastar::future<> set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
     seastar::future<> delete_client_routes_inner(const std::vector<service::client_routes_service::client_route_key>& route_keys);
@@ -75,6 +82,7 @@ private:
     gms::feature_service& _feature_service;
     service::raft_group0_client& _group0_client;
     cql3::query_processor& _qp;
+    endpoint_lifecycle_notifier& _lifecycle_notifier;
 };
 
 }

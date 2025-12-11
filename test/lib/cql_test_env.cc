@@ -29,6 +29,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
+#include "service/client_routes.hh"
 #include "service/migration_manager.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/tablet_allocator.hh"
@@ -146,6 +147,7 @@ private:
     sharded<db::view::view_update_generator> _view_update_generator;
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
+    sharded<service::client_routes_service> _client_routes;
     sharded<qos::service_level_controller::auth_integration> _sl_controller_auth_integration;
     sharded<service::topology_state_machine> _topology_state_machine;
     sharded<db::view::view_building_state_machine> _view_building_state_machine;
@@ -954,6 +956,7 @@ private:
                 std::ref(_view_builder), std::ref(_view_building_worker),
                 std::ref(_qp),
                 std::ref(_sl_controller),
+                std::ref(_client_routes),
                 std::ref(_topology_state_machine),
                 std::ref(_view_building_state_machine),
                 std::ref(_task_manager),
