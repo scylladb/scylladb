@@ -386,7 +386,6 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     if (_feature_service.cdc_with_tablets) {
         co_await _ss.load_cdc_streams();
     }
-    co_await _ss.auth_cache().load_all();
     _ss._topology_state_machine.event.broadcast();
     _ss._view_building_state_machine.event.broadcast();
 }
