@@ -78,6 +78,7 @@
 #include "readers/multishard.hh"
 #include "readers/filtering.hh"
 #include "delete_ghost_rows_visitor.hh"
+#include "keys/clustering_interval_set.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
 #include "idl/view.dist.hh"
@@ -1658,7 +1659,10 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_ptr>& views) {
-    // WARNING: interval<clustering_key_prefix_view> is unsafe - refer to scylladb#22817 and scylladb#21604
+    // FIXME: This function should be refactored to use position_range and clustering_interval_set
+    // instead of interval<clustering_key_prefix_view> to avoid issues with intersection and deoverlap.
+    // See scylladb#22817, scylladb#21604, and scylladb#8157 for details.
+    // The current implementation uses unsafe operations that can return incorrect results.
     utils::chunked_vector<interval<clustering_key_prefix_view>> row_ranges;
     utils::chunked_vector<interval<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
@@ -1684,7 +1688,10 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
                     bound_view::to_interval_bound<interval>(rt.start_bound()),
                     bound_view::to_interval_bound<interval>(rt.end_bound()));
             for (auto&& vr : view_row_ranges) {
-                // WARNING: interval<clustering_key_prefix_view>::intersection can return incorrect results - refer to scylladb#8157 and scylladb#21604
+                // FIXME: interval<clustering_key_prefix_view>::intersection can return incorrect results
+                // (scylladb#8157, scylladb#21604). This should be refactored to use position_range.
+                // Proper fix: Convert to position_range, check overlap using position_range::overlaps(),
+                // compute intersection manually with position_in_partition comparisons.
                 auto overlap = rtr.intersection(vr, cmp);
                 if (overlap) {
                     row_ranges.push_back(std::move(overlap).value());
@@ -1708,15 +1715,18 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     // content, in case the view includes a column that is not included in
     // this mutation.
 
-    query::clustering_row_ranges result_ranges;
-    // FIXME: scylladb#22817 - interval<clustering_key_prefix_view>::deoverlap can return incorrect results
-    auto deoverlapped_ranges = interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp);
-    result_ranges.reserve(deoverlapped_ranges.size());
-    for (auto&& r : deoverlapped_ranges) {
-        result_ranges.emplace_back(std::move(r).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); }));
-        co_await coroutine::maybe_yield();
+    // FIXME: interval<clustering_key_prefix_view>::deoverlap can return incorrect results (scylladb#22817)
+    // Proper fix: Convert row_ranges to clustering_row_ranges, then use clustering_interval_set
+    // which handles deoverlapping correctly via position_range internally.
+    query::clustering_row_ranges temp_ranges;
+    temp_ranges.reserve(row_ranges.size());
+    for (auto&& r : row_ranges) {
+        temp_ranges.emplace_back(std::move(r).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); }));
     }
-    co_return result_ranges;
+    
+    // Use clustering_interval_set for correct deoverlapping (fixes scylladb#22817)
+    clustering_interval_set interval_set(base, temp_ranges);
+    co_return interval_set.to_clustering_row_ranges();
 }
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_ptr>& views) {

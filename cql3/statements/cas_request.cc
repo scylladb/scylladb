@@ -19,6 +19,7 @@
 #include "types/map.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
+#include "keys/clustering_interval_set.hh"
 
 namespace cql3::statements {
 
@@ -87,8 +88,9 @@ lw_shared_ptr<query::read_command> cas_request::read_command(query_processor& qp
         ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
         max_rows = 1;
     } else {
-        // WARNING: clustering_range::deoverlap can return incorrect results - refer to scylladb#22817 and scylladb#21604
-        ranges = query::clustering_range::deoverlap(std::move(ranges), clustering_key::tri_compare(*_schema));
+        // Use clustering_interval_set to correctly deoverlap ranges (fixes scylladb#22817 and scylladb#21604)
+        clustering_interval_set interval_set(*_schema, ranges);
+        ranges = interval_set.to_clustering_row_ranges();
     }
     auto options = update_parameters::options;
     options.set(query::partition_slice::option::always_return_static_content);
