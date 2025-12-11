@@ -1778,7 +1778,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         .del_repair_task_info(last_token, _feature_service)
                                         .del_session(last_token);
                         for (auto& m : tablet_state.repair_task_updates) {
-                            updates.push_back(std::move(m));
+                            updates.push_back(m);
                         }
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
