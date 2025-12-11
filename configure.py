@@ -859,6 +859,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/alien_worker.cc',
                 'utils/array-search.cc',
                 'utils/base64.cc',
+                'utils/crypt_sha512.cc',
                 'utils/logalloc.cc',
                 'utils/large_bitset.cc',
                 'utils/buffer_input_stream.cc',
@@ -1479,7 +1480,6 @@ deps = {
 
 pure_boost_tests = set([
     'test/boost/anchorless_list_test',
-    'test/boost/auth_passwords_test',
     'test/boost/auth_resource_test',
     'test/boost/big_decimal_test',
     'test/boost/caching_options_test',

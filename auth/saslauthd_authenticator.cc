@@ -35,10 +35,9 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::raft_group0_client&,
         ::service::migration_manager&,
-        cache&,
-        utils::alien_worker&> saslauthd_auth_reg("com.scylladb.auth.SaslauthdAuthenticator");
+        cache&> saslauthd_auth_reg("com.scylladb.auth.SaslauthdAuthenticator");
 
-saslauthd_authenticator::saslauthd_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, cache&, utils::alien_worker&)
+saslauthd_authenticator::saslauthd_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, cache&)
     : _socket_path(qp.db().get_config().saslauthd_socket_path())
 {}
 
