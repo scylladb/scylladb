@@ -56,9 +56,16 @@ void service::client_state::validate_login() const {
 
 void service::client_state::ensure_not_anonymous() const {
     validate_login();
+    if (is_from_maintenance_socket()) {
+        return;
+    }
     if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
+}
+
+bool service::client_state::is_from_maintenance_socket() const {
+    return _auth_service->is_used_by_maintenance_socket();
 }
 
 future<> service::client_state::has_all_keyspaces_access(
