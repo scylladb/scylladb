@@ -1748,6 +1748,33 @@ void do_rebalance_tablets(cql_test_env& e,
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
 
+static
+void apply_resize_decisions(cql_test_env& e, shared_load_stats& stats) {
+    testlog.debug("apply_resize_decisions(): start");
+
+    abort_source as;
+    auto guard = e.get_raft_group0_client().start_operation(as).get();
+
+    auto& talloc = e.get_tablet_allocator().local();
+    auto& stm = e.shared_token_metadata().local();
+    auto plan = talloc.balance_tablets(stm.get(),
+                                       &e.get_topology_state_machine().local()._topology,
+                                       &e.get_system_keyspace().local(),
+                                       stats.get()).get();
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        return apply_resize_plan(tm, plan);
+    }).get();
+
+    // We should not introduce inconsistency between on-disk state and in-memory state
+    // as that may violate invariants and cause failures in later operations
+    // causing test flakiness.
+    save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+    e.get_storage_service().local().update_tablet_metadata({}).get();
+
+    testlog.debug("apply_resize_decisions(): done");
+}
+
 // Invokes the tablet scheduler and executes its plan, continuously until it emits an empty plan.
 // Simulates topology coordinator but doesn't perform actual migration,
 // only reflects it in the metadata.
@@ -1786,10 +1813,15 @@ void rebalance_tablets(cql_test_env& e,
 }
 
 static
-void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm, shared_load_stats& stats) {
+void rebalance_tablets_as_in_progress(cql_test_env& env, shared_load_stats& stats,
+                                      std::function<bool(const migration_plan&)> stop = nullptr) {
+    auto& stm = env.local_db().get_shared_token_metadata();
+    auto& talloc = env.get_tablet_allocator().local();
+    auto& topology = env.get_topology_state_machine().local()._topology;
+    auto& sys_ks = env.get_system_keyspace().local();
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get(), nullptr, nullptr, stats.get()).get();
-        if (plan.empty()) {
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, stats.get()).get();
+        if (plan.empty() || (stop && stop(plan))) {
             break;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
@@ -2141,6 +2173,97 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
             }
         }
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+
+        auto host1 = topo.add_node(node_state::normal, 2, rack1);
+
+        // host2 has 1 shard so that rack2 doesn't need co-location and if any, it will be on host1
+        auto host2 = topo.add_node(node_state::normal, 1, rack2);
+
+        auto ks_name = add_keyspace_racks(e, {{topo.dc(), {rack1.rack, rack2.rack}}}, 8);
+        auto table1 = add_table(e, ks_name).get();
+        topo.get_shared_load_stats().set_size(table1, 0);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        topo.add_node(node_state::normal, 1, rack1); // So that balancer doesn't exit early due to no candidate nodes.
+        e.get_storage_service().local().mark_excluded({host1}).get();
+        topo.add_draining_request(host1);
+
+        // trigger merge
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
+        apply_resize_decisions(e, topo.get_shared_load_stats());
+
+        // Sanity check, to verify that co-location was attempted.
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).needs_merge());
+
+        abort_source as;
+        auto guard = e.get_raft_group0_client().start_operation(as).get();
+        rebalance_tablets_as_in_progress(e, topo.get_shared_load_stats(), [&] (const migration_plan& plan) {
+            // Verify that only rebuilding migrations involve the excluded host.
+            for (auto&& mig : plan.migrations()) {
+                BOOST_REQUIRE_NE(mig.dst.host, host1);
+                if (mig.src.host == host1) {
+                    BOOST_REQUIRE(mig.kind == tablet_transition_kind::rebuild_v2);
+                }
+            }
+            return false;
+        });
+
+        // Restore consistency between stm and system tables before releasing group0 guard.
+        save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+    }, tablet_cql_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_no_intranode_migration_on_draining_node) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+
+        // host which is decommissioned has more shards so that it has spare streaming capacity
+        // to be used by potential intra-node migration.
+        auto host1 = topo.add_node(node_state::normal, 5, rack1);
+        auto host2 = topo.add_node(node_state::normal, 1, rack1);
+
+        auto ks_name = add_keyspace_racks(e, {{topo.dc(), {rack1.rack}}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+        topo.get_shared_load_stats().set_size(table1, 0);
+
+        topo.add_draining_request(host1);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // trigger merge to exercise co-location
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
+        apply_resize_decisions(e, topo.get_shared_load_stats());
+
+        // Sanity check, to verify that co-location was attempted.
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).needs_merge());
+
+        abort_source as;
+        auto guard = e.get_raft_group0_client().start_operation(as).get();
+        rebalance_tablets_as_in_progress(e, topo.get_shared_load_stats(), [&] (const migration_plan& plan) {
+            // Verify no intra-node migrations on the draining host.
+            for (auto&& mig : plan.migrations()) {
+                if (mig.src.host == host1) {
+                    BOOST_REQUIRE_NE(mig.dst.host, host1);
+                }
+            }
+            return false;
+        });
+
+        // Restore consistency between stm and system tables before releasing group0 guard.
+        save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+    }, tablet_cql_test_config()).get();
 }
 
 // Throws if tablets have more than 1 replica in a given rack.
@@ -3301,7 +3424,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
 
     topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
 
-    rebalance_tablets_as_in_progress(e.get_tablet_allocator().local(), stm, topo.get_shared_load_stats());
+    rebalance_tablets_as_in_progress(e, topo.get_shared_load_stats());
     execute_transitions(stm);
 
     {
