@@ -3,6 +3,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "service/raft/strong_consistency/sc_storage_proxy.hh"
+#include "replica/database.hh"
 
 namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
@@ -37,13 +38,24 @@ future<shared_ptr<result_message>> sc_modification_statement::execute_without_ch
 
     auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
     auto [proxy, holder] = qp.acquire_sc_storage_proxy();
-    co_await proxy.get().mutate(*_statement->s, keys[0].start()->value().token(), [&](api::timestamp_type ts) {
+    const auto mutate_result = co_await proxy.get().mutate(*_statement->s, keys[0].start()->value().token(), [&](api::timestamp_type ts) {
         auto muts = _statement->get_mutations(qp, options, timeout, false, ts, qs, json_cache, keys);
         if (!muts.available()) {
             on_internal_error(logger, "get_mutations must return a resolved future");
         }
         return std::move(muts.get());
     });
+    if (const auto* redirect = mutate_result.get_if_redirect()) {
+        const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
+        if (redirect->host != my_host_id) {
+            throw exceptions::invalid_request_exception(format(
+                "Strongly consistent queries can be executed only on the leader node, "
+                "leader id {}, current host id {}",
+                redirect->host, my_host_id));
+        }
+        auto&& func_values_cache = const_cast<cql3::query_options&>(options).take_cached_pk_function_calls();
+        co_return qp.bounce_to_shard(redirect->shard, std::move(func_values_cache));
+    }
 
     co_return seastar::make_shared<result_message::void_message>();
 }
