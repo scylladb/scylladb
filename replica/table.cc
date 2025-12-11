@@ -708,7 +708,7 @@ public:
         return *_single_sg;
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const noexcept override {
+    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const override {
         return locator::combined_load_stats{
             .table_ls = locator::table_load_stats{
                             .size_in_bytes = _single_sg->live_disk_space_used(),
@@ -874,7 +874,7 @@ public:
         return storage_group_for_id(storage_group_of(token).first);
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept override;
+    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const override;
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
@@ -922,7 +922,7 @@ compaction_group_ptr& storage_group::select_compaction_group(locator::tablet_ran
     return _main_cg;
 }
 
-void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept {
+void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const {
     action(_main_cg);
     for (auto& cg : _merging_groups) {
         action(cg);
@@ -932,7 +932,7 @@ void storage_group::for_each_compaction_group(std::function<void(const compactio
     }
 }
 
-utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() noexcept {
+utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() {
     utils::small_vector<compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);
@@ -940,7 +940,7 @@ utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() 
     return cgs;
 }
 
-utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups() const noexcept {
+utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups() const {
     utils::small_vector<const_compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);
@@ -1890,7 +1890,7 @@ sstables::file_size_stats compaction_group::live_disk_space_used_full_stats() co
     return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
 }
 
-uint64_t storage_group::live_disk_space_used() const noexcept {
+uint64_t storage_group::live_disk_space_used() const {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
 }
@@ -2813,7 +2813,7 @@ void table::on_flush_timer() {
     });
 }
 
-locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
+locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
     locator::table_load_stats table_stats;
     table_stats.split_ready_seq_number = _split_ready_seq_number;
 
@@ -2836,7 +2836,7 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std:
     };
 }
 
-locator::combined_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
+locator::combined_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
     return _sg_manager->table_load_stats(std::move(tablet_filter));
 }
 
@@ -3456,7 +3456,7 @@ size_t compaction_group::memtable_count() const noexcept {
     return _memtables->size();
 }
 
-size_t storage_group::memtable_count() const noexcept {
+size_t storage_group::memtable_count() const {
     return std::ranges::fold_left(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
 }
 
