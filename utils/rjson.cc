@@ -33,7 +33,7 @@ private:
     chunked_content::iterator _current_chunk;
     // _count only needed for Tell(). 32 bits is enough, we don't allow
     // more than 16 MB requests anyway.
-    unsigned _count;
+    unsigned _count{0};
 public:
     typedef char Ch;
     chunked_content_stream(chunked_content&& content)
