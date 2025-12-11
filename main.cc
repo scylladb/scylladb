@@ -1798,7 +1798,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing client routes service");
             static sharded<service::client_routes_service> client_routes;
-            client_routes.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(group0_client), std::ref(qp)).get();
+            client_routes.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(group0_client), std::ref(qp), std::ref(lifecycle_notifier)).get();
             auto stop_client_routes = defer_verbose_shutdown("client_routes", [&] {
                 client_routes.stop().get();
             });
@@ -1811,7 +1811,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(view_building_worker), std::ref(qp), std::ref(sl_controller),
-                std::ref(auth_cache),
+                std::ref(auth_cache), std::ref(client_routes),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)

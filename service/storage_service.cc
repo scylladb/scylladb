@@ -205,6 +205,7 @@ storage_service::storage_service(abort_source& abort_source,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
     auth::cache& auth_cache,
+    sharded<client_routes_service>& client_routes,
     topology_state_machine& topology_state_machine,
     db::view::view_building_state_machine& view_building_state_machine,
     tasks::task_manager& tm,
@@ -224,6 +225,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _snitch(snitch)
         , _sl_controller(sl_controller)
         , _auth_cache(auth_cache)
+        , _client_routes(client_routes)
         , _group0(nullptr)
         , _async_gate("storage_service")
         , _node_ops_abort_thread(node_ops_abort_thread())
@@ -1420,7 +1422,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
             _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
     auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
 
-    co_await write_mutations_to_database(_qp.proxy(), mutation_creator_addr, std::move(change.mutations));
+    co_await write_mutations_to_database(*this, _qp.proxy(), mutation_creator_addr, std::move(change.mutations));
     co_await _qp.proxy().mutate_locally({history_append}, nullptr);
 }
 
@@ -8044,6 +8046,18 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint, 
     });
 }
 
+future<> endpoint_lifecycle_notifier::notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys) {
+    co_await seastar::async([this, &client_route_keys] {
+        _subscribers.thread_for_each([&client_route_keys] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_client_routes_change(client_route_keys);
+            } catch (...) {
+                slogger.warn("Client routes notification failed: {}", std::current_exception());
+            }
+        });
+    });
+}
+
 future<> storage_service::notify_joined(inet_address endpoint, locator::host_id hid) {
     co_await utils::get_local_injector().inject(
         "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
@@ -8066,6 +8080,10 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
     } else {
         co_await notify_down(endpoint, hid);
     }
+}
+
+future<> storage_service::notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys) {
+    co_await _client_routes.local().notify_client_routes_change(client_route_keys);
 }
 
 bool storage_service::is_normal_state_handled_on_boot(locator::host_id node) {

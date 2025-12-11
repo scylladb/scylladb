@@ -130,6 +130,6 @@ public:
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);
 
 // Used to write data to topology and other tables except schema tables.
-future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
 
 } // end of namespace service
