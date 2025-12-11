@@ -278,18 +278,15 @@ public:
         return h;
     }
 
-    void set_node_state(locator::host_id id, service::node_state state) {
+    void modify_group0(std::function<void(service::group0_guard&, utils::chunked_vector<canonical_mutation>&)> func) {
         abort_source as;
         auto& client = _env.get_raft_group0_client();
         while (true) {
             auto guard = client.start_operation(as).get();
-            service::topology_mutation_builder builder(guard.write_timestamp());
-            builder.with_node(raft::server_id(id.uuid()))
-                    .set("node_state", state);
-            service::topology_change change({builder.build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
-                                                                    format("node {} state={}", id, state));
-            testlog.info("Changing node {} state={}", id, state);
+            utils::chunked_vector<canonical_mutation> muts;
+            func(guard, muts);
+            service::topology_change change({std::move(muts)});
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "modify_topology()");
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
                 break;
@@ -297,6 +294,14 @@ public:
                 testlog.warn("Concurrent modification detected, retrying");
             }
         }
+    }
+
+    void modify_topology(std::function<void(service::topology_mutation_builder&)> func) {
+        modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            func(builder);
+            muts.emplace_back(builder.build());
+        });
     }
 
     void pause_rf_change_request(utils::UUID new_elem) {
@@ -335,6 +340,36 @@ public:
                 testlog.warn("Concurrent modification detected, retrying");
             }
         }
+    }
+
+    void set_node_state(locator::host_id id, service::node_state state) {
+        modify_topology([&](service::topology_mutation_builder& builder) {
+            testlog.info("Changing node {} state={}", id, state);
+            builder.with_node(raft::server_id(id.uuid()))
+                   .set("node_state", state);
+        });
+    }
+
+    void add_draining_request(locator::host_id id) {
+        modify_group0([&](service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            auto& topo = _env.local_db().get_shared_token_metadata().get()->get_topology();
+            auto req = topo.get_node(id).is_excluded() ? service::topology_request::remove : service::topology_request::leave;
+
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            builder.with_node(raft::server_id(id.uuid()))
+                    .set("topology_request", req)
+                    .set("request_id", guard.new_group0_state_id());
+            muts.emplace_back(builder.build());
+
+            service::topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(),
+                                                                 _env.local_db().features().topology_requests_type_column);
+            rtbuilder.set("initiating_host", raft::server_id(topo.my_host_id().uuid()))
+                    .set("done", false);
+            rtbuilder.set("request_type", req);
+            muts.emplace_back(rtbuilder.build());
+
+            testlog.info("Adding {} request for node {}", req, id);
+        });
     }
 
     const std::vector<locator::host_id>& hosts() const {
