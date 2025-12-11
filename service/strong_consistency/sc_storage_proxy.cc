@@ -160,6 +160,19 @@ auto sc_storage_proxy::query(schema_ptr schema,
         db::timeout_clock::time_point timeout
     ) -> future<query_result_type>
 {
-    throw std::runtime_error("not implemented");
+    auto sc_op_result = co_await create_sc_operation_ctx(*schema,
+        ranges[0].start()->value().token(),
+        _sc_groups);
+    if (const auto* redirect = sc_op_result.get_if_redirect()) {
+        co_return query_result_type::redirect(*redirect);
+    }
+    auto sc_op = std::move(sc_op_result).extract_result();
+
+    co_await sc_op.raft_server.server().read_barrier(nullptr);
+
+    auto [result, cache_temp] = co_await _db.query(schema, cmd,
+        query::result_options::only_result(), ranges, trace_state, timeout);
+
+    co_return query_result_type::result(std::move(result));
 }
 }
