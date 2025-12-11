@@ -1470,6 +1470,23 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_max_expression_cache_entries_per_shard(this, "alternator_max_expression_cache_entries_per_shard", liveness::LiveUpdate, value_status::Used, 2000, "Maximum number of cached parsed request expressions, per shard.")
     , alternator_max_users_query_size_in_trace_output(this, "alternator_max_users_query_size_in_trace_output", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
             "Maximum size of user's command in trace output (`alternator_op` entry). Larger traces will be truncated and have `<truncated>` message appended - which doesn't count to the maximum limit.")
+    , webshell_http_address(this, "webshell_http_address", value_status::Used, {/*api_address*/}, "Web Shell HTTP listening address. Defaults to api_address if not set."
+            " If you want to enable Web Shell over non-localhost address, consider using HTTPS instead, see webshell_https_port." )
+    , webshell_http_port(this, "webshell_http_port", value_status::Used, 10001, "Web Shell HTTP listening port. Set to 0 to disable the Web Shell over plain HTTP.")
+    , webshell_https_address(this, "webshell_https_address", value_status::Used, "localhost", "Web Shell HTTPS listening address. Defaults to localhost.")
+    , webshell_https_port(this, "webshell_https_port", value_status::Used, 0, "Web Shell HTTPS listening port. Disabled by default (set to 0), set to non-0 value to enable."
+            " See also webshell_https_encryption_options.")
+    , webshell_https_encryption_options(this, "webshell_https_encryption_options", value_status::Used, {},
+        "When Web Shell via HTTPS is enabled with webshell_https_port, where to take the key and certificate. The available options are:\n"
+        "* certificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
+        "* keyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "\n"
+        "The advanced settings are:\n"
+        "\n"
+        "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.\n"
+        "* enable_session_tickets: (Default: false) Enables or disables TLS1.3 session tickets.")
+    , webshell_resource_manifest_path(this, "webshell_resource_manifest_path", value_status::Used, "", "External resource manifest for Web Shell."
+            " Useful for development or providing resources for alternative Web UI. If empty (default) the resource manifest for the default built-in Web UI (compiled into the binary) is used.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")

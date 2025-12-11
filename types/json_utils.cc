@@ -24,58 +24,6 @@
 #include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string.hpp>
 
-static inline bool is_control_char(char c) {
-    return c >= 0 && c <= 0x1F;
-}
-
-static inline bool needs_escaping(const sstring& s) {
-    return std::any_of(s.begin(), s.end(), [](char c) {return is_control_char(c) || c == '"' || c == '\\';});
-}
-
-
-static sstring quote_json_string(const sstring& value) {
-    if (!needs_escaping(value)) {
-        return format("\"{}\"", value);
-    }
-    std::ostringstream oss;
-    oss << std::hex << std::uppercase << std::setfill('0');
-    oss.put('"');
-    for (char c : value) {
-        switch (c) {
-        case '"':
-            oss.put('\\').put('"');
-            break;
-        case '\\':
-            oss.put('\\').put('\\');
-            break;
-        case '\b':
-            oss.put('\\').put('b');
-            break;
-        case '\f':
-            oss.put('\\').put('f');
-            break;
-        case '\n':
-            oss.put('\\').put('n');
-            break;
-        case '\r':
-            oss.put('\\').put('r');
-            break;
-        case '\t':
-            oss.put('\\').put('t');
-            break;
-        default:
-            if (is_control_char(c)) {
-                oss.put('\\').put('u') << std::setw(4) << static_cast<int>(c);
-            } else {
-                oss.put(c);
-            }
-            break;
-        }
-    }
-    oss.put('"');
-    return std::move(oss).str();
-}
-
 
 template <typename T> static T to_int(const rjson::value& value) {
     int64_t result;
@@ -525,7 +473,7 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
         if (ti != t.all_types().begin()) {
             out << ", ";
         }
-        out << quote_json_string(t.field_name_as_string(i)) << ": ";
+        out << rjson::quote_json_string(t.field_name_as_string(i)) << ": ";
         if (*vi) {
             //TODO(sarna): We can avoid copying if to_json_string accepted bytes_view
             out << to_json_string(**ti, **vi);
@@ -557,28 +505,28 @@ struct to_json_string_visitor {
         }
         return to_sstring(d);
     }
-    sstring operator()(const uuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const inet_addr_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
+    sstring operator()(const uuid_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
+    sstring operator()(const inet_addr_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
+    sstring operator()(const string_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
+    sstring operator()(const bytes_type_impl& t) { return rjson::quote_json_string("0x" + t.to_string(bv)); }
     sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(timestamp_to_json_string(t, bv)); }
-    sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
+    sstring operator()(const timestamp_date_base_class& t) { return rjson::quote_json_string(timestamp_to_json_string(t, bv)); }
+    sstring operator()(const timeuuid_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
     sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const set_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const list_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const tuple_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const vector_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const user_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const simple_date_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const time_type_impl& t) { return quote_json_string(t.to_string(bv)); }
+    sstring operator()(const simple_date_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
+    sstring operator()(const time_type_impl& t) { return rjson::quote_json_string(t.to_string(bv)); }
     sstring operator()(const empty_type_impl& t) { return "null"; }
     sstring operator()(const duration_type_impl& t) {
         auto v = t.deserialize(bv);
         if (v.is_null()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
-        return quote_json_string(t.to_string(bv));
+        return rjson::quote_json_string(t.to_string(bv));
     }
     sstring operator()(const counter_type_impl& t) {
         // It will be called only from cql3 layer while processing query results.
