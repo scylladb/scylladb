@@ -419,7 +419,7 @@ static std::optional<std::string> find_table_name(const rjson::value& request) {
     if (!table_name_value->IsString()) {
         throw api_error::validation("Non-string TableName field in request");
     }
-    std::string table_name = table_name_value->GetString();
+    std::string table_name = rjson::to_string(*table_name_value);
     return table_name;
 }
 
@@ -546,7 +546,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
             // does exist but the index does not (ValidationException).
             if (proxy.data_dictionary().has_schema(keyspace_name, orig_table_name)) {
                 throw api_error::validation(
-                    fmt::format("Requested resource not found: Index '{}' for table '{}'", index_name->GetString(), orig_table_name));
+                    fmt::format("Requested resource not found: Index '{}' for table '{}'", rjson::to_string_view(*index_name), orig_table_name));
             } else {
                 throw api_error::resource_not_found(
                     fmt::format("Requested resource not found: Table: {} not found", orig_table_name));
@@ -587,7 +587,7 @@ static std::string get_string_attribute(const rjson::value& value, std::string_v
         throw api_error::validation(fmt::format("Expected string value for attribute {}, got: {}",
                 attribute_name, value));
     }
-    return std::string(attribute_value->GetString(), attribute_value->GetStringLength());
+    return rjson::to_string(*attribute_value);
 }
 
 // Convenience function for getting the value of a boolean attribute, or a
@@ -1080,8 +1080,8 @@ static void add_column(schema_builder& builder, const std::string& name, const r
     }
     for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
         const rjson::value& attribute_info = *it;
-        if (attribute_info["AttributeName"].GetString() == name) {
-            auto type = attribute_info["AttributeType"].GetString();
+        if (rjson::to_string_view(attribute_info["AttributeName"]) == name) {
+            std::string_view type = rjson::to_string_view(attribute_info["AttributeType"]);
             data_type dt = parse_key_type(type);
             if (computed_column) {
                 // Computed column for GSI (doesn't choose a real column as-is
@@ -1116,7 +1116,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
         throw api_error::validation("First element of KeySchema must be an object");
     }
     const rjson::value *v = rjson::find((*key_schema)[0], "KeyType");
-    if (!v || !v->IsString() || v->GetString() != std::string("HASH")) {
+    if (!v || !v->IsString() || rjson::to_string_view(*v) != "HASH") {
         throw api_error::validation("First key in KeySchema must be a HASH key");
     }
     v = rjson::find((*key_schema)[0], "AttributeName");
@@ -1124,14 +1124,14 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
         throw api_error::validation("First key in KeySchema must have string AttributeName");
     }
     validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "HASH key in KeySchema - ");
-    std::string hash_key = v->GetString();
+    std::string hash_key = rjson::to_string(*v);
     std::string range_key;
     if (key_schema->Size() == 2) {
         if (!(*key_schema)[1].IsObject()) {
             throw api_error::validation("Second element of KeySchema must be an object");
         }
         v = rjson::find((*key_schema)[1], "KeyType");
-        if (!v || !v->IsString() || v->GetString() != std::string("RANGE")) {
+        if (!v || !v->IsString() || rjson::to_string_view(*v) != "RANGE") {
             throw api_error::validation("Second key in KeySchema must be a RANGE key");
         }
         v = rjson::find((*key_schema)[1], "AttributeName");
@@ -1887,8 +1887,8 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         std::string def_type = type_to_string(def.type);
         for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
             const rjson::value& attribute_info = *it;
-            if (attribute_info["AttributeName"].GetString() == def.name_as_text()) {
-                auto type = attribute_info["AttributeType"].GetString();
+            if (rjson::to_string_view(attribute_info["AttributeName"]) == def.name_as_text()) {
+                std::string_view type = rjson::to_string_view(attribute_info["AttributeType"]);
                 if (type != def_type) {
                     throw api_error::validation(fmt::format("AttributeDefinitions redefined {} to {} already a key attribute of type {} in this table", def.name_as_text(), type, def_type));
                 }
@@ -2362,7 +2362,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
-        bytes column_name = to_bytes(it->name.GetString());
+        bytes column_name = to_bytes(rjson::to_string_view(it->name));
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
@@ -2783,10 +2783,10 @@ static void verify_all_are_used(const rjson::value* field,
         return;
     }
     for (auto it = field->MemberBegin(); it != field->MemberEnd(); ++it) {
-        if (!used.contains(it->name.GetString())) {
+        if (!used.contains(rjson::to_string(it->name))) {
             throw api_error::validation(
                 format("{} has spurious '{}', not used in {}",
-                    field_name, it->name.GetString(), operation));
+                    field_name, rjson::to_string_view(it->name), operation));
         }
     }
 }
@@ -3000,7 +3000,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 }
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
-    sstring table_name = batch_request->name.GetString(); // JSON keys are always strings
+    sstring table_name = rjson::to_sstring(batch_request->name); // JSON keys are always strings
     try {
         return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
     } catch(data_dictionary::no_such_column_family&) {
@@ -3386,7 +3386,7 @@ static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>
         }
         rjson::value newv = rjson::empty_object();
         for (auto it = v.MemberBegin(); it != v.MemberEnd(); ++it) {
-            std::string attr = it->name.GetString();
+            std::string attr = rjson::to_string(it->name);
             auto x = members.find(attr);
             if (x != members.end()) {
                 if (x->second) {
@@ -3606,7 +3606,7 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
         const rjson::value& attributes_to_get = req["AttributesToGet"];
         attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
-            attribute_path_map_add("AttributesToGet", ret, it->GetString());
+            attribute_path_map_add("AttributesToGet", ret, rjson::to_string(*it));
             validate_attr_name_length("AttributesToGet", it->GetStringLength(), false);
         }
         if (ret.empty()) {
@@ -4272,12 +4272,12 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
         attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const {
     for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
         // Note that it.key() is the name of the column, *it is the operation
-        bytes column_name = to_bytes(it->name.GetString());
+        bytes column_name = to_bytes(rjson::to_string_view(it->name));
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef && cdef->is_primary_key()) {
-            throw api_error::validation(format("UpdateItem cannot update key column {}", it->name.GetString()));
+            throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
-        std::string action = (it->value)["Action"].GetString();
+        std::string action = rjson::to_string((it->value)["Action"]);
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
             // "Value" option, it is used to delete an attribute. With a
@@ -5474,7 +5474,7 @@ calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
     std::vector<query::clustering_range> ck_bounds;
 
     for (auto it = conditions.MemberBegin(); it != conditions.MemberEnd(); ++it) {
-        std::string key = it->name.GetString();
+        sstring key = rjson::to_sstring(it->name);
         const rjson::value& condition = it->value;
 
         const rjson::value& comp_definition = rjson::get(condition, "ComparisonOperator");
@@ -5482,13 +5482,13 @@ calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
 
         const column_definition& pk_cdef = schema->partition_key_columns().front();
         const column_definition* ck_cdef = schema->clustering_key_size() > 0 ? &schema->clustering_key_columns().front() : nullptr;
-        if (sstring(key) == pk_cdef.name_as_text()) {
+        if (key == pk_cdef.name_as_text()) {
             if (!partition_ranges.empty()) {
                 throw api_error::validation("Currently only a single restriction per key is allowed");
             }
             partition_ranges.push_back(calculate_pk_bound(schema, pk_cdef, comp_definition, attr_list));
         }
-        if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
+        if (ck_cdef && key == ck_cdef->name_as_text()) {
             if (!ck_bounds.empty()) {
                 throw api_error::validation("Currently only a single restriction per key is allowed");
             }
@@ -5889,7 +5889,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     rjson::value* exclusive_start_json = rjson::find(request, "ExclusiveStartTableName");
     rjson::value* limit_json = rjson::find(request, "Limit");
-    std::string exclusive_start = exclusive_start_json ? exclusive_start_json->GetString() : "";
+    std::string exclusive_start = exclusive_start_json ? rjson::to_string(*exclusive_start_json) : "";
     int limit = limit_json ? limit_json->GetInt() : 100;
     if (limit < 1 || limit > 100) {
         co_return api_error::validation("Limit must be greater than 0 and no greater than 100");

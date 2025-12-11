@@ -10,6 +10,7 @@
 #include "utils/http.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/default_aws_retry_strategy.hh"
+#include "utils/rjson.hh"
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
 #include <seastar/http/client.hh>
@@ -72,7 +73,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
 }
 
 s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sstring& creds_response) {
-    rapidjson::Document document;
+    rjson::document document;
     document.Parse(creds_response.data());
 
     if (document.HasParseError()) {
@@ -81,9 +82,9 @@ s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sst
     }
 
     // Retrieve credentials
-    return {.access_key_id = document["AccessKeyId"].GetString(),
-            .secret_access_key = document["SecretAccessKey"].GetString(),
-            .session_token = document["Token"].GetString(),
+    return {.access_key_id = rjson::to_string(document["AccessKeyId"]),
+            .secret_access_key = rjson::to_string(document["SecretAccessKey"]),
+            .session_token = rjson::to_string(document["Token"]),
             // Set the expiration to one minute earlier to ensure credentials are renewed slightly before they expire
             .expires_at = seastar::lowres_clock::now() + std::chrono::seconds(session_duration - 60)};
 }

@@ -654,7 +654,7 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
             for (const auto& table : tables.empty() ? ks_to_cfs[keyspace] : tables) {
                 repair_params["table"] = table;
                 try {
-                    sstring task_id = client.post("/storage_service/tablets/repair", repair_params).GetObject()["tablet_task_id"].GetString();
+                    sstring task_id = rjson::to_sstring(client.post("/storage_service/tablets/repair", repair_params).GetObject()["tablet_task_id"]);
 
                     log("Starting repair with task_id={} keyspace={} table={}", task_id, keyspace, table);
 

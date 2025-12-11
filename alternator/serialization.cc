@@ -496,7 +496,7 @@ const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value&
         return {"", nullptr};
     }
     auto it = v.MemberBegin();
-    const std::string it_key = it->name.GetString();
+    const std::string it_key = rjson::to_string(it->name);
     if (it_key != "SS" && it_key != "BS" && it_key != "NS") {
         return {std::move(it_key), nullptr};
     }

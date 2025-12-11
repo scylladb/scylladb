@@ -152,7 +152,7 @@ seastar::future<bool> client::check_status() {
     }
     auto resp = co_await std::move(f);
     auto json = rjson::parse(std::move(resp.content));
-    co_return json.IsString() && json.GetString() == std::string_view("SERVING");
+    co_return json.IsString() && rjson::to_string_view(json) == "SERVING";
 }
 
 seastar::future<> client::close() {

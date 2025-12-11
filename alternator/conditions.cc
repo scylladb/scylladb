@@ -42,7 +42,7 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
     if (!comparison_operator.IsString()) {
         throw api_error::validation(fmt::format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
-    std::string op = comparison_operator.GetString();
+    std::string op = rjson::to_string(comparison_operator);
     auto it = ops.find(op);
     if (it == ops.end()) {
         throw api_error::validation(fmt::format("Unsupported comparison operator {}", op));
@@ -377,8 +377,8 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
         return cmp(unwrap_number(*v1, cmp.diagnostic), unwrap_number(v2, cmp.diagnostic));
     }
     if (kv1.name == "S") {
-        return cmp(std::string_view(kv1.value.GetString(), kv1.value.GetStringLength()),
-                   std::string_view(kv2.value.GetString(), kv2.value.GetStringLength()));
+        return cmp(rjson::to_string_view(kv1.value),
+                   rjson::to_string_view(kv2.value));
     }
     if (kv1.name == "B") {
         auto d_kv1 = unwrap_bytes(kv1.value, v1_from_query);
@@ -470,9 +470,9 @@ static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const r
         return check_BETWEEN(unwrap_number(*v, diag), unwrap_number(lb, diag), unwrap_number(ub, diag), bounds_from_query);
     }
     if (kv_v.name == "S") {
-        return check_BETWEEN(std::string_view(kv_v.value.GetString(), kv_v.value.GetStringLength()),
-                             std::string_view(kv_lb.value.GetString(), kv_lb.value.GetStringLength()),
-                             std::string_view(kv_ub.value.GetString(), kv_ub.value.GetStringLength()),
+        return check_BETWEEN(rjson::to_string_view(kv_v.value),
+                             rjson::to_string_view(kv_lb.value),
+                             rjson::to_string_view(kv_ub.value),
                              bounds_from_query);
     }
     if (kv_v.name == "B") {
