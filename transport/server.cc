@@ -126,6 +126,14 @@ sstring to_string(const event::topology_change::change_type t) {
     throw std::invalid_argument("unknown change type");
 }
 
+sstring to_string(const event::client_routes_change::change_type t) {
+    using type = event::client_routes_change::change_type;
+    switch (t) {
+    case type::UPDATE_NODES:    return "UPDATE_NODES";
+    }
+    throw std::invalid_argument("unknown change type");
+}
+
 sstring to_string(cql_binary_opcode op) {
     switch(op) {
     case cql_binary_opcode::ERROR:          return "ERROR";
@@ -194,6 +202,8 @@ parse_event_type(const sstring& value)
         return event::event_type::STATUS_CHANGE;
     } else if (value == "SCHEMA_CHANGE") {
         return event::event_type::SCHEMA_CHANGE;
+    } else if (value == "CLIENT_ROUTES_CHANGE") {
+        return event::event_type::CLIENT_ROUTES_CHANGE;
     } else {
         return exceptions::protocol_exception(format("Invalid value '{}' for Event.Type", value));
     }
@@ -1770,6 +1780,15 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
+std::unique_ptr<cql_server::response>
+cql_server::connection::make_client_routes_change_event(const event::client_routes_change& event) const
+{
+    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    response->write_string("CLIENT_ROUTES_CHANGE");
+    response->serialize(event, _version);
+    return response;
+}
+
 void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
@@ -1876,6 +1895,13 @@ void cql_server::response::serialize(const event::schema_change& event, uint8_t 
         write_string_list(std::vector<sstring>(event.arguments.begin() + 1, event.arguments.end()));
         break;
     }
+}
+
+void cql_server::response::serialize(const event::client_routes_change& event, uint8_t version)
+{
+    write_string(to_string(event.change));
+    write_string_list(event.get_connection_ids());
+    write_string_list(event.get_host_ids());
 }
 
 void cql_server::response::write_byte(uint8_t b)
