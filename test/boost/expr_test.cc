@@ -3784,6 +3784,8 @@ enum struct expected_rhs_type {
     float_in_list,
     // list<tuple<float, int, text, double>
     multi_column_tuple_in_list,
+    // IS allows only NULL as the RHS, everything else is invalid
+    is_null_rhs,
     // IS_NOT allows only NULL as the RHS, everything else is invalid
     is_not_null_rhs
 };
@@ -4522,7 +4524,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_null) {
 
         test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
 
-        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::is_not_null_rhs, db,
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::is_null_rhs, db,
                                                         table_schema);
     }
 }
