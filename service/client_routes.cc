@@ -11,6 +11,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "mutation/mutation.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/system_keyspace.hh"
 
 static logging::logger crlogger("client_routes");
@@ -69,6 +70,12 @@ future<std::vector<service::client_routes_service::client_route_entry>> service:
         );
     }
     co_return result;
+}
+
+seastar::future<> service::client_routes_service::notify_client_routes_change(const client_route_keys& client_route_keys) {
+    co_await container().invoke_on_all([&client_route_keys] (service::client_routes_service& client_routes) {
+        return client_routes._lifecycle_notifier.notify_client_routes_change(client_route_keys);
+    });
 }
 
 seastar::future<> service::client_routes_service::set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
