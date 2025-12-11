@@ -524,11 +524,6 @@ private:
             int32_t page_size);
 
     /*!
-     * \brief run a query using paging
-     *
-     * \note Optimized for convenience, not performance.
-     */
-    /*!
      * \brief run a query using paging with an optional custom query_state (for timeout control)
      *
      * state - internal query state containing prepared statement and options

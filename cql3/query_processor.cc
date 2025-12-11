@@ -888,7 +888,8 @@ future<> query_processor::for_each_cql_result(
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state, service::query_state* query_state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    auto qs = query_state ? *query_state : query_state_for_internal_call();
+    auto default_qs = query_state ? std::nullopt : std::make_optional(query_state_for_internal_call());
+    auto& qs = query_state ? *query_state : *default_qs;
     ::shared_ptr<cql_transport::messages::result_message> msg =
       co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
 
