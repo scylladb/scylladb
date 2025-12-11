@@ -67,11 +67,11 @@ def test_tls_versions(cql):
 # a regression test for #9216
 def test_system_clients_stores_tls_info(cql):
     if not cql.cluster.ssl_context:
-            table_result = cql.execute(f"SELECT * FROM system.clients")
-            for row in table_result:
-                assert not row.ssl_enabled
-                assert row.ssl_protocol is None
-                assert row.ssl_cipher_suite is None
+        table_result = cql.execute(f"SELECT * FROM system.clients")
+        for row in table_result:
+            assert not row.ssl_enabled
+            assert row.ssl_protocol is None
+            assert row.ssl_cipher_suite is None
     else:
         # TLS v1.2 must be supported, because this is the default version that
         # "cqlsh --ssl" uses. If this fact changes in the future, we may need
