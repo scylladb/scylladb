@@ -344,3 +344,19 @@ void service::client_state::update_per_service_level_params(qos::service_level_o
 
     _workload_type = slo.workload;
 }
+
+future<> service::client_state::set_client_options(
+        client_options_cache_type& keys_and_values_cache,
+        const std::unordered_map<sstring, sstring>& client_options) {
+    _client_options = std::list<std::pair<client_options_cache_entry_type, client_options_cache_entry_type>>{};
+
+    for (const auto& [key, value] : client_options) {
+        auto cached_key = co_await keys_and_values_cache.get_or_load(key, [] (const client_options_cache_key_type&) {
+            return make_ready_future<empty_t>(empty_t{});
+        });
+        auto cached_value = co_await keys_and_values_cache.get_or_load(value, [] (const client_options_cache_key_type&) {
+            return make_ready_future<empty_t>(empty_t{});
+        });
+        _client_options->emplace_back(std::move(cached_key), std::move(cached_value));
+    }
+}

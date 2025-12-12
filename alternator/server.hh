@@ -55,6 +55,7 @@ class server : public peering_sharded_service<server> {
     // though it isn't really relevant for Alternator which defines its own
     // timeouts separately. We can create this object only once.
     updateable_timeout_config _timeout_config;
+    client_options_cache_type _connection_options_keys_and_values;
 
     alternator_callbacks_map _callbacks;
 
@@ -88,7 +89,7 @@ class server : public peering_sharded_service<server> {
     // is called when reading the "system.clients" virtual table.
     struct ongoing_request {
         socket_address _client_address;
-        sstring _user_agent;
+        client_options_cache_entry_type _user_agent;
         sstring _username;
         scheduling_group _scheduling_group;
         bool _is_https;
@@ -107,7 +108,7 @@ public:
     // table "system.clients" is read. It is expected to generate a list of
     // clients connected to this server (on this shard). This function is
     // called by alternator::controller::get_client_data().
-    future<utils::chunked_vector<client_data>> get_client_data();
+    future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
 private:
     void set_routes(seastar::httpd::routes& r);
     // If verification succeeds, returns the authenticated user's username

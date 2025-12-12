@@ -10,7 +10,10 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include "types/types.hh"
+#include "utils/loading_shared_values.hh"
 
+#include <list>
 #include <optional>
 
 enum class client_type {
@@ -27,6 +30,10 @@ enum class client_connection_stage {
     ready,
 };
 
+using client_options_cache_type = utils::loading_shared_values<sstring, empty_t>;
+using client_options_cache_entry_type = client_options_cache_type::entry_ptr;
+using client_options_cache_key_type = client_options_cache_type::key_type;
+
 sstring to_string(client_connection_stage ct);
 
 // Representation of a row in `system.clients'. std::optionals are for nullable cells.
@@ -37,8 +44,8 @@ struct client_data {
     client_connection_stage connection_stage = client_connection_stage::established;
     int32_t shard_id;  /// ID of server-side shard which is processing the connection.
 
-    std::optional<sstring> driver_name;
-    std::optional<sstring> driver_version;
+    std::optional<client_options_cache_entry_type> driver_name;
+    std::optional<client_options_cache_entry_type> driver_version;
     std::optional<sstring> hostname;
     std::optional<int32_t> protocol_version;
     std::optional<sstring> ssl_cipher_suite;
@@ -46,6 +53,7 @@ struct client_data {
     std::optional<sstring> ssl_protocol;
     std::optional<sstring> username;
     std::optional<sstring> scheduling_group_name;
+    std::optional<std::list<std::pair<client_options_cache_entry_type, client_options_cache_entry_type>>> client_options;
 
     sstring stage_str() const { return to_string(connection_stage); }
     sstring client_type_str() const { return to_string(ct); }
