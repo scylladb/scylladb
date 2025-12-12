@@ -71,7 +71,7 @@ Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on Linux 
 
 ### Building the Docs 
 
-1. Run `make preview` to build the documentation.
+1. Run `make preview` in the `docs/` directory to build the documentation.
 1. Preview the built documentation locally at http://127.0.0.1:5500/.
 
 ### Cleanup
