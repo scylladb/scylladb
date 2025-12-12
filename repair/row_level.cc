@@ -551,9 +551,13 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     }
     replica::table& t = _db.local().find_column_family(_schema->id());
     rlogger.debug("repair_writer: keyspace={}, table={}, estimated_partitions={}", w->schema()->ks_name(), w->schema()->cf_name(), w->get_estimated_partitions());
+    // #17384 don't use off-strategy for repair (etc) if using tablets. sstables generated will 
+    // be single token range and can just be added to normal sstable set as is, eventually
+    // handled by normal compaction.
+    auto off_str = t.uses_tablets() ? sstables::offstrategy(false) : is_offstrategy_supported(_reason);
     auto sharder = get_sharder_helper(t, *(w->schema()), _topo_guard);
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason),
+            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, off_str,
                 _topo_guard, _repaired_at, w->get_sstable_list_to_mark_as_repaired()),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
