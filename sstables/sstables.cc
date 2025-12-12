@@ -1371,6 +1371,7 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
 void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
+    auto lock = get_units(_mutate_sem, 1).get();
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     auto w = make_digests_component_file_writer(component_type::TemporaryStatistics, std::move(options),
@@ -2539,6 +2540,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<generation_type> sstable::snapshot(const sstring& dir, bool use_sstable_identifier) const {
+    auto lock = co_await get_units(_mutate_sem, 1);
     // Use the sstable identifier UUID if available to enable global de-duplication of sstables in backup.
     generation_type gen = (use_sstable_identifier && _sstable_identifier) ? generation_type(_sstable_identifier->uuid()) : _generation;
     co_await _storage->snapshot(*this, dir, storage::absolute_path::yes, gen);
@@ -2546,11 +2548,14 @@ future<generation_type> sstable::snapshot(const sstring& dir, bool use_sstable_i
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
+    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
+    // just in case, not really needed as the sstable is not yet in use while in the upload dir
+    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3485,6 +3490,9 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 
 future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
+    // Serialize with other calls to unlink or potentially ongoing mutations.
+    auto lock = co_await get_units(_mutate_sem, 1);
+
     _unlinked = true;
     _on_delete(*this);
 
