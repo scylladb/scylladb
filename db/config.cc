@@ -1105,6 +1105,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Like native_transport_port, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_shard_aware_transport_port_ssl(this, "native_shard_aware_transport_port_ssl", value_status::Used, 19142,
         "Like native_transport_port_ssl, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
+    , native_transport_port_proxy_protocol(this, "native_transport_port_proxy_protocol", value_status::Used, 0,
+        "Port on which the CQL native transport listens for clients using proxy protocol v2. Disabled (0) by default.")
+    , native_transport_port_ssl_proxy_protocol(this, "native_transport_port_ssl_proxy_protocol", value_status::Used, 0,
+        "Port on which the CQL TLS native transport listens for clients using proxy protocol v2. Disabled (0) by default.")
+    , native_shard_aware_transport_port_proxy_protocol(this, "native_shard_aware_transport_port_proxy_protocol", value_status::Used, 0,
+        "Like native_transport_port_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
+    , native_shard_aware_transport_port_ssl_proxy_protocol(this, "native_shard_aware_transport_port_ssl_proxy_protocol", value_status::Used, 0,
+        "Like native_transport_port_ssl_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_transport_max_threads(this, "native_transport_max_threads", value_status::Invalid, 128,
         "The maximum number of thread handling requests. The meaning is the same as rpc_max_threads.\n"
         "Default is different (128 versus unlimited).\n"

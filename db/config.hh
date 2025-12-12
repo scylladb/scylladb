@@ -324,6 +324,10 @@ public:
     named_value<uint16_t> native_transport_port_ssl;
     named_value<uint16_t> native_shard_aware_transport_port;
     named_value<uint16_t> native_shard_aware_transport_port_ssl;
+    named_value<uint16_t> native_transport_port_proxy_protocol;
+    named_value<uint16_t> native_transport_port_ssl_proxy_protocol;
+    named_value<uint16_t> native_shard_aware_transport_port_proxy_protocol;
+    named_value<uint16_t> native_shard_aware_transport_port_ssl_proxy_protocol;
     named_value<uint32_t> native_transport_max_threads;
     named_value<uint32_t> native_transport_max_frame_size_in_mb;
     named_value<sstring> broadcast_rpc_address;
