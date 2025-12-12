@@ -135,9 +135,13 @@ aws_error aws_error::from_system_error(const std::system_error& system_error) {
     case static_cast<int>(std::errc::timed_out):
     case static_cast<int>(std::errc::connection_aborted):
     case static_cast<int>(std::errc::connection_reset):
+    case static_cast<int>(std::errc::connection_refused):
     case static_cast<int>(std::errc::broken_pipe):
     case static_cast<int>(std::errc::network_unreachable):
     case static_cast<int>(std::errc::host_unreachable):
+    case static_cast<int>(std::errc::network_down):
+    case static_cast<int>(std::errc::network_reset):
+    case static_cast<int>(std::errc::no_buffer_space):
     // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
     case GNUTLS_E_PREMATURE_TERMINATION:
     case GNUTLS_E_AGAIN:
@@ -149,7 +153,9 @@ aws_error aws_error::from_system_error(const std::system_error& system_error) {
     case GNUTLS_E_BAD_COOKIE: // as per RFC6347 section-4.2.1 client should retry
         return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
     default:
-        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::no};
+        return {aws_error_type::UNKNOWN,
+                format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
+                retryable::no};
     }
 }
 
