@@ -1414,20 +1414,6 @@ def test_scrub_output_dir(scylla_path, scrub_workdir, scrub_schema_file, scrub_g
         # Empty output directory is accepted.
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable])
 
-    with tempfile.TemporaryDirectory(prefix="test_scrub_output_dir", dir=scrub_workdir) as tmp_dir:
-        with open(os.path.join(tmp_dir, "dummy.txt"), "w") as f:
-            f.write("dummy")
-            f.flush()
-
-        # Non-empty output directory is rejected.
-        subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable], "error processing arguments: output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory\n")
-
-        # Validate doesn't write output sstables, so it doesn't care if output dir is non-empty.
-        subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "validate", "--output-dir", tmp_dir, scrub_good_sstable])
-
-        # Check that overriding with --unsafe-accept-nonempty-output-dir works.
-        subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, "--unsafe-accept-nonempty-output-dir", scrub_good_sstable])
-
 
 def test_scrub_abort_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
     with tempfile.TemporaryDirectory(prefix="test_scrub_abort_mode", dir=scrub_workdir) as tmp_dir:
@@ -2066,10 +2052,7 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
                 f.write("dummy")
                 f.flush()
 
-            with pytest.raises(subprocess.CalledProcessError):
-                lines = invoke(tmp_dir, [])
-
-            lines = invoke(tmp_dir, ["--unsafe-accept-nonempty-output-dir"])
+            lines = invoke(tmp_dir, [])
             assert len(lines) == len(sstables)
             for line, sst in zip(lines, sstables):
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")

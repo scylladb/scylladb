@@ -818,16 +818,8 @@ public:
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
 };
 
-void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
-    auto fd = open_file_dma(output_dir.native(), open_flags::ro).get();
-    unsigned entries = 0;
-    fd.list_directory([&entries] (directory_entry) {
-        ++entries;
-        return make_ready_future<>();
-    }).done().get();
-    if (entries && !accept_nonempty_output_dir) {
-        throw std::invalid_argument("output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory");
-    }
+void validate_output_dir(std::filesystem::path output_dir) {
+    open_file_dma(output_dir.native(), open_flags::ro).get();
 }
 
 void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -884,7 +876,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     }
     auto output_dir = vm["output-dir"].as<std::string>();
     if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
-        validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+        validate_output_dir(output_dir);
     }
 
     scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
@@ -2185,7 +2177,7 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
     const auto all = vm.count("all");
 
     const auto output_dir = vm["output-dir"].as<std::string>();
-    validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+    validate_output_dir(output_dir);
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
@@ -2372,22 +2364,15 @@ For more information, see: {}
 fmt::format(R"(
 Read and re-write the sstable, getting rid of or fixing broken parts, depending
 on the selected mode.
-Output sstables are written to the directory specified via `--output-directory`.
+Output sstables are written to the directory specified via `--output-dir`.
 They will be written with the BIG format and the highest supported sstable
-format, with generations chosen by scylla-sstable. Generations are chosen such
-that they are unique between the sstables written by the current scrub.
-The output directory is expected to be empty, if it isn't scylla-sstable will
-abort the scrub. This can be overridden by the
-`--unsafe-accept-nonempty-output-dir` command line flag, but note that scrub will
-be aborted if an sstable cannot be written because its generation clashes with
-pre-existing sstables in the directory.
+format, with generations chosen by scylla-sstable.
 
 For more information, see: {}
 )", doc_link("operating-scylla/admin-tools/scylla-sstable#scrub")),
             {
                     typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the scrubbed sstables to"),
-                    typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
             scrub_operation},
 /* validate-checksums */
@@ -2566,7 +2551,6 @@ For more information, see: {}
                 typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                 typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
                 typed_option<>("all", "upgrade all sstables, even if they are already at the requested version"),
-                typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
             upgrade_operation},
 /* dump-schema */
