@@ -44,6 +44,7 @@
 #include "service/storage_proxy.hh"
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/on_internal_error.hh>
+#include "vector_search/primary_key.hh"
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
@@ -1966,6 +1967,17 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     auto& sim = cf.get_index_manager();
     auto [index_opt, _] = restrictions->find_idx(sim);
 
+    for (const auto& cdef : schema->partition_key_columns()) {
+        if (!selection->has_column(cdef)) {
+            selection->add_column_for_post_processing(cdef);
+        }
+    }
+    for (const auto& cdef : schema->clustering_key_columns()) {
+        if (!selection->has_column(cdef)) {
+            selection->add_column_for_post_processing(cdef);
+        }
+    }
+
     auto indexes = sim.list_indexes();
     auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
         return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
@@ -2033,14 +2045,28 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
-        auto pkeys = co_await qp.vector_store_client().ann(
+        auto ann_results_opt = co_await qp.vector_store_client().ann(
                 _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
-        if (!pkeys.has_value()) {
+        if (!ann_results_opt.has_value()) {
             co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, ann_results_opt.error())));
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+        auto ann_results = std::move(ann_results_opt).value();
+        std::vector<vector_search::primary_key> pkeys;
+        pkeys.reserve(ann_results.size());
+
+        for (const auto& [pk, _] : ann_results) {
+            pkeys.emplace_back(vector_search::primary_key{pk.partition, pk.clustering});
+        }
+
+        std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(
+            std::make_unique<cql3::query_options>(options),
+            _prepared_ann_ordering,
+            std::move(ann_results)
+        );
+
+        co_return co_await query_base_table(qp, state, *internal_options, pkeys, timeout);
     });
 
     auto page_size = options.get_page_size();
