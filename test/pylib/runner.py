@@ -86,7 +86,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--cluster-pool-size", type=int,
                      help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
                           "CLUSTER_POOL_SIZE can be used to achieve the same")
-    parser.addoption("--extra-scylla-cmdline-options", default=[],
+    parser.addoption("--extra-scylla-cmdline-options", default='',
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
     parser.addoption('--x-log2-compaction-groups', action="store", default="0", type=int,
