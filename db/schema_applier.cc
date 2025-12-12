@@ -1262,16 +1262,9 @@ static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_applier ap(proxy, ss, sys_ks, reload);
-    std::exception_ptr ex;
-    try {
-        co_await execute_do_merge_schema(proxy, ap, std::move(mutations));
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await ap.destroy();
-    if (ex) {
-        throw ex;
-    }
+    co_await execute_do_merge_schema(proxy, ap, std::move(mutations)).finally([&ap]() {
+        return ap.destroy();
+    });
 }
 
 /**
