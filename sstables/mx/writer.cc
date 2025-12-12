@@ -91,7 +91,7 @@ public:
         {}
 
         void increment() {
-            SCYLLA_ASSERT(_range);
+            scylla_assert(_range);
             if (!_range->next()) {
                 _range = nullptr;
             }
@@ -102,7 +102,7 @@ public:
         }
 
         const ValueType dereference() const {
-            SCYLLA_ASSERT(_range);
+            scylla_assert(_range);
             return _range->get_value();
         }
 
@@ -153,7 +153,7 @@ public:
         auto limit = std::min(_serialization_limit_size, _offset + clustering_block::max_block_size);
 
         _current_block = {};
-        SCYLLA_ASSERT (_offset % clustering_block::max_block_size == 0);
+        scylla_assert (_offset % clustering_block::max_block_size == 0);
         while (_offset < limit) {
             auto shift = _offset % clustering_block::max_block_size;
             if (_offset < _prefix.size(_schema)) {
@@ -280,7 +280,7 @@ public:
                     ++_current_index;
                 }
             } else {
-                SCYLLA_ASSERT(_mode == encoding_mode::large_encode_missing);
+                scylla_assert(_mode == encoding_mode::large_encode_missing);
                 while (_current_index < total_size) {
                     auto cell = _row.find_cell(_columns[_current_index].get().id);
                     if (!cell) {
@@ -1180,7 +1180,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
 
     if (cdef.is_counter()) {
         if (!is_deleted) {
-            SCYLLA_ASSERT(!cell.is_counter_update());
+            scylla_assert(!cell.is_counter_update());
             auto ccv = counter_cell_view(cell);
             write_counter_value(ccv, writer, _sst.get_version(), [] (bytes_ostream& out, uint32_t value) {
                 return write_vint(out, value);
@@ -1489,7 +1489,7 @@ template <typename W>
 requires Writer<W>
 static void write_clustering_prefix(sstable_version_types v, W& writer, bound_kind_m kind,
     const schema& s, const clustering_key_prefix& clustering) {
-    SCYLLA_ASSERT(kind != bound_kind_m::static_clustering);
+    scylla_assert(kind != bound_kind_m::static_clustering);
     write(v, writer, kind);
     auto is_ephemerally_full = ephemerally_full_prefix{s.is_compact_table()};
     if (kind != bound_kind_m::clustering) {

@@ -170,7 +170,7 @@ struct compression {
             const_iterator(const const_iterator& other) = default;
 
             const_iterator& operator=(const const_iterator& other) {
-                SCYLLA_ASSERT(&_offsets == &other._offsets);
+                scylla_assert(&_offsets == &other._offsets);
                 _index = other._index;
                 return *this;
             }

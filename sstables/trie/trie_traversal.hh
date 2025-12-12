@@ -204,7 +204,7 @@ inline void descend_leftmost_single_page(
             next_pos = -1;
             trail.back().child_idx = -1;
         } else {
-            SCYLLA_ASSERT(traverse_one.n_children >= 1);
+            scylla_assert(traverse_one.n_children >= 1);
             next_pos = traverse_one.body_pos - traverse_one.child_offset;
         }
     }

@@ -109,7 +109,7 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     options.buffer_size = sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    SCYLLA_ASSERT(
+    scylla_assert(
         type == component_type::Data
         || type == component_type::Index
         || type == component_type::Rows
@@ -129,7 +129,7 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
 }
 
 future<data_source> filesystem_storage::make_data_or_index_source(sstable&, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
-    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
+    scylla_assert(type == component_type::Data || type == component_type::Index);
     co_return make_file_data_source(std::move(f), offset, len, std::move(opt));
 }
 
@@ -717,7 +717,7 @@ static future<data_source> maybe_wrap_source(const sstable& sst, component_type 
 }
 
 future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, component_type type) {
-    SCYLLA_ASSERT(
+    scylla_assert(
         type == component_type::Data
         || type == component_type::Index
         || type == component_type::Rows

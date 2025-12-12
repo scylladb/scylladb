@@ -9,6 +9,7 @@
 #pragma once
 
 #include "writer_node.hh"
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 
 namespace sstables::trie {
@@ -111,9 +112,9 @@ void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit)
             fmt::ptr(node.get()), out.pos().value, node->get_children().size(), node->_node_size.value, node->_transition_length);
 
         if (guaranteed_fit) {
-            SCYLLA_ASSERT(out.pos() - startpos == node->_branch_size);
+            scylla_assert(out.pos() - startpos == node->_branch_size);
             node->_pos = sink_pos(out.write(*node, sink_pos(out.pos())));
-            SCYLLA_ASSERT(out.pos() - startpos == node->_branch_size + node->_node_size);
+            scylla_assert(out.pos() - startpos == node->_branch_size + node->_node_size);
         } else {
             if (uint64_t(out.serialized_size(*node, sink_pos(out.pos())).value) > out.bytes_left_in_page()) {
                 out.pad_to_page_boundary();

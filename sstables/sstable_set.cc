@@ -283,7 +283,7 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
         }
         sstlog.info("SSTable {}, as_unleveled={}, expect_unleveled={}, sst_tr={}, overlap_ratio={}",
             sst->generation(), as_unleveled, expect_unleveled, sst_tr, dht::overlap_ratio(_token_range, sst_tr));
-        SCYLLA_ASSERT(as_unleveled == expect_unleveled);
+        scylla_assert(as_unleveled == expect_unleveled);
     });
 
     return as_unleveled;
@@ -712,8 +712,8 @@ public:
 
         // by !empty(bound) and `_it` invariant:
         //      _it != _end, _it->first <= bound, and filter(*_it->second) == true
-        SCYLLA_ASSERT(_cmp(_it->first, bound) <= 0);
-        // we don't SCYLLA_ASSERT(filter(*_it->second)) due to the requirement that `filter` is called at most once for each sstable
+        scylla_assert(_cmp(_it->first, bound) <= 0);
+        // we don't scylla_assert(filter(*_it->second)) due to the requirement that `filter` is called at most once for each sstable
 
         // Find all sstables with the same position as `_it` (they form a contiguous range in the container).
         auto next = std::find_if(std::next(_it), _end, [this] (const value_t& v) { return _cmp(v.first, _it->first) != 0; });
@@ -1301,7 +1301,7 @@ sstable_set::create_single_key_sstable_reader(
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate,
         sstables::integrity_check integrity) const {
-    SCYLLA_ASSERT(pr.is_singular() && pr.start()->value().has_key());
+    scylla_assert(pr.is_singular() && pr.start()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
             std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
 }
@@ -1408,7 +1408,7 @@ sstable_set::make_local_shard_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate, integrity]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        SCYLLA_ASSERT(!sst->is_shared());
+        scylla_assert(!sst->is_shared());
         if (!predicate(*sst)) {
             return make_empty_mutation_reader(s, permit);
         }
