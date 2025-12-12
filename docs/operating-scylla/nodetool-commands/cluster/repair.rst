@@ -9,6 +9,8 @@ Running ``cluster repair`` on a **single node** synchronizes all data on all nod
 To synchronize all data in clusters that have both tablets-based and vnodes-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair/>` on **all**
 of the nodes in the cluster, and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` on  **any** of the nodes in the cluster.
 
+.. warning:: :term:`Colocated Tables <Colocated Table>` cannot be synchronized using cluster repair in this version.
+
 To check if a keyspace enables tablets, use:
 
 .. code-block:: cql
