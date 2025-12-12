@@ -63,10 +63,32 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
 
+async def validate_connections_scheduling_group(cql, hosts, username, scheduling_group):
+    def connections_ready(host):
+        async def func():
+            rows = await cql.run_async(f"SELECT connection_stage, username, scheduling_group FROM system.clients WHERE username='{username}' ALLOW FILTERING", host=host)
+            if len(rows) == 0:
+                return None
+            for row in rows:
+                if row.connection_stage != "READY":
+                    return None
+            return rows
+        return func
+
+    for host in hosts:
+        rows = await wait_for(connections_ready(host), time.time() + 60)
+        for r in rows:
+            assert r.username == username
+            assert r.scheduling_group == scheduling_group
+
+# Reproduces SCYLLADB-90 with use_driver_service_level=False
 @pytest.mark.asyncio
-async def test_service_levels_upgrade(request, manager: ManagerClient, build_mode: str):
+@pytest.mark.parametrize("use_driver_service_level", [True, False])
+async def test_service_levels_upgrade(request, manager: ManagerClient, build_mode: str, use_driver_service_level):
     # First, force the first node to start in legacy mode
-    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
+    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled', 'service_levels_interval_ms': 100}
+    if not use_driver_service_level:
+        cfg['error_injections_at_startup'] = ['skip_driver_service_level_creation']
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
@@ -92,6 +114,17 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
     result = await cql.run_async("SELECT service_level FROM system_distributed.service_levels")
     assert set([sl.service_level for sl in result]) == set(sls)
 
+    # Create user connection before doing an upgrade
+    sl_for_user = sls[0]
+    await cql.run_async("CREATE ROLE r1 WITH password='r1' AND login=true AND superuser=true")
+    await cql.run_async(f"ATTACH SERVICE LEVEL {sl_for_user} TO r1")
+    cluster = manager.con_gen([s.ip_addr for s in servers], manager.port, manager.use_ssl, PlainTextAuthProvider(username='r1', password='r1'))
+    user_session = cluster.connect()
+
+    # sleep for 1s to allow legacy service level update loop to refresh the cache
+    await asyncio.sleep(1)
+    await validate_connections_scheduling_group(cql, hosts, 'r1', f'sl:{sl_for_user}')
+
     if build_mode in ("debug", "dev"):
         # See scylladb/scylladb/#24963 for more details
         logging.info("Enabling an error injection in legacy role manager, to check that we don't query auth in system_auth")
@@ -102,17 +135,25 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
 
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-    await wait_until_driver_service_level_created(manager, time.time() + 60)
+    if use_driver_service_level:
+        await wait_until_driver_service_level_created(manager, time.time() + 60)
 
     result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_v2]) == set(sls + [DRIVER_SL_NAME])
+    expected_sls = sls
+    if use_driver_service_level:
+        expected_sls = expected_sls + [DRIVER_SL_NAME]
+    assert set([sl.service_level for sl in result_v2]) == set(expected_sls)
+
+    # Create new connection after the upgrade to consistent topology is completed
+    new_user_session = cluster.connect()
+    await validate_connections_scheduling_group(cql, hosts, 'r1', f'sl:{sl_for_user}')
 
     sl_v2 = "sl" + unique_name()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
 
     await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
     result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [DRIVER_SL_NAME] + [sl_v2])
+    assert set([sl.service_level for sl in result_with_sl_v2]) == set(expected_sls + [sl_v2])
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
