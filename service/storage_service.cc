@@ -1395,7 +1395,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
             _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
     auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
 
-    co_await write_mutations_to_database(_qp.proxy(), mutation_creator_addr, std::move(change.mutations));
+    co_await write_mutations_to_database(*this, _qp.proxy(), mutation_creator_addr, std::move(change.mutations));
     co_await _qp.proxy().mutate_locally({history_append}, nullptr);
 }
 
@@ -7593,6 +7593,9 @@ void storage_service::init_messaging_service() {
                     additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
                     additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
+                if (ss._feature_service.client_routes) {
+                    additional_tables.push_back(db::system_keyspace::client_routes()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -7900,6 +7903,18 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint, 
     });
 }
 
+future<> endpoint_lifecycle_notifier::notify_client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids) {
+    co_await seastar::async([this, &connection_ids, &host_ids] {
+        _subscribers.thread_for_each([&connection_ids, &host_ids] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_client_routes_change(connection_ids, host_ids);
+            } catch (...) {
+                slogger.warn("Client routes notification failed: {}", std::current_exception());
+            }
+        });
+    });
+}
+
 future<> storage_service::notify_joined(inet_address endpoint, locator::host_id hid) {
     co_await utils::get_local_injector().inject(
         "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
@@ -7908,6 +7923,12 @@ future<> storage_service::notify_joined(inet_address endpoint, locator::host_id 
         return ss._lifecycle_notifier.notify_joined(endpoint, hid);
     });
     slogger.debug("Notify node {}/{} has joined the cluster", endpoint, hid);
+}
+
+future<> storage_service::notify_client_routes_change(const std::vector<sstring>& connection_ids, const std::vector<sstring>& host_ids) {
+    co_await container().invoke_on_all([&connection_ids, &host_ids] (auto&& ss) {
+        return ss._lifecycle_notifier.notify_client_routes_change(connection_ids, host_ids);
+    });
 }
 
 future<> storage_service::remove_rpc_client_with_ignored_topology(inet_address endpoint, locator::host_id id) {
