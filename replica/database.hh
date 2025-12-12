@@ -709,6 +709,7 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
+    size_t compaction_group_count() const noexcept;
     void for_each_compaction_group(std::function<void(compaction_group&)> action);
     void for_each_compaction_group(std::function<void(const compaction_group&)> action) const;
     // Unsafe reference to all storage groups. Don't use it across preemption points.
