@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/algorithm/string.hpp>
 #include <filesystem>
 #include <set>
 #include <fmt/chrono.h>
