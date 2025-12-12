@@ -66,6 +66,8 @@ PYTEST_RUNNER_DIRECTORIES = [
     TEST_DIR / 'cql',
     TEST_DIR / 'cqlpy',
     TEST_DIR / 'rest_api',
+    TEST_DIR / 'cluster',
+    TEST_DIR / 'storage',
 ]
 
 launch_time = time.monotonic()
@@ -312,16 +314,17 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
-    for name in options.name:
-        file_name = name
-        if '::' in name:
-            file_name, _ = name.split('::', maxsplit=1)
-        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
-            files_to_run.append(name)
-    if not options.name:
-        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if options.name:
+        for name in options.name:
+            file_name = name
+            if '::' in name:
+                file_name, _ = name.split('::', maxsplit=1)
+            if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+                files_to_run.append(name)
+    else:
+        files_to_run = [ TOP_SRC_DIR / 'test/']
     if not files_to_run:
-        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        logging.warning('No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
         '--color=yes',
@@ -371,6 +374,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f'-m={options.markers}')
     args.extend(files_to_run)
+    print(f'Running pytest with args: {args}', file=open('/tmp/pytest_args', 'w+'))
     pytest.main(args=args)
 
     if options.list_tests:

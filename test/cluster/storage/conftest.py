@@ -15,8 +15,8 @@ from typing import Callable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
+from test.cluster.conftest import PHASE_REPORT_KEY
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import *
 from test.pylib.util import gather_safely
 
 
