@@ -1849,6 +1849,10 @@ protected:
                 throw make_compaction_stopped_exception();
             }
         }, false);
+        if (utils::get_local_injector().is_enabled("split_sstable_force_stop_exception")) {
+            throw make_compaction_stopped_exception();
+        }
+
         co_return co_await do_rewrite_sstable(std::move(sst));
     }
 };
