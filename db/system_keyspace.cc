@@ -260,6 +260,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("node_state", utf8_type)
             .with_column("release_version", utf8_type)
             .with_column("topology_request", utf8_type)
+            .with_column("request_paused", boolean_type)
+            .with_column("drained", boolean_type)
             .with_column("replaced_id", uuid_type)
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
@@ -3147,6 +3149,16 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
         utils::UUID request_id = row.get_as<utils::UUID>("request_id");
 
+        bool drained = false;
+        if (row.has("drained")) {
+            drained = row.get_as<bool>("drained");
+        }
+
+        bool request_paused = false;
+        if (row.has("request_paused")) {
+            request_paused = row.get_as<bool>("request_paused");
+        }
+
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
         std::optional<service::ring_slice> ring_slice;
@@ -3199,6 +3211,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
 
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
+            if (request_paused) {
+                ret.paused_requests.emplace(host_id, req);
+            }
             ret.requests.emplace(host_id, req);
             switch(req) {
             case service::topology_request::replace:
@@ -3268,7 +3283,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
-                service::cleanup_status_from_string(cleanup_status), request_id});
+                service::cleanup_status_from_string(cleanup_status), request_id, drained, request_paused});
         }
     }
 
@@ -3562,18 +3577,20 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     return entry;
 }
 
-future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id, bool require_entry) {
+future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id) {
+    auto r = co_await get_topology_request_entry_opt(id);
+    if (!r) {
+        on_internal_error(slogger, format("no entry for request id {}", id));
+    }
+    co_return std::move(*r);
+}
+
+future<std::optional<system_keyspace::topology_requests_entry>> system_keyspace::get_topology_request_entry_opt(utils::UUID id) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
 
     if (!rs || rs->empty()) {
-        if (require_entry) {
-            on_internal_error(slogger, format("no entry for request id {}", id));
-        } else {
-            co_return topology_requests_entry{
-                .id = utils::null_uuid()
-            };
-        }
+        co_return std::nullopt;
     }
 
     const auto& row = rs->one();
