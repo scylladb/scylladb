@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 import platform
+import random
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
@@ -205,6 +206,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
 
     if testpy_run_id := config.getoption("--run_id"):

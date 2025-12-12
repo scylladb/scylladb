@@ -16,6 +16,8 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from test import path_to
 from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
@@ -314,7 +316,7 @@ async def prepare_3_racks_cluster(request, manager):
 
 @pytest.fixture(scope="function")
 def internet_dependency_enabled(request) -> None:
-    if request.config.getoption('skip_internet_dependent_tests'):
+    if request.config.getoption('skip_internet_dependent_tests', default=None):
         pytest.skip(reason="skip_internet_dependent_tests is set")
 
 
@@ -323,7 +325,8 @@ async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> Asy
     yield await get_scylla_2025_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
-async def key_provider(request, tmpdir):
+async def key_provider(request, tmpdir, build_mode) -> AsyncGenerator[KeyProvider, None]:
     """Encryption providers fixture"""
-    async with make_key_provider_factory(request.param, tmpdir) as res:
+    scylla_exe = path_to(build_mode, "scylla")
+    async with make_key_provider_factory(request.param, tmpdir, scylla_exe) as res:
         yield res
