@@ -159,7 +159,7 @@ async def test_scans(manager: ManagerClient):
 async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = { 'auto_snapshot': True }
-    servers = await manager.servers_add(3, config = cfg)
+    servers = await manager.servers_add(3, config = cfg, auto_rack_dc = True)
 
     cql = manager.get_cql()
 
@@ -168,9 +168,11 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 
     for i in range(3):
         await cql.run_async("DROP KEYSPACE IF EXISTS test;")
-        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8 };")
+        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 8 };")
         await cql.run_async("CREATE TABLE IF NOT EXISTS test.tbl_sample_kv (id int, value text, PRIMARY KEY (id));")
-        await cql.run_async("INSERT INTO test.tbl_sample_kv (id, value) VALUES (1, 'ala');")
+        for k in range(3):
+            await cql.run_async(f"INSERT INTO test.tbl_sample_kv (id, value) VALUES ({k}, 'ala');")
+            await manager.api.flush_keyspace(servers[0].ip_addr, "test")
 
     await cql.run_async("DROP KEYSPACE test;")
 
