@@ -604,6 +604,10 @@ public:
 
     data_dictionary::table as_data_dictionary() const;
 
+    // The usage of these functions are restricted to preexisting sstables that aren't being
+    // moved anywhere, so should never be used in the context of file streaming and intra
+    // node migration. The only user today is distributed loader, which populates the
+    // sstables for each column family on boot.
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
