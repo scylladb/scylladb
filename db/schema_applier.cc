@@ -1109,6 +1109,10 @@ void schema_applier::commit_on_shard(replica::database& db) {
 // TODO: move per shard logic directly to raft so that all subsystems can be updated together
 // (requires switching all affected subsystems to 'applier' interface first)
 future<> schema_applier::commit() {
+    if (_tablet_hint) {
+        co_await _ss.local().start_tablet_raft_servers(_token_metadata_change);
+    }
+
     auto& sharded_db = _proxy.local().get_db();
     // Adding and dropping tables, or changing tablet metadata, uses this
     // locking mechanism to prevent changes to tables_metadata during preemptive
