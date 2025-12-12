@@ -408,6 +408,8 @@ public:
 
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const;
+
+    bool is_empty() const;
 };
 
 statement_restrictions analyze_statement_restrictions(
