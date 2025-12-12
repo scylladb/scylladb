@@ -2,36 +2,35 @@
 
 [[package]]
 name = "alabaster"
-version = "0.7.16"
+version = "1.0.0"
 description = "A light, configurable Sphinx theme"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "alabaster-0.7.16-py3-none-any.whl", hash = "sha256:b46733c07dce03ae4e150330b975c75737fa60f0a7c591b6c8bf4928a28e2c92"},
-    {file = "alabaster-0.7.16.tar.gz", hash = "sha256:75a8b99c28a5dad50dd7f8ccdd447a121ddb3892da9e53d1ca5cca3106d58d65"},
+    {file = "alabaster-1.0.0-py3-none-any.whl", hash = "sha256:fc6786402dc3fcb2de3cabd5fe455a2db534b371124f1f21de8731783dec828b"},
+    {file = "alabaster-1.0.0.tar.gz", hash = "sha256:c00dca57bca26fa62a6d7d0a9fcce65f3e026e9bfe33e9c538fd3fbb2144fd9e"},
 ]
 
 [[package]]
 name = "anyio"
-version = "4.11.0"
+version = "4.12.0"
 description = "High-level concurrency and networking framework on top of asyncio or Trio"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "anyio-4.11.0-py3-none-any.whl", hash = "sha256:0287e96f4d26d4149305414d4e3bc32f0dcd0862365a4bddea19d7a1ec38c4fc"},
-    {file = "anyio-4.11.0.tar.gz", hash = "sha256:82a8d0b81e318cc5ce71a5f1f8b5c4e63619620b63141ef8c995fa0db95a57c4"},
+    {file = "anyio-4.12.0-py3-none-any.whl", hash = "sha256:dad2376a628f98eeca4881fc56cd06affd18f659b17a747d3ff0307ced94b1bb"},
+    {file = "anyio-4.12.0.tar.gz", hash = "sha256:73c693b567b0c55130c104d0b43a9baf3aa6a31fc6110116509f27bf75e21ec0"},
 ]
 
 [package.dependencies]
 exceptiongroup = {version = ">=1.0.2", markers = "python_version < \"3.11\""}
 idna = ">=2.8"
-sniffio = ">=1.1"
 typing_extensions = {version = ">=4.5", markers = "python_version < \"3.13\""}
 
 [package.extras]
-trio = ["trio (>=0.31.0)"]
+trio = ["trio (>=0.31.0) ; python_version < \"3.10\"", "trio (>=0.32.0) ; python_version >= \"3.10\""]
 
 [[package]]
 name = "babel"
@@ -50,14 +49,14 @@ dev = ["backports.zoneinfo ; python_version < \"3.9\"", "freezegun (>=1.0,<2.0)"
 
 [[package]]
 name = "beartype"
-version = "0.22.6"
+version = "0.22.8"
 description = "Unbearably fast near-real-time pure-Python runtime-static type-checker."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "beartype-0.22.6-py3-none-any.whl", hash = "sha256:0584bc46a2ea2a871509679278cda992eadde676c01356ab0ac77421f3c9a093"},
-    {file = "beartype-0.22.6.tar.gz", hash = "sha256:97fbda69c20b48c5780ac2ca60ce3c1bb9af29b3a1a0216898ffabdd523e48f4"},
+    {file = "beartype-0.22.8-py3-none-any.whl", hash = "sha256:b832882d04e41a4097bab9f63e6992bc6de58c414ee84cba9b45b67314f5ab2e"},
+    {file = "beartype-0.22.8.tar.gz", hash = "sha256:b19b21c9359722ee3f7cc433f063b3e13997b27ae8226551ea5062e621f61165"},
 ]
 
 [package.extras]
@@ -70,18 +69,18 @@ test-tox-coverage = ["coverage (>=5.5)"]
 
 [[package]]
 name = "beautifulsoup4"
-version = "4.14.2"
+version = "4.14.3"
 description = "Screen-scraping library"
 optional = false
 python-versions = ">=3.7.0"
 groups = ["main"]
 files = [
-    {file = "beautifulsoup4-4.14.2-py3-none-any.whl", hash = "sha256:5ef6fa3a8cbece8488d66985560f97ed091e22bbc4e9c2338508a9d5de6d4515"},
-    {file = "beautifulsoup4-4.14.2.tar.gz", hash = "sha256:2a98ab9f944a11acee9cc848508ec28d9228abfd522ef0fad6a02a72e0ded69e"},
+    {file = "beautifulsoup4-4.14.3-py3-none-any.whl", hash = "sha256:0918bfe44902e6ad8d57732ba310582e98da931428d231a5ecb9e7c703a735bb"},
+    {file = "beautifulsoup4-4.14.3.tar.gz", hash = "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86"},
 ]
 
 [package.dependencies]
-soupsieve = ">1.2"
+soupsieve = ">=1.6.1"
 typing-extensions = ">=4.0.0"
 
 [package.extras]
@@ -803,18 +802,6 @@ files = [
 ]
 
 [[package]]
-name = "sniffio"
-version = "1.3.1"
-description = "Sniff out which async library your code is running under"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"},
-    {file = "sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"},
-]
-
-[[package]]
 name = "snowballstemmer"
 version = "3.0.1"
 description = "This package provides 32 stemmers for 30 languages generated from Snowball algorithms."
@@ -840,18 +827,18 @@ files = [
 
 [[package]]
 name = "sphinx"
-version = "7.4.7"
+version = "8.1.3"
 description = "Python documentation generator"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "sphinx-7.4.7-py3-none-any.whl", hash = "sha256:c2419e2135d11f1951cd994d6eb18a1835bd8fdd8429f9ca375dc1f3281bd239"},
-    {file = "sphinx-7.4.7.tar.gz", hash = "sha256:242f92a7ea7e6c5b406fdc2615413890ba9f699114a9c09192d7dfead2ee9cfe"},
+    {file = "sphinx-8.1.3-py3-none-any.whl", hash = "sha256:09719015511837b76bf6e03e42eb7595ac8c2e41eeb9c29c5b755c6b677992a2"},
+    {file = "sphinx-8.1.3.tar.gz", hash = "sha256:43c1911eecb0d3e161ad78611bc905d1ad0e523e4ddc202a58a821773dc4c927"},
 ]
 
 [package.dependencies]
-alabaster = ">=0.7.14,<0.8.0"
+alabaster = ">=0.7.14"
 babel = ">=2.13"
 colorama = {version = ">=0.4.6", markers = "sys_platform == \"win32\""}
 docutils = ">=0.20,<0.22"
@@ -861,17 +848,17 @@ packaging = ">=23.0"
 Pygments = ">=2.17"
 requests = ">=2.30.0"
 snowballstemmer = ">=2.2"
-sphinxcontrib-applehelp = "*"
-sphinxcontrib-devhelp = "*"
-sphinxcontrib-htmlhelp = ">=2.0.0"
-sphinxcontrib-jsmath = "*"
-sphinxcontrib-qthelp = "*"
+sphinxcontrib-applehelp = ">=1.0.7"
+sphinxcontrib-devhelp = ">=1.0.6"
+sphinxcontrib-htmlhelp = ">=2.0.6"
+sphinxcontrib-jsmath = ">=1.0.1"
+sphinxcontrib-qthelp = ">=1.0.6"
 sphinxcontrib-serializinghtml = ">=1.1.9"
 tomli = {version = ">=2", markers = "python_version < \"3.11\""}
 
 [package.extras]
 docs = ["sphinxcontrib-websupport"]
-lint = ["flake8 (>=6.0)", "importlib-metadata (>=6.0)", "mypy (==1.10.1)", "pytest (>=6.0)", "ruff (==0.5.2)", "sphinx-lint (>=0.9)", "tomli (>=2)", "types-docutils (==0.21.0.20240711)", "types-requests (>=2.30.0)"]
+lint = ["flake8 (>=6.0)", "mypy (==1.11.1)", "pyright (==1.1.384)", "pytest (>=6.0)", "ruff (==0.6.9)", "sphinx-lint (>=0.9)", "tomli (>=2)", "types-Pillow (==10.2.0.20240822)", "types-Pygments (==2.18.0.20240506)", "types-colorama (==0.4.15.20240311)", "types-defusedxml (==0.7.0.20240218)", "types-docutils (==0.21.0.20241005)", "types-requests (==2.32.0.20240914)", "types-urllib3 (==1.26.25.14)"]
 test = ["cython (>=3.0)", "defusedxml (>=0.7.1)", "pytest (>=8.0)", "setuptools (>=70.0)", "typing_extensions (>=4.9)"]
 
 [[package]]
@@ -1001,13 +988,14 @@ test = ["tox"]
 
 [[package]]
 name = "sphinx-scylladb-markdown"
-version = "0.1.3"
+version = "0.1.4"
 description = "Sphinx extension for ScyllaDB documentation with enhanced Markdown support through MystParser and recommonmark."
 optional = false
 python-versions = "*"
 groups = ["main"]
 files = [
-    {file = "sphinx_scylladb_markdown-0.1.3-py3-none-any.whl", hash = "sha256:f20160b4aadf4c8cf95637f0a544121954b792914ab6ec05b67cae75e20a5566"},
+    {file = "sphinx_scylladb_markdown-0.1.4-py3-none-any.whl", hash = "sha256:598753e01cf159d4698eb1a707958828446e21749038d3d42c5b9c7e86eda6e4"},
+    {file = "sphinx_scylladb_markdown-0.1.4.tar.gz", hash = "sha256:9db3ae0dcf7c3519262da65e48c7f9e4db0ad1ce9c5f874864ea218f4cbc4c68"},
 ]
 
 [package.dependencies]
@@ -1059,24 +1047,25 @@ dev = ["build", "flake8", "pre-commit", "pytest", "sphinx", "sphinx-last-updated
 
 [[package]]
 name = "sphinx-substitution-extensions"
-version = "2025.1.2"
+version = "2025.11.17"
 description = "Extensions for Sphinx which allow for substitutions."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "sphinx_substitution_extensions-2025.1.2-py2.py3-none-any.whl", hash = "sha256:ff14f40e4393bd7434a196badb8d47983355d9755af884b902e3023fb456b958"},
-    {file = "sphinx_substitution_extensions-2025.1.2.tar.gz", hash = "sha256:53b8d394d5098a09aef36bc687fa310aeb28466319d2c750e996e46400fb2474"},
+    {file = "sphinx_substitution_extensions-2025.11.17-py2.py3-none-any.whl", hash = "sha256:ac18455bdc8324b337b0fe7498c1c0d0b1cb65c74d131459be4dea9edb6abbef"},
+    {file = "sphinx_substitution_extensions-2025.11.17.tar.gz", hash = "sha256:aae17f8db9efc3d454a304373ae3df763f8739e05e0b98d5381db46f6d250b27"},
 ]
 
 [package.dependencies]
 beartype = ">=0.18.5"
 docutils = ">=0.19"
-sphinx = ">=7.3.5"
+myst-parser = ">=4.0.0"
+sphinx = ">=8.1.0"
 
 [package.extras]
-dev = ["actionlint-py (==1.7.5.21)", "check-manifest (==0.50)", "deptry (==0.21.2)", "doc8 (==1.1.2)", "doccmd (==2024.12.26)", "docformatter (==1.7.5)", "interrogate (==1.7.0)", "mypy-strict-kwargs (==2024.12.25)", "mypy[faster-cache] (==1.14.1)", "myst-parser (==4.0.0)", "pre-commit (==4.0.1)", "pyenchant (==3.3.0rc1)", "pylint (==3.3.3)", "pyproject-fmt (==2.5.0)", "pyright (==1.1.391)", "pyroma (==4.2)", "pytest (==8.3.4)", "pytest-cov (==6.0.0)", "ruff (==0.8.4)", "shellcheck-py (==0.10.0.1)", "shfmt-py (==3.7.0.1)", "sphinx-toolbox (==3.8.1)", "sphinx[test] (==8.1.3)", "types-docutils (==0.21.0.20241128)", "vulture (==2.14)", "yamlfix (==1.17.0)"]
-release = ["check-wheel-contents (==0.6.1)"]
+dev = ["actionlint-py (==1.7.8.24)", "check-manifest (==0.51)", "deptry (==0.24.0)", "doc8 (==2.0.0)", "doccmd (==2025.11.8.1)", "docformatter (==1.7.7)", "interrogate (==1.7.0)", "mypy-strict-kwargs (==2025.4.3)", "mypy[faster-cache] (==1.18.2)", "pre-commit (==4.4.0)", "pylint[spelling] (==4.0.3)", "pyproject-fmt (==2.11.1)", "pyright (==1.1.407)", "pyroma (==5.0)", "pytest (==9.0.1)", "pytest-cov (==7.0.0)", "ruff (==0.14.5)", "shellcheck-py (==0.11.0.1)", "shfmt-py (==3.12.0.2)", "sphinx-lint (==1.0.1)", "sphinx-toolbox (==4.0.0)", "types-docutils (==0.22.2.20251006)", "vulture (==2.14)", "yamlfix (==1.19.0)"]
+release = ["check-wheel-contents (==0.6.3)"]
 
 [[package]]
 name = "sphinx-tabs"
@@ -1363,21 +1352,21 @@ files = [
 
 [[package]]
 name = "urllib3"
-version = "2.5.0"
+version = "2.6.2"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "urllib3-2.5.0-py3-none-any.whl", hash = "sha256:e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc"},
-    {file = "urllib3-2.5.0.tar.gz", hash = "sha256:3fc47733c7e419d4bc3f6b3dc2b4f890bb743906a30d56ba4a5bfa4bbff92760"},
+    {file = "urllib3-2.6.2-py3-none-any.whl", hash = "sha256:ec21cddfe7724fc7cb4ba4bea7aa8e2ef36f607a4bab81aa6ce42a13dc3f03dd"},
+    {file = "urllib3-2.6.2.tar.gz", hash = "sha256:016f9c98bb7e98085cb2b4b17b87d2c702975664e4f060c6532e64d1c1a5e797"},
 ]
 
 [package.extras]
-brotli = ["brotli (>=1.0.9) ; platform_python_implementation == \"CPython\"", "brotlicffi (>=0.8.0) ; platform_python_implementation != \"CPython\""]
+brotli = ["brotli (>=1.2.0) ; platform_python_implementation == \"CPython\"", "brotlicffi (>=1.2.0.0) ; platform_python_implementation != \"CPython\""]
 h2 = ["h2 (>=4,<5)"]
 socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
-zstd = ["zstandard (>=0.18.0)"]
+zstd = ["backports-zstd (>=1.0.0) ; python_version < \"3.14\""]
 
 [[package]]
 name = "uvicorn"
@@ -1603,4 +1592,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "0ae673106f45d3465cbdabbf511e165ca44feadd34d7753f2e68093afaa95c79"
+content-hash = "9a17caa38b3c88f3fe3d1a60fdb73a96aa12ff1e30ecb00e2f9249e7ba9f859c"
