@@ -176,6 +176,7 @@ public:
     gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
     gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
+    gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

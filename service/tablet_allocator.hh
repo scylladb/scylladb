@@ -12,6 +12,7 @@
 #include "locator/tablets.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/metrics.hh>
 
 namespace service {
@@ -202,7 +203,7 @@ private:
     std::unique_ptr<impl> _impl;
     tablet_allocator_impl& impl();
 public:
-    tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db);
+    tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db, gms::feature_service& fs);
 public:
     future<> stop();
 
