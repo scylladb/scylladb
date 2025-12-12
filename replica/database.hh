@@ -1040,12 +1040,12 @@ public:
 private:
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-    future<snapshot_file_set> take_snapshot(sstring jsondir, db::snapshot_options opts);
+    future<snapshot_file_set> take_snapshot(sstring jsondir);
     // Writes the table schema and the manifest of all files in the snapshot directory.
     future<> finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 public:
-    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts);
+    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
     static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
@@ -2009,9 +2009,9 @@ public:
     static future<> drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id);
     static future<> drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
 
-    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id id, sstring tag, db::snapshot_options opts);
-    static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts);
-    static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, db::snapshot_options opts);
+    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id id, sstring tag, bool skip_flush);
+    static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
+    static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush);
 
 public:
     bool update_column_family(schema_ptr s);
