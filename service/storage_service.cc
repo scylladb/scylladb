@@ -6475,8 +6475,11 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
         for (auto&& sst_desc : d) {
             ssts.push_back(co_await load_sstable(sharder, table, std::move(sst_desc)));
         }
-        co_await table.add_sstables_and_update_cache(ssts);
-        _view_building_worker.local().load_sstables(tablet.table, ssts);
+        auto on_add = [] (sstables::shared_sstable loading_sst) -> future<> {
+            co_return;
+        };
+        auto loaded_ssts = co_await table.add_new_sstables_and_update_cache(ssts, on_add);
+        _view_building_worker.local().load_sstables(tablet.table, loaded_ssts);
     });
     rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
 }
