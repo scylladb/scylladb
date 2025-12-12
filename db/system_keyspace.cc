@@ -110,6 +110,7 @@ namespace {
             system_keyspace::v3::CDC_LOCAL,
             system_keyspace::DICTS,
             system_keyspace::VIEW_BUILDING_TASKS,
+            system_keyspace::CLIENT_ROUTES,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -137,6 +138,7 @@ namespace {
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
                 system_keyspace::VIEW_BUILDING_TASKS,
+                system_keyspace::CLIENT_ROUTES,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -1391,6 +1393,23 @@ schema_ptr system_keyspace::view_building_tasks() {
     return schema;
 }
 
+schema_ptr system_keyspace::client_routes() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CLIENT_ROUTES);
+        return schema_builder(NAME, CLIENT_ROUTES, std::make_optional(id))
+                .with_column("connection_id", utf8_type, column_kind::partition_key)
+                .with_column("host_id", uuid_type, column_kind::clustering_key)
+                .with_column("address", utf8_type)
+                .with_column("port", int32_type)
+                .with_column("tls_port", int32_type)
+                .with_column("alternator_port", int32_type)
+                .with_column("alternator_https_port", int32_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
     auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
@@ -2318,7 +2337,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {

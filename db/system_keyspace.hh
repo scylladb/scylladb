@@ -198,6 +198,7 @@ public:
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
+    static constexpr auto CLIENT_ROUTES = "client_routes";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -274,6 +275,7 @@ public:
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
     static schema_ptr view_building_tasks();
+    static schema_ptr client_routes();
 
     // auth
     static schema_ptr roles();

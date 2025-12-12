@@ -7702,6 +7702,9 @@ void storage_service::init_messaging_service() {
                     additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
                     additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
+                if (ss._feature_service.client_routes) {
+                    additional_tables.push_back(db::system_keyspace::client_routes()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
