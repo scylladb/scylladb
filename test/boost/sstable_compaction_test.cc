@@ -6322,4 +6322,37 @@ SEASTAR_TEST_CASE(unsealed_sstable_compaction_test) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        sstables::sstable_generation_generator gen_generator;
+
+        bool leave_unsealed = true;
+        auto d = sst->clone(gen_generator(), leave_unsealed).get();
+
+        auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+        sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
+        BOOST_REQUIRE(!file_exists(sst2->get_filename(sstables::component_type::TOC).format()).get());
+        BOOST_REQUIRE(file_exists(sst2->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+
+        leave_unsealed = false;
+        d = sst->clone(gen_generator(), leave_unsealed).get();
+
+        auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+        sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
+        BOOST_REQUIRE(file_exists(sst3->get_filename(sstables::component_type::TOC).format()).get());
+        BOOST_REQUIRE(!file_exists(sst3->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
