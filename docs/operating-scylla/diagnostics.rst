@@ -102,7 +102,6 @@ Other Tools
 ScyllaDB has various other tools, mainly to work with sstables.
 If you are diagnosing a problem that is related to sstables misbehaving or being corrupt, you may find these useful:
 
-* :doc:`sstabledump </operating-scylla/admin-tools/sstabledump/>`
 * :doc:`ScyllaDB SStable </operating-scylla/admin-tools/scylla-sstable/>`
 * :doc:`ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>`
 
