@@ -858,7 +858,7 @@ Alternatively, you can provide each key-value pair via a separate ``--script-arg
 
     --script-arg $key1=$value1 --script-arg $key2=$value2
 
-Command line arguments will be received by the `consume_stream_start() <scylla-consume-stream-start-method_>`_ API method.
+Command line arguments will be received by the :ref:`consume_stream_start() <scylla-consume-stream-start-method>` API method.
 
 .. _scylla-consume-api:
 
@@ -866,8 +866,8 @@ ScyllaDB Consume API
 ~~~~~~~~~~~~~~~~~~~~~~
 
 These methods represent the glue code between scylla-sstable's C++ code and the Lua script.
-Conceptually a script is an implementation of a consumer interface. The script has to implement only the methods it is interested in. Each method has a default implementation in the interface, which simply drops the respective `mutation fragment <scylla-sstable-sstable-content_>`_.
-For example, a script only interested in partitions can define only `consume_partition_start() <scylla-consume-partition-start-method_>`_ and nothing else.
+Conceptually a script is an implementation of a consumer interface. The script has to implement only the methods it is interested in. Each method has a default implementation in the interface, which simply drops the respective :ref:`mutation fragment <scylla-sstable-sstable-content>`.
+For example, a script only interested in partitions can define only :ref:`consume_partition_start() <scylla-consume-partition-start-method>` and nothing else.
 Therefore a completely empty script is also valid, although not very useful.
 Below you will find the listing of the API methods.
 These methods (if provided by the script) will be called by the scylla-sstable runtime for the appropriate events and fragment types.
@@ -1137,7 +1137,7 @@ ScyllaDB.json_writer
 
 A JSON writer object, with both low-level and high-level APIs.
 The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html>`_ (upon which it is implemented).
-The high-level API is for writing `mutation fragments <scylla-sstable-sstable-content_>`_ as JSON directly, using the built-in JSON conversion logic that is used by `dump-data <dump-data_>`_ operation.
+The high-level API is for writing :ref:`mutation fragments <scylla-sstable-sstable-content>` as JSON directly, using the built-in JSON conversion logic that is used by :ref:`dump-data <scylla-sstable-dump-data-operation>` operation.
 
 Low level API Methods:
 
@@ -1397,7 +1397,7 @@ SSTables which are already on the designated version are skipped. To force rewri
 Output SSTables are written to the path provided by the ``--output-dir`` flag, or to the current directory if not specified.
 This directory is expected to exist and be empty. If not empty the tool will refuse to run. This can be overridden with the ``--unsafe-accept-nonempty-output-dir`` flag.
 
-It is strongly recommended to use the system schema tables as the schema source for this command, see the `schema options <scylla-sstable-schema_>`_ for more details.
+It is strongly recommended to use the system schema tables as the schema source for this command, see the :ref:`schema options <scylla-sstable-schema>` for more details.
 A schema which is good enough to read the SSTable and dump its content, may not be good enough to write its content back verbatim.
 An incomplete or incorrect schema can lead to the tool crashing or even data loss.
 
