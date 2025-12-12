@@ -265,6 +265,14 @@ class ScyllaRESTAPIClient:
         """
         return await self.client.get_json(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
 
+    async def tablet_repair_config(self, node_ip: str, ks: str, table: str, auto_repair_enabled: bool, auto_repair_threshold : int) -> None:
+        await self.client.post(f"/storage_service/tablets/config_repair", host=node_ip, params={
+            "ks": ks,
+            "table": table,
+            "auto_repair_enabled": str(auto_repair_enabled).lower(),
+            "auto_repair_threshold": str(auto_repair_threshold)
+        })
+
     async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int, timeout: Optional[float] = None) -> None:
         await self.client.post(f"/storage_service/tablets/move", host=node_ip, timeout=timeout, params={
             "ks": ks,

@@ -1549,6 +1549,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "\tdisabled: New keyspaces use vnodes by default, unless enabled by the tablets={'enabled':true} option\n"
             "\tenabled:  New keyspaces use tablets by default, unless disabled by the tablets={'enabled':false} option\n"
             "\tenforced: New keyspaces must use tablets. Tablets cannot be disabled using the CREATE KEYSPACE option")
+    , auto_repair_enabled_for_no_per_table_cfg_tablet_tables(this, "auto_repair_enabled_for_no_per_table_cfg_tablet_tables", value_status::Used, false, "Set true to enable auto repair for tablet tables with no per table configs. The value will be overridden by the per table config by REST API.")
+    , auto_repair_threshold_for_no_per_table_cfg_tablet_tables(this, "auto_repair_threshold_for_no_per_table_cfg_tablet_tables", value_status::Used, 10 * 24 * 3600 , "Set time in seconds for the auto repair threshold for tablet tables with no per table configs. If the time since last repair is bigger than the configured time, the tablet is eligible for auto repair. The value will be overridden by per table REST API.")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximal amount of time that materialized-view update flow control may delay responses "
         "to try to slow down the client and prevent buildup of unfinished view updates. "

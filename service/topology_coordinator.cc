@@ -72,6 +72,8 @@
 #include "service/topology_coordinator.hh"
 
 #include <boost/range/join.hpp>
+#include <seastar/core/metrics_registration.hh>
+#include "utils/labels.hh"
 
 using token = dht::token;
 using inet_address = gms::inet_address;
@@ -1703,6 +1705,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     bool fail_repair = utils::get_local_injector().enter("handle_tablet_migration_repair_fail");
                     if (fail_repair || action_failed(tablet_state.repair)) {
                         if (do_barrier()) {
+                            auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                            if (tinfo.repair_task_info.is_auto_repair_request()) {
+                                _tablet_ops_metrics.inc_failed(tablet_ops_metrics::tablet_ops_kind::auto_repair);
+                            } else if (tinfo.repair_task_info.is_user_repair_request()) {
+                                _tablet_ops_metrics.inc_failed(tablet_ops_metrics::tablet_ops_kind::user_repair);
+                            }
                             updates.emplace_back(get_mutation_builder()
                                     .set_stage(last_token, locator::tablet_transition_stage::end_repair)
                                     .del_session(last_token)
@@ -1782,6 +1790,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                     sched_time, time, repaired_at, last_token);
                         }
                         updates.emplace_back(update.build());
+                        if (tinfo.repair_task_info.is_auto_repair_request()) {
+                            _tablet_ops_metrics.inc_succeeded(tablet_ops_metrics::tablet_ops_kind::auto_repair);
+                        } else if (tinfo.repair_task_info.is_user_repair_request()) {
+                            _tablet_ops_metrics.inc_succeeded(tablet_ops_metrics::tablet_ops_kind::user_repair);
+                        }
                     }
                 }
                     break;
@@ -3407,6 +3420,9 @@ public:
 
     virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
+
+private:
+    tablet_ops_metrics _tablet_ops_metrics;
 };
 
 future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_tables(group0_guard guard) {
@@ -4076,6 +4092,21 @@ future<> run_topology_coordinator(
     }
     co_await lifecycle_notifier.unregister_subscriber(&coordinator);
     co_await coordinator.stop();
+}
+
+tablet_ops_metrics::tablet_ops_metrics() {
+    namespace sm = seastar::metrics;
+    auto ops_label_type = sm::label("kind");
+    _metrics.add_group("tablet_ops", {
+        sm::make_gauge("failed", [this] { return failed[tablet_ops_metrics::tablet_ops_kind::auto_repair]; },
+                sm::description("Number of failed tablet auto repair"), {ops_label_type("auto_repair"), basic_level}),
+        sm::make_gauge("succeeded", [this] { return succeeded[tablet_ops_metrics::tablet_ops_kind::auto_repair] ; },
+                sm::description("Number of succeeded tablet auto repair"), {ops_label_type("auto_repair"), basic_level}),
+        sm::make_gauge("failed", [this] { return failed[tablet_ops_metrics::tablet_ops_kind::user_repair]; },
+                sm::description("Number of failed tablet user repair"), {ops_label_type("user_repair"), basic_level}),
+        sm::make_gauge("succeeded", [this] { return succeeded[tablet_ops_metrics::tablet_ops_kind::user_repair]; },
+                sm::description("Number of succeeded tablet user repair"), {ops_label_type("user_repair"), basic_level}),
+    });
 }
 
 } // namespace service

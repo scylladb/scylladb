@@ -562,6 +562,8 @@ public:
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
     named_value<enum_option<tablets_mode_t>> tablets_mode_for_new_keyspaces;
+    named_value<bool> auto_repair_enabled_for_no_per_table_cfg_tablet_tables;
+    named_value<int32_t> auto_repair_threshold_for_no_per_table_cfg_tablet_tables;
 
     bool enable_tablets_by_default() const noexcept {
         switch (tablets_mode_for_new_keyspaces()) {

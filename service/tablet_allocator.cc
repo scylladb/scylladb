@@ -27,6 +27,8 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <absl/container/flat_hash_map.h>
+#include <fmt/format.h>
+#include <fmt/chrono.h>
 
 using namespace locator;
 using namespace replica;
@@ -69,7 +71,11 @@ void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& sta
         sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
             stats.resizes_revoked),
         sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
-            stats.resizes_finalized)
+            stats.resizes_finalized),
+        sm::make_counter("auto_repair_needs_repair_nr", sm::description("number of tablets with auto repair enabled that currently needs repair"),
+            stats.auto_repair_needs_repair_nr),
+        sm::make_counter("auto_repair_enabled_nr", sm::description("number of tablets with auto repair enabled"),
+            stats.auto_repair_enabled_nr)
     });
 }
 
@@ -237,6 +243,15 @@ struct migration_candidate {
     migration_badness badness;
 };
 
+struct repair_plan {
+	locator::global_tablet_id gid;
+	locator::tablet_info tinfo;
+	dht::token_range range;
+	dht::token last_token;
+	db_clock::duration repair_time_diff;
+	bool is_user_reuqest;
+};
+
 }
 
 template<>
@@ -268,6 +283,16 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
             fmt::format_to(ctx.out(), " (bad!)");
         }
         fmt::format_to(ctx.out(), "}}");
+        return ctx.out();
+    }
+};
+
+template<>
+struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::repair_plan& p, FormatContext& ctx) const {
+        auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
+		fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
         return ctx.out();
     }
 };
@@ -810,9 +835,40 @@ public:
         return (it != _table_load_stats->tables.end()) ? &it->second : nullptr;
     }
 
+    bool is_auto_repair_enabled(const std::optional<locator::repair_scheduler_config>& config) {
+        // if there is no per table configuration, use the yaml config.
+        return config ? config->auto_repair_enabled : _db.get_config().auto_repair_enabled_for_no_per_table_cfg_tablet_tables();
+    }
+
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const locator::repair_scheduler_config& config, const db_clock::time_point& now, db_clock::duration& diff) {
-        co_return false;
+            const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now, db_clock::duration& diff, service::auto_repair_stats& stats) {
+        std::chrono::seconds repair_time_threshold;
+        if (!config) {
+            // No per table configuration. Use the yaml config.
+            auto enabled = _db.get_config().auto_repair_enabled_for_no_per_table_cfg_tablet_tables();
+            if (!enabled) {
+                lblogger.trace("Skipped tablet auto repair for tablet={} reason=no_per_table_config_global_disabled", gid);
+                co_return false;
+            }
+            auto threshold = _db.get_config().auto_repair_threshold_for_no_per_table_cfg_tablet_tables();
+            repair_time_threshold = std::chrono::seconds(threshold);
+        } else {
+            // Use per table confiugration.
+            if (!config->auto_repair_enabled) {
+                lblogger.trace("Skipped tablet auto repair for tablet={} reason=disabled_by_per_table_config", gid);
+                co_return false;
+            }
+            repair_time_threshold = config->auto_repair_threshold;
+        }
+        auto& last_repair_time = info.repair_time;
+        diff = now - last_repair_time;
+        lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
+                gid, diff, info.repair_time, repair_time_threshold);
+        if (diff < repair_time_threshold) {
+            co_return false;
+        }
+        stats.needs_repair_nr++;
+        co_return true;
     }
 
     future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
@@ -878,23 +934,21 @@ public:
             apply_load(nodes, streaming_info);
         }
 
-        struct repair_plan {
-            locator::global_tablet_id gid;
-            locator::tablet_info tinfo;
-            dht::token_range range;
-            dht::token last_token;
-            db_clock::duration repair_time_diff;
-        };
+        service::auto_repair_stats auto_repair_stats;
 
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
-            auto& config = tmap.repair_scheduler_config();
+            auto config = tmap.get_repair_scheduler_config();
+            auto auto_repair_enabled = is_auto_repair_enabled(config);
             auto now = db_clock::now();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
+                if (auto_repair_enabled) {
+                    auto_repair_stats.enabled_nr++;
+                }
                 // Skip tablet that is in transitions.
                 auto* tti = tmap.get_tablet_transition_info(id);
                 if (tti) {
@@ -926,23 +980,34 @@ public:
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff});
+                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
             });
         }
+
+        _stats.for_cluster().auto_repair_needs_repair_nr = auto_repair_stats.needs_repair_nr;
+        _stats.for_cluster().auto_repair_enabled_nr = auto_repair_stats.enabled_nr;
 
         // TODO: we could add other factors in addition to the repair time when
         // picking which tablet to repair, e.g., higher repair priority
         // specified by user, tablet with higher purgeable tombstone ratio.
         std::sort(plans.begin(), plans.end(), [] (const repair_plan& x, const repair_plan& y) {
+            if (x.is_user_reuqest != y.is_user_reuqest) {
+                return x.is_user_reuqest > y.is_user_reuqest;
+            }
             return x.repair_time_diff > y.repair_time_diff;
         });
+
+
+        if (utils::get_local_injector().enter("tablet_dump_repair_plan")) {
+            lblogger.info("dump_repair_plans=[{}]", fmt::join(plans, ","));
+        }
 
         auto trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
                 locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
@@ -954,6 +1019,11 @@ public:
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
             }
+        }
+
+        if (utils::get_local_injector().enter("tablet_skip_repair_plan")) {
+            lblogger.info("Skip repair plan due to error injection=tablet_skip_repair_plan");
+            co_return tablet_repair_plan();
         }
 
         co_return ret;

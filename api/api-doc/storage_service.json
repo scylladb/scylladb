@@ -2790,6 +2790,54 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/config_repair",
+         "operations":[
+            {
+               "nickname":"config_repair_tablet",
+               "method":"POST",
+               "summary":"Configure tablet repair",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ks",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"auto_repair_enabled",
+                     "description":"When set to false, auto repair is disabled",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"auto_repair_threshold",
+                     "description":"If the time since last repair is bigger than auto_repair_threshold seconds, the tablet is eligible for auto repair",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/tablets/move",
          "operations":[
             {
