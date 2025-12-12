@@ -89,9 +89,8 @@ future<> directories::create_and_verify(directories::set dir_set, recursive recu
         try {
             co_await directories::verify_owner_and_mode(path, recursive);
         } catch (...) {
-            std::exception_ptr ep = std::current_exception();
-            startlog.error("Failed owner and mode verification: {}", ep);
-            throw ep;
+            startlog.error("Failed owner and mode verification: {}", std::current_exception());
+            throw;
         }
     });
     std::move(locks.begin(), locks.end(), std::back_inserter(_locks));
