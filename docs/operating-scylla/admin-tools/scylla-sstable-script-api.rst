@@ -1,3 +1,11 @@
+ScyllaDB SStable Script API
+---------------------------
+
+The script API consists of two parts:
+
+* `ScyllaDB Consume API <scylla-consume-api_>`_ - Hook methods implemented by the script to consume a :ref:`mutation fragment stream <scylla-sstable-sstable-content>`;
+* `ScyllaDB Lua API <scylla-script-lua-api_>`_ - types and methods exposed to the script to work with ScyllaDB types and values.
+
 .. _scylla-consume-api:
 
 ScyllaDB Consume API
@@ -89,6 +97,8 @@ consume_stream_end()
 
 * Part of the Consume API. 
 * Called at the very end of the stream.
+
+.. _scylla-script-lua-api:
 
 ScyllaDB LUA API
 ~~~~~~~~~~~~~~~~
