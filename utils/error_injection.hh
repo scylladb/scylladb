@@ -204,7 +204,7 @@ public:
 
     public:
         template <typename Clock, typename Duration>
-        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, abort_source* as = nullptr) {
+        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, abort_source* as = nullptr, std::source_location loc = std::source_location::current()) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
@@ -234,7 +234,8 @@ public:
                 throw;
             }
             catch (const std::exception& e) {
-                on_internal_error(errinj_logger, "Error injection wait_for_message timeout: " + std::string(e.what()));
+                on_internal_error(errinj_logger, fmt::format("Error injection [{}] wait_for_message timeout: Called from `{}` @ {}:{}:{:d}: {}",
+                        _shared_data->injection_name, loc.function_name(), loc.file_name(), loc.line(), loc.column(), e.what()));
             }
             ++_read_messages_counter;
         }
