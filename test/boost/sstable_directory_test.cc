@@ -7,10 +7,14 @@
  */
 
 
+#include <boost/test/tools/old/interface.hpp>
 #include <fmt/format.h>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/file.hh>
+#include <seastar/core/shard_id.hh>
+#include <seastar/core/when_all.hh>
+#include "seastar/core/future.hh"
 #include "sstables/generation_type.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -860,6 +864,52 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
             BOOST_REQUIRE_EQUAL(expected, collected);
         });
       }
+    });
+}
+
+// Test filesystem_storage::create_links robustness when cloning 2 sstables concurrently using the same generation
+// This can happen when using the sstable identifier for snapshot,
+// when the snapshot is taken during intra-node migration.
+// Reproducer for low-level issue triggering #27501
+SEASTAR_TEST_CASE(test_sstable_clone_with_common_generation) {
+    return sstables::test_env::do_with_sharded_async([] (auto& env) {
+        auto dir = env.local().tempdir().path();
+        recursive_touch_directory(dir.native()).get();
+
+        auto new_sstable = [&] {
+            return env.local().make_sstable(test_table_schema(), dir.native());
+        };
+        auto sst = make_sstable_for_this_shard(new_sstable);
+
+        auto new_generation = [] {
+            return sstables::generation_type(utils::UUID_gen::get_time_UUID());
+        };
+        auto clone_gen = new_generation();
+
+        auto clone_sst = [] (shared_sstable sst, sstables::generation_type gen) {
+            return sst->clone(gen).then_wrapped([sst, gen] (auto f) {
+                if (f.failed()) {
+                    auto ex = f.get_exception();
+                    auto msg = format("sstable clone of {} to generation {} failed: {}", sst->get_filename(), gen, ex);
+                    testlog.error("{}", msg);
+                    BOOST_FAIL(msg);
+                }
+                return std::move(f);
+            });
+        };
+        clone_sst(sst, clone_gen).get();
+
+        auto other_shard = (this_shard_id() + 1) % smp::count;
+        auto foreign_sst = env.invoke_on(other_shard, [&] (auto& e) {
+            return make_foreign(e.make_sstable(test_table_schema(), dir.native(), clone_gen));
+        }).get();
+
+        auto shared_gen = new_generation();
+        auto f1 = clone_sst(sst, shared_gen);
+        auto f2 = smp::submit_to(other_shard, [&clone_sst, foreign_sst = std::move(foreign_sst), shared_gen]() mutable {
+            return clone_sst(foreign_sst.unwrap_on_owner_shard(), shared_gen);
+        });
+        BOOST_REQUIRE_NO_THROW(when_all_succeed(std::move(f1), std::move(f2)).get());
     });
 }
 
