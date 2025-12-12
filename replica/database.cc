@@ -2871,6 +2871,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
 
+  try {
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(smp::count);
 
@@ -2963,6 +2964,10 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         return db.truncate(sys_ks.local(), cf, views, st);
     });
     dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
+  } catch (...) {
+    dblog.error("Truncation of {}.{} on all shards failed: {}", s->ks_name(), s->cf_name(), std::current_exception());
+    throw;
+  }
 }
 
 future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state& st) {
