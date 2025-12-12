@@ -76,28 +76,10 @@ const auto app_name = "sstable";
 
 logging::logger sst_log(format("scylla-{}", app_name));
 
-struct decorated_key_hash {
-    std::size_t operator()(const dht::decorated_key& dk) const {
-        return dht::token::to_int64(dk.token());
-    }
-};
-
-struct decorated_key_equal {
-    const schema& _s;
-    explicit decorated_key_equal(const schema& s) : _s(s) {
-    }
-    bool operator()(const dht::decorated_key& a, const dht::decorated_key& b) const {
-        return a.equal(_s, b);
-    }
-};
-
-using partition_set = std::unordered_set<dht::decorated_key, decorated_key_hash, decorated_key_equal>;
-
-template <typename T>
-using partition_map = std::unordered_map<dht::decorated_key, T, decorated_key_hash, decorated_key_equal>;
+using partition_set = std::set<dht::decorated_key, dht::decorated_key::less_comparator>;
 
 partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_config) {
-    partition_set partitions(app_config.count("partition"), {}, decorated_key_equal(*schema));
+    partition_set partitions{dht::decorated_key::less_comparator(schema)};
     auto pk_type = schema->partition_key_type();
 
     auto dk_from_hex = [&] (std::string_view hex) {
@@ -1882,7 +1864,7 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
         throw std::invalid_argument("no sstables specified on the command line");
     }
     const auto merge = vm.count("merge");
-    const auto partitions = partition_set(0, {}, decorated_key_equal(*schema));
+    const auto partitions = partition_set(dht::decorated_key::less_comparator(schema));
     if (!vm.count("script-file")) {
         throw std::invalid_argument("missing required option '--script-file'");
     }
