@@ -1051,8 +1051,9 @@ public:
     future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
 
     // Clones this sstable with a new generation, under the same location as the original one.
+    // If leave_unsealed is true, the destination sstable is left unsealed.
     // Implementation is underlying storage specific.
-    future<entry_descriptor> clone(generation_type new_generation) const;
+    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false) const;
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager
