@@ -358,12 +358,39 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dst_dir
 future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
+  try {
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", sst.get_filename(), dst_dir, generation, mark_for_removal);
     auto comps = sst.all_components();
     co_await check_create_links_replay(sst, dst_dir, generation, comps);
     // TemporaryTOC is always first, TOC is always last
-    auto dst = filename(sst, dst_dir, generation, component_type::TemporaryTOC);
-    co_await sst.sstable_write_io_check(idempotent_link_file, fmt::to_string(sst.filename(component_type::TOC)), std::move(dst));
+    auto dst_temp_toc = filename(sst, dst_dir, generation, component_type::TemporaryTOC);
+    auto dst_toc = filename(sst, dst_dir, generation, component_type::TOC);
+    for (;;) {
+        if (co_await file_exists(dst_toc)) {
+            // The destination TOC already exists.  This may be a replay of
+            // a previous create_links call, or create_links using the same generation,
+            // e.g. when using the sstable identifier and taking a snapshot during intra-node migration.
+            auto msg = fmt::format("create_links: {}: destination TOC {} already exists", sst.get_filename(), dst_toc);
+            if (co_await same_file(fmt::to_string(sst.filename(component_type::TOC)), dst_toc)) {
+                sstlog.info("{}", msg);
+                co_return;
+            }
+            throw std::runtime_error(msg);
+        }
+        try {
+            co_await sst.sstable_write_io_check(link_file, fmt::to_string(sst.filename(component_type::TOC)), dst_temp_toc);
+            break;
+        } catch (const std::system_error& e) {
+            if (e.code().value() == EEXIST) {
+                // TemporaryTOC already exists.  This may be a race with create_links using the same generation,
+                // probably on a different shard.
+                sstlog.info("create_links: {}: destination TemporaryTOC {} already exists.  Retrying...", sst.get_filename(), dst_temp_toc);
+            } else {
+                throw;
+            }
+        }
+        co_await sleep(std::chrono::milliseconds(10));
+    }
     auto dir = opened_directory(dst_dir);
     co_await dir.sync(sst._write_error_handler);
     co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation] (auto p) {
@@ -372,7 +399,6 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
         return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
     });
     co_await dir.sync(sst._write_error_handler);
-    auto dst_temp_toc = filename(sst, dst_dir, generation, component_type::TemporaryTOC);
     if (mark_for_removal) {
         // Now that the source sstable is linked to new_dir, mark the source links for
         // deletion by leaving a TemporaryTOC file in the source directory.
@@ -387,6 +413,10 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     co_await dir.sync(sst._write_error_handler);
     co_await dir.close();
     sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
+  } catch (...) {
+    sstlog.error("create_links: {} -> {} generation={} failed: {}", sst.get_filename(), dst_dir, generation, std::current_exception());
+    throw;
+  }
 }
 
 future<> filesystem_storage::create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> gen) const {
