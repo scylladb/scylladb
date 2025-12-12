@@ -14,7 +14,7 @@ import time
 from collections import defaultdict
 from functools import cached_property
 from functools import wraps
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Optional, Tuple
 
 from cassandra import ConsistencyLevel
 from cassandra import WriteTimeout, ReadTimeout, OperationTimedOut
@@ -64,6 +64,7 @@ class Worker:
     """
     A single worker increments its dedicated column `s{i}` via LWT:
       UPDATE .. SET s{i}=? WHERE pk=? IF <guards on other cols> AND s{i}=?
+      bump global phase-ops counter via on_applied()
     It checks for applied state and retries on "uncertainty" timeouts.
     """
     def __init__(
@@ -76,8 +77,10 @@ class Worker:
         other_columns: List[int],
         get_lower_bound: Callable[[int, int], int],
         on_applied: Callable[[int, int, int], None],
-        stop_event: asyncio.Event
-
+        stop_event: asyncio.Event,
+        counter_update_statement: Optional[PreparedStatement] = None,
+        counters_random_delta: bool = False,
+        counters_max_delta: int = 5,
     ):
         self.stop_event = stop_event
         self.success_counts: Dict[int, int] = {pk: 0 for pk in pks}
@@ -91,7 +94,11 @@ class Worker:
         self.cql = cql
         self.get_lower_bound = get_lower_bound
         self.on_applied = on_applied
-
+        # counters
+        self.counter_update_statement = counter_update_statement
+        self.counters_random_delta = counters_random_delta
+        self.counters_max_delta = max(1, counters_max_delta)
+        self.counter_deltas: Dict[int, int] = {pk: 0 for pk in pks}
 
     async def verify_update_through_select(self, pk, new_val, prev_val):
         """
@@ -106,6 +113,24 @@ class Worker:
         assert current_val == new_val or current_val == prev_val
         return current_val == new_val
 
+    def _next_counter_delta(self) -> int:
+        """
+        Compute the next delta to apply to the counter table.
+        If random mode is disabled -> always +1.
+        If random mode is enabled -> random value from
+            [-max_delta..-1] U [1..max_delta].
+        """
+        if not self.counters_random_delta:
+            return 1
+        # Avoid 0 by choosing magnitude in [1, max] and random sign.
+        mag = self.rng.randint(1, self.counters_max_delta)
+        sign = -1 if self.rng.random() < 0.5 else 1
+        return sign * mag
+
+    async def _inc_counter(self, pk: int, delta: int) -> None:
+        stmt = self.counter_update_statement.bind([delta, pk])
+        stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+        await self.cql.run_async(stmt)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -170,6 +195,11 @@ class Worker:
                     self.on_applied(pk, self.worker_id, new_val)
                     self.success_counts[pk] += 1
 
+                if self.counter_update_statement:
+                    delta = self._next_counter_delta()
+                    self.counter_deltas[pk] += delta
+                    await self._inc_counter(pk, delta)
+
                 await asyncio.sleep(0.1)
 
             except Exception:
@@ -187,7 +217,8 @@ class BaseLWTTester:
 
     def __init__(
             self, manager: ManagerClient, ks: str, tbl: str,
-            num_workers: int = DEFAULT_WORKERS, num_keys: int = DEFAULT_NUM_KEYS
+            num_workers: int = DEFAULT_WORKERS, num_keys: int = DEFAULT_NUM_KEYS, use_counters: bool = False,
+            counters_random_delta: bool = False, counters_max_delta: int = 5, counter_tbl: Optional[str] = None
     ):
         self.ks = ks
         self.tbl = tbl
@@ -202,6 +233,12 @@ class BaseLWTTester:
         self.migrations = 0
         self.phase = "warmup"  # "warmup" -> "migrating" -> "post"
         self.phase_ops = defaultdict(int)
+        # counters config
+        self.use_counters = use_counters
+        self.counters_random_delta = counters_random_delta
+        self.counters_max_delta = counters_max_delta
+        self.counter_tbl = counter_tbl or (f"{tbl}_ctr" if use_counters else None)
+
 
     def _get_lower_bound(self, pk: int, col_idx: int) -> int:
         return self.lb_counts[pk][col_idx]
@@ -233,6 +270,14 @@ class BaseLWTTester:
 
     def create_workers(self, stop_event) -> List[Worker]:
         workers: List[Worker] = []
+
+        counter_stmt: Optional[PreparedStatement] = None
+        if self.use_counters:
+            counter_stmt = self.cql.prepare(
+                f"UPDATE {self.ks}.{self.counter_tbl} "
+                f"SET c = c + ? WHERE pk = ?"
+            )
+
         for i in range(self.num_workers):
             other_columns = [j for j in range(self.num_workers) if j != i]
             cond = " AND ".join([*(f"s{j} >= ?" for j in other_columns), f"s{i} = ?"])
@@ -247,6 +292,9 @@ class BaseLWTTester:
                 other_columns=other_columns,
                 get_lower_bound=self._get_lower_bound,
                 on_applied=self._on_applied,
+                counter_update_statement=counter_stmt,
+                counters_random_delta=self.counters_random_delta,
+                counters_max_delta=self.counters_max_delta,
             )
             workers.append(worker)
         return workers
@@ -258,6 +306,11 @@ class BaseLWTTester:
             f"CREATE TABLE {self.ks}.{self.tbl} (pk int PRIMARY KEY, {cols_def})"
         )
         logger.info("Created table %s.%s with %d columns", self.ks, self.tbl, self.num_workers)
+        if self.use_counters:
+            await self.cql.run_async(
+                f"CREATE TABLE {self.ks}.{self.counter_tbl} (pk int PRIMARY KEY, c counter)"
+            )
+            logger.info("Created counter table %s.%s", self.ks, self.counter_tbl)
 
     async def initialize_rows(self):
         """
@@ -296,7 +349,7 @@ class BaseLWTTester:
             assert not errs, f"worker errors: {errs}"
         logger.info("All workers stopped")
 
-    async def verify_consistency(self):
+    async def _verify_base_table(self):
         """Ensure every (pk, column) reflects the number of successful CAS writes."""
         # Run SELECTs for all PKs in parallel using prepared statement
         tasks = []
@@ -319,6 +372,35 @@ class BaseLWTTester:
         assert not mismatches, "Consistency violations: " + "; ".join(mismatches)
         total_ops = sum(sum(w.success_counts.values()) for w in self.workers)
         logger.info("Consistency verified – %d total successful CAS operations", total_ops)
+
+    async def _verify_counters(self):
+        if not self.use_counters:
+            return
+
+        stmt = SimpleStatement(
+            f"SELECT pk, c FROM {self.ks}.{self.counter_tbl}",
+            consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        )
+
+        rows = await self.cql.run_async(stmt)
+        db_values: Dict[int, int] = {row.pk: row.c for row in rows}
+
+        mismatches = []
+        for pk in self.pks:
+            actual = db_values.get(pk, 0)
+            expected = sum(worker.counter_deltas.get(pk, 0) for worker in self.workers)
+            if actual != expected:
+                mismatches.append(
+                    f"counter mismatch pk={pk} c={actual}, expected={expected}"
+                )
+
+        assert not mismatches, "Counter consistency violations: " + "; ".join(mismatches)
+        total_delta = sum(sum(worker.counter_deltas.values()) for worker in self.workers)
+        logger.info("Counter table consistency verified – total delta=%d", total_delta)
+
+    async def verify_consistency(self):
+        await self._verify_base_table()
+        await self._verify_counters()
 
 
 async def get_token_for_pk(cql, ks: str, tbl: str, pk: int) -> int:
