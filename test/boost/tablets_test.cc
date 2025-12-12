@@ -2162,6 +2162,68 @@ void check_rack_list(const locator::topology& topo, const tablet_map& tmap, sstr
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_with_two_replicas_in_rack) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host4 = topo.add_node(node_state::normal, shard_count);
+        auto rack3 = topo.start_new_rack();
+        [[maybe_unused]] auto host5 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host6 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host2, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host5, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        // Build the map literal for CQL
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc1, rack1.rack, dc1, rack2.rack);
+
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.paused_rf_change_requests.insert(id);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        BOOST_REQUIRE(!plan.empty());
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            return apply_plan(tm, plan);
+        }).get();
+        check_rack_list(stm.get()->get_topology(), stm.get()->tablets().get_tablet_map(table1), dc1, {rack1.rack, rack2.rack});
+    }).get();
+}
+
 struct alter_result {
     tablet_map new_tablet_map;
     replication_strategy_config_options opts;
