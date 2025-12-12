@@ -14,6 +14,7 @@ from cassandra.query import SimpleStatement
 from cassandra.concurrent import execute_concurrent_with_args
 
 from test.cluster.dtest.dtest_class import create_cf
+from test.cluster.dtest.tools import assertions
 
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,27 @@ def insert_c1c2(  # noqa: PLR0913
         statement.consistency_level = consistency
 
         execute_concurrent_with_args(session, statement, [[f"k{k}"] for k in keys], concurrency=concurrency)
+
+
+def query_c1c2(  # noqa: PLR0913
+    session,
+    key,
+    consistency=ConsistencyLevel.QUORUM,
+    tolerate_missing=False,
+    must_be_missing=False,
+    c1_value="value1",
+    c2_value="value2",
+    ks="ks",
+    cf="cf",
+):
+    query = SimpleStatement(f"SELECT c1, c2 FROM {ks}.{cf} WHERE key='k{key}'", consistency_level=consistency)
+    rows = list(session.execute(query))
+    if not tolerate_missing and not must_be_missing:
+        assertions.assert_length_equal(rows, 1)
+        res = rows[0]
+        assert len(res) == 2 and res[0] == c1_value and res[1] == c2_value, res
+    if must_be_missing:
+        assertions.assert_length_equal(rows, 0)
 
 
 def rows_to_list(rows):
