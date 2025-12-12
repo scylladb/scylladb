@@ -6,8 +6,6 @@
 * :doc:`ScyllaDB SStable </operating-scylla/admin-tools/scylla-sstable>` - Validates and dumps the content of SStables, generates a histogram, dumps the content of the SStable index.
 * :doc:`ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>` - Examines raw values obtained from SStables, logs, coredumps, etc.
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a ScyllaDB and Cassandra clusters.
-* :doc:`SSTabledump </operating-scylla/admin-tools/sstabledump>`
-* :doc:`SSTableMetadata </operating-scylla/admin-tools/sstablemetadata>`
 * scylla local-file-key-generator - Generate a local file (system) key for :doc:`encryption at rest </operating-scylla/security/encryption-at-rest>`, with the provided length, Key algorithm, Algorithm block mode and Algorithm padding method.
 * `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb collectd/prometheus metrics.
 * :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run ScyllaDB in Developer Mode.
