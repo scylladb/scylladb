@@ -14,7 +14,13 @@
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
 
+namespace db {
+class system_keyspace;
+}
+
 namespace service {
+
+class topology;
 
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
@@ -133,6 +139,26 @@ struct tablet_repair_plan {
     }
 };
 
+struct tablet_rack_list_colocation_plan {
+    utils::UUID _request_to_resume;
+
+    const utils::UUID& request_to_resume() const noexcept {
+        return _request_to_resume;
+    }
+
+    size_t size() const { return _request_to_resume ? 1 : 0; };
+
+    void merge(tablet_rack_list_colocation_plan&& other) {
+        _request_to_resume = _request_to_resume ? _request_to_resume : other._request_to_resume;
+    }
+
+    void maybe_add_request_to_resume(const utils::UUID& id) {
+        if (!_request_to_resume) {
+            _request_to_resume = id;
+        }
+    }
+};
+
 class migration_plan {
 public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
@@ -140,17 +166,19 @@ private:
     migrations_vector _migrations;
     table_resize_plan _resize_plan;
     tablet_repair_plan _repair_plan;
+    tablet_rack_list_colocation_plan _rack_list_colocation_plan;
     bool _has_nodes_to_drain = false;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size();}
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size(); }
+    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
+    size_t tablet_rack_list_colocation_count() const { return _rack_list_colocation_plan.size(); }
 
     void add(tablet_migration_info info) {
         _migrations.emplace_back(std::move(info));
@@ -167,6 +195,7 @@ public:
         _has_nodes_to_drain |= other._has_nodes_to_drain;
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
+        _rack_list_colocation_plan.merge(std::move(other._rack_list_colocation_plan));
     }
 
     void set_has_nodes_to_drain(bool b) {
@@ -183,6 +212,12 @@ public:
 
     void set_repair_plan(tablet_repair_plan repair) {
         _repair_plan = std::move(repair);
+    }
+
+    const tablet_rack_list_colocation_plan& rack_list_colocation_plan() const { return _rack_list_colocation_plan; }
+
+    void set_rack_list_colocation_plan(tablet_rack_list_colocation_plan rack_list_colocation_plan) {
+        _rack_list_colocation_plan = std::move(rack_list_colocation_plan);
     }
 
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
@@ -230,7 +265,7 @@ public:
     ///
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
-    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr, service::topology*, db::system_keyspace*, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
     void set_load_stats(locator::load_stats_ptr);
 
@@ -245,6 +280,12 @@ public:
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
 };
+
+future<bool> requires_rack_list_colocation(
+        replica::database& db,
+        locator::token_metadata_ptr tmptr,
+        db::system_keyspace* sys_ks,
+        utils::UUID request_id);
 
 }
 

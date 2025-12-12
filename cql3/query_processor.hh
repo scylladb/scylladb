@@ -474,6 +474,7 @@ public:
     void reset_cache();
 
     bool topology_global_queue_empty();
+    future<bool> ongoing_rf_change(const service::group0_guard& guard, sstring ks);
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,

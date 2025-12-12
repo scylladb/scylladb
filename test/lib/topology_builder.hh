@@ -280,6 +280,44 @@ public:
         }
     }
 
+    void pause_rf_change_request(utils::UUID new_elem) {
+        abort_source as;
+        auto& client = _env.get_raft_group0_client();
+        while (true) {
+            auto guard = client.start_operation(as).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            builder.pause_rf_change_request(new_elem);
+            service::topology_change change({builder.build()});
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
+                                                                    "setting ongoing RF change data");
+            try {
+                client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+                break;
+            } catch (service::group0_concurrent_modification&) {
+                testlog.warn("Concurrent modification detected, retrying");
+            }
+        }
+    }
+
+    void resume_rf_change_request(const std::unordered_set<utils::UUID>& current_queue, utils::UUID elem_to_remove) {
+        abort_source as;
+        auto& client = _env.get_raft_group0_client();
+        while (true) {
+            auto guard = client.start_operation(as).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            builder.resume_rf_change_request(current_queue, elem_to_remove);
+            service::topology_change change({builder.build()});
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
+                                                                    "setting ongoing RF change data");
+            try {
+                client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+                break;
+            } catch (service::group0_concurrent_modification&) {
+                testlog.warn("Concurrent modification detected, retrying");
+            }
+        }
+    }
+
     const std::vector<locator::host_id>& hosts() const {
         return _hosts;
     }
