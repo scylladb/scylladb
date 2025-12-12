@@ -22,7 +22,7 @@ format_match = re.compile(r'\s*(?:seastar::)?format\(\s*"([^"]+)"\s*,\s*(.*)\s*'
 def handle_error(message, strict=True, verbose_mode=False):
     if strict:
         print(f"[ERROR] {message}")
-        exit(-1)
+        exit(1)
     elif verbose_mode:
         print(f"[WARNING] {message}")
 
@@ -180,12 +180,11 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
     groups = {}
     if clean_name in metrics_information:
         if (isinstance(metrics_information[clean_name], str) and metrics_information[clean_name] == "skip") or "skip" in metrics_information[clean_name]:
-            exit(0)
+            return {}
     param_mapping =  metrics_information[clean_name]["params"] if clean_name in metrics_information and "params" in metrics_information[clean_name] else {}
     groups = metrics_information[clean_name]["groups"] if clean_name in metrics_information and "groups" in metrics_information[clean_name] else {}
 
     metrics = {}
-    multi_line = False
     names = undefined
     typ = undefined
     line_number = 0;

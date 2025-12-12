@@ -41,6 +41,8 @@ class MetricsProcessor:
                 # Get metrics from the file
                 try:
                     metrics_file = metrics.get_metrics_from_file(relative_path, "scylla_", metrics_info, strict=strict)
+                except SystemExit:
+                    pass
                 finally:
                     os.chdir(old_cwd)
                 if metrics_file:
