@@ -397,10 +397,6 @@ public:
         return _version;
     }
 
-    format_types get_format() const {
-        return _format;
-    }
-
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk() const;
     file_size_stats get_file_size_stats() const;
@@ -442,10 +438,7 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    // When use_sstable_identifier is true and the sstable identifier is available,
-    // use it to name the sstable in the snapshot, rather than the sstable generation.
-    // Returns the generation used for snapshot.
-    future<generation_type> snapshot(const sstring& dir, bool use_sstable_identifier = false) const;
+    future<> snapshot(const sstring& dir) const;
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
