@@ -886,9 +886,10 @@ future<> query_processor::for_each_cql_result(
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::execute_paged_internal(internal_query_state& state) {
+query_processor::execute_paged_internal(internal_query_state& state, service::query_state* query_state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    auto qs = query_state_for_internal_call();
+    auto default_qs = query_state ? std::nullopt : std::make_optional(query_state_for_internal_call());
+    auto& qs = query_state ? *query_state : *default_qs;
     ::shared_ptr<cql_transport::messages::result_message> msg =
       co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
 
@@ -923,6 +924,20 @@ query_processor::execute_paged_internal(internal_query_state& state) {
     }
 
     co_return ::make_shared<untyped_result_set>(msg);
+}
+
+future<> query_processor::for_each_cql_result(
+        cql3::internal_query_state& state,
+        service::query_state& query_state,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
+    do {
+        auto msg = co_await execute_paged_internal(state, &query_state);
+        for (auto& row : *msg) {
+            if ((co_await f(row)) == stop_iteration::yes) {
+                co_return;
+            }
+        }
+    } while (has_more_results(state));
 }
 
 future<::shared_ptr<untyped_result_set>>
@@ -1200,6 +1215,17 @@ future<> query_processor::query_internal(
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     auto query_state = create_paged_state(query_string, cl, values, page_size);
     co_return co_await for_each_cql_result(query_state, std::move(f));
+}
+
+future<> query_processor::query_internal(
+        const sstring& query_string,
+        db::consistency_level cl,
+        service::query_state& query_state,
+        const data_value_list& values,
+        int32_t page_size,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
+    auto paged_state = create_paged_state(query_string, cl, values, page_size);
+    co_return co_await for_each_cql_result(paged_state, query_state, std::move(f));
 }
 
 future<> query_processor::query_internal(
