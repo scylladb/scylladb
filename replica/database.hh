@@ -618,6 +618,9 @@ public:
     add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
                                      std::function<future<>(sstables::shared_sstable)> on_add,
                                      sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> new_ssts,
+                                      std::function<future<>(sstables::shared_sstable)> on_add);
 
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
