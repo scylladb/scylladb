@@ -16,6 +16,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/json/json_elements.hh>
 
 #include "dht/decorated_key.hh"
 #include "replica/database.hh"
@@ -3198,23 +3199,35 @@ db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
 
+struct manifest_json : public json::json_base {
+    json::json_chunked_list<sstring> files;
+
+    manifest_json() {
+        register_params();
+    }
+    manifest_json(manifest_json&& e) {
+        register_params();
+        files = std::move(e.files);
+    }
+    manifest_json& operator=(manifest_json&& e) {
+        files = std::move(e.files);
+        return *this;
+    }
+private:
+    void register_params() {
+        add(&files, "files");
+    }
+};
+
 future<>
 table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
-    std::ostringstream ss;
-    int n = 0;
-    ss << "{" << std::endl << "\t\"files\" : [ ";
+    manifest_json manifest;
     for (const auto& fsp : file_sets) {
-      for (const auto& rf : *fsp) {
-        if (n++ > 0) {
-            ss << ", ";
+        for (auto& rf : *fsp) {
+            manifest.files.push(std::move(rf));
         }
-        ss << "\"" << rf << "\"";
-        co_await coroutine::maybe_yield();
-      }
     }
-    ss << " ]" << std::endl << "}" << std::endl;
-
-    auto json = ss.str();
+    auto streamer = json::stream_object(std::move(manifest));
     auto jsonfile = jsondir + "/manifest.json";
 
     tlogger.debug("Storing manifest {}", jsonfile);
@@ -3224,12 +3237,10 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
     try {
-        co_await out.write(json.c_str(), json.size());
-        co_await out.flush();
+        co_await streamer(std::move(out));
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await out.close();
 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
