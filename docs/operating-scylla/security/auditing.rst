@@ -64,13 +64,12 @@ ADMIN      Logs service level operations: create, alter, drop, attach, detach, l
            auditing.
 =========  =========================================================================================
 
-Note that audit for every DML or QUERY might impact performance and consume a lot of storage.
+Note that enabling audit may negatively impact performance and audit-to-table may consume extra storage. That's especially true when auditing DML and QUERY categories, which generate a high volume of audit messages.
 
 Configuring Audit Storage
 ---------------------------
 
-Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>` or stored in a Scylla :ref:`table <auditing-table-storage>`.
-Currently, auditing messages can only be saved to one location at a time. You cannot log into both a table and the Syslog.
+Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>` or stored in a Scylla :ref:`table <auditing-table-storage>` or both.
 
 .. _auditing-syslog-storage:
 
@@ -192,6 +191,23 @@ For example:
       -------------------------+--------------+--------------------------------------+----------+-------------+-------+---------------+------------------------------+-----------------+-------------+----------+
       2018-03-18 00:00:00+0000 | 10.143.2.108 | 3429b1a5-2a94-11e8-8f4e-000000000001 |      DDL |         ONE | False |           nba | DROP TABLE nba.team_roster ; | 127.0.0.1       | team_roster | Scylla   | 
       (1 row)
+
+.. _auditing-table-and-syslog-storage:
+
+Storing Audit Messages in a Table and Syslog Simultaneously
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Procedure**
+
+#. Follow both procedures from above, and set the ``audit`` parameter in the ``scylla.yaml`` file to both ``syslog`` and ``table``. You need to restart scylla only once.
+
+   To have both syslog and table you need to specify both backends separated by a comma:
+
+   .. code-block:: shell
+
+      audit: "syslog,table"
+
+
 
 Handling Audit Failures
 ---------------------------
