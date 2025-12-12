@@ -2094,3 +2094,50 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
             assert new_res == expected_results[schema_table]
     finally:
         cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+
+
+def test_scylla_sstable_filter(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        pks = [r.pk for r in cql.execute(f"SELECT pk FROM {test_keyspace}.{table}")]
+
+        print(f"Generated primary keys: {pks}")
+
+        assert len(pks) > 2
+
+        serialized_pks = [_serialize_value(scylla_path, pk) for pk in pks]
+
+        def filter(flag):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                cmd = [scylla_path, "sstable", "filter", "--schema-file", schema_file, "--output-dir", tmp_dir , flag]
+                for pk in serialized_pks[:2]:
+                    cmd += ["--partition", pk]
+                cmd += sstables
+
+                out = subprocess.check_output(cmd, text=True)
+
+                print(f"Filter: {' '.join(cmd)}\n{out}")
+
+                out_lines = out.strip().split('\n')
+
+                filtered_sstables = []
+                for line in out_lines:
+                    m = re.match(r"^Filtering.*\.\.\. output written to (.*)$", line)
+                    if m:
+                        filtered_sstables.append(m.group(1))
+
+                assert len(filtered_sstables) >= 1
+
+                query_cmd = [scylla_path, "sstable", "query", "--output-format", "json", "--schema-file", schema_file] + filtered_sstables
+                query_res = json.loads(subprocess.check_output(query_cmd, text=True))
+
+                print(f"Query: {' '.join(query_cmd)}\n{query_res}")
+
+                return {row['pk'] for row in query_res}
+
+        if filter("--include") != set(pks[:2]):
+            shutil.copy(schema_file, "/home/bdenes/out")
+            for sst in sstables:
+                shutil.copy(sst, "/home/bdenes/out/")
+
+        assert filter("--include") == set(pks[:2])
+        assert filter("--exclude") == set(pks[2:])

@@ -878,6 +878,25 @@ But even an altered schema which changed only the table options can lead to data
 
 The mapping of input SSTables to output SSTables is printed to ``stdout``.
 
+filter
+^^^^^^
+
+Filter the SSTable(s), including/excluding specified partitions.
+
+Similar to ``scylla sstable dump-data --partition|--partition-file``, with some notable differences:
+
+* Instead of dumping the content to stdout, the filtered content is written back to SSTable(s) on disk.
+* Also supports negative filters (keep all partitions except the those specified).
+
+The partition list can be provided either via the ``--partition`` command line argument, or via a file path passed to the the ``--partitions-file`` argument. The file should contain one partition key per line.
+Partition keys should be provided in the hex format, as produced by `scylla types serialize </operating-scylla/admin-tools/scylla-types/>`_.
+
+With ``--include``, only the specified partitions are kept from the input SSTable(s). With ``--exclude``, the specified partitions are discarded and won't be written to the output SSTable(s).
+It is possible that certain input SSTable(s) won't have any content left after the filtering. These input SSTable(s) will not have a matching output SSTable.
+
+By default, each input sstable is filtered individually. Use ``--merge`` to filter the combined content of all input sstables, producing a single output SSTable.
+
+Output sstables use the latest supported sstable format (can be changed with ``--sstable-version``).
 
 Examples
 --------
