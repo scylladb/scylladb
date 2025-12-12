@@ -674,6 +674,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_ADD_ENTRY:
     case messaging_verb::RAFT_MODIFY_CONFIG:
     case messaging_verb::RAFT_PULL_SNAPSHOT:
+    case messaging_verb::DIRECT_FD_PING:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
@@ -732,7 +733,6 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
-    case messaging_verb::DIRECT_FD_PING:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:

@@ -1638,7 +1638,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             fd.start(
                 std::ref(fd_pinger), std::ref(fd_clock),
                 service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count(),
-                service::direct_fd_clock::base::duration{std::chrono::milliseconds{cfg->direct_failure_detector_ping_timeout_in_ms()}}.count()).get();
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{cfg->direct_failure_detector_ping_timeout_in_ms()}}.count(), dbcfg.gossip_scheduling_group).get();
 
             auto stop_fd = defer_verbose_shutdown("direct_failure_detector", [] {
                 fd.stop().get();
