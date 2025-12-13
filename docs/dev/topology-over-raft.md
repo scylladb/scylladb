@@ -86,6 +86,7 @@ stateDiagram-v2
         de_left_token_ring --> [*]
     }
     state removing {
+        re_left_token_ring : left_token_ring
         re_tablet_draining : tablet_draining
         re_tablet_migration : tablet_migration
         re_write_both_read_old : write_both_read_old
@@ -98,7 +99,8 @@ stateDiagram-v2
         re_tablet_draining --> re_write_both_read_old
         re_write_both_read_old --> re_write_both_read_new: streaming completed
         re_write_both_read_old --> re_rollback_to_normal: rollback
-        re_write_both_read_new --> [*]
+        re_write_both_read_new --> re_left_token_ring
+        re_left_token_ring --> [*]
     }
     rebuilding --> normal: streaming completed
     decommissioning --> left: operation succeeded
@@ -122,9 +124,10 @@ Note that these are not all states, as there are other states specific to tablet
     Writes to vnodes-based tables are going to both new and old replicas (new replicas means calculated according
     to modified token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
-- `left_token_ring` - the decommissioning node left the token ring, but we still need to wait until other
-    nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
-    it from group 0. We also use this state to rollback a failed bootstrap or decommission.
+- `left_token_ring` - the decommissioning or removing node left the token ring, but we still need to wait until other
+    nodes observe it and stop sending writes to this node. For decommission, we tell the node to shut down,
+    then remove it from group 0. For removenode, the node is already down, so we skip the shutdown step.
+    We also use this state to rollback a failed bootstrap or decommission.
 - `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
     moving the node we tried to decommission/remove back to the normal state.
 - `lock` - the topology stays in this state until externally changed (to null state), preventing topology
@@ -141,7 +144,9 @@ reads that started before this point exist in the system. Finally we remove the
 transitioning state.
 
 Decommission, removenode and replace work similarly, except they don't go through
-`commit_cdc_generation`.
+`commit_cdc_generation`. Both decommission and removenode go through the
+`left_token_ring` state to run a global barrier ensuring all nodes are aware
+of the topology change before the operation completes.
 
 The state machine may also go only through the `commit_cdc_generation` state
 after getting a request from the user to create a new CDC generation if the
