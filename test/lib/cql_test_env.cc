@@ -905,7 +905,7 @@ private:
             _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
             auto stop_mm = defer_verbose_shutdown("migration manager", [this] { _mm.stop().get(); });
 
-            _tablet_allocator.start(service::tablet_allocator::config{}, std::ref(_mnotifier), std::ref(_db)).get();
+            _tablet_allocator.start(service::tablet_allocator::config{}, std::ref(_mnotifier), std::ref(_db), std::ref(_feature_service)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [this] {
                 _tablet_allocator.stop().get();
             });
