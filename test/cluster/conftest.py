@@ -11,12 +11,13 @@ from __future__ import annotations
 import asyncio
 import ssl
 import tempfile
-import platform
 import urllib.parse
 from concurrent.futures.thread import ThreadPoolExecutor
 from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from test import path_to
 from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
@@ -301,24 +302,6 @@ async def random_tables(request, manager):
     if not failed and not await manager.is_dirty():
         tables.drop_all()
 
-skipped_funcs = {}
-# Can be used to mark a test to be skipped for a specific mode=[release, dev, debug]
-# The reason to skip a test should be specified, used as a comment only.
-# Additionally, platform_key can be specified to limit the scope of the attribute
-# to the specified platform. Example platform_key-s: [aarch64, x86_64]
-def skip_mode(mode: str, reason: str, platform_key: str | None = None):
-    def wrap(func):
-        skipped_funcs.setdefault((func, mode), []).append((reason, platform_key))
-        return func
-    return wrap
-
-@pytest.fixture(scope="function", autouse=True)
-def skip_mode_fixture(request, build_mode):
-    for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
-        if platform_key is None or platform_key in platform.platform():
-            pytest.skip(f'{request.node.name} skipped, reason: {reason}')
-
-
 @pytest.fixture(scope="function", autouse=True)
 async def prepare_3_nodes_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_nodes_cluster"):
@@ -333,7 +316,7 @@ async def prepare_3_racks_cluster(request, manager):
 
 @pytest.fixture(scope="function")
 def internet_dependency_enabled(request) -> None:
-    if request.config.getoption('skip_internet_dependent_tests'):
+    if request.config.getoption('skip_internet_dependent_tests', default=None):
         pytest.skip(reason="skip_internet_dependent_tests is set")
 
 
@@ -342,7 +325,8 @@ async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> Asy
     yield await get_scylla_2025_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
-async def key_provider(request, tmpdir):
+async def key_provider(request, tmpdir, build_mode) -> AsyncGenerator[KeyProvider, None]:
     """Encryption providers fixture"""
-    async with make_key_provider_factory(request.param, tmpdir) as res:
+    scylla_exe = path_to(build_mode, "scylla")
+    async with make_key_provider_factory(request.param, tmpdir, scylla_exe) as res:
         yield res
