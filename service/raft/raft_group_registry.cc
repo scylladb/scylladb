@@ -340,6 +340,8 @@ raft_server_with_timeouts raft_group_registry::group0_with_timeouts() {
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
 
+    const auto is_group0 = this_shard_id() == 0 && !_group0_id;
+
     if (_servers.contains(gid)) {
         on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same gid={}", gid));
     }
@@ -348,7 +350,9 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         // start the server instance prior to arming the ticker timer.
         // By the time the tick() is executed the server should already be initialized.
         co_await new_grp.server->start();
-        new_grp.server->register_metrics();
+        if (is_group0) {
+            new_grp.server->register_metrics();
+        }
     } catch (abort_requested_exception&) {
         throw;
     } catch (...) {
@@ -362,7 +366,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     try {
         auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
 
-        if (_servers.size() == 1 && this_shard_id() == 0) {
+        if (is_group0) {
             _group0_id = gid;
         }
 
@@ -376,7 +380,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         std::rethrow_exception(ex);
     }
 
-    if (gid == _group0_id) {
+    if (is_group0) {
         co_await container().invoke_on_all([] (raft_group_registry& rg) {
             rg._group0_is_alive = true;
         });

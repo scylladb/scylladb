@@ -25,12 +25,12 @@ struct prepared_select {
 
 }
 
-class strongly_consistent_select_statement : public select_statement {
+class broadcast_select_statement : public select_statement {
     const broadcast_tables::prepared_select _query;
 
     broadcast_tables::prepared_select prepare_query() const;
 public:
-    strongly_consistent_select_statement(schema_ptr schema,
+    broadcast_select_statement(schema_ptr schema,
                      uint32_t bound_terms,
                      lw_shared_ptr<const parameters> parameters,
                      ::shared_ptr<selection::selection> selection,
