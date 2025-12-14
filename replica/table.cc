@@ -3409,6 +3409,8 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     auto lister = directory_lister(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
     while (auto de = co_await lister.get()) {
         const auto& name = de->name;
+        // FIXME: optimize stat calls by keeping the base directory open and use statat instead, here and below.
+        // See https://github.com/scylladb/seastar/pull/3163
         auto sd = co_await io_check(file_stat, (snapshot_dir / name).native(), follow_symlink::no);
         auto size = sd.allocated_size;
 
