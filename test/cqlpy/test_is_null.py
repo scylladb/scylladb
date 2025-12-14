@@ -192,13 +192,15 @@ def test_is_not_null_without_filtering_error(cql, table1):
 
 def test_is_null_with_invalid_syntax(cql, table1):
     """Test that IS NULL only accepts NULL as RHS"""
+    from cassandra.protocol import SyntaxException
     p = unique_key_int()
-    # IS NULL with non-null value should fail
-    with pytest.raises(InvalidRequest):
+    # IS NULL with non-null value should fail with syntax error
+    # (the grammar only allows IS NULL, not IS <value>)
+    with pytest.raises(SyntaxException):
         cql.execute(f"SELECT * FROM {table1} WHERE p = {p} AND v IS 123 ALLOW FILTERING")
     
-    # IS NOT with non-null value should fail
-    with pytest.raises(InvalidRequest):
+    # IS NOT with non-null value should fail with syntax error
+    with pytest.raises(SyntaxException):
         cql.execute(f"SELECT * FROM {table1} WHERE p = {p} AND v IS NOT 123 ALLOW FILTERING")
 
 
