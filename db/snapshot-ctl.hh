@@ -46,8 +46,8 @@ struct snapshot_options {
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
     struct table_snapshot_details {
-        int64_t total;
-        int64_t live;
+        int64_t total = 0;
+        int64_t live = 0;
     };
 
     struct table_snapshot_details_ext {

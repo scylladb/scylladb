@@ -3395,37 +3395,29 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
     table::snapshot_details details{};
 
-    co_await lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [datadir, &details] (fs::path snapshot_dir, directory_entry de) -> future<> {
-        auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
-        auto size = sd.allocated_size;
-
-        // The manifest and schema.sql files are the only files expected to be in this directory not belonging to the SSTable.
-        //
-        // All the others should just generate an exception: there is something wrong, so don't blindly
-        // add it to the size.
-        if (de.name != "manifest.json" && de.name != "schema.cql") {
-            details.total += size;
-        } else {
-            size = 0;
-        }
-
-        try {
-            // File exists in the main SSTable directory. Snapshots are not contributing to size
-            auto psd = co_await io_check(file_stat, (datadir / de.name).native(), follow_symlink::no);
-            // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
-            if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
-                dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
-                        (datadir / de.name).native(), psd.device_id, psd.inode_number, psd.size,
-                        (snapshot_dir / de.name).native(), sd.device_id, sd.inode_number, sd.size);
-                details.live += size;
+    // Index the file size by inode number, since when using the sstable identifier
+    // the file names in the snapshot may be different than the ones in the main data directory,
+    using file_size_map = std::unordered_map<uint64_t, uint64_t>;
+    auto get_file_sizes = [] (file_size_map& file_sizes, fs::path dir) -> future<> {
+        co_await lister::scan_dir(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&] (fs::path dir, directory_entry de) -> future<> {
+            // The manifest and schema.sql files are the only files expected to be in the snapshot directory not belonging to the SSTable.
+            if (de.name == "manifest.json" || de.name == "schema.cql") {
+                co_return;
             }
-        } catch (std::system_error& e) {
-            if (e.code() != std::error_code(ENOENT, std::system_category())) {
-                throw;
-            }
+            auto sd = co_await io_check(file_stat, (dir / de.name).native(), follow_symlink::no);
+            file_sizes[sd.inode_number] = sd.allocated_size;
+        });
+    };
+    file_size_map snapshot_files, table_files;
+    co_await get_file_sizes(snapshot_files, snapshot_dir);
+    co_await get_file_sizes(table_files, datadir);
+
+    for (const auto& [inode_number, size] : snapshot_files) {
+        details.total += size;
+        if (!table_files.contains(inode_number)) {
             details.live += size;
         }
-    });
+    }
 
     co_return details;
 }
