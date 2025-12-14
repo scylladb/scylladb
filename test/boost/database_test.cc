@@ -664,7 +664,7 @@ static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, co
 }
 
 // Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
-static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir) {
+static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time) {
     sstring suffix = "-Data.db";
     auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
     std::set<sstring> sstables_in_manifest;
@@ -681,7 +681,7 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(manifest_info.HasMember("version"));
     auto& manifest_version = manifest_info["version"];
     BOOST_REQUIRE(manifest_version.IsString());
-    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.3");
+    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.3.1");
     BOOST_REQUIRE(manifest_info.HasMember("scope"));
     auto& manifest_scope = manifest_info["scope"];
     BOOST_REQUIRE(manifest_scope.IsString());
@@ -711,6 +711,18 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     auto& snapshot_name = manifest_snapshot["name"];
     BOOST_REQUIRE(snapshot_name.IsString());
     BOOST_REQUIRE_EQUAL(snapshot_dir.filename(), snapshot_name.GetString());
+    BOOST_REQUIRE(manifest_snapshot.HasMember("created_at"));
+    auto& created_at = manifest_snapshot["created_at"];
+    BOOST_REQUIRE(created_at.IsNumber());
+    time_t created_at_seconds = created_at.GetInt64();
+    BOOST_REQUIRE_GE(created_at_seconds, min_time.time_since_epoch().count());
+    BOOST_REQUIRE_LT(created_at_seconds, min_time.time_since_epoch().count() + 60);
+    if (manifest_snapshot.HasMember("expires_at")) {
+        BOOST_REQUIRE(created_at_seconds > 0);
+        auto& expires_at = manifest_snapshot["expires_at"];
+        BOOST_REQUIRE(expires_at.IsNumber());
+        BOOST_REQUIRE_GE(expires_at.GetInt64(), created_at_seconds);
+    }
 
     BOOST_REQUIRE(manifest_json.HasMember("files"));
     auto& manifest_files = manifest_json["files"];
@@ -729,6 +741,7 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
 
 static future<> snapshot_works(const std::string& table_name) {
     return do_with_some_data_in_thread({"cf"}, [table_name] (cql_test_env& e) {
+        auto min_time = gc_clock::now();
         take_snapshot(e, "ks", table_name).get();
 
         auto& cf = e.local_db().find_column_family("ks", table_name);
@@ -747,7 +760,7 @@ static future<> snapshot_works(const std::string& table_name) {
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
         const auto& topology = e.local_db().get_token_metadata().get_topology();
-        validate_manifest(topology, snapshot_dir, in_snapshot_dir).get();
+        validate_manifest(topology, snapshot_dir, in_snapshot_dir, min_time).get();
     }, true);
 }
 

@@ -3353,6 +3353,8 @@ struct manifest_json : public json::json_base {
 
     struct snapshot_info : public json::json_base {
         json::json_element<sstring> name;
+        json::json_element<time_t> created_at;
+        json::json_element<time_t> expires_at;
 
         snapshot_info() {
             register_params();
@@ -3360,16 +3362,22 @@ struct manifest_json : public json::json_base {
         snapshot_info(const snapshot_info& e) {
             register_params();
             name = e.name;
+            created_at = e.created_at;
+            expires_at = e.expires_at;
         }
         snapshot_info& operator=(const snapshot_info& e) {
             if (this != &e) {
                 name = e.name;
+                created_at = e.created_at;
+                expires_at = e.expires_at;
             }
             return *this;
         }
     private:
         void register_params() {
             add(&name, "name");
+            add(&created_at, "created_at");
+            add(&expires_at, "expires_at");
         }
     };
 
@@ -3416,11 +3424,11 @@ public:
 
 using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_file_set> file_sets, sstring name) {
+static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_file_set> file_sets, sstring name, db::snapshot_options opts) {
     manifest_json manifest;
 
     manifest_json::info info;
-    info.version = "0.3";
+    info.version = "0.3.1";
     info.scope = "node";
     manifest.manifest = std::move(info);
 
@@ -3433,6 +3441,10 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
 
     manifest_json::snapshot_info snapshot;
     snapshot.name = name;
+    snapshot.created_at = opts.created_at.time_since_epoch().count();
+    if (opts.expires_at) {
+        snapshot.expires_at = opts.expires_at->time_since_epoch().count();
+    }
     manifest.snapshot = std::move(snapshot);
 
     for (const auto& fsp : file_sets) {
@@ -3561,7 +3573,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
-        co_await write_manifest(topology, *writer, std::move(file_sets), name).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(file_sets), name, std::move(opts)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });

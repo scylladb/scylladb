@@ -40,6 +40,8 @@ class backup_task_impl;
 
 struct snapshot_options {
     bool skip_flush = false;
+    gc_clock::time_point created_at = gc_clock::now();
+    std::optional<gc_clock::time_point> expires_at;
 };
 
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {

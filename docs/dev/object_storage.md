@@ -228,7 +228,7 @@ The json structure is as follows:
 ```
 {
   "manifest": {
-    "version": "0.3",
+    "version": "0.3.1",
     "scope": "node"
   },
   "node": {
@@ -238,6 +238,8 @@ The json structure is as follows:
   },
   "snapshot": {
     "name": "snapshot name",
+    "created_at": seconds_since_epoch,
+    "expires_at": seconds_since_epoch | null,
   },
   "files": [ "me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db", "ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db", ... ]
 }
@@ -254,6 +256,8 @@ The `node` member contains metadata about this node that enables datacenter- or 
 
 The `snapshot` member contains metadata about the snapshot.
 - `name` - is the snapshot name (a.k.a. `tag`)
+- `created_at` - is the time when the snapshot was created.
+- `expires_at` - is an optional time when the snapshot expires and can be dropped, if a TTL was set for the snapshot.  If there is no TTL, `expires_at` may be omitted, set to null, or set to 0.
 
 The `files` member contains a list of SSTable data component files included in the snapshot directory.
 ```
