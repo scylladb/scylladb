@@ -675,6 +675,18 @@ static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<s
     auto manifest_json = rjson::parse(manifest_str);
     BOOST_REQUIRE(manifest_json.IsObject());
 
+    BOOST_REQUIRE(manifest_json.HasMember("manifest"));
+    auto& manifest_info = manifest_json["manifest"];
+    BOOST_REQUIRE(manifest_info.IsObject());
+    BOOST_REQUIRE(manifest_info.HasMember("version"));
+    auto& manifest_version = manifest_info["version"];
+    BOOST_REQUIRE(manifest_version.IsString());
+    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.1");
+    BOOST_REQUIRE(manifest_info.HasMember("scope"));
+    auto& manifest_scope = manifest_info["scope"];
+    BOOST_REQUIRE(manifest_scope.IsString());
+    BOOST_REQUIRE_EQUAL(manifest_scope.GetString(), "node");
+
     BOOST_REQUIRE(manifest_json.HasMember("files"));
     auto& manifest_files = manifest_json["files"];
     BOOST_REQUIRE(manifest_files.IsArray());
