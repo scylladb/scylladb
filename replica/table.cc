@@ -3321,7 +3321,38 @@ struct manifest_json : public json::json_base {
         }
     };
 
+    struct node_info : public json::json_base {
+        json::json_element<sstring> host_id;
+        json::json_element<sstring> datacenter;
+        json::json_element<sstring> rack;
+
+        node_info() {
+            register_params();
+        }
+        node_info(const node_info& e) {
+            register_params();
+            host_id = e.host_id;
+            datacenter = e.datacenter;
+            rack = e.rack;
+        }
+        node_info& operator=(const node_info& e) {
+            if (this != &e) {
+                host_id = e.host_id;
+                datacenter = e.datacenter;
+                rack = e.rack;
+            }
+            return *this;
+        }
+    private:
+        void register_params() {
+            add(&host_id, "host_id");
+            add(&datacenter, "datacenter");
+            add(&rack, "rack");
+        }
+    };
+
     json::json_element<info> manifest;
+    json::json_element<node_info> node;
     json::json_chunked_list<std::string_view> files;
 
     manifest_json() {
@@ -3330,11 +3361,13 @@ struct manifest_json : public json::json_base {
     manifest_json(manifest_json&& e) {
         register_params();
         manifest = std::move(e.manifest);
+        node = std::move(e.node);
         files = std::move(e.files);
     }
     manifest_json& operator=(manifest_json&& e) {
         if (this != &e) {
             manifest = std::move(e.manifest);
+            node = std::move(e.node);
             files = std::move(e.files);
         }
         return *this;
@@ -3342,6 +3375,7 @@ struct manifest_json : public json::json_base {
 private:
     void register_params() {
         add(&manifest, "manifest");
+        add(&node, "node");
         add(&files, "files");
     }
 };
@@ -3356,13 +3390,20 @@ public:
 
 using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
+static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
     manifest_json manifest;
 
     manifest_json::info info;
-    info.version = "0.1";
+    info.version = "0.2";
     info.scope = "node";
     manifest.manifest = std::move(info);
+
+    manifest_json::node_info node;
+    node.host_id = topology.my_host_id().to_sstring();
+    const auto& loc = topology.get_location();
+    node.datacenter = loc.dc;
+    node.rack = loc.rack;
+    manifest.node = std::move(node);
 
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
@@ -3487,7 +3528,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
-        co_await write_manifest(*writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+        const auto& topology = sharded_db.local().get_token_metadata().get_topology();
+        co_await write_manifest(topology, *writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
