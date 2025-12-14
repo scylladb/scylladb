@@ -970,6 +970,7 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
+    int64_t calculate_tablet_count() const;
 private:
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
@@ -1308,7 +1309,6 @@ private:
     void check_valid_rp(const db::replay_position&) const;
 
     void recalculate_tablet_count_stats();
-    int64_t calculate_tablet_count() const;
 public:
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);

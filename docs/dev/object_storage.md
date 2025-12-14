@@ -228,7 +228,7 @@ The json structure is as follows:
 ```
 {
   "manifest": {
-    "version": "0.3.1",
+    "version": "0.4",
     "scope": "node"
   },
   "node": {
@@ -240,6 +240,13 @@ The json structure is as follows:
     "name": "snapshot name",
     "created_at": seconds_since_epoch,
     "expires_at": seconds_since_epoch | null,
+  },
+  "table": {
+    "keyspace_name": "my_keyspace",
+    "table_name": "my_table",
+    "table_id": "<UUID>",
+    "tablets_type": "none|powof2",
+    "tablet_count": N
   },
   "files": [ "me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db", "ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db", ... ]
 }
@@ -258,6 +265,14 @@ The `snapshot` member contains metadata about the snapshot.
 - `name` - is the snapshot name (a.k.a. `tag`)
 - `created_at` - is the time when the snapshot was created.
 - `expires_at` - is an optional time when the snapshot expires and can be dropped, if a TTL was set for the snapshot.  If there is no TTL, `expires_at` may be omitted, set to null, or set to 0.
+
+The `table` member contains metadata about the table being snapshot.
+- `keyspace_name` and `table_name` - are self-explanatory.
+- `table_id` - a universally unique identifier (UUID) of the table set when the table is created.
+- `tablets_type`:
+    - `none` - if the keyspace uses vnodes replication
+    - `powof2` - if the keyspace uses tables replication, and the tablet token ranges are based on powers of 2.
+- `tablet_count` - Optional. If `tablets_type` is not `none`, contains the number of tablets allcated in the table. If `tablets_type` is `powof2`, tablet_count would be a power of 2.
 
 The `files` member contains a list of SSTable data component files included in the snapshot directory.
 ```
