@@ -1085,14 +1085,20 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
         }
     }
+    // Extract single-column restrictions from all restriction categories
+    // Note: This must be done even if _where is empty, because IS NULL/IS NOT NULL
+    // restrictions are not added to _where but are still in the category restrictions
+    if (!has_token_restrictions()) {
+        _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
+    }
+    if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
+    }
+    _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
+    
+    // Extract clustering prefix and partition range restrictions from _where
+    // These require _where to have a value
     if (_where.has_value()) {
-        if (!has_token_restrictions()) {
-            _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
-        }
-        if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
-            _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
-        }
-        _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
