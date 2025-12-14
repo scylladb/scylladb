@@ -3401,6 +3401,10 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 
 future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
     table::snapshot_details details{};
+    std::optional<fs::path> staging_dir = snapshot_dir / sstables::staging_dir;
+    if (!co_await file_exists(staging_dir->native())) {
+        staging_dir.reset();
+    }
 
     auto lister = directory_lister(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
     while (auto de = co_await lister.get()) {
@@ -3425,20 +3429,28 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
             continue;
         }
 
-        try {
+        auto exists_in_dir = [&] (fs::path path) -> future<bool> {
+          try {
             // File exists in the main SSTable directory. Snapshots are not contributing to size
-            auto psd = co_await io_check(file_stat, (datadir / name).native(), follow_symlink::no);
+            auto psd = co_await io_check(file_stat, path.native(), follow_symlink::no);
             // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
             if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
                 dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
                         (datadir / name).native(), psd.device_id, psd.inode_number, psd.size,
                         (snapshot_dir / name).native(), sd.device_id, sd.inode_number, sd.size);
-                details.live += size;
+                co_return false;
             }
-        } catch (std::system_error& e) {
+            co_return true;
+          } catch (std::system_error& e) {
             if (e.code() != std::error_code(ENOENT, std::system_category())) {
                 throw;
             }
+            co_return false;
+          }
+        };
+        // Check staging dir first, as files might be moved from there to the datadir concurrently to this check
+        if ((!staging_dir || !co_await exists_in_dir(*staging_dir / name)) &&
+                !co_await exists_in_dir(datadir / name)) {
             details.live += size;
         }
     }
