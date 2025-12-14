@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 from .util import new_test_table, unique_name, unique_key_int
 
 
@@ -192,7 +192,6 @@ def test_is_not_null_without_filtering_error(cql, table1):
 
 def test_is_null_with_invalid_syntax(cql, table1):
     """Test that IS NULL only accepts NULL as RHS"""
-    from cassandra.protocol import SyntaxException
     p = unique_key_int()
     # IS NULL with non-null value should fail with syntax error
     # (the grammar only allows IS NULL, not IS <value>)
