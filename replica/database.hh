@@ -64,6 +64,7 @@
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/types.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "locator/tablets.hh"
