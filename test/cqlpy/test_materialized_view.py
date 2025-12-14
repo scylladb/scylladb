@@ -1501,14 +1501,11 @@ def test_views_with_future_tombstones(cql, test_keyspace):
 def test_view_in_system_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
         with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
-            wait_for_view_built(cql, view)
-
-            # In view_building_coordinator path, `built_views` table is updated by view_building_worker,
-            # so there is a short window when a view is build (information is in view_build_status_v2)
-            # but it isn't marked in `built_views` locally.
-            # Doing read barrier is enough to ensure that the worker updated the table.
-            cql.execute("DROP TABLE IF EXISTS nosuchkeyspace.nosuchtable")
-
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if view in [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]:
+                    break
+                time.sleep(0.1)
             res = [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]
             assert view in res
             res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]
