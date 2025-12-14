@@ -666,7 +666,7 @@ static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, co
 
 // Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
 static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time, bool tablets_enabled) {
-    sstring suffix = "-Data.db";
+    sstring suffix = "-TOC.txt";
     auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
     std::set<sstring> sstables_in_manifest;
     std::set<sstring> non_sstables_in_manifest;
@@ -682,7 +682,7 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(manifest_info.HasMember("version"));
     auto& manifest_version = manifest_info["version"];
     BOOST_REQUIRE(manifest_version.IsString());
-    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.4");
+    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "1.0");
     BOOST_REQUIRE(manifest_info.HasMember("scope"));
     auto& manifest_scope = manifest_info["scope"];
     BOOST_REQUIRE(manifest_scope.IsString());
@@ -762,13 +762,45 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
         }
     }
 
-    BOOST_REQUIRE(manifest_json.HasMember("files"));
-    auto& manifest_files = manifest_json["files"];
-    BOOST_REQUIRE(manifest_files.IsArray());
-    for (auto& f : manifest_files.GetArray()) {
-        if (is_component(f.GetString(), suffix)) {
-            sstables_in_manifest.insert(f.GetString());
-        } else {
+    if (manifest_json.HasMember("sstables")) {
+        auto& sstables = manifest_json["sstables"];
+        BOOST_REQUIRE(sstables.IsArray());
+        for (auto& sst_json : sstables.GetArray()) {
+            BOOST_REQUIRE(sst_json.IsObject());
+
+            auto& id = sst_json["id"];
+            BOOST_REQUIRE(id.IsString());
+            auto uuid = utils::UUID(id.GetString());
+            BOOST_REQUIRE(!uuid.is_null());
+
+            auto& toc_name = sst_json["toc_name"];
+            BOOST_REQUIRE(toc_name.IsString());
+            BOOST_REQUIRE(is_component(toc_name.GetString(), suffix));
+            sstables_in_manifest.insert(toc_name.GetString());
+
+            auto& data_size = sst_json["data_size"];
+            BOOST_REQUIRE(data_size.IsNumber());
+            auto& index_size = sst_json["index_size"];
+            BOOST_REQUIRE(index_size.IsNumber());
+
+            if (sst_json.HasMember("first_token")) {
+                auto& first_token = sst_json["first_token"];
+                BOOST_REQUIRE(first_token.IsNumber());
+
+                BOOST_REQUIRE(sst_json.HasMember("last_token"));
+                auto& last_token = sst_json["last_token"];
+                BOOST_REQUIRE(last_token.IsNumber());
+                BOOST_REQUIRE_LE(first_token.GetInt64(), last_token.GetInt64());
+            } else {
+                BOOST_REQUIRE(!sst_json.HasMember("last_token"));
+            }
+        }
+    }
+
+    if (manifest_json.HasMember("files")) {
+        auto& manifest_files = manifest_json["files"];
+        BOOST_REQUIRE(manifest_files.IsArray());
+        for (auto& f : manifest_files.GetArray()) {
             non_sstables_in_manifest.insert(f.GetString());
         }
     }
@@ -801,7 +833,7 @@ static future<> snapshot_works(const std::string& table_name, bool create_mvs, b
 
         const auto& topology = e.local_db().get_token_metadata().get_topology();
         validate_manifest(topology, snapshot_dir, in_snapshot_dir, min_time, cf.uses_tablets()).get();
-    }, create_mvs, db_cfg_ptr);
+    }, create_mvs, db_cfg_ptr, 100);
 }
 
 SEASTAR_TEST_CASE(table_snapshot_works) {

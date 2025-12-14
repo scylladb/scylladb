@@ -405,17 +405,25 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     co_await storage.atomic_delete_complete(std::move(ctx));
 }
 
-future<std::unordered_set<sstring>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
-    std::unordered_set<sstring> table_names;
+future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
+    utils::chunked_vector<sstable_snapshot_metadata> sstables_metadata;
 
-    co_await _dir_semaphore.parallel_for_each(ssts, [&name, &table_names] (sstables::shared_sstable sstable) {
-        table_names.insert(sstable->component_basename(sstables::component_type::Data));
+    co_await _dir_semaphore.parallel_for_each(ssts, [&] (sstables::shared_sstable sstable) {
+        sstable_snapshot_metadata md = {
+            .id = sstable->sstable_identifier()->uuid(),
+            .toc_name = sstable->component_basename(sstables::component_type::TOC),
+            .data_size = sstable->data_size(),
+            .index_size = sstable->index_size(),
+            .first_token = dht::token::to_int64(sstable->get_first_decorated_key().token()),
+            .last_token = dht::token::to_int64(sstable->get_last_decorated_key().token()),
+        };
+        sstables_metadata.push_back(std::move(md));
         return io_check([sstable, &name] {
             return sstable->snapshot(name);
         });
     });
 
-    co_return table_names;
+    co_return sstables_metadata;
 }
 
 future<> sstables_manager::close() {

@@ -228,7 +228,7 @@ The json structure is as follows:
 ```
 {
   "manifest": {
-    "version": "0.4",
+    "version": "1.0",
     "scope": "node"
   },
   "node": {
@@ -248,7 +248,26 @@ The json structure is as follows:
     "tablets_type": "none|powof2",
     "tablet_count": N
   },
-  "files": [ "me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db", "ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db", ... ]
+  "sstables": [
+    {
+      "id": "67e35000-d8c6-11f0-9599-060de9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq829wcsddgwha1n-big-TOC.txt",
+      "data_size": 75,
+      "index_size": 8,
+      "first_token": -8629266958227979430,
+      "last_token": 9168982884335614769,
+    },
+    {
+      "id": "67e35000-d8c6-11f0-85dc-0625e9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq821a6cqlbmxrtn-big-TOC.txt",
+      "data_size": 73,
+      "index_size": 8,
+      "first_token": 221146791717891383,
+      "last_token": 7354559975791427036,
+    },
+    ...
+  ],
+  "files": [ ... ]
 }
 
 The `manifest` member contains the following attributes:
@@ -274,7 +293,13 @@ The `table` member contains metadata about the table being snapshot.
     - `powof2` - if the keyspace uses tables replication, and the tablet token ranges are based on powers of 2.
 - `tablet_count` - Optional. If `tablets_type` is not `none`, contains the number of tablets allcated in the table. If `tablets_type` is `powof2`, tablet_count would be a power of 2.
 
-The `files` member contains a list of SSTable data component files included in the snapshot directory.
+The `sstables` member is a list containing metadata about the SSTables in the snapshot.
+- `id` - is the STable's unique id (a UUID).  It is carried over with the SSTable when it's streamed as part of tablet migration, even if it gets a new generation.
+- `toc_name` - is the name of the SSTable Table Of Contents (TOC) component.
+- `data_size` and `index_size` - are the sizes of the SSTable's data and index components, respectively.  They can be used to estimate how much disk space is needed for restore.
+- `first_token` and `last_token` - are the first and last tokens in the SSTable, respectively.  They can be used to determine if a SSTable is fully contained in a (tablet) token range to enable efficient file-based streaming of the SSTable.
+
+The optional `files` member may contain a list of non-SSTable files included in the snapshot directory, not including the manifest.json file and schema.cql.
 ```
 
 3. `CREATE KEYSPACE` with S3/GS storage
