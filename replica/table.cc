@@ -3295,6 +3295,33 @@ db::replay_position table::highest_flushed_replay_position() const {
 }
 
 struct manifest_json : public json::json_base {
+    struct info : public json::json_base {
+        json::json_element<sstring> version;
+        json::json_element<sstring> scope;
+
+        info() {
+            register_params();
+        }
+        info(const info& e) {
+            register_params();
+            version = e.version;
+            scope = e.scope;
+        }
+        info& operator=(const info& e) {
+            if (this != &e) {
+                version = e.version;
+                scope = e.scope;
+            }
+            return *this;
+        }
+    private:
+        void register_params() {
+            add(&version, "version");
+            add(&scope, "scope");
+        }
+    };
+
+    json::json_element<info> manifest;
     json::json_chunked_list<std::string_view> files;
 
     manifest_json() {
@@ -3302,14 +3329,19 @@ struct manifest_json : public json::json_base {
     }
     manifest_json(manifest_json&& e) {
         register_params();
+        manifest = std::move(e.manifest);
         files = std::move(e.files);
     }
     manifest_json& operator=(manifest_json&& e) {
-        files = std::move(e.files);
+        if (this != &e) {
+            manifest = std::move(e.manifest);
+            files = std::move(e.files);
+        }
         return *this;
     }
 private:
     void register_params() {
+        add(&manifest, "manifest");
         add(&files, "files");
     }
 };
@@ -3326,6 +3358,12 @@ using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring
 
 static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
     manifest_json manifest;
+
+    manifest_json::info info;
+    info.version = "0.1";
+    info.scope = "node";
+    manifest.manifest = std::move(info);
+
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
             manifest.files.push(std::string_view(rf));

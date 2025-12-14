@@ -223,12 +223,21 @@ See the API [documentation](#copying-sstables-on-s3-backup) for more details abo
 
 ### The snapshot manifest
 
-Each table snapshot directory contains a manifest.json file that lists the contents of the snapshot.
+Each table snapshot directory contains a manifest.json file that lists the contents of the snapshot and some metadata.
 The json structure is as follows:
 ```
 {
+  "manifest": {
+    "version": "0.1",
+    "scope": "node"
+  },
   "files": [ "me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db", "ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db", ... ]
 }
+
+The `manifest` member contains the following attributes:
+- `version` - respresenting the version of the manifest itself. It is incremented when members are added or removed from the manifest.
+- `scope` - the scope of metadata stored in this manifest file.  The following scopes are supported:
+    - `node` - the manifest describes all SSTables owned by this node in this snapshot.
 
 The `files` member contains a list of SSTable data component files included in the snapshot directory.
 ```
