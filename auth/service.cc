@@ -191,8 +191,7 @@ service::service(
         ::service::migration_manager& mm,
         const service_config& sc,
         maintenance_socket_enabled used_by_maintenance_socket,
-        cache& cache,
-        utils::alien_worker& hashing_worker)
+        cache& cache)
             : service(
                       std::move(c),
                       cache,
@@ -200,7 +199,7 @@ service::service(
                       g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache, hashing_worker),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache),
                       create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
                       used_by_maintenance_socket) {
 }
