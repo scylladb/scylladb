@@ -3410,6 +3410,11 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     };
     file_size_map snapshot_files, table_files;
     co_await get_file_sizes(snapshot_files, snapshot_dir);
+    // Get file size first from the staging dir, so not to miss any sstable if it is moved into the base dir in the background.
+    // Note that the staging dir may not exist, e.g. after the table is dropped.
+    if (co_await file_exists((datadir / sstables::staging_dir).native())) {
+        co_await get_file_sizes(table_files, datadir / sstables::staging_dir);
+    }
     co_await get_file_sizes(table_files, datadir);
 
     for (const auto& [inode_number, size] : snapshot_files) {
