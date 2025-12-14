@@ -105,7 +105,7 @@ def check_snapshot_out(res, tag, ktlist, skip_flush):
     if len(ktlist) == 0:
         keyspaces = "all keyspaces"
     else:
-        keyspaces = ", ?".join(ktlist)
+        keyspaces = ", ".join(ktlist)
 
     pattern = re.compile("Requested creating snapshot\\(s\\)"
                          f" for \\[{keyspaces}\\]"
@@ -216,7 +216,7 @@ def test_snapshot_ktlist(nodetool, option_name):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
     ])
-    check_snapshot_out(res.stdout, tag, ["ks1" ,"ks2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1","ks2"], False)
 
 
 @pytest.mark.parametrize("tag", [None, "my_snapshot_tag"])
@@ -291,8 +291,8 @@ def test_snapshot_table_with_ktlist(nodetool):
             nodetool,
             ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
+            ["error: When specifying the Keyspace column family list for a snapshot,"
+             " you should not specify column family",
              "error processing arguments: when specifying the keyspace-table list for a snapshot,"
              " you should not specify table(s)"])
 
@@ -302,8 +302,8 @@ def test_snapshot_keyspace_with_ktlist(nodetool):
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
+            ["error: When specifying the Keyspace column family list for a snapshot,"
+             " you should not specify column family",
              "error processing arguments: when specifying the keyspace-table list for a snapshot,"
              " you should not specify keyspace(s)"])
 
