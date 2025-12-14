@@ -575,6 +575,90 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     # We could further test how GRANT works, but this would be unnecessary
     # repeating of the tests in test/alternator/test_cql_rbac.py.
 
+@pytest.mark.asyncio
+async def test_index_requires_rf_rack_valid(manager: ManagerClient):
+    """
+    Verify that creating a table with GSI or LSI fails with an appropriate error if
+    it's tablets based and rf_rack_valid_keyspaces is disabled.
+    Adding a GSI to an existing table with tablets should fail as well.
+    """
+    servers = await manager.servers_add(1, config=alternator_config | {"rf_rack_valid_keyspaces": False})
+    alternator = get_alternator(servers[0].ip_addr)
+
+    expected_err_create = "GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled."
+    expected_err_update_add_gsi = "GlobalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled."
+
+    def create_table_with_index(alternator, table_name, index_type, initial_tablets):
+        create_table_args = dict(
+            TableName=table_name,
+            BillingMode='PAY_PER_REQUEST',
+            Tags=[{'Key': 'system:initial_tablets', 'Value': initial_tablets}],
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'c', 'KeyType': 'RANGE'}
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'c', 'AttributeType': 'S'}
+            ],
+        )
+        if index_type == "GSI":
+            create_table_args["GlobalSecondaryIndexes"] = [
+                {
+                    'IndexName': 'gsi1',
+                    'KeySchema': [
+                        {'AttributeName': 'c', 'KeyType': 'HASH'},
+                        {'AttributeName': 'p', 'KeyType': 'RANGE'},
+                    ],
+                    'Projection': {'ProjectionType': 'ALL'}
+                }
+            ]
+        elif index_type == "LSI":
+            create_table_args["LocalSecondaryIndexes"] = [
+                {
+                    'IndexName': 'lsi1',
+                    'KeySchema': [
+                        {'AttributeName': 'p', 'KeyType': 'HASH'},
+                        {'AttributeName': 'c', 'KeyType': 'RANGE'},
+                    ],
+                    'Projection': {'ProjectionType': 'ALL'}
+                }
+            ]
+        alternator.create_table(**create_table_args)
+
+    # Create a table with tablets and GSI or LSI - should fail because rf_rack_valid_keyspaces is disabled
+    for index_type in ["GSI", "LSI"]:
+        with pytest.raises(ClientError, match=expected_err_create):
+            create_table_with_index(alternator, unique_table_name(), index_type, initial_tablets='1')
+
+    # Now create the table without tablets - should succeed
+    for index_type in ["GSI", "LSI"]:
+        create_table_with_index(alternator, unique_table_name(), index_type, initial_tablets='none')
+
+    # Create a table with tablets and no indexes, then add a GSI - the update should fail
+    table_name = unique_table_name()
+    create_table_with_index(alternator, table_name, index_type=None, initial_tablets='1')
+    with pytest.raises(ClientError, match=expected_err_update_add_gsi):
+        alternator.meta.client.update_table(
+            TableName=table_name,
+            AttributeDefinitions=[
+                {'AttributeName': 'c', 'AttributeType': 'S'},
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+            ],
+            GlobalSecondaryIndexUpdates=[
+                {
+                    'Create': {
+                        'IndexName': 'gsi1',
+                        'KeySchema': [
+                            {'AttributeName': 'c', 'KeyType': 'HASH'},
+                            {'AttributeName': 'p', 'KeyType': 'RANGE'},
+                        ],
+                        'Projection': {'ProjectionType': 'ALL'}
+                    }
+                }
+            ]
+        )
+
 # Unfortunately by default a Python thread print the exception that kills
 # it (e.g., pytest assert failures) but it doesn't propagate the exception
 # to the join() - so the overall test doesn't fail. The following ThreadWrapper
