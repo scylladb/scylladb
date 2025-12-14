@@ -304,8 +304,6 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
         }
     }));
 #endif
-    verify_batch_size(qp, mutations);
-
     bool mutate_atomic = true;
     if (_type != type::LOGGED) {
         _stats.batches_pure_unlogged += 1;
@@ -313,6 +311,7 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
     } else {
         if (mutations.size() > 1) {
             _stats.batches_pure_logged += 1;
+            verify_batch_size(qp, mutations);
         } else {
             _stats.batches_unlogged_from_logged += 1;
             mutate_atomic = false;

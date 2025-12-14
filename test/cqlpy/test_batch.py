@@ -74,3 +74,58 @@ def test_batch_with_error(cql, table1):
         # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
         with pytest.raises(NoHostAvailable, match="Value too large"):
             cql.execute(generate_big_batch(table1, 100) + injection_key)
+
+
+def test_unlogged_batch_size_not_checked(cql, test_keyspace):
+    """Verifies that UNLOGGED batches are NOT subject to batch size limits.
+    
+    Unlogged batches are applied as independent mutations and don't go through
+    the system.batchlog table, so their collective size is irrelevant.
+    This test should succeed even with a batch larger than the fail threshold.
+    """
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        # Create a batch larger than the fail threshold (1024 KB)
+        # This would fail for a logged batch, but should succeed for unlogged
+        statements = [f"INSERT INTO {table} (k, t) VALUES ({idx}, '{'x' * 743}')" for idx in range(1100)]
+        unlogged_batch = "BEGIN UNLOGGED BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
+        
+        # This should not raise an exception
+        cql.execute(unlogged_batch)
+        
+        # Verify the data was inserted
+        result = cql.execute(f"SELECT COUNT(*) FROM {table}")
+        assert result.one()[0] == 1100
+
+
+def test_logged_multi_partition_batch_size_checked(cql, test_keyspace):
+    """Verifies that LOGGED batches targeting multiple partitions ARE subject to batch size limits.
+    
+    Logged multi-partition batches go through system.batchlog and must be size-checked.
+    """
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        # Create a batch larger than the fail threshold (1024 KB) with multiple partitions
+        statements = [f"INSERT INTO {table} (k, t) VALUES ({idx}, '{'x' * 743}')" for idx in range(1100)]
+        logged_batch = "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
+        
+        # This should raise "Batch too large" exception
+        with pytest.raises(InvalidRequest, match="Batch too large"):
+            cql.execute(logged_batch)
+
+
+def test_logged_single_partition_batch_size_not_checked(cql, test_keyspace):
+    """Verifies that LOGGED batches targeting a single partition are NOT subject to batch size limits.
+    
+    Logged single-partition batches don't go through system.batchlog,
+    so their collective size is not relevant.
+    """
+    with new_test_table(cql, test_keyspace, "k int, c int, t text, primary key (k, c)") as table:
+        # Create a batch larger than the fail threshold (1024 KB) but all targeting the same partition
+        statements = [f"INSERT INTO {table} (k, c, t) VALUES (1, {idx}, '{'x' * 743}')" for idx in range(1100)]
+        logged_batch = "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
+        
+        # This should not raise an exception since it's a single-partition batch
+        cql.execute(logged_batch)
+        
+        # Verify the data was inserted
+        result = cql.execute(f"SELECT COUNT(*) FROM {table} WHERE k = 1")
+        assert result.one()[0] == 1100
