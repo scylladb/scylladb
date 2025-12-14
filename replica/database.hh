@@ -1059,7 +1059,12 @@ public:
     db::replay_position set_low_replay_position_mark();
     db::replay_position highest_flushed_replay_position() const;
 
-    future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
+    struct snapshot_data {
+        sstable_list_permit permit;
+        std::optional<int64_t> tablet_count;
+        std::vector<sstables::shared_sstable> sstables;
+    };
+    future<snapshot_data> snapshot_sstables();
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
     static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
