@@ -547,20 +547,6 @@ def testDeleteWithNonoverlappingRange(cql, test_keyspace):
         # this query does not overlap the tombstone range above and caused the rows to be resurrected
         assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE a=1 and b <= 2"))
 
-def testDeleteWithIntermediateRangeAndOneClusteringColumn(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(a int, b int, c text, primary key (a, b))") as table:
-        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 1, '1')")
-        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 3, '3')")
-        execute(cql, table, "DELETE FROM %s where a=1 and b >= 2 and b <= 3")
-        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 2, '2')")
-        flush(cql, table)
-
-        execute(cql, table, "DELETE FROM %s where a=1 and b >= 2 and b <= 3")
-        flush(cql, table)
-
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ?", 1),
-                   row(1, 1, "1"))
-
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testDeleteWithIntermediateRangeAndOneClusteringColumn(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering int, value int, primary key (partitionKey, clustering))") as table:
