@@ -664,7 +664,7 @@ static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, co
 }
 
 // Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
-static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir) {
+static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir) {
     sstring suffix = "-Data.db";
     auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
     std::set<sstring> sstables_in_manifest;
@@ -681,11 +681,28 @@ static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<s
     BOOST_REQUIRE(manifest_info.HasMember("version"));
     auto& manifest_version = manifest_info["version"];
     BOOST_REQUIRE(manifest_version.IsString());
-    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.1");
+    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "0.2");
     BOOST_REQUIRE(manifest_info.HasMember("scope"));
     auto& manifest_scope = manifest_info["scope"];
     BOOST_REQUIRE(manifest_scope.IsString());
     BOOST_REQUIRE_EQUAL(manifest_scope.GetString(), "node");
+
+    BOOST_REQUIRE(manifest_json.HasMember("node"));
+    auto& node_info = manifest_json["node"];
+    BOOST_REQUIRE(node_info.IsObject());
+    BOOST_REQUIRE(node_info.HasMember("host_id"));
+    auto& host_id_json = node_info["host_id"];
+    BOOST_REQUIRE(host_id_json.IsString());
+    auto id = utils::UUID(host_id_json.GetString());
+    BOOST_REQUIRE_EQUAL(id, topology.my_host_id().uuid());
+    BOOST_REQUIRE(node_info.HasMember("datacenter"));
+    auto& datacenter = node_info["datacenter"];
+    BOOST_REQUIRE(datacenter.IsString());
+    BOOST_REQUIRE_EQUAL(datacenter.GetString(), topology.get_location().dc);
+    BOOST_REQUIRE(node_info.HasMember("rack"));
+    auto& rack = node_info["rack"];
+    BOOST_REQUIRE(rack.IsString());
+    BOOST_REQUIRE_EQUAL(rack.GetString(), topology.get_location().rack);
 
     BOOST_REQUIRE(manifest_json.HasMember("files"));
     auto& manifest_files = manifest_json["files"];
@@ -721,7 +738,8 @@ static future<> snapshot_works(const std::string& table_name) {
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
-        validate_manifest(snapshot_dir, in_snapshot_dir).get();
+        const auto& topology = e.local_db().get_token_metadata().get_topology();
+        validate_manifest(topology, snapshot_dir, in_snapshot_dir).get();
     }, true);
 }
 

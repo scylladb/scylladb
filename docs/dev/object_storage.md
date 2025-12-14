@@ -228,8 +228,13 @@ The json structure is as follows:
 ```
 {
   "manifest": {
-    "version": "0.1",
+    "version": "0.2",
     "scope": "node"
+  },
+  "node": {
+    "host_id": "<UUID>",
+    "datacenter": "mydc",
+    "rack": "myrack"
   },
   "files": [ "me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db", "ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db", ... ]
 }
@@ -238,6 +243,11 @@ The `manifest` member contains the following attributes:
 - `version` - respresenting the version of the manifest itself. It is incremented when members are added or removed from the manifest.
 - `scope` - the scope of metadata stored in this manifest file.  The following scopes are supported:
     - `node` - the manifest describes all SSTables owned by this node in this snapshot.
+
+The `node` member contains metadata about this node that enables datacenter- or rack-aware restore.
+- `host_id` - is the node's unique host_id (a UUID).
+- `datacenter` - is the node's datacenter.
+- `rack` - is the node's rack.
 
 The `files` member contains a list of SSTable data component files included in the snapshot directory.
 ```
