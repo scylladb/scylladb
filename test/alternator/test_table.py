@@ -14,7 +14,7 @@ from re import fullmatch
 import pytest
 from botocore.exceptions import ClientError
 
-from test.alternator.util import list_tables, multiset, unique_table_name, create_test_table, random_string, new_test_table, is_aws, scylla_config_read
+from .util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws, scylla_config_read
 
 
 # Utility function for create a table with a given name and some valid

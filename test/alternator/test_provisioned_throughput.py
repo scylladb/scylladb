@@ -8,8 +8,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from decimal import Decimal
-from test.alternator.util import random_string, random_bytes, new_test_table
+from test.alternator.util import new_test_table
 
 # When creating a table with PROVISIONED billing mode, ProvisionedThroughput must be explicitly set,
 # and the same values should be reflected when the table is described.

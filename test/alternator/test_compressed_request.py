@@ -33,7 +33,6 @@ import botocore
 import gzip
 import requests
 import pytest
-from contextlib import contextmanager
 
 from .util import random_string
 from .test_manual_requests import get_signed_request

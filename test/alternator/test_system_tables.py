@@ -11,7 +11,7 @@ import requests
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
-from .util import full_scan, scylla_config_read, scylla_config_write, scylla_config_temporary
+from .util import full_scan, scylla_config_read, scylla_config_temporary
 
 internal_prefix = '.scylla.alternator.'
 
