@@ -567,15 +567,15 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
 // Snapshot tests and their helpers
 // \param func: function to be called back, in a seastar thread.
-future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::function<void (cql_test_env&)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
-    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs,  db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
+future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::function<void (cql_test_env&)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}, size_t num_keys = 2) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs,  db_cfg_ptr = std::move(db_cfg_ptr), num_keys] () mutable {
         lw_shared_ptr<tmpdir> tmpdir_for_data;
         if (!db_cfg_ptr) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
             db_cfg_ptr = make_shared<db::config>();
             db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func), create_mvs] (cql_test_env& e) {
+        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func), create_mvs, num_keys] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
                     return *schema_builder(ks_name, cf_name)
@@ -585,12 +585,22 @@ future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::functio
                             .with_column("r1", int32_type)
                             .build();
                 }).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 1, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 2, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 3, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 4, 5, 6);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 5, 5, 6);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 6, 5, 6);", cf_name)).get();
+                auto stmt = e.prepare(fmt::format("insert into {} (p1, c1, c2, r1) values (?, ?, ?, ?)", cf_name)).get();
+                auto make_key = [] (int64_t k) {
+                    std::string s = fmt::format("key{}", k);
+                    bytes b(bytes::initialized_later(), sizeof(s.size()));
+                    std::ranges::copy(s, b.begin());
+                    return cql3::raw_value::make_value(b);
+                };
+                auto make_val = [] (int64_t x) {
+                    return cql3::raw_value::make_value(int32_type->decompose(int32_t{x}));
+                };
+                for (size_t i = 0; i < num_keys; ++i) {
+                    auto key = tests::random::get_int<int32_t>(1, 1000000);
+                    e.execute_prepared(stmt, {make_key(key), make_val(key), make_val(key + 1), make_val(key + 2)}).get();
+                    e.execute_prepared(stmt, {make_key(key), make_val(key + 1), make_val(key + 1), make_val(key + 2)}).get();
+                    e.execute_prepared(stmt, {make_key(key), make_val(key + 2), make_val(key + 1), make_val(key + 2)}).get();
+                }
 
                 if (create_mvs) {
                     auto f1 = e.local_view_builder().wait_until_built("ks", seastar::format("view_{}", cf_name));
