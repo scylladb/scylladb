@@ -1801,7 +1801,7 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
 }
 
 future<> memtable_list::flush() {
-    if (!may_flush()) {
+    if (!can_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
         promise<> flushed;

@@ -226,12 +226,8 @@ public:
         : memtable_list({}, std::move(cs), dirty_memory_manager, table_shared_data, table_stats, compaction_scheduling_group) {
     }
 
-    bool may_flush() const noexcept {
-        return bool(_seal_immediate_fn);
-    }
-
     bool can_flush() const noexcept {
-        return may_flush() && !empty();
+        return bool(_seal_immediate_fn);
     }
 
     bool needs_flush() const noexcept {
