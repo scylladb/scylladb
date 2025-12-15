@@ -173,6 +173,7 @@ public:
     gms::feature repair_msg_split { *this, "REPAIR_MSG_SPLIT"sv };
     gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
     gms::feature ms_sstable { *this, "MS_SSTABLE_FORMAT"sv };
+    gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
