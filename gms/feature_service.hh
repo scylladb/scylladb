@@ -173,6 +173,23 @@ public:
     gms::feature repair_msg_split { *this, "REPAIR_MSG_SPLIT"sv };
     gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
     gms::feature ms_sstable { *this, "MS_SSTABLE_FORMAT"sv };
+<<<<<<< HEAD
+||||||| parent of ccdb301731 (tablets: Make balancing disabling call preempt tablet transitions)
+    gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
+    gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
+    gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
+    gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
+    gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
+    gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
+=======
+    gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
+    gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
+    gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
+    gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
+    gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
+    gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
+    gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
+>>>>>>> ccdb301731 (tablets: Make balancing disabling call preempt tablet transitions)
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
