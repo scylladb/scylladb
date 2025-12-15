@@ -90,8 +90,6 @@ def test_attached_service_level(scylla_only, cql):
         assert res_one.role == cql.cluster.auth_provider.username and res_one.service_level == sl
 
 def test_list_effective_service_level(scylla_only, cql):
-    sl1 = "sl1"
-    sl2 = "sl2"
     timeout = "10s"
     workload_type = "batch"
 
@@ -120,8 +118,6 @@ def test_list_effective_service_level(scylla_only, cql):
                             assert row.value == "batch"
 
 def test_list_effective_service_level_shares(scylla_only, cql):
-    sl1 = "sl1"
-    sl2 = "sl2"
     shares1 = 500
     shares2 = 200
 
@@ -184,8 +180,6 @@ def test_default_shares_in_listings(scylla_only, cql):
 # and that the messages Scylla returns are informative.
 def test_manipulating_default_service_level(cql, scylla_only):
     default_sl = "default"
-    # Service levels are case-sensitive (if used with quotation marks).
-    fake_default_sl = '"DeFaUlT"'
 
     with new_user(cql) as role:
         # Creation.

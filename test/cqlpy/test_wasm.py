@@ -23,7 +23,7 @@ def scylla_with_wasm_only(scylla_only, cql, test_keyspace):
     try:
         f42 = unique_name()
         f42_body = f'(module(func ${f42} (param $n i64) (result i64)(return i64.const 42))(export "{f42}" (func ${f42})))'
-        res = cql.execute(f"CREATE FUNCTION {test_keyspace}.{f42} (input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{f42_body}'")
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{f42} (input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{f42_body}'")
         cql.execute(f"DROP FUNCTION {test_keyspace}.{f42}")
     except NoHostAvailable as err:
         if "not enabled" in str(err):
@@ -373,8 +373,7 @@ def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
         assert len(res) == 1 and res[0].result == 177147
 
 # Test that only compilable input is accepted
-def test_compilable(cql, test_keyspace, table1, scylla_with_wasm_only):
-    table = table1
+def test_compilable(cql, test_keyspace, scylla_with_wasm_only):
     wrong_source = f"""
 Dear wasmtime compiler, please return a function which returns its float argument increased by 1
 """
@@ -384,8 +383,7 @@ Dear wasmtime compiler, please return a function which returns its float argumen
 
 # Test that not exporting a function with matching name
 # results in an error
-def test_not_exported(cql, test_keyspace, table1, scylla_with_wasm_only):
-    table = table1
+def test_not_exported(cql, test_keyspace, scylla_with_wasm_only):
     wrong_source = f"""
 (module
   (type (;0;) (func (param f32) (result f32)))
@@ -403,8 +401,7 @@ def test_not_exported(cql, test_keyspace, table1, scylla_with_wasm_only):
                 f"AS '{wrong_source}'")
 
 # Test that trying to use something that is exported, but is not a function, won't work
-def test_not_a_function(cql, test_keyspace, table1, scylla_with_wasm_only):
-    table = table1
+def test_not_a_function(cql, test_keyspace, scylla_with_wasm_only):
     wrong_source = f"""
 (module
   (type (;0;) (func (param f32) (result f32)))

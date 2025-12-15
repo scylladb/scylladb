@@ -352,7 +352,7 @@ def test_storage_options_alter_type(cql, scylla_only):
         ksdef_local = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'S3', 'bucket' : '/b1', 'endpoint': 'localhost'}"
         with pytest.raises(InvalidRequest):
-            res = cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
+            cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
 
 # Reproducer for scylladb#14139
 def test_alter_keyspace_preserves_udt(cql):
