@@ -3282,6 +3282,7 @@ public:
 
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
     void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+        utils::get_local_injector().inject("pause_in_allocate_tablets_for_new_table", utils::wait_for_message(std::chrono::minutes(5))).get();
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
@@ -3324,7 +3325,7 @@ public:
                         if (s.id() != base_id) {
                             lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
                             muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
-                            _db.get_notifier().before_allocate_tablet_map(base_map, s, muts, ts);
+                            _db.get_notifier().before_allocate_tablet_map_in_notification(base_map, s, muts, ts);
                         }
                     }
                 };
@@ -3337,7 +3338,7 @@ public:
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
                     auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
                     muts.emplace_back(tablet_map_to_mutation(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
-                    _db.get_notifier().before_allocate_tablet_map(base_map, s, muts, ts);
+                    _db.get_notifier().before_allocate_tablet_map_in_notification(base_map, s, muts, ts);
 
                     create_colocated_tablet_maps(base_map);
                 }
