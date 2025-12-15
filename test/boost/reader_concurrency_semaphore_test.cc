@@ -1663,7 +1663,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
     db_cfg.reader_concurrency_semaphore_kill_limit_multiplier.set(4, utils::config_file::config_source::CommandLine);
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        auto tbl = create_memory_limit_table(env, 64);
+        auto tbl = create_memory_limit_table(env, 54);
 
         auto& db = env.local_db();
         auto& semaphore = db.get_reader_concurrency_semaphore();
