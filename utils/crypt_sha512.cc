@@ -327,7 +327,6 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 	/* output is $6$rounds=n$salt$hash */
 	p = output;
 	p += sprintf(p, "$6$%s%.*s$", rounds, slen, salt);
-#if 1
 	static const unsigned char perm[][3] = {
 		{0,21,42},{22,43,1},{44,2,23},{3,24,45},{25,46,4},
 		{47,5,26},{6,27,48},{28,49,7},{50,8,29},{9,30,51},
@@ -336,29 +335,6 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 		{62,20,41} };
 	for (i=0; i<21; i++) p = to64(p,
 		(md[perm[i][0]]<<16)|(md[perm[i][1]]<<8)|md[perm[i][2]], 4);
-#else
-	p = to64(p, (md[0]<<16)|(md[21]<<8)|md[42], 4);
-	p = to64(p, (md[22]<<16)|(md[43]<<8)|md[1], 4);
-	p = to64(p, (md[44]<<16)|(md[2]<<8)|md[23], 4);
-	p = to64(p, (md[3]<<16)|(md[24]<<8)|md[45], 4);
-	p = to64(p, (md[25]<<16)|(md[46]<<8)|md[4], 4);
-	p = to64(p, (md[47]<<16)|(md[5]<<8)|md[26], 4);
-	p = to64(p, (md[6]<<16)|(md[27]<<8)|md[48], 4);
-	p = to64(p, (md[28]<<16)|(md[49]<<8)|md[7], 4);
-	p = to64(p, (md[50]<<16)|(md[8]<<8)|md[29], 4);
-	p = to64(p, (md[9]<<16)|(md[30]<<8)|md[51], 4);
-	p = to64(p, (md[31]<<16)|(md[52]<<8)|md[10], 4);
-	p = to64(p, (md[53]<<16)|(md[11]<<8)|md[32], 4);
-	p = to64(p, (md[12]<<16)|(md[33]<<8)|md[54], 4);
-	p = to64(p, (md[34]<<16)|(md[55]<<8)|md[13], 4);
-	p = to64(p, (md[56]<<16)|(md[14]<<8)|md[35], 4);
-	p = to64(p, (md[15]<<16)|(md[36]<<8)|md[57], 4);
-	p = to64(p, (md[37]<<16)|(md[58]<<8)|md[16], 4);
-	p = to64(p, (md[59]<<16)|(md[17]<<8)|md[38], 4);
-	p = to64(p, (md[18]<<16)|(md[39]<<8)|md[60], 4);
-	p = to64(p, (md[40]<<16)|(md[61]<<8)|md[19], 4);
-	p = to64(p, (md[62]<<16)|(md[20]<<8)|md[41], 4);
-#endif
 	p = to64(p, md[63], 2);
 	*p = 0;
 	co_return output;
