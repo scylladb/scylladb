@@ -1077,8 +1077,9 @@ private:
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
-            bmcfg.write_request_timeout = 2s;
-            bmcfg.delay = 0ms;
+            bmcfg.replay_timeout = cfg_in.batchlog_replay_timeout.value_or(2s);
+            bmcfg.delay = cfg_in.batchlog_delay;
+            bmcfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
             _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
             auto stop_bm = defer([this] {
                 _batchlog_manager.stop().get();
@@ -1129,9 +1130,15 @@ private:
 
 public:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
-        const std::vector<std::string_view>& queries, std::unique_ptr<cql3::query_options> qo) override {
+            const std::vector<std::string_view>& queries,
+            cql3::statements::batch_statement::type batch_type,
+            std::unique_ptr<cql3::query_options> qo) override {
         using cql3::statements::batch_statement;
         using cql3::statements::modification_statement;
+
+        testlog.trace("{}(type={}):\n  {}",
+                __FUNCTION__, batch_type == batch_statement::type::LOGGED ? "LOGGED" : "UNLOGGED", fmt::join(queries, "\n  "));
+
         std::vector<batch_statement::single_statement> modifications;
         std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
             auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
@@ -1142,7 +1149,7 @@ public:
             return batch_statement::single_statement(static_pointer_cast<modification_statement>(stmt->statement));
         });
         auto batch = ::make_shared<batch_statement>(
-            batch_statement::type::UNLOGGED,
+            batch_type,
             std::move(modifications),
             cql3::attributes::none(),
             local_qp().get_cql_stats());

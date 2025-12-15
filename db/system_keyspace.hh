@@ -170,6 +170,7 @@ public:
     static constexpr auto NAME = "system";
     static constexpr auto HINTS = "hints";
     static constexpr auto BATCHLOG = "batchlog";
+    static constexpr auto BATCHLOG_V2 = "batchlog_v2";
     static constexpr auto PAXOS = "paxos";
     static constexpr auto BUILT_INDEXES = "IndexInfo";
     static constexpr auto LOCAL = "local";
@@ -281,6 +282,7 @@ public:
 
     static schema_ptr hints();
     static schema_ptr batchlog();
+    static schema_ptr batchlog_v2();
     static schema_ptr paxos();
     static schema_ptr built_indexes(); // TODO (from Cassandra): make private
     static schema_ptr raft();

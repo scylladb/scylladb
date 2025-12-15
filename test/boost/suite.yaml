@@ -48,5 +48,15 @@ custom_args:
         - '-c1 -m2G'
     bloom_filter_test:
         - '-c1'
+<<<<<<< HEAD:test/boost/suite.yaml
+||||||| parent of 8edd5b80ab (test/boost/batchlog_manager_test: add test for batchlog cleanup):test/boost/test_config.yaml
+    s3_test:
+        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
+=======
+    s3_test:
+        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
+    batchlog_manager_test:
+        - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
+>>>>>>> 8edd5b80ab (test/boost/batchlog_manager_test: add test for batchlog cleanup):test/boost/test_config.yaml
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test

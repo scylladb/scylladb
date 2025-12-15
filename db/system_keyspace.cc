@@ -201,6 +201,30 @@ schema_ptr system_keyspace::batchlog() {
     return batchlog;
 }
 
+schema_ptr system_keyspace::batchlog_v2() {
+    static thread_local auto batchlog_v2 = [] {
+        schema_builder builder(generate_legacy_id(NAME, BATCHLOG_V2), NAME, BATCHLOG_V2,
+        // partition key
+        {{"version", int32_type}, {"stage", byte_type}, {"shard", int32_type}},
+        // clustering key
+        {{"written_at", timestamp_type}, {"id", uuid_type}},
+        // regular columns
+        {{"data", bytes_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "batches awaiting replay"
+       );
+       builder.set_gc_grace_seconds(0);
+       builder.set_caching_options(caching_options::get_disabled_caching_options());
+       builder.with_hash_version();
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return batchlog_v2;
+}
+
 /*static*/ schema_ptr system_keyspace::paxos() {
     static thread_local auto paxos = [] {
         // FIXME: switch to the new schema_builder interface (with_column(...), etc)
@@ -2424,7 +2448,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     auto auth_tables = system_keyspace::auth_tables();
     std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
-    r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
+    r.insert(r.end(), { built_indexes(), hints(), batchlog(), batchlog_v2(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
@@ -2462,7 +2486,9 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
 }
 
 static bool maybe_write_in_user_memory(schema_ptr s) {
-    return (s.get() == system_keyspace::batchlog().get()) || (s.get() == system_keyspace::paxos().get())
+    return (s.get() == system_keyspace::batchlog().get())
+            || (s.get() == system_keyspace::batchlog_v2().get())
+            || (s.get() == system_keyspace::paxos().get())
             || s == system_keyspace::v3::scylla_views_builds_in_progress();
 }
 
