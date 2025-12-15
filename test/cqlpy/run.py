@@ -182,7 +182,6 @@ def cleanup_all():
             sys.stdout.flush()
             shutil.copyfileobj(f, sys.stdout.buffer)
         f.close()
-    scylla_set = set()
     print(summary)
 
 # We run the cleanup_all() function on exit for any reason - successful finish
