@@ -144,10 +144,6 @@ def test_mv_quoted_column_names_build(cql, test_keyspace):
                 # which we don't). This means, unfortunately, that a failure
                 # of this test is slow - it needs to wait for a timeout.
                 wait_for_view_built(cql, mv)
-                # start_time = time.time()
-                # while time.time() < start_time + 30:
-                #     if list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]:
-                #         break
                 assert list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]
 
 # The previous test (test_mv_empty_string_partition_key) verifies that a
