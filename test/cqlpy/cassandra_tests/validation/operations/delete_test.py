@@ -562,7 +562,7 @@ def testDeleteWithIntermediateRangeAndOneClusteringColumn(cql, test_keyspace):
                    row(1, 1, "1"))
 
 @pytest.mark.parametrize("forceFlush", [False, True])
-def testDeleteWithIntermediateRangeAndOneClusteringColumn(cql, test_keyspace, forceFlush):
+def testDeleteWithRangeAndOneClusteringColumn(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering int, value int, primary key (partitionKey, clustering))") as table:
         value = 0
         for partitionKey in range(5):
