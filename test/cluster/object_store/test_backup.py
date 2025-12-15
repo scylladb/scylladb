@@ -715,7 +715,7 @@ async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, 
 
     await asyncio.gather(*(load_fn(manager, logger, ks, cf, s, sstables, scope, primary_replica_only, prefix, object_storage) for s, sstables in sstables_per_server.items()))
     if primary_replica_only:
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all')
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all', timeout=600)
 
 async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger):
     logger.info(f'Backup to {snap_name}')
