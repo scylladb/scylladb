@@ -61,7 +61,7 @@ def test_select_default_order(cql, table_int_desc):
 def test_multi_column_relation_desc(cql, table2):
     k = unique_key_int()
     stmt = cql.prepare(f'INSERT INTO {table2} (p, c1, c2) VALUES (?, ?, ?)')
-    cql.execute(stmt, [0, 1, 0])
-    cql.execute(stmt, [0, 1, 1])
-    cql.execute(stmt, [0, 1, 2])
-    assert [(1, 2), (1, 1)] == list(cql.execute(f'SELECT c1,c2 FROM {table2} WHERE p = 0 AND (c1, c2) >= (1, 1)'))
+    cql.execute(stmt, [k, 1, 0])
+    cql.execute(stmt, [k, 1, 1])
+    cql.execute(stmt, [k, 1, 2])
+    assert [(1, 2), (1, 1)] == list(cql.execute(f'SELECT c1,c2 FROM {table2} WHERE p = {k} AND (c1, c2) >= (1, 1)'))
