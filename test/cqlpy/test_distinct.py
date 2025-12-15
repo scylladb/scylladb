@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table, unique_key_int, random_string
+from .util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")

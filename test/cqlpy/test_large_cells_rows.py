@@ -4,7 +4,6 @@
 
 from .util import new_test_table
 
-import requests
 from . import nodetool
 
 def test_create_large_static_cells_and_rows(cql, test_keyspace):

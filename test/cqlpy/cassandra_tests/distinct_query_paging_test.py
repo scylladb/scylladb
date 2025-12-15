@@ -7,9 +7,6 @@
 
 from .porting import *
 
-from cassandra.query import BatchStatement, BatchType
-from cassandra.protocol import InvalidRequest
-
 # Migrated from cql_tests.py:TestCQL.test_select_distinct()
 def testSelectDistinct(cql, test_keyspace):
     # Test a regular (CQL3) table.

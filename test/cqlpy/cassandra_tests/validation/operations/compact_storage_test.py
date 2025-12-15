@@ -7,8 +7,6 @@
 
 from ...porting import *
 from uuid import UUID
-from cassandra.query import UNSET_VALUE
-from cassandra.util import Duration
 
 compactOption = " WITH COMPACT STORAGE"
 

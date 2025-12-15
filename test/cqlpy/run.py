@@ -7,7 +7,6 @@ import time
 import shutil
 import signal
 import atexit
-import tempfile
 import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such

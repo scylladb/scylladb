@@ -8,8 +8,8 @@
 from ...cassandra_tests.porting import *
 from decimal import Decimal
 from ctypes import c_float
-from datetime import datetime, timezone
-from cassandra.util import Date, Time, Duration, uuid_from_time, ms_timestamp_from_datetime
+from datetime import datetime
+from cassandra.util import Date, uuid_from_time
 
 def testInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b text, c double)") as table:

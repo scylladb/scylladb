@@ -32,7 +32,6 @@ from cassandra.util import Duration
 import yaml
 
 from test.cluster.object_store.conftest import s3_server
-from test.pylib.minio_server import MinioServer
 
 
 def simple_no_clustering_table(cql, keyspace):

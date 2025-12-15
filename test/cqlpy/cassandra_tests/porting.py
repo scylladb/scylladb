@@ -16,7 +16,6 @@ import time
 from ..util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
-from cassandra.protocol import ConfigurationException
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
 

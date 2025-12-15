@@ -12,7 +12,7 @@
 
 from .util import new_test_table, unique_key_int
 from datetime import datetime
-from cassandra.protocol import SyntaxException, InvalidRequest
+from cassandra.protocol import InvalidRequest
 import pytest
 
 @pytest.fixture(scope="module")

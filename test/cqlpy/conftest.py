@@ -10,14 +10,10 @@
 # and automatically setting up the fixtures they need.
 
 import pytest
-import logging
-import pathlib
-import boto3
-from cassandra.cluster import Cluster, NoHostAvailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import json
 import os
-import ssl
 import subprocess
 import tempfile
 import time

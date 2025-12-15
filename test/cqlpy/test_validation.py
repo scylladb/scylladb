@@ -12,7 +12,7 @@
 import pytest
 import re
 import random
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.protocol import InvalidRequest
 from .util import unique_name, unique_key_int, new_test_table
 
 @pytest.fixture(scope="module")

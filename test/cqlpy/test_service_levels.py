@@ -9,14 +9,13 @@
 #############################################################################
 
 from contextlib import contextmanager, ExitStack
-from .util import unique_name, new_test_table, new_user
+from .util import unique_name, new_user
 from .rest_api import scylla_inject_error
 
-from cassandra.protocol import InvalidRequest, ReadTimeout
+from cassandra.protocol import InvalidRequest
 from cassandra.util import Duration
 
 import pytest
-import time
 
 # MAX_USER_SERVICE_LEVELS represents the maximal number of service levels that users can create.
 # The value is documentented in `docs/features/workload-prioritization.rst`.

@@ -7,7 +7,7 @@
 
 from ...porting import  *
 
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import UNSET_VALUE
 
 # Test for the validation bug of CASSANDRA-4706,

@@ -10,7 +10,7 @@ import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
 
-from test.cluster.util import parse_replication_options, get_replication, get_replica_count
+from test.cluster.util import get_replication, get_replica_count
 
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
