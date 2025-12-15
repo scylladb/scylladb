@@ -1240,6 +1240,8 @@ private:
         // compaction.
         reenablers_and_holders.cres.clear();
         rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
+
+        co_await utils::get_local_injector().inject("wait_after_prepare_sstables_for_incremental_repair", utils::wait_for_message(5min));
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
