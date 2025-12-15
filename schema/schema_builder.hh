@@ -33,6 +33,7 @@ private:
     std::optional<schema_ptr> _base_schema;
     std::optional<db::view::base_dependent_view_info> _base_info;
     std::optional<schema_ptr> _cdc_schema;
+    schema_static_props _static_props;
     schema_builder(const schema::raw_schema&);
     static std::vector<static_configurator>& static_configurators();
 public:

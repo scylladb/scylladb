@@ -1306,6 +1306,10 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
+
+    for (const auto& c: static_configurators()) {
+        c(_raw._ks_name, _raw._cf_name, _static_props);
+    }
 }
 
 schema_builder::schema_builder(const schema_ptr s)
@@ -1319,6 +1323,7 @@ schema_builder::schema_builder(const schema_ptr s)
     if (s->cdc_schema()) {
         _cdc_schema = s->cdc_schema();
     }
+    _static_props = s->static_props();
 }
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
@@ -1600,17 +1605,13 @@ schema_ptr schema_builder::build() & {
 }
 
 schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
-    schema_static_props static_props{};
-    for (const auto& c: static_configurators()) {
-        c(new_raw._ks_name, new_raw._cf_name, static_props);
-    }
-    if (static_props.use_schema_commitlog) {
-        if (!static_props.use_null_sharder) {
+    if (_static_props.use_schema_commitlog) {
+        if (!_static_props.use_null_sharder) {
             on_internal_error(dblog,
                 format("{}.{} uses schema commitlog, but not null sharder, "
                        "schema commitlog works only on shard 0", ks_name(), cf_name()));
         }
-        if (static_props.wait_for_sync_to_commitlog) {
+        if (_static_props.wait_for_sync_to_commitlog) {
             on_internal_error(dblog,
                 format("{}.{} uses schema commitlog, wait_for_sync_to_commitlog is redundant",
                         ks_name(), cf_name()));
@@ -1658,7 +1659,7 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
             dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second)->get_options();
     }
 
-    if (static_props.use_null_sharder) {
+    if (_static_props.use_null_sharder) {
         new_raw._sharder = get_sharder(1, 0);
     }
 
@@ -1675,11 +1676,11 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     ), _version);
 
     if (_base_info) {
-        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, nullptr, _base_info);
+        return make_lw_shared<schema>(schema::private_tag{}, new_raw, _static_props, nullptr, _base_info);
     } else if (_base_schema) {
-        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, nullptr, _base_schema);
+        return make_lw_shared<schema>(schema::private_tag{}, new_raw, _static_props, nullptr, _base_schema);
     }
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, _cdc_schema ? *_cdc_schema : nullptr);
+    return make_lw_shared<schema>(schema::private_tag{}, new_raw, _static_props, _cdc_schema ? *_cdc_schema : nullptr);
 }
 
 auto schema_builder::static_configurators() -> std::vector<static_configurator>& {
