@@ -7280,6 +7280,8 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         while (true) {
             group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
+            // In legacy mode (without topology_global_request_queue feature), we can only have one
+            // global request at a time. Check if there's a conflicting request already pending.
             auto curr_req = _topology_state_machine._topology.global_request;
             if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::disable_tablet_balancing) {
                 throw std::runtime_error{
@@ -7300,7 +7302,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
                 builder.set_global_topology_request(global_topology_request::disable_tablet_balancing);
             }
             muts.push_back(builder.build());
-            
+
             sstring reason = "Disabling tablet balancing";
             rtlogger.info("{}", reason);
             topology_change change{std::move(muts)};
