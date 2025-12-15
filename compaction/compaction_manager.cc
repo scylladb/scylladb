@@ -770,30 +770,30 @@ future<> compaction_manager::await_ongoing_compactions(compaction_group_view* t)
     }
 }
 
-future<seastar::rwlock::holder>
+future<utils::rwlock_holder>
 compaction_manager::get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) {
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
-    auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
+    auto ret = co_await cs.incremental_repair_lock->hold_read_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
     }
-    co_return ret;
+    co_return utils::rwlock_holder{std::move(ret), cs.incremental_repair_lock};
 }
 
-future<seastar::rwlock::holder>
+future<utils::rwlock_holder>
 compaction_manager::get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) {
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
-    auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
+    auto ret = co_await cs.incremental_repair_lock->hold_write_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
     }
-    co_return ret;
+    co_return utils::rwlock_holder{std::move(ret), cs.incremental_repair_lock};
 }
 
 future<compaction_reenabler>
@@ -2342,6 +2342,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
 
 compaction::compaction_state::compaction_state(compaction_group_view& t)
     : gate(format("compaction_state for table {}.{}", t.schema()->ks_name(), t.schema()->cf_name()))
+    , incremental_repair_lock(seastar::make_lw_shared<seastar::rwlock>())
 {
 }
 
