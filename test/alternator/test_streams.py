@@ -135,7 +135,7 @@ def test_list_streams_create(dynamodb, dynamodbstreams):
 def test_list_streams_alter(dynamodb, dynamodbstreams):
     for type in stream_types:
         with create_stream_test_table(dynamodb, StreamViewType=None) as table:
-            res = table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': type});
+            table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': type});
             wait_for_active_stream(dynamodbstreams, table)
 
 def test_list_streams_paged(dynamodb, dynamodbstreams):
@@ -273,7 +273,7 @@ def test_describe_stream_create_time(dynamodb, dynamodbstreams):
 
 def test_describe_nonexistent_stream(dynamodb, dynamodbstreams):
     with pytest.raises(ClientError, match='ResourceNotFoundException' if is_local_java(dynamodbstreams) else 'ValidationException'):
-        streams = dynamodbstreams.describe_stream(StreamArn='sdfadfsdfnlfkajakfgjalksfgklasjklasdjfklasdfasdfgasf')
+        dynamodbstreams.describe_stream(StreamArn='sdfadfsdfnlfkajakfgjalksfgklasjklasdjfklasdfasdfgasf')
 
 def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
@@ -313,7 +313,7 @@ def test_get_shard_iterator(dynamodb, dynamodbstreams):
         for type in ['AT_SEQUENCE_NUMBER', 'AFTER_SEQUENCE_NUMBER']: 
             # must have seq in these modes
             with pytest.raises(ClientError, match='ValidationException'):
-                iter = dynamodbstreams.get_shard_iterator(
+                dynamodbstreams.get_shard_iterator(
                     StreamArn=arn, ShardId=shard_id, ShardIteratorType=type
                 )
 
@@ -326,7 +326,7 @@ def test_get_shard_iterator(dynamodb, dynamodbstreams):
 
         # bad arn
         with pytest.raises(ClientError, match='ValidationException'):
-            iter = dynamodbstreams.get_shard_iterator(
+            dynamodbstreams.get_shard_iterator(
                 StreamArn='sdfadsfsdfsdgdfsgsfdabadfbabdadsfsdfsdfsdfsdfsdfsdfdfdssdffbdfdf', ShardId=shard_id, ShardIteratorType=type, SequenceNumber=seq
             )
         # bad shard id  
@@ -1601,7 +1601,6 @@ def test_table_stream_with_result(dynamodb, dynamodbstreams):
 # doing an UpdateTable to a table - because before this wait finishes we are
 # not allowed to update the same table again or delete it.
 def wait_for_status_active(table):
-    start_time = time.time()
     for i in range(60):
         desc = table.meta.client.describe_table(TableName=table.name)
         if desc['Table']['TableStatus'] == 'ACTIVE':
@@ -1878,15 +1877,15 @@ def test_get_records_too_high_limit(test_table_ss_keys_only, dynamodbstreams):
     shard_id = shard['ShardId']
     iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
     # Limit=1000 should be allowed:
-    response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
+    dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
     # Limit=1001 should NOT be allowed
     with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
-        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1001)
+        dynamodbstreams.get_records(ShardIterator=iter, Limit=1001)
     # Limit must be >= 0:
     with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
-        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=0)
+        dynamodbstreams.get_records(ShardIterator=iter, Limit=0)
     with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
-        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=-1)
+        dynamodbstreams.get_records(ShardIterator=iter, Limit=-1)
 
 # padded_name() creates a unique name of given length by taking the
 # output of unique_table_name() and padding it with extra 'x' characters:

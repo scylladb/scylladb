@@ -35,14 +35,12 @@ def test_invalid_consumed_capacity_type(test_table_sb):
     c = random_bytes()
     test_table_sb.put_item(Item={'p': p, 'c': c, 'att': val})
     with pytest.raises(ClientError):
-        response = test_table_sb.get_item(Key={'p': p, 'c': c}, ConsistentRead=True, ReturnConsumedCapacity='DUMMY')
+        test_table_sb.get_item(Key={'p': p, 'c': c}, ConsistentRead=True, ReturnConsumedCapacity='DUMMY')
 
 # A missing Item, count as zero length item which require 1 or 0.5 RCU depends on the consistency
 def test_missing_get_item(test_table):
     p = random_string()
     c = random_string()
-    val = random_string()
-    val2 = random_string()
     response = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True, ReturnConsumedCapacity='TOTAL')
     assert 'ConsumedCapacity' in response
     consumed_capacity = response['ConsumedCapacity']
@@ -225,7 +223,6 @@ def test_simple_delete_item(test_table_sb):
 # we will get 1 WCU
 def test_delete_missing_item(test_table_sb):
     p = random_string()
-    val = random_string()
     c = random_bytes()
     response = test_table_sb.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='TOTAL')
     assert 'ConsumedCapacity' in response

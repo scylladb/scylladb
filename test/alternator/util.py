@@ -243,7 +243,7 @@ def get_region(dynamodb):
 # will trigger a test to be skipped if it cannot be executed.
 @contextmanager
 def scylla_inject_error(rest_api, err, one_shot=False):
-    response = requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
+    requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
     response = requests.get(f'{rest_api}/v2/error_injection/injection')
     print("Enabled error injections:", response.content.decode('utf-8'))
     if response.content.decode('utf-8') == "[]":
@@ -252,7 +252,7 @@ def scylla_inject_error(rest_api, err, one_shot=False):
         yield
     finally:
         print("Disabling error injection", err)
-        response = requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
+        requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
 
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which
@@ -305,7 +305,6 @@ def wait_for_gsi_gone(table, gsi_name):
         if 'GlobalSecondaryIndexes' in desc['Table']:
             index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
             if len(index_desc) != 0:
-                index_status = index_desc[0]['IndexStatus']
                 time.sleep(0.1)
                 continue
         return

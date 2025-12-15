@@ -1021,7 +1021,7 @@ def test_transact_get_items_projection_expression(test_table_s):
 def test_transact_get_items_unused_expressionattributenames(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*unused.*#qq'):
-        ret = test_table_s.meta.client.transact_get_items(TransactItems=[
+        test_table_s.meta.client.transact_get_items(TransactItems=[
             { 'Get': {
                 'TableName': test_table_s.name,
                 'Key': {'p': p},
@@ -1034,7 +1034,7 @@ def test_transact_get_items_unused_expressionattributenames(test_table_s):
 def test_transact_get_items_missing_expressionattributenames(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*#zz'):
-        ret = test_table_s.meta.client.transact_get_items(TransactItems=[
+        test_table_s.meta.client.transact_get_items(TransactItems=[
             { 'Get': {
                 'TableName': test_table_s.name,
                 'Key': {'p': p},
@@ -1071,7 +1071,6 @@ def test_transact_get_items_100(test_table_s):
 # A transaction with 100 read actions is the limit, and 101 are not allowed:
 @pytest.mark.xfail(reason="#5064 - transactions not yet supported")
 def test_transact_get_items_101(test_table_s):
-    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*[tT]ransactItems.*100'):
         test_table_s.meta.client.transact_get_items(TransactItems=[
             { 'Get': {

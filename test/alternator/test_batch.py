@@ -152,7 +152,7 @@ def test_batch_write_nonduplicate_multiple_tables(test_table_s, test_table_s_2):
     p = random_string()
     # The batch_writer() function used in previous tests can't write to more
     # than one table. So we use the lower level interface boto3 gives us.
-    reply = test_table_s.meta.client.batch_write_item(RequestItems = {
+    test_table_s.meta.client.batch_write_item(RequestItems = {
         test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'a': 'hi'}}}],
         test_table_s_2.name: [{'PutRequest': {'Item': {'p': p, 'b': 'hello'}}}]
     })
@@ -222,7 +222,7 @@ def test_batch_write_multiple_tables(test_table_s, test_table):
     # We use the low-level batch_write_item API for lack of a more convenient
     # API (the batch_writer() API can only write to one table). At least it
     # spares us the need to encode the key's types...
-    reply = test_table.meta.client.batch_write_item(RequestItems = {
+    test_table.meta.client.batch_write_item(RequestItems = {
         test_table.name: [{'PutRequest': {'Item': {'p': p1, 'c': c1, 'a': 'hi'}}}],
         test_table_s.name: [{'PutRequest': {'Item': {'p': p2, 'b': 'hello'}}}]
     })
@@ -537,9 +537,8 @@ def test_batch_get_item_full_failure(scylla_only, dynamodb, rest_api, test_table
         for i in range(count):
             batch.put_item(Item={
                 'p': p, 'c': i, 'content': content})
-    responses = []
     to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
     # The error injection is permanent, so it will fire for each batch read.
     with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False):
         with pytest.raises(ClientError, match="InternalServerError"):
-            reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+            test_table_sn.meta.client.batch_get_item(RequestItems = to_read)

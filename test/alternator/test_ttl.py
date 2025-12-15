@@ -638,12 +638,10 @@ def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
         assert response['TimeToLiveSpecification'] == ttl_spec
         p = random_string()
         c = random_string()
-        l = random_string()
         # expiration one minute in the past, so item should expire ASAP.
         expiration = int(time.time()) - 60
         table.put_item(Item={'p': p, 'c': c, 'l': expiration})
         start_time = time.time()
-        gsi_was_alive = False
         while time.time() < start_time + max_duration:
             if 'Item' not in table.get_item(Key={'p': p, 'c': c}):
                 # test is done - and successful:
@@ -787,7 +785,7 @@ def test_ttl_expiration_long(dynamodb, waits_for_expiration):
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' },
                                { 'AttributeName': 'c', 'AttributeType': 'N' }]) as table:
         ttl_spec = {'AttributeName': 'expiration', 'Enabled': True}
-        response = table.meta.client.update_time_to_live(TableName=table.name,
+        table.meta.client.update_time_to_live(TableName=table.name,
             TimeToLiveSpecification=ttl_spec)
         with table.batch_writer() as batch:
             for p in range(N):

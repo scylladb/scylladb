@@ -369,7 +369,6 @@ def test_query_exclusivestartkey(test_table_sn):
         # The ExclusiveStartKey option must indicate both partition key and
         # sort key. Note that the Python driver further converts this map
         # into the correct format for the request (including the key types).
-        exclusivestartkey = { 'p': p, 'c': start }
         got_items = test_table_sn.query(
             KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
             ExclusiveStartKey= { 'p': p, 'c': start },

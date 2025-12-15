@@ -125,7 +125,6 @@ def test_basic_string_more_update(test_table):
     val1 = random_string()
     val2 = random_string()
     val3 = random_string()
-    val4 = random_string()
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a3': {'Value': val1, 'Action': 'PUT'}})
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a1': {'Value': val1, 'Action': 'PUT'}})
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a2': {'Value': val2, 'Action': 'PUT'}})

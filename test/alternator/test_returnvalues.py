@@ -99,7 +99,7 @@ def test_put_item_returnvalues_on_condition_check_failure(test_table_s):
     p = random_string()
     # Failed conditional on non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
-        ret=test_table_s.put_item(Item={'p': p, 's': 'cat'},
+        test_table_s.put_item(Item={'p': p, 's': 'cat'},
             ReturnValuesOnConditionCheckFailure='ALL_OLD',
             ConditionExpression='s = :v1',
             ExpressionAttributeValues={':v1' : 'dog'})
@@ -175,7 +175,7 @@ def test_delete_item_returnvalues_on_condition_check_failure(test_table_s):
     p = random_string()
     # Delete of non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
-        ret=test_table_s.delete_item(Key={'p': p},
+        test_table_s.delete_item(Key={'p': p},
             ReturnValuesOnConditionCheckFailure='ALL_OLD',
             ConditionExpression='s = :v1',
             ExpressionAttributeValues={':v1' : 'dog'})
@@ -566,7 +566,7 @@ def test_update_item_returnvalues_on_condition_check_failure(test_table_s):
     p = random_string()
     # Modification of non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
-        ret=test_table_s.update_item(Key={'p': p},
+        test_table_s.update_item(Key={'p': p},
             ReturnValuesOnConditionCheckFailure='ALL_OLD',
             ConditionExpression='s = :v1',
             UpdateExpression='SET s = :v2',

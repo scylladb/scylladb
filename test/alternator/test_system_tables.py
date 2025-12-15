@@ -56,7 +56,6 @@ def test_page_break_over_range_tombstone_asan(scylla_only, dynamodb, rest_api, c
         while True:
             response = client.scan(TableName=qualified_name, Limit=10, **args)
             pos = response.get('LastEvaluatedKey', None)
-            cnt = 0
             for i in response['Items']:
                 if i['cf_id'] == 'eee7eb26-a372-4eb4-aeaa-72f224cf0000':
                     items_found.append(i['schema_version'])
@@ -101,10 +100,9 @@ def test_fetch_from_system_tables(scylla_only, dynamodb, rest_api):
 def test_block_access_to_non_system_tables_with_virtual_interface(scylla_only, test_table_s, dynamodb):
     client = dynamodb.meta.client
     with pytest.raises(ClientError, match='ResourceNotFoundException.*{}'.format(internal_prefix)):
-        tables_response = client.scan(TableName="{}alternator_{}.{}".format(internal_prefix, test_table_s.name, test_table_s.name))
+        client.scan(TableName="{}alternator_{}.{}".format(internal_prefix, test_table_s.name, test_table_s.name))
 
 def test_block_creating_tables_with_reserved_prefix(scylla_only, dynamodb):
-    client = dynamodb.meta.client
     for wrong_name_postfix in ['', 'a', 'xxx', 'system_auth.roles', 'table_name']:
         with pytest.raises(ClientError, match=internal_prefix):
             dynamodb.create_table(TableName=internal_prefix+wrong_name_postfix,
@@ -200,7 +198,6 @@ def test_write_to_config(scylla_only, dynamodb):
 # Same test as above, just using the scylla_config_temporary() utility
 # function (also validating its correctness)
 def test_scylla_config_temporary(scylla_only, dynamodb):
-    tbl = '.scylla.alternator.system.config'
     parameter = 'query_tombstone_page_limit'
     old_val = scylla_config_read(dynamodb, parameter)
     new_val = old_val + "1"

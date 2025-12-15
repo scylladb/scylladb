@@ -376,7 +376,7 @@ def test_rbac_updateitem_read(dynamodb, cql, test_table_s):
                 assert ret['Attributes'] == {'p': p, 'v': v1}
                 # Just MODIFY permission, not SELECT permission, also allows
                 # us to do a read-modify-write expression:
-                ret = authorized(lambda: tab.update_item(Key={'p': p},
+                authorized(lambda: tab.update_item(Key={'p': p},
                     UpdateExpression='SET v =  v + :val',
                     ExpressionAttributeValues={':val': 1}))
     assert {'p': p, 'v': v2 + 1} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
@@ -903,7 +903,6 @@ def test_rbac_tagresource(dynamodb, cql):
         arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
         with new_role(cql) as (role, key):
             with new_dynamodb(dynamodb, role, key) as d:
-                tab = d.Table(table.name)
                 # Without ALTER permission, TagResource and UntagResource
                 # are refused
                 tags = [{'Key': 'hello', 'Value': 'dog'},
