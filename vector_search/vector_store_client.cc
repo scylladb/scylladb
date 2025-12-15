@@ -54,6 +54,7 @@ using operation_type = httpd::operation_type;
 using port_number = vector_search::vector_store_client::port_number;
 using primary_key = vector_search::primary_key;
 using primary_keys = vector_search::vector_store_client::primary_keys;
+using ann_results = vector_search::vector_store_client::ann_results;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
 using uri = vector_search::uri;
 
@@ -137,11 +138,19 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
+auto distance_from_json(rjson::value const& item) -> std::expected<float, ann_error> {
+    if (!item.IsNumber()) {
+        vslogger.error("Vector Store returned invalid JSON: 'distances' array element is not a number");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    return item.GetFloat();
+}
+
 auto write_ann_json(vs_vector vs_vector, limit limit) -> json_content {
     return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
 }
 
-auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
+auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<ann_results, ann_error> {
     if (!json.HasMember("primary_keys")) {
         vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
         return std::unexpected{service_reply_format_error{}};
@@ -161,10 +170,11 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         vslogger.error("Vector Store returned invalid JSON: 'distances' is not an array");
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& distances_arr = json["distances"].GetArray();
+    auto const& distances_arr = distances_json.GetArray();
 
     auto size = distances_arr.Size();
-    auto keys = primary_keys{};
+    ann_results results;
+    results.reserve(size);
     for (auto idx = 0U; idx < size; ++idx) {
         auto pk = pk_from_json(keys_json, idx, schema);
         if (!pk) {
@@ -174,9 +184,13 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         if (!ck) {
             return std::unexpected{ck.error()};
         }
-        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck});
+        auto distance = distance_from_json(distances_arr[idx]);
+        if (!distance) {
+            return std::unexpected{distance.error()};
+        }
+        results.push_back({primary_key{dht::decorate_key(*schema, *pk), *ck}, *distance});
     }
-    return std::move(keys);
+    return results;
 }
 
 bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
@@ -298,7 +312,7 @@ struct vector_store_client::impl {
     }
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>> {
+            -> future<std::expected<ann_results, ann_error>> {
         if (is_disabled()) {
             vslogger.error("Disabled Vector Store while calling ann");
             co_return std::unexpected{disabled{}};
@@ -378,7 +392,7 @@ auto vector_store_client::is_disabled() const -> bool {
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
-        -> future<std::expected<primary_keys, ann_error>> {
+        -> future<std::expected<ann_results, ann_error>> {
     return _impl->ann(keyspace, name, schema, vs_vector, limit, as);
 }
 

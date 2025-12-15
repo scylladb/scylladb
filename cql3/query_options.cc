@@ -18,7 +18,7 @@ namespace cql3 {
 const cql_config default_cql_config(cql_config::default_tag{});
 
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{
-    -1, {}, db::consistency_level::SERIAL, api::missing_timestamp, service::node_local_only::no};
+    -1, {}, db::consistency_level::SERIAL, api::missing_timestamp, service::node_local_only::no, std::nullopt, {}};
 
 thread_local query_options query_options::DEFAULT{default_cql_config,
     db::consistency_level::ONE, std::nullopt,
@@ -117,6 +117,18 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
         query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
 
 }
+
+query_options::query_options(std::unique_ptr<query_options> qo, statements::raw::select_statement::prepared_ann_ordering_type ann_ordering, vector_search::vector_store_client::ann_results ann_results)
+        : query_options(qo->_cql_config,
+        qo->_consistency,
+        std::move(qo->_names),
+        std::move(qo->_values),
+        std::move(qo->_value_views),
+        std::move(qo->_unset),
+        qo->_skip_metadata,
+        query_options::specific_options{qo->_options.page_size, qo->_options.state, qo->_options.serial_consistency, qo->_options.timestamp, qo->_options.node_local_only, std::move(ann_ordering), std::move(ann_results)}) {
+}
+
 
 query_options::query_options(cql3::raw_value_vector_with_unset values)
     : query_options(
