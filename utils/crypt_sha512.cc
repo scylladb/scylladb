@@ -224,7 +224,9 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 	char *p;
 
 	/* reject large keys */
-	for (i = 0; i <= KEY_MAX && key[i]; i++);
+	for (i = 0; i <= KEY_MAX && key[i]; i++) {
+		/* iterate to find key length */
+	}
 	if (i > KEY_MAX)
 		co_return nullptr;
 	klen = i;
