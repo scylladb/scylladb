@@ -12,7 +12,6 @@
 
 import pytest
 from .util import new_test_table, unique_key_int, config_value_context
-from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

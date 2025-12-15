@@ -12,9 +12,9 @@ import pytest
 import os
 from contextlib import ExitStack
 from . import rest_api
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
+from cassandra.protocol import InvalidRequest, ConfigurationException, ReadFailure
 from cassandra.query import SimpleStatement
-from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
+from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order
 
 from .util import new_test_table, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context
 

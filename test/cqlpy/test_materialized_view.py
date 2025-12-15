@@ -5,11 +5,10 @@
 # Tests for materialized views
 
 import time
-import re
 import pytest
 from . import rest_api
 
-from .util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
+from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement

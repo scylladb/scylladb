@@ -7,10 +7,8 @@
 #############################################################################
 
 import pytest
-import re
-import time
 from cassandra.protocol import InvalidRequest
-from .util import unique_name, unique_key_int, unique_key_string, new_test_table, new_type, new_function
+from .util import unique_name, unique_key_int, new_test_table, new_type, new_function
 
 
 @pytest.fixture(scope="module")

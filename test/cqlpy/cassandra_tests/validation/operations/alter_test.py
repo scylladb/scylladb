@@ -20,6 +20,7 @@
 # limitations under the License.
 
 from ...porting import *
+from cassandra.protocol import ConfigurationException
 
 def testDropColumnAsPreparedStatement(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:

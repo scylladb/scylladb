@@ -7,7 +7,6 @@
 #############################################################################
 
 import pytest
-import re
 from contextlib import contextmanager
 from cassandra.protocol import InvalidRequest
 from .util import unique_name, new_test_table, new_secondary_index, new_function, is_scylla

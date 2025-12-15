@@ -4,11 +4,9 @@
 
 # Tests for USING SERVICE LEVEL extension
 
-from .util import new_test_keyspace, unique_name, unique_key_int
+from .util import unique_name
 import pytest
-from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException
-from cassandra.cluster import NoHostAvailable
-from cassandra.util import Duration
+from cassandra.protocol import InvalidRequest, ReadTimeout
 
 # yields list of (service level name, bool if non-zero timeout)
 @pytest.fixture(scope="module")

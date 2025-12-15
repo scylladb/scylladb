@@ -7,7 +7,7 @@
 
 import pytest
 from .util import new_test_table
-from cassandra.protocol import InvalidRequest, SyntaxException
+from cassandra.protocol import SyntaxException
 
 
 # table1 is just there so we can execute bad queries against it.

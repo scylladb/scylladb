@@ -7,7 +7,7 @@
 
 from ...porting import *
 
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from cassandra.util import OrderedMap
 
 

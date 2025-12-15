@@ -41,7 +41,7 @@
 # * testDroppingIndexInvalidatesPreparedStatements
 
 from ...porting import *
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID
 
 # Test creating and dropping an index with the specified name.
