@@ -211,7 +211,7 @@ private:
                 output_ck_raw_values.emplace_back(bytes{});
             }
         }
-        if (underlying_ck_raw_values.empty()) {
+        if (pos.region() != partition_region::clustered) {
             output_ck_raw_values.push_back(bytes{});
         } else {
             output_ck_raw_values.push_back(data_value(static_cast<int8_t>(pos.get_bound_weight())).serialize_nonnull());
