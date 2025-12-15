@@ -735,9 +735,11 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         co_await auth_cache().load_all();
     }
 
-    co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
-        sl_controller.upgrade_to_v2(_qp, _group0->client());
-    });
+    if (!_sl_controller.local().is_v2()) {
+        co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
+            sl_controller.upgrade_to_v2(_qp, _group0->client());
+        });
+    }
 
     // the view_builder is migrated to v2 in view_builder::migrate_to_v2.
     // it writes a v2 version mutation as topology_change, then we get here
