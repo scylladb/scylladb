@@ -7252,29 +7252,79 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         });
     }
 
-    while (true) {
-        group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+    if (enabled) {
+        // Enabling is immediate, no need to wait for idle topology or use a request
+        while (true) {
+            group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
-        utils::chunked_vector<canonical_mutation> updates;
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-            .set_tablet_balancing_enabled(enabled)
-            .build()));
+            utils::chunked_vector<canonical_mutation> updates;
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                .set_tablet_balancing_enabled(true)
+                .build()));
 
-        sstring reason = format("Setting tablet balancing to {}", enabled);
-        rtlogger.info("{}", reason);
-        topology_change change{std::move(updates)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
-            break;
-        } catch (group0_concurrent_modification&) {
-            rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
+            sstring reason = "Enabling tablet balancing";
+            rtlogger.info("{}", reason);
+            topology_change change{std::move(updates)};
+            group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+            try {
+                co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+                break;
+            } catch (group0_concurrent_modification&) {
+                rtlogger.debug("set_tablet_balancing_enabled(true): concurrent modification, retrying");
+            }
         }
-    }
+    } else {
+        // Disabling is done via topology request to interrupt tablet scheduler
+        utils::UUID request_id;
 
-    while (_topology_state_machine._topology.is_busy()) {
-        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-        co_await _topology_state_machine.event.when();
+        while (true) {
+            group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+            auto curr_req = _topology_state_machine._topology.global_request;
+            if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::disable_tablet_balancing) {
+                throw std::runtime_error{
+                    "set_tablet_balancing_enabled: a different topology request is already pending, try again later"};
+            }
+
+            utils::chunked_vector<canonical_mutation> muts;
+            topology_mutation_builder builder(guard.write_timestamp());
+            if (_feature_service.topology_global_request_queue) {
+                request_id = guard.new_group0_state_id();
+                builder.queue_global_topology_request_id(request_id);
+                topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+                rtbuilder.set("done", false)
+                         .set("start_time", db_clock::now())
+                         .set("request_type", global_topology_request::disable_tablet_balancing);
+                muts.push_back(rtbuilder.build());
+            } else {
+                builder.set_global_topology_request(global_topology_request::disable_tablet_balancing);
+            }
+            muts.push_back(builder.build());
+            
+            sstring reason = "Disabling tablet balancing";
+            rtlogger.info("{}", reason);
+            topology_change change{std::move(muts)};
+            group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+
+            try {
+                co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+                break;
+            } catch (group0_concurrent_modification&) {
+                rtlogger.debug("set_tablet_balancing_enabled(false): concurrent modification, retrying");
+            }
+        }
+
+        // Wait for the request to be processed
+        if (_feature_service.topology_global_request_queue) {
+            co_await _topology_state_machine.event.when([this, request_id] {
+                auto& queue = _topology_state_machine._topology.global_requests_queue;
+                return std::find(queue.begin(), queue.end(), request_id) == queue.end();
+            });
+        } else {
+            co_await _topology_state_machine.event.when([this] {
+                return _topology_state_machine._topology.global_request != global_topology_request::disable_tablet_balancing;
+            });
+        }
     }
 }
 
