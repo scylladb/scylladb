@@ -375,7 +375,7 @@ seastar::future<const char *> __crypt_sha512(const char *key, const char *settin
 	p = co_await sha512crypt(key, setting, output);
 	/* self test and stack cleanup */
 	q = co_await sha512crypt(testkey, testsetting, testbuf);
-	if (!p || q != testbuf || memcmp(testbuf, testhash, sizeof testhash))
+	if (!p || q != testbuf || memcmp(testbuf, testhash, strlen(testhash)))
 		co_return "*";
 	co_return p;
 }
