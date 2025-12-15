@@ -22,7 +22,11 @@ class per_partition_rate_limit_options;
 struct schema_builder {
 public:
     enum class compact_storage { no, yes };
-    using static_configurator = noncopyable_function<void(const sstring& ks_name, const sstring& cf_name, schema_static_props&)>;
+    // "schema initializer" - Configures default values for schema properties.
+    using schema_initializer = noncopyable_function<void(schema_builder&)>;
+    struct schema_initializers_checkpoint {
+        size_t size;
+    };
 private:
     struct from_hash {};
     struct from_time {};
@@ -35,7 +39,7 @@ private:
     std::optional<schema_ptr> _cdc_schema;
     schema_static_props _static_props;
     schema_builder(const schema::raw_schema&);
-    static std::vector<static_configurator>& static_configurators();
+    static std::vector<schema_initializer>& schema_initializers();
 public:
     schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<table_id> = { },
@@ -52,7 +56,20 @@ public:
             sstring comment = "");
     schema_builder(const schema_ptr);
 
-    static int register_static_configurator(static_configurator&& configurator);
+    // Registration is not thread-safe (modifies a global static vector).
+    // Call only during init, before starting any services that use `schema_builder`.
+    static int register_schema_initializer(schema_initializer&& initializer);
+    // (For unit testing)
+    // Checkpoint/Restore for the global schema-initializer list.
+    // Captures the current list size; restoring truncates the list back to
+    // that size. Useful when some initializer depends on runtime state that
+    // needs to be reset for the purposes of a test.
+    // Typical usage:
+    //   auto cp = capture_schema_initializers_checkpoint();
+    //   register_schema_initializer(...);
+    //   restore_schema_initializers_checkpoint(cp);
+    static schema_initializers_checkpoint capture_schema_initializers_checkpoint();
+    static void restore_schema_initializers_checkpoint(schema_initializers_checkpoint checkpoint);
 
     void set_properties(schema::user_properties);
 
@@ -235,6 +252,20 @@ public:
     }
 
     schema_builder& set_tablet_options(std::map<sstring, sstring>&& hints);
+
+    // Setters for static properties.
+    void set_use_null_sharder(bool enabled = true) {
+        _static_props.use_null_sharder = enabled;
+    }
+    void set_wait_for_sync_to_commitlog(bool enabled = true) {
+        _static_props.wait_for_sync_to_commitlog = enabled;
+    }
+    void enable_schema_commitlog() {
+        _static_props.enable_schema_commitlog();
+    }
+    void set_is_group0_table(bool enabled = true) {
+        _static_props.is_group0_table = enabled;
+    }
 
     class default_names {
     public:

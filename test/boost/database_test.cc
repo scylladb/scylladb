@@ -1685,9 +1685,9 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "388"} }))
             .build();
 
-    schema_builder::register_static_configurator([] (const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        if (ks_name == "test" && cf_name == "table_gc_mode_group0") {
-            props.is_group0_table = true;
+    schema_builder::register_schema_initializer([] (schema_builder& builder) {
+        if (builder.ks_name() == "test" && builder.cf_name() == "table_gc_mode_group0") {
+            builder.set_is_group0_table(true);
         }
     });
     auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
