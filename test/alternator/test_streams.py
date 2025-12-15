@@ -735,7 +735,6 @@ def compare_events(expected_events, output, mode, expected_region):
             assert not 'NewImage' in record
             if expected_old_image == None:
                 assert not 'OldImage' in record
-                pass
             else:
                 old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
                 assert expected_old_image == old_image
