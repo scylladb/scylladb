@@ -197,13 +197,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.build_modes = get_modes_to_run(config)
+    repeat = int(config.getoption("--repeat"))
 
     if testpy_run_id := config.getoption("--run_id"):
-        if config.getoption("--repeat") != 1:
+        if repeat != 1:
             raise RuntimeError("Can't use --run_id and --repeat simultaneously.")
         config.run_ids = (testpy_run_id,)
     else:
-        config.run_ids = tuple(range(1, config.getoption("--repeat") + 1))
+        config.run_ids = tuple(range(1, repeat + 1))
 
 
 @pytest.hookimpl(wrapper=True)
