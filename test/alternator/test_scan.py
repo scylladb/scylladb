@@ -220,7 +220,6 @@ def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
 # without returning items at all.
 def test_scan_select(filled_test_table):
     test_table, items = filled_test_table
-    got_items = full_scan(test_table)
     # By default, a scan returns all the items, with all their attributes:
     # query returns all attributes:
     got_items = full_scan(test_table)
