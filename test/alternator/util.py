@@ -8,7 +8,6 @@ import string
 import random
 import collections
 import time
-import re
 import requests
 import json
 import pytest

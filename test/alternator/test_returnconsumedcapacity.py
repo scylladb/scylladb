@@ -7,7 +7,6 @@
 import pytest
 from botocore.exceptions import ClientError
 from test.alternator.util import random_string, random_bytes, new_test_table
-import decimal
 from decimal import Decimal
 KB = 1024
 

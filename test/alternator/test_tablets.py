@@ -14,10 +14,9 @@
 # will probably go away eventually.
 
 import pytest
-import boto3
 from botocore.exceptions import ClientError
 
-from .util import new_test_table, wait_for_gsi, random_string, full_scan, full_query, multiset, scylla_config_read, scylla_config_temporary
+from .util import new_test_table, scylla_config_read, scylla_config_temporary
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)

@@ -21,7 +21,7 @@ from functools import cache
 
 import re
 
-from .util import is_aws, unique_table_name, random_string, new_test_table
+from .util import unique_table_name, random_string, new_test_table
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
 

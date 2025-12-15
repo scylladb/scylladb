@@ -17,8 +17,8 @@
 import pytest
 from botocore.exceptions import ClientError
 import re
-import time, datetime
-from test.alternator.util import multiset, create_test_table, new_test_table
+import time
+from test.alternator.util import multiset, new_test_table
 
 # Test that DescribeTable correctly returns the table's name and state
 def test_describe_table_basic(test_table):

@@ -9,7 +9,6 @@
 # various cases of that issue.
 
 import pytest
-import time
 from botocore.exceptions import ClientError
 from .util import random_string, full_scan, full_query, multiset, \
     new_test_table, wait_for_gsi, wait_for_gsi_gone

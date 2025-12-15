@@ -5,13 +5,9 @@
 import pytest
 from test.alternator.test_metrics import metrics, get_metrics, check_increases_metric
 from contextlib import contextmanager
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT, ConsistencyLevel
-from cassandra.policies import RoundRobinPolicy
 import time
-import re
 
-from .util import random_string, is_aws, unique_table_name
+from .util import random_string, unique_table_name
 from .test_cql_rbac import new_role, new_dynamodb
 
 # new_service_level() is a context manager for temporarily creating a new
