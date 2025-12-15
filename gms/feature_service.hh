@@ -177,6 +177,7 @@ public:
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
     gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
     gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
+    gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
