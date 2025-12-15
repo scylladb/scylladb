@@ -491,7 +491,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     if (!opts.enabled()) {
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
-        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+        co_return rjson::print(std::move(ret));
     }
 
     // TODO: label
@@ -502,8 +502,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
 
-    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
-
+    std::map<db_clock::time_point, cdc::streams_version> topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
         auto e = topologies.end();
         auto prev = e;
         auto shards = rjson::empty_array();
@@ -617,8 +616,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         rjson::add(stream_desc, "Shards", std::move(shards));
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
             
-        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
-    });
+        co_return rjson::print(std::move(ret));
 }
 
 enum class shard_iterator_type {
@@ -898,8 +896,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
-    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
+    service::storage_proxy::coordinator_query_result qr = co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
         cql3::selection::result_set_builder builder(*selection, gc_clock::now());
         query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 
@@ -1035,13 +1032,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
             // will notice end end of shard and not return NextShardIterator.
             rjson::add(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
-            return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+            co_return rjson::print(std::move(ret));
         }
 
         // ugh. figure out if we are and end-of-shard
         auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
 
-        return _sdks.cdc_current_generation_timestamp({ normal_token_owners }).then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
+        db_clock::time_point ts = co_await _sdks.cdc_current_generation_timestamp({ normal_token_owners });
             auto& shard = iter.shard;            
 
             if (shard.time < ts && ts < high_ts) {
@@ -1059,11 +1056,9 @@ future<executor::request_return_type> executor::get_records(client_state& client
             }
             _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
             if (is_big(ret)) {
-                return make_ready_future<executor::request_return_type>(make_streamed(std::move(ret)));
+                co_return make_streamed(std::move(ret));
             }
-            return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
-        });
-    });
+            co_return rjson::print(std::move(ret));
 }
 
 bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp) {
