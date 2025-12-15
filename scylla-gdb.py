@@ -818,6 +818,9 @@ class std_list:
                 self._node = node_header['_M_next']
                 self._end = node_header['_M_next']['_M_prev']
 
+            def __iter__(self):
+                return self
+
             def __next__(self):
                 if self._node == self._end:
                     raise StopIteration()
