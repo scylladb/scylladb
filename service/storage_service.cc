@@ -7531,7 +7531,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                 &&  _join_node_response_done.failed()) {
             // The topology coordinator accepted the node that was rejected before or failed while handling
             // the response. Inform the coordinator about it so it moves the node to the left state.
-            throw _join_node_response_done.get_shared_future().get_exception();
+            co_await coroutine::return_exception_ptr(_join_node_response_done.get_shared_future().get_exception());
         }
 
         co_return join_node_response_result{};
