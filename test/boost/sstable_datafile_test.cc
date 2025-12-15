@@ -3388,8 +3388,11 @@ SEASTAR_TEST_CASE(test_non_full_and_empty_row_keys) {
                 .with_typed_column<bytes>("partition_key", [&] (const bytes& v) {
                     return partition_key::from_bytes(v).equal(*schema, dk.key());
                 })
-                .with_typed_column<bytes>("clustering_key", [&] (const bytes& v) {
-                    return clustering_key::from_bytes(v).equal(*schema, ck);
+                .with_typed_column<bytes>("clustering_key", [&] (const bytes* v) {
+                    if (!v) {
+                        return ck.is_empty();
+                    }
+                    return clustering_key::from_bytes(*v).equal(*schema, ck);
                 })
                 .with_typed_column<sstring>("mutation_fragment_kind", "clustering row")
                 .with_typed_column<bytes>("frozen_mutation_fragment", [&] (const bytes& v) {

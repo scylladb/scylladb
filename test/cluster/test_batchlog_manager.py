@@ -56,7 +56,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
 
         await manager.server_stop(servers[1].server_id)
 
-        batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=hosts[0]))[0].count
+        batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=hosts[0]))[0].count
         assert batchlog_row_count > 0
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "skip_batch_replay") for s in servers if s != servers[1]])
@@ -72,7 +72,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
         await s0_log.wait_for('Finished replayAllFailedBatches', timeout=60, from_mark=s0_mark)
 
         async def batchlog_empty() -> bool:
-            batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=hosts[0]))[0].count
+            batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=hosts[0]))[0].count
             if batchlog_row_count == 0:
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
@@ -120,7 +120,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "skip_batch_replay") for s in servers if s != servers[1]])
 
-        batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=hosts[0]))[0].count
+        batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=hosts[0]))[0].count
         assert batchlog_row_count > 0
 
         # The batch is replayed while server 1 is down
@@ -136,7 +136,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         async def batchlog_empty() -> bool:
-            batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=hosts[0]))[0].count
+            batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=hosts[0]))[0].count
             if batchlog_row_count == 0:
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
@@ -237,7 +237,7 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
     host1, _ = hosts
 
     async def get_batchlog_row_count():
-        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=host1)
+        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=host1)
         row = rows[0]
         assert hasattr(row, "count")
 
@@ -313,12 +313,14 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
     9. Verify that the row is deleted and there is no data resurrection.
     """
 
+    write_timeout_ms = 2000
+
     cmdline=['--enable-cache', '0',
              "--hinted-handoff-enabled", "0",
              "--logger-log-level", "batchlog_manager=trace:repair=debug",
              "--repair-hints-batchlog-flush-cache-time-in-ms", "1000000" if repair_cache else "0"]
     config = {"error_injections_at_startup": ["short_batchlog_manager_replay_interval"],
-              "write_request_timeout_in_ms": 2000,
+              "write_request_timeout_in_ms": write_timeout_ms,
               'group0_tombstone_gc_refresh_interval_in_ms': 1000,
               'tablets_mode_for_new_keyspaces': 'disabled'
     }
@@ -330,7 +332,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
     host1, _ = hosts
 
     async def get_batchlog_row_count():
-        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=host1)
+        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=host1)
         row = rows[0]
         assert hasattr(row, "count")
 
@@ -376,7 +378,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
 
         await cql.run_async(f"DELETE FROM {ks}.my_table WHERE pk=0 AND ck=0")
 
-        time.sleep(2)
+        await asyncio.sleep((write_timeout_ms // 1000) * 2 + 1)
 
         batchlog_row_count = await get_batchlog_row_count()
         assert batchlog_row_count > 0
@@ -386,7 +388,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
 
         # Once the mutations are in the batchlog, waiting to be replayed, we can disable this.
         await disable_injection("storage_proxy_fail_remove_from_batchlog")
-        await enable_injection("batch_replay_throw")
+        await enable_injection("storage_proxy_fail_replay_batch")
         # Once the table is dropped, we can resume the replay. The bug can
         # be triggered from now on (if it's present).
         await disable_injection("skip_batch_replay")
@@ -402,7 +404,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
         await manager.api.keyspace_compaction(s1.ip_addr, ks)
         await manager.api.keyspace_compaction(s2.ip_addr, ks)
 
-        await disable_injection("batch_replay_throw")
+        await disable_injection("storage_proxy_fail_replay_batch")
 
         await s1_log.wait_for("Replaying batch", timeout=60, from_mark=s1_mark)
         await s1_log.wait_for("Finished replayAllFailedBatches", timeout=60, from_mark=s1_mark)
