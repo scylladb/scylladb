@@ -32,10 +32,15 @@ namespace db {
 class system_keyspace;
 
 struct batchlog_manager_config {
-    std::chrono::duration<double> write_request_timeout;
+    db_clock::duration replay_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
     std::chrono::milliseconds delay = std::chrono::milliseconds(0);
     unsigned replay_cleanup_after_replays;
+};
+
+enum class batchlog_stage : int8_t {
+    initial,
+    failed_replay
 };
 
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
@@ -57,7 +62,7 @@ private:
 
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
-    db_clock::duration _write_request_timeout;
+    db_clock::duration _replay_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
     unsigned _replay_cleanup_after_replays = 100;
@@ -69,7 +74,21 @@ private:
 
     gc_clock::time_point _last_replay;
 
+<<<<<<< HEAD
     future<> replay_all_failed_batches(post_replay_cleanup cleanup);
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
+=======
+    // Was the v1 -> v2 migration already done since last restart?
+    // The migration is attempted once after each restart. This is redundant but
+    // keeps thing simple. Once no upgrade path exists from a ScyllaDB version
+    // which can still produce v1 entries, this migration code can be removed.
+    bool _migration_done = false;
+
+    future<> maybe_migrate_v1_to_v2();
+
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -83,9 +102,12 @@ public:
     future<> do_batch_log_replay(post_replay_cleanup cleanup);
 
     future<size_t> count_all_batches() const;
-    db_clock::duration get_batch_log_timeout() const;
     gc_clock::time_point get_last_replay() const {
         return _last_replay;
+    }
+
+    const stats& stats() const {
+        return _stats;
     }
 private:
     future<> batchlog_replay_loop();

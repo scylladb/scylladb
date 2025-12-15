@@ -21,28 +21,43 @@
 class columns_assertions {
     const cql3::metadata& _metadata;
     const std::vector<managed_bytes_opt>& _columns;
+    std::source_location _loc;
 
     columns_assertions& do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func);
 
     void fail(const sstring& msg);
 
 public:
-    columns_assertions(const cql3::metadata& metadata, const std::vector<managed_bytes_opt>& columns)
-        : _metadata(metadata), _columns(columns)
+    columns_assertions(const cql3::metadata& metadata, const std::vector<managed_bytes_opt>& columns, std::source_location loc)
+        : _metadata(metadata), _columns(columns), _loc(loc)
     { }
 
     columns_assertions& with_raw_column(const char* name, std::function<bool(managed_bytes_view)> predicate);
     columns_assertions& with_raw_column(const char* name, managed_bytes_view value);
 
     template <typename T>
-    columns_assertions& with_typed_column(const char* name, std::function<bool(const T& value)> predicate) {
+    columns_assertions& with_typed_column(const char* name, std::function<bool(const T* value)> predicate) {
         return do_with_raw_column(name, [this, name, predicate] (data_type type, managed_bytes_view value) {
             if (type != data_type_for<T>()) {
                 fail(seastar::format("Column {} is not of type {}, but of type {}", name, data_type_for<T>()->name(), type->name()));
             }
-            if (!predicate(value_cast<T>(type->deserialize(value)))) {
+            std::optional<T> t_opt;
+            if (!value.empty()) {
+                t_opt.emplace(value_cast<T>(type->deserialize(value)));
+            }
+            if (!predicate(t_opt.has_value() ? &t_opt.value() : nullptr)) {
                 fail(seastar::format("Column {} failed predicate check: value = {}", name, value));
             }
+        });
+    }
+
+    template <typename T>
+    columns_assertions& with_typed_column(const char* name, std::function<bool(const T& value)> predicate) {
+        return with_typed_column<T>(name, [this, name, predicate] (const T* value) {
+            if (!value) {
+                fail(seastar::format("Column {} is null", name));
+            }
+            return predicate(*value);
         });
     }
 
@@ -59,9 +74,11 @@ public:
 
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;
+    std::source_location _loc;
 public:
-    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows);
+    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc);
     rows_assertions with_size(size_t size);
+    rows_assertions with_size(std::function<bool(size_t)> predicate);
     rows_assertions is_empty();
     rows_assertions is_not_empty();
     rows_assertions with_column_types(std::initializer_list<data_type> column_types);
@@ -75,18 +92,21 @@ public:
 
     columns_assertions with_columns_of_row(size_t row_index);
 
+    rows_assertions& assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func);
+
     rows_assertions is_null();
     rows_assertions is_not_null();
 };
 
 class result_msg_assertions {
     shared_ptr<cql_transport::messages::result_message> _msg;
+    std::source_location _loc;
 public:
-    result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg);
+    result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc);
     rows_assertions is_rows();
 };
 
-result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg);
+result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc = std::source_location::current());
 
 template<typename T>
 void assert_that_failed(future<T>& f)
