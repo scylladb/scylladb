@@ -190,7 +190,7 @@ future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_pro
     co_return vresult;
 }
 
-void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) {
+void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
     }
@@ -209,8 +209,9 @@ void batch_statement::verify_batch_size(query_processor& qp, const utils::chunke
             for (auto&& m : mutations) {
                 ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
-            return seastar::format("Batch modifying {:d} partitions in {} is of size {:d} bytes, exceeding specified {} threshold of {:d} by {:d}.",
-                    mutations.size(), fmt::join(ks_cf_pairs, ", "), size, type, threshold, size - threshold);
+            const auto batch_type = _type == type::LOGGED ? "Logged" : "Unlogged";
+            return seastar::format("{} batch modifying {:d} partitions in {} is of size {:d} bytes, exceeding specified {} threshold of {:d} by {:d}.",
+                    batch_type, mutations.size(), fmt::join(ks_cf_pairs, ", "), size, type, threshold, size - threshold);
         };
         if (size > fail_threshold) {
             _logger.error("{}", error("FAIL", fail_threshold).c_str());

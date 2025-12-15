@@ -136,7 +136,7 @@ def table_batch(cql, test_keyspace):
 
 def test_warning_message_for_batch_exceeding_warning_threshold(cql, table_batch, logfile):
     """Batch size above threshold should add warning message to scylla logs"""
-    warning_pattern = r"WARN .+BatchStatement - Batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
+    warning_pattern = r"WARN .+BatchStatement - Logged batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
                       r"exceeding specified WARN threshold of"
     cql.execute(generate_big_batch(table_batch, 256))
     wait_for_log(logfile, warning_pattern, timeout=1)
@@ -147,7 +147,7 @@ def test_error_message_for_batch_exceeding_fail_threshold(cql, table_batch, logf
     try:
         cql.execute(generate_big_batch(table_batch, 1025))
     except InvalidRequest:
-        err_pattern = r"ERROR .+ BatchStatement - Batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
+        err_pattern = r"ERROR .+ BatchStatement - Logged batch modifying [\d]+ partitions in [_\w.]+ is of size [\d]+ bytes, "\
                           r"exceeding specified FAIL threshold of"
         wait_for_log(logfile, err_pattern, timeout=1)
     else:
