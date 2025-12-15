@@ -31,7 +31,10 @@ struct sha512 {
 	uint8_t buf[128]; /* message block buffer */
 };
 
-static uint64_t ror(uint64_t n, int k) { return (n >> k) | (n << (64-k)); }
+static uint64_t ror(uint64_t n, int k) { 
+    int s = k & 63;
+    return (n >> s) | (n << ((64 - s) & 63));
+}
 #define Ch(x,y,z)  (z ^ (x & (y ^ z)))
 #define Maj(x,y,z) ((x & y) | (z & (x | y)))
 #define S0(x)      (ror(x,28) ^ ror(x,34) ^ ror(x,39))
