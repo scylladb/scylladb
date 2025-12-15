@@ -114,6 +114,67 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
     result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
     assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [DRIVER_SL_NAME] + [sl_v2])
 
+async def validate_connections_scheduling_group(cql, hosts, username, scheduling_group):
+    def connections_ready(host):
+        async def func():
+            rows = await cql.run_async(f"SELECT connection_stage, username, scheduling_group FROM system.clients WHERE username='{username}' ALLOW FILTERING", host=host)
+            if len(rows) == 0:
+                return None
+            connections_ready = [r.connection_stage == "READY" for r in rows]
+            correct_scheduling_group = [r.scheduling_group == scheduling_group for r in rows]
+            return all(connections_ready) and all(correct_scheduling_group)
+        return func
+
+    for host in hosts:
+        await wait_for(connections_ready(host), time.time() + 60)
+
+# Reproduces SCYLLADB-90
+@pytest.mark.asyncio
+@skip_mode('release', "error injections are not supported in release mode")
+async def test_service_levels_cache_is_updated_after_upgrade(manager: ManagerClient):
+    # Force the first node to start in legacy mode
+    cfg = {
+        **auth_config,
+        'force_gossip_topology_changes': True,
+        'tablets_mode_for_new_keyspaces': 'disabled',
+        'service_levels_interval_ms': 100,
+        'error_injections_at_startup': ['skip_driver_service_level_creation']
+    }
+
+    servers = [await manager.server_add(config=cfg)]
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
+    # using gossiper-based node operations
+    cfg.pop('force_gossip_topology_changes')
+
+    servers += [await manager.server_add(config=cfg) for _ in range(2)]
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    role_name = f"role_{unique_name()}"
+    sl_name = f"sl_{unique_name()}"
+    await cql.run_async(f"CREATE ROLE {role_name} WITH password='{role_name}' AND login=true AND superuser=true")
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl_name}")
+    # Sleep to allow legacy service level update loop to refresh the cache
+    await asyncio.sleep(1)
+
+    # Create user connection before doing an upgrade
+    await cql.run_async(f"ATTACH SERVICE LEVEL {sl_name} TO {role_name}")
+    cluster = manager.con_gen([s.ip_addr for s in servers], manager.port, manager.use_ssl, PlainTextAuthProvider(username=role_name, password=role_name))
+    user_session = cluster.connect()
+    await validate_connections_scheduling_group(cql, hosts, role_name, f'sl:{sl_name}')
+
+    # Trigger update to raft topology
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    # Create new connection after the upgrade to consistent topology is completed
+    new_user_session = cluster.connect()
+    await validate_connections_scheduling_group(cql, hosts, role_name, f'sl:{sl_name}')
+
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
     # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
