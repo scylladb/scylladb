@@ -2601,9 +2601,6 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
     auto flush_or_clear = [should_flush] (replica::table& cf) {
             if (should_flush && cf.can_flush()) {
-                // TODO:
-                // this is not really a guarantee at all that we've actually
-                // gotten all things to disk. Again, need queue-ish or something.
                 return cf.flush();
             } else {
                 return cf.clear();
