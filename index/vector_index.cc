@@ -19,6 +19,7 @@
 #include "types/concrete_types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
+#include <boost/algorithm/string.hpp>
 
 
 namespace secondary_index {
@@ -41,6 +42,24 @@ static void validate_positive_option(const sstring& value) {
     }
 }
 
+template <float MIN, float MAX>
+static void validate_factor(const sstring& value) {
+    float num_value;
+    size_t len;
+    try {
+        num_value = std::stof(value, &len);
+    } catch (...) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+    }
+    if (len != value.size()) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+    }
+
+    if (num_value < MIN || num_value > MAX) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range [{} - {}]", value, MIN, MAX));
+    }
+}
+
 static void validate_similarity_function(const sstring& value) {
     sstring similarity_function = value;
     std::transform(similarity_function.begin(), similarity_function.end(), similarity_function.begin(), ::tolower);
@@ -49,12 +68,35 @@ static void validate_similarity_function(const sstring& value) {
     }
 }
 
+static void validate_quantization(const sstring& value) {
+    if (!(boost::iequals(value, "f32") || boost::iequals(value, "f16")
+         || boost::iequals(value, "bf16") || boost::iequals(value, "i8") || boost::iequals(value, "b1"))) {
+        throw exceptions::invalid_request_exception(format("Unsupported quantization type: {}", value));
+    }
+}
+
 const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
         {"similarity_function", validate_similarity_function},
         {"maximum_node_connections", validate_positive_option<512>},
         {"construction_beam_width", validate_positive_option<4096>},
         {"search_beam_width", validate_positive_option<4096>},
+        {"quantization", validate_quantization},
+        {"rescoring_factor", validate_factor<1.0f, 100.0f>},
     };
+
+
+bool vector_index::is_quantization_enabled(const index_options_map& properties) {
+    auto it = properties.find("quantization");
+    return !(it == properties.end() || boost::iequals(it->second, "f32"));
+}
+
+std::optional<float> vector_index::get_rescoring_factor(const index_options_map& properties) {
+    auto it = properties.find("rescoring_factor");
+    if (it != properties.end()) {
+        return std::stof(it->second);
+    }
+    return std::nullopt;
+}
 
 bool vector_index::view_should_exist() const {
     return false;
