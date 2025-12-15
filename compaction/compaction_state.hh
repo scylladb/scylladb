@@ -39,7 +39,7 @@ struct compaction_state {
     // compactions. This lock guarantees that no sstables are being repaired.
     // Note that the minor compactions do not need to take this lock because
     // they ignore sstables that are being repaired.
-    seastar::rwlock incremental_repair_lock;
+    seastar::lw_shared_ptr<seastar::rwlock> incremental_repair_lock;
 
     // Raised by any function running under run_with_compaction_disabled();
     long compaction_disabled_counter = 0;
