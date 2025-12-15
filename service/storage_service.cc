@@ -7362,15 +7362,34 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         });
     }
 
+    utils::UUID request_id;
+    auto reason = format("Setting tablet balancing to {}", enabled);
+
     while (true) {
         group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
-
         utils::chunked_vector<canonical_mutation> updates;
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-            .set_tablet_balancing_enabled(enabled)
-            .build()));
 
-        sstring reason = format("Setting tablet balancing to {}", enabled);
+        updates.push_back(canonical_mutation(
+                topology_mutation_builder(guard.write_timestamp())
+                     .set_tablet_balancing_enabled(enabled)
+                     .build()));
+
+        // When topology on raft is not enabled, just toggle the flag, but don't create a request, as it won't
+        // execute. Tests use this API even with gossip-based topology.
+        if (raft_topology_change_enabled() && !enabled
+                && _feature_service.topology_noop_request && _feature_service.topology_global_request_queue) {
+            request_id = guard.new_group0_state_id();
+            updates.push_back(canonical_mutation(
+                topology_mutation_builder(guard.write_timestamp())
+                    .queue_global_topology_request_id(request_id)
+                    .build()));
+            updates.push_back(canonical_mutation(
+                topology_request_tracking_mutation_builder(request_id, _feature_service.topology_requests_type_column)
+                    .set("done", false)
+                    .set("request_type", global_topology_request::noop_request)
+                    .build()));
+        }
+
         rtlogger.info("{}", reason);
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
@@ -7382,9 +7401,16 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         }
     }
 
-    while (_topology_state_machine._topology.is_busy()) {
-        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-        co_await _topology_state_machine.event.when();
+    if (request_id) {
+        co_await wait_for_topology_request_completion(request_id);
+    } else if (!enabled) {
+        if (!raft_topology_change_enabled()) {
+            co_return;
+        }
+        while (_topology_state_machine._topology.is_busy()) {
+            rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
+            co_await _topology_state_machine.event.when();
+        }
     }
 }
 
