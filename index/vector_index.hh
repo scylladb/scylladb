@@ -35,6 +35,8 @@ public:
     static bool has_vector_index(const schema& s);
     static bool has_vector_index_on_column(const schema& s, const sstring& target_name);
     static void check_cdc_options(const schema& schema);
+
+    static float get_oversampling(const index_options_map& properties);
 private:
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
