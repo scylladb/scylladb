@@ -15,7 +15,7 @@ def test_create_table_with_compact_storage_default_config(cql, test_keyspace):
     # enable_create_table_with_compact_storage is now disabled in db/config
     try:
         with new_test_table(cql, test_keyspace, schema="p int PRIMARY KEY, v int", extra="WITH COMPACT STORAGE") as test_table:
-            pytest.fail
+            pytest.fail()
     except InvalidRequest:
         pass
 
@@ -25,9 +25,9 @@ def test_create_table_with_compact_storage_config(cql, test_keyspace, enable_com
         try:
             with new_test_table(cql, test_keyspace, schema="p int PRIMARY KEY, v int", extra="WITH COMPACT STORAGE") as test_table:
                 if not enable_compact_storage:
-                    pytest.fail
+                    pytest.fail()
         except InvalidRequest:
             # expected to throw InvalidRequest only when
             # enable_create_table_with_compact_storage=false
             if enable_compact_storage:
-                pytest.fail
+                pytest.fail()
