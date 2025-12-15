@@ -769,6 +769,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     // until the table is really available. So/ DescribeTable returns either
     // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
     // The states CREATING and UPDATING are not currently returned.
+    rjson::add(table_description, "TableSizeBytes", 1);
     rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
