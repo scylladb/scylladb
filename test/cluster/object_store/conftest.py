@@ -72,13 +72,15 @@ class MinioWrapper(S3_Server):
         self.server = MinioServer(tempdir,
                                   '127.0.0.1',
                                   logging.getLogger('minio'))
-        self.tempdir = tempdir
-        self.address = self.server.address
-        self.port = self.server.port
-        self.acc_key = self.server.access_key
-        self.secret_key = self.server.access_key
-        self.region = MinioServer.DEFAULT_REGION
-        self.bucket_name = self.server.bucket_name
+        super().__init__(
+            tempdir,
+            self.server.address,
+            self.server.port,
+            self.server.access_key,
+            self.server.access_key,
+            MinioServer.DEFAULT_REGION,
+            self.server.bucket_name
+        )
 
     def create_endpoint_conf(self):
         return MinioServer.create_conf(self.address, self.port, self.region)
