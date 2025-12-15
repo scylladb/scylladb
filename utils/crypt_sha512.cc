@@ -364,7 +364,7 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 	co_return output;
 }
 
-seastar::future<const char *> __crypt_sha512(const char *key, const char *setting, char *output)
+seastar::future<const char *> crypt_sha512(const char *key, const char *setting, char *output)
 {
 	static const char testkey[] = "Xy01@#\x01\x02\x80\x7f\xff\r\n\x81\t !";
 	static const char testsetting[] = "$6$rounds=1234$abc0123456789$";
