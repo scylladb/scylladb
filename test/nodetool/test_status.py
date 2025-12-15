@@ -109,7 +109,7 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_o
                 assert load_unit is not None
                 assert load == "{:.2f}".format(int(node.load) / load_multiplier[load_unit])
             if token_count_unknown:
-                tokens == "?"
+                assert tokens == "?"
             else:
                 assert int(tokens) == len(node.tokens)
             if effective_ownership_unknown:
