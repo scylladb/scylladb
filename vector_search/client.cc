@@ -61,6 +61,8 @@ private:
     }
 
     std::chrono::milliseconds timeout() const {
+        // Minimum timeout is set to 5 seconds to avoid overly aggressive connection attempts,
+        // ensuring sufficient time for network negotiation, especially under high latency conditions.
         constexpr std::chrono::milliseconds MIN_TIMEOUT = 5s;
         auto timeout_ms = std::chrono::milliseconds(_connect_timeout_in_ms.get());
         if (timeout_ms < MIN_TIMEOUT) {
