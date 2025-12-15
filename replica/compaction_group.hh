@@ -297,6 +297,10 @@ private:
 public:
     storage_group(compaction_group_ptr cg);
 
+    size_t group_id() const noexcept {
+        return _main_cg->group_id();
+    }
+
     seastar::named_gate& async_gate() {
         return _async_gate;
     }
@@ -449,8 +453,9 @@ public:
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
 
-    virtual future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) = 0;
-    virtual future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) = 0;
+    virtual future<seastar::rwlock::holder> get_incremental_repair_read_lock(locator::global_tablet_id gid, const sstring& reason) = 0;
+    virtual future<seastar::rwlock::holder> get_incremental_repair_write_lock(locator::global_tablet_id gid, const sstring& reason) = 0;
+    virtual void cleanup_incremental_repair_state(locator::global_tablet_id gid) {}
 
     virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
 };
