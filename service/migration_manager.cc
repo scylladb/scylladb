@@ -648,6 +648,13 @@ void migration_notifier::before_allocate_tablet_map(const locator::tablet_map& m
     });
 }
 
+void migration_notifier::before_allocate_tablet_map_in_notification(const locator::tablet_map& map,
+        const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
+    _listeners.thread_for_each_nested([&map, &s, &mutations, ts] (migration_listener* listener) {
+        listener->on_before_allocate_tablet_map(map, s, mutations, ts);
+    });
+}
+
 utils::chunked_vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);

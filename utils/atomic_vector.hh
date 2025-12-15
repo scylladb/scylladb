@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/on_internal_error.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -32,7 +33,8 @@ public:
     }
 
     // This must be called on a thread. The callback function must not
-    // call remove.
+    // call remove or thread_for_each. If the callback function needs to
+    // call this, use thread_for_each_nested instead.
     //
     // We would take callbacks that take a T&, but we had bugs in the
     // past with some of those callbacks holding that reference past a
@@ -42,6 +44,26 @@ public:
         auto unlock = seastar::defer([this] {
             _vec_lock.for_read().unlock();
         });
+        // We grab a lock in remove(), but not in add(), so we
+        // iterate using indexes to guard against the vector being
+        // reallocated.
+        for (size_t i = 0, n = _vec.size(); i < n; ++i) {
+            func(_vec[i]);
+        }
+    }
+
+    // This must be called on a thread. This should be used only from
+    // the context of a thread_for_each callback, when the read lock is
+    // already held. The callback function must not call remove or
+    // thread_for_each.
+    void thread_for_each_nested(seastar::noncopyable_function<void(T)> func) const {
+        // When called in the context of thread_for_each, the read lock is
+        // already held, so we don't need to acquire it again. Acquiring it
+        // again could lead to a deadlock.
+        if (!_vec_lock.locked()) {
+            utils::on_internal_error("thread_for_each_nested called without holding the vector lock");
+        }
+
         // We grab a lock in remove(), but not in add(), so we
         // iterate using indexes to guard against the vector being
         // reallocated.
