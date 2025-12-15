@@ -1294,8 +1294,8 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
 
-    for (const auto& c: static_configurators()) {
-        c(_raw._ks_name, _raw._cf_name, _static_props);
+    for (const auto& c : schema_initializers()) {
+        c(*this);
     }
 }
 
@@ -1659,14 +1659,28 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     return make_lw_shared<schema>(schema::private_tag{}, new_raw, _static_props);
 }
 
-auto schema_builder::static_configurators() -> std::vector<static_configurator>& {
-    static std::vector<static_configurator> result{};
+std::vector<schema_builder::schema_initializer>&
+schema_builder::schema_initializers() {
+    static std::vector<schema_initializer> result{};
     return result;
 }
 
-int schema_builder::register_static_configurator(static_configurator&& configurator) {
-    static_configurators().push_back(std::move(configurator));
+int schema_builder::register_schema_initializer(schema_initializer&& initializer) {
+    schema_initializers().push_back(std::move(initializer));
     return 0;
+}
+
+schema_builder::schema_initializers_checkpoint
+schema_builder::capture_schema_initializers_checkpoint() {
+    return schema_initializers_checkpoint{schema_initializers().size()};
+}
+
+void schema_builder::restore_schema_initializers_checkpoint(schema_initializers_checkpoint checkpoint) {
+    auto& initializers = schema_initializers();
+    if (checkpoint.size > initializers.size()) {
+        throw std::logic_error("Invalid schema initializer checkpoint");
+    }
+    initializers.resize(checkpoint.size);
 }
 
 const cdc::options& schema::cdc_options() const {
