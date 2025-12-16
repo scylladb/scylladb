@@ -3385,16 +3385,15 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                 continue;
             }
 
-            lister::scan_dir(snapshots_dir,  lister::dir_entry_types::of<directory_entry_type::directory>(), [datadir, &all_snapshots] (fs::path snapshots_dir, directory_entry de) {
-                auto snapshot_name = de.name;
+            auto lister = directory_lister(snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>());
+            while (auto de = lister.get().get()) {
+                auto snapshot_name = de->name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                return get_snapshot_details(snapshots_dir / fs::path(snapshot_name), datadir).then([&all_snapshots, snapshot_name] (auto details) {
-                    auto& sd = all_snapshots.at(snapshot_name);
-                    sd.total += details.total;
-                    sd.live += details.live;
-                    return make_ready_future<>();
-                });
-            }).get();
+                auto details = get_snapshot_details(snapshots_dir / fs::path(snapshot_name), datadir).get();
+                auto& sd = all_snapshots.at(snapshot_name);
+                sd.total += details.total;
+                sd.live += details.live;
+            }
         }
         return all_snapshots;
     });
@@ -3403,15 +3402,17 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
     table::snapshot_details details{};
 
-    co_await lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [datadir, &details] (fs::path snapshot_dir, directory_entry de) -> future<> {
-        auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
+    auto lister = directory_lister(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    while (auto de = co_await lister.get()) {
+        const auto& name = de->name;
+        auto sd = co_await io_check(file_stat, (snapshot_dir / name).native(), follow_symlink::no);
         auto size = sd.allocated_size;
 
         // The manifest and schema.sql files are the only files expected to be in this directory not belonging to the SSTable.
         //
         // All the others should just generate an exception: there is something wrong, so don't blindly
         // add it to the size.
-        if (de.name != "manifest.json" && de.name != "schema.cql") {
+        if (name != "manifest.json" && name != "schema.cql") {
             details.total += size;
         } else {
             size = 0;
@@ -3419,12 +3420,12 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
 
         try {
             // File exists in the main SSTable directory. Snapshots are not contributing to size
-            auto psd = co_await io_check(file_stat, (datadir / de.name).native(), follow_symlink::no);
+            auto psd = co_await io_check(file_stat, (datadir / name).native(), follow_symlink::no);
             // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
             if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
                 dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
-                        (datadir / de.name).native(), psd.device_id, psd.inode_number, psd.size,
-                        (snapshot_dir / de.name).native(), sd.device_id, sd.inode_number, sd.size);
+                        (datadir / name).native(), psd.device_id, psd.inode_number, psd.size,
+                        (snapshot_dir / name).native(), sd.device_id, sd.inode_number, sd.size);
                 details.live += size;
             }
         } catch (std::system_error& e) {
@@ -3433,7 +3434,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
             }
             details.live += size;
         }
-    });
+    }
 
     co_return details;
 }
