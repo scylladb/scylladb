@@ -127,20 +127,21 @@ auto send_message(messaging_service* ms, messaging_verb verb, std::optional<loca
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
-        return futurator::make_exception_future(rpc::closed_error());
+        return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
-        if (try_catch<rpc::closed_error>(eptr)) {
+        if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
             if (host_id) {
                 ms->remove_error_rpc_client(verb, *host_id);
             } else {
                 ms->remove_error_rpc_client(verb, id);
             }
-            return futurator::make_exception_future(std::move(eptr));
+            return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
+                    host_id.value_or(locator::host_id{}), id.addr, exp->what())));
         } else {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             return futurator::make_exception_future(std::move(eptr));
@@ -165,20 +166,21 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, std::optio
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
-        return futurator::make_exception_future(rpc::closed_error());
+        return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
-        if (try_catch<rpc::closed_error>(eptr)) {
+        if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
             if (host_id) {
                 ms->remove_error_rpc_client(verb, *host_id);
             } else {
                 ms->remove_error_rpc_client(verb, id);
             }
-            return futurator::make_exception_future(std::move(eptr));
+            return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
+                    host_id.value_or(locator::host_id{}), id.addr, exp->what())));
         } else {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             return futurator::make_exception_future(std::move(eptr));
@@ -206,7 +208,7 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
-        return futurator::make_exception_future(rpc::closed_error());
+        return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
     auto& rpc_client = *rpc_client_ptr;
@@ -222,14 +224,15 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
 
     return rpc_handler(rpc_client, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
-        if (try_catch<rpc::closed_error>(eptr)) {
+        if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
             if (host_id) {
                 ms->remove_error_rpc_client(verb, *host_id);
             } else {
                 ms->remove_error_rpc_client(verb, id);
             }
-            return futurator::make_exception_future(std::move(eptr));
+            return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
+                    host_id.value_or(locator::host_id{}), id.addr, exp->what())));
         } else if (try_catch<rpc::canceled_error>(eptr)) {
             // Translate low-level canceled_error into high-level abort_requested_exception.
             return futurator::make_exception_future(abort_requested_exception{});
@@ -255,9 +258,10 @@ auto send_message_timeout_cancellable(messaging_service* ms, messaging_verb verb
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
-        return futurator::make_exception_future(rpc::closed_error());
+        return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
-    auto rpc_client_ptr = ms->get_rpc_client(verb, ms->addr_for_host_id(host_id), host_id);
+    auto address = ms->addr_for_host_id(host_id);
+    auto rpc_client_ptr = ms->get_rpc_client(verb, address, host_id);
     auto& rpc_client = *rpc_client_ptr;
 
     auto c = std::make_unique<seastar::rpc::cancellable>();
@@ -269,12 +273,13 @@ auto send_message_timeout_cancellable(messaging_service* ms, messaging_verb verb
         return futurator::make_exception_future(abort_requested_exception{});
     }
 
-    return rpc_handler(rpc_client, timeout, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
+    return rpc_handler(rpc_client, timeout, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), host_id, address, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
-        if (try_catch<rpc::closed_error>(eptr)) {
+        if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
             ms->remove_error_rpc_client(verb, host_id);
-            return futurator::make_exception_future(std::move(eptr));
+            return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
+                    host_id, address.addr, exp->what())));
         } else if (try_catch<rpc::canceled_error>(eptr)) {
             // Translate low-level canceled_error into high-level abort_requested_exception.
             return futurator::make_exception_future(abort_requested_exception{});
