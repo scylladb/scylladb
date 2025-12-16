@@ -29,9 +29,9 @@ class KeyProvider(Enum):
 
 class KeyProviderFactory:
     """Base class for provider factories"""
-    def __init__(self, key_provider : KeyProvider):
+    def __init__(self, key_provider : KeyProvider, tmpdir):
         self.key_provider = key_provider
-        self.system_keyfile = None
+        self.system_key_location = os.path.join(tmpdir, "resources/system_keys")
 
     async def __aenter__(self):
         return self
@@ -50,7 +50,7 @@ class KeyProviderFactory:
 
     def configuration_parameters(self) -> dict[str, str]:
         """scylla.conf entries for provider"""
-        return {}
+        return {"system_key_directory": self.system_key_location}
 
     def additional_cf_options(self) -> dict[str, str]:
         # pylint: disable=unused-argument
@@ -62,7 +62,7 @@ class KeyProviderFactory:
 class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
     """LocalFileSystemKeyProviderFactory proxy"""
     def __init__(self, tmpdir):
-        super(LocalFileSystemKeyProviderFactory, self).__init__( KeyProvider.local)
+        super(LocalFileSystemKeyProviderFactory, self).__init__(KeyProvider.local, tmpdir)
         self.secret_file = os.path.join(tmpdir, "test/node1/conf/data_encryption_keys")
 
     def additional_cf_options(self) -> dict[str, str]:
@@ -72,8 +72,7 @@ class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
 class ReplicatedKeyProviderFactory(KeyProviderFactory):
     """ReplicatedKeyProviderFactory proxy"""
     def __init__(self, tmpdir):
-        super(ReplicatedKeyProviderFactory, self).__init__( KeyProvider.replicated)
-        self.system_key_location = os.path.join(tmpdir, "resources/system_keys")
+        super(ReplicatedKeyProviderFactory, self).__init__(KeyProvider.replicated, tmpdir)
         self.system_key_file_name = "system_key"
 
     async def __aenter__(self):
@@ -88,17 +87,13 @@ class ReplicatedKeyProviderFactory(KeyProviderFactory):
             raise RuntimeError(f'Could not generate system key: {stderr.decode()}')
         return self
 
-    def configuration_parameters(self) -> dict[str, str]:
-        """scylla.conf entries for provider"""
-        return super().configuration_parameters() | {"system_key_directory": self.system_key_location}
-
     def additional_cf_options(self):
         return super().additional_cf_options() | {"system_key": self.system_key_file_name}
 
 class KmipKeyProviderFactory(KeyProviderFactory):
     """KmipKeyProviderFactory proxy"""
     def __init__(self, tmpdir):
-        super(KmipKeyProviderFactory, self).__init__( KeyProvider.kmip)
+        super(KmipKeyProviderFactory, self).__init__(KeyProvider.kmip, tmpdir)
         self.tmpdir = tmpdir
         self.kmip_server_wrapper = None
         self.kmip_host = "kmip_test"
@@ -178,7 +173,7 @@ class KmipKeyProviderFactory(KeyProviderFactory):
 class KMSKeyProviderFactory(KeyProviderFactory):
     """KMSKeyProviderFactory proxy"""
     def __init__(self, tmpdir):
-        super(KMSKeyProviderFactory, self).__init__( KeyProvider.kms)
+        super(KMSKeyProviderFactory, self).__init__(KeyProvider.kms, tmpdir)
         self.tmpdir = tmpdir
         self.master_key = "alias/Scylla-test"
         self.kms_host = "kms_test"
@@ -260,7 +255,7 @@ class KMSKeyProviderFactory(KeyProviderFactory):
 class AzureKeyProviderFactory(KeyProviderFactory):
     """AzureKeyProviderFactory proxy"""
     def __init__(self, tmpdir):
-        super(AzureKeyProviderFactory, self).__init__( KeyProvider.azure)
+        super(AzureKeyProviderFactory, self).__init__(KeyProvider.azure, tmpdir)
         self.tmpdir = tmpdir
         self.azure_host = "azure_test"
         self.azure_server = None
