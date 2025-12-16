@@ -1547,8 +1547,8 @@ void reclaim_timer::report() const noexcept {
     auto time_level = _stall_detected ? log_level::warn : log_level::debug;
     auto info_level = _stall_detected ? log_level::info : log_level::debug;
     auto MiB = 1024*1024;
-    auto msg_extra = extra_msg_when_stall_detected(_stall_detected,
-                                                   _stall_detected ? current_backtrace() : saved_backtrace{});
+    auto msg_extra = extra_msg_when_stall_detected(_stall_detected && !_preemptible,
+                                                   (_stall_detected && !_preemptible) ? current_backtrace() : saved_backtrace{});
 
     timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly, reserve: {{goal: {}, max: {}}}{}",
                         _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
