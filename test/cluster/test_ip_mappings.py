@@ -121,6 +121,16 @@ async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bo
                 response = await manager.cql.run_async(f"SELECT * FROM {table} WHERE a = {i}")
                 assert response[0].b == i
 
+            # Verify that `/storage_service/tokens/{endpoint}` returns no tokens for IP of the node being replaced iff
+            # reuse_ip is True. The goal here is to check that the API endpoint resolves the provided IP address to the
+            # host ID of the replacing node when reuse_ip is True. There is nothing special about this endpoint; we
+            # can use any endpoint that calls `gossiper::get_host_id(inet_address endpoint)`. When reuse_ip is False, we
+            # expect non-empty tokens as a sanity check.
+            logger.info(f'Checking tokens of {dead_server.ip_addr}')
+            for srv in live_servers:
+                tokens = await manager.api.get_tokens(srv.ip_addr, dead_server.ip_addr)
+                assert (len(tokens) == 0) == reuse_ip
+
             for srv in live_servers:
                 await manager.api.message_injection(
                     srv.ip_addr, 'topology_coordinator/write_both_read_old/before_global_token_metadata_barrier')
