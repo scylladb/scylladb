@@ -57,3 +57,5 @@ seastar::file create_file_for_seekable_source(seekable_data_source, seekable_dat
  * resulting data to `len` (default is remaining data in stream)
  */
 seastar::data_source create_ranged_source(data_source, uint64_t offset, std::optional<uint64_t> len = {});
+
+seastar::data_source create_prefetch_source(data_source);

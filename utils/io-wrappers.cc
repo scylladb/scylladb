@@ -365,3 +365,42 @@ seastar::data_source create_ranged_source(data_source src, uint64_t offset, std:
     return data_source(std::make_unique<ranged_data_source>(std::move(src), offset, len));
 }
 
+seastar::data_source create_prefetch_source(data_source src) {
+    class prefetch_data_source : public data_source_impl {
+        data_source _src;
+        future<temporary_buffer<char>> _fetch;
+    public:
+        prefetch_data_source(data_source src)
+            : _src(std::move(src))
+            , _fetch(_src.get())
+        {}
+        void start_fetch() {
+            _fetch = _src.get();
+        }
+        future<temporary_buffer<char>> skip(uint64_t n) override {
+            auto res = co_await std::move(_fetch);
+            auto trim = std::min(n, res.size());
+            res.trim_front(trim);
+            n -= trim;
+            if (n > 0) {
+                res = co_await _src.skip(n);
+            } else if (res.empty() && trim > 0) {
+                res = co_await _src.get();
+            }
+            if (res.empty()) {
+                _fetch = make_ready_future<temporary_buffer<char>>();
+            } else {
+                _fetch = _src.get();
+            }
+            co_return res;
+        }
+        future<temporary_buffer<char>> get() override {
+            return skip(0);
+        }
+        future<> close() override {
+            return _src.close();
+        }
+    };
+
+    return data_source(std::make_unique<prefetch_data_source>(std::move(src)));
+}
