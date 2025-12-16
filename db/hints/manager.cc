@@ -643,6 +643,12 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
         co_return;
     }
 
+    if (!replay_allowed()) {
+        auto reason = seastar::format("Precondition violdated while trying to drain {} / {}: "
+                "hint replay is not allowed", host_id, ip);
+        on_internal_error(manager_logger, std::move(reason));
+    }
+
     manager_logger.info("Draining starts for {}", host_id);
 
     const auto holder = seastar::gate::holder{_draining_eps_gate};
