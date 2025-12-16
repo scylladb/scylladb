@@ -318,6 +318,10 @@ public:
     /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
     /// corresponding hint_endpoint_manager objects.
     ///
+    /// Preconditions:
+    /// * Hint replay must be allowed (i.e. `replay_allowed()` must be true) throughout
+    ///   the execution of this function.
+    ///
     /// \param host_id host ID of the node that left the cluster
     /// \param ip the IP of the node that left the cluster
     future<> drain_for(endpoint_id host_id, gms::inet_address ip) noexcept;
@@ -342,13 +346,13 @@ public:
         return _state.contains(state::started);
     }
 
+    bool replay_allowed() const noexcept {
+        return _state.contains(state::replay_allowed);
+    }
+
 private:
     void set_started() noexcept {
         _state.set(state::started);
-    }
-
-    bool replay_allowed() const noexcept {
-        return _state.contains(state::replay_allowed);
     }
 
     void set_draining_all() noexcept {
