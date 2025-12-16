@@ -20,6 +20,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_first_completed
 from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
 from collections import defaultdict
+from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,46 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
     assert status['state'] == 'failed'
     if ne_parameter == 'endpoint':
         assert status['error'] == 'std::invalid_argument (endpoint no-such-endpoint not found)'
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail
+async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient, object_storage):
+    '''backup should fail if the endpoint is invalid/inaccessible
+       after updating the config, it should succeed'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'sstables_manager=debug']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    ks, cf = await prepare_snapshot_for_backup(manager, server)
+
+    prefix = f'{cf}/backup'
+
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None
+    assert status['state'] == 'failed'
+    assert status['error'] == f'std::invalid_argument (endpoint {object_storage.address} not found)'
+
+    objconf = object_storage.create_endpoint_conf()
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', objconf)
+
+    async def endpoint_appeared_in_config():
+        await read_barrier(manager.api, server.ip_addr)
+        resp = await manager.api.get_config(server.ip_addr, 'object_storage_endpoints')
+        for ep in objconf:
+            if ep['name'] not in resp:
+                return None
+        return True
+    await wait_for(endpoint_appeared_in_config, deadline=time.time() + 60)
+
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None
+    assert status['state'] == 'done'
 
 
 async def do_test_backup_abort(manager: ManagerClient, object_storage,
