@@ -57,6 +57,8 @@ namespace paxos {
 struct topology_request_state;
 
 class group0_guard;
+
+class raft_group0_client;
 }
 
 namespace netw {
@@ -184,6 +186,7 @@ public:
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_SNAPSHOT_CONFIG = "raft_snapshot_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
+    static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
@@ -283,6 +286,7 @@ public:
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
     static schema_ptr repair_history();
+    static schema_ptr repair_tasks();
     static schema_ptr group0_history();
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
@@ -421,6 +425,22 @@ public:
         int64_t range_end;
     };
 
+    enum class repair_task_operation {
+        requested,
+        finished,
+    };
+    static sstring repair_task_operation_to_string(repair_task_operation op);
+    static repair_task_operation repair_task_operation_from_string(const sstring& name);
+
+    struct repair_task_entry {
+        tasks::task_id task_uuid;
+        repair_task_operation operation;
+        int64_t first_token;
+        int64_t last_token;
+        db_clock::time_point timestamp;
+        table_id table_uuid;
+    };
+
     struct topology_requests_entry {
         utils::UUID id;
         utils::UUID initiating_host;
@@ -441,6 +461,10 @@ public:
     future<> update_repair_history(repair_history_entry);
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
     future<> get_repair_history(table_id, repair_history_consumer f);
+
+    future<utils::chunked_vector<canonical_mutation>> get_update_repair_task_mutations(const repair_task_entry& entry, api::timestamp_type ts);
+    using repair_task_consumer = noncopyable_function<future<>(const repair_task_entry&)>;
+    future<> get_repair_task(tasks::task_id task_uuid, repair_task_consumer f);
 
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<replay_positions> get_truncated_positions(table_id);
@@ -746,3 +770,8 @@ public:
 }; // class system_keyspace
 
 } // namespace db
+
+template <>
+struct fmt::formatter<db::system_keyspace::repair_task_operation> : fmt::formatter<string_view> {
+    auto format(const db::system_keyspace::repair_task_operation&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
