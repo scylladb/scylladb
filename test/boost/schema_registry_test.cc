@@ -105,6 +105,28 @@ SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {
     BOOST_REQUIRE(s->cdc_schema()->registry_entry());
 }
 
+SEASTAR_THREAD_TEST_CASE(test_learn_loaded_schema_with_cdc) {
+    dummy_init dummy;
+    auto s_cdc = schema_builder("ks", "cdc_cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("val", bytes_type)
+        .build();
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("val", bytes_type)
+        .with_cdc_schema(s_cdc)
+        .build();
+
+    local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) {
+        return make_ready_future<extended_frozen_schema>(s);
+    }).get();
+
+    s = local_schema_registry().learn(s);
+
+    BOOST_REQUIRE(s->registry_entry());
+    BOOST_REQUIRE(s->cdc_schema()->registry_entry());
+}
+
 SEASTAR_TEST_CASE(test_async_loading) {
     return seastar::async([] {
         dummy_init dummy;

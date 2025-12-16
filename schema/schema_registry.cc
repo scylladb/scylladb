@@ -78,10 +78,8 @@ void schema_registry::attach_table(schema_registry_entry& e) noexcept {
 }
 
 schema_ptr schema_registry::learn(schema_ptr s) {
-    auto learned_cdc_schema = s->cdc_schema() ? local_schema_registry().learn(s->cdc_schema()) : nullptr;
-    if (learned_cdc_schema != s->cdc_schema()) {
-        s = s->make_with_cdc(learned_cdc_schema);
-    }
+    auto learned_cdc_schema = s->cdc_schema() ? learn(s->cdc_schema()) : nullptr;
+    s->_cdc_schema = learned_cdc_schema;
     if (s->registry_entry()) {
         return s;
     }
@@ -92,7 +90,9 @@ schema_ptr schema_registry::learn(schema_ptr s) {
             e.load(s);
             attach_table(e);
         }
-        return e.get_schema();
+        auto loaded_s = e.get_schema();
+        loaded_s->_cdc_schema = learned_cdc_schema;
+        return loaded_s;
     }
     slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
