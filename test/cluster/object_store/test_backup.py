@@ -131,8 +131,9 @@ async def test_backup_move(manager: ManagerClient, object_storage, move_files):
 
 
 @pytest.mark.asyncio
-async def test_backup_to_non_existent_bucket(manager: ManagerClient, object_storage):
-    '''backup should fail if the destination bucket does not exist'''
+@pytest.mark.parametrize("ne_parameter", [ "endpoint", "bucket", "snapshot" ])
+async def test_backup_with_non_existing_parameters(manager: ManagerClient, object_storage, ne_parameter):
+    '''backup should fail if either of the parameters does not exist'''
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
@@ -142,7 +143,8 @@ async def test_backup_to_non_existent_bucket(manager: ManagerClient, object_stor
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
+    backup_snap_name = 'backup'
+    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name = backup_snap_name)
 
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
@@ -150,38 +152,17 @@ async def test_backup_to_non_existent_bucket(manager: ManagerClient, object_stor
     assert len(files) > 0
 
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, "non-existant-bucket", prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf,
+            backup_snap_name if ne_parameter != 'snapshot' else 'no-such-snapshot',
+            object_storage.address if ne_parameter != 'endpoint' else 'no-such-endpoint',
+            object_storage.bucket_name if ne_parameter != 'bucket' else 'no-such-bucket',
+            prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'failed'
-    #assert 'S3 request failed. Code: 15. Reason: Access Denied.' in status['error']
+    if ne_parameter == 'endpoint':
+        assert status['error'] == 'std::invalid_argument (endpoint no-such-endpoint not found)'
 
-
-@pytest.mark.asyncio
-async def test_backup_to_non_existent_endpoint(manager: ManagerClient, object_storage):
-    '''backup should fail if the endpoint is invalid/inaccessible'''
-
-    objconf = object_storage.create_endpoint_conf()
-    cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
-           'task_ttl_in_seconds': 300
-           }
-    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
-
-    prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', "does_not_exist", object_storage.bucket_name, prefix)
-    status = await manager.api.wait_task(server.ip_addr, tid)
-    assert status is not None
-    assert status['state'] == 'failed'
-    assert status['error'] == 'std::invalid_argument (endpoint does_not_exist not found)'
 
 async def do_test_backup_abort(manager: ManagerClient, object_storage,
                                breakpoint_name, min_files, max_files = None):
@@ -234,38 +215,6 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     # Parallelism is a pain.
     assert min_files <= uploaded_count < len(files)
     assert max_files is None or uploaded_count < max_files
-
-
-@pytest.mark.asyncio
-async def test_backup_to_non_existent_snapshot(manager: ManagerClient, object_storage):
-    '''backup should fail if the snapshot does not exist'''
-
-    objconf = object_storage.create_endpoint_conf()
-    cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
-           'task_ttl_in_seconds': 300
-           }
-    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
-    prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'nonexistent-snapshot',
-                                   object_storage.address, object_storage.bucket_name, prefix)
-    # The task is expected to fail immediately due to invalid snapshot name.
-    # However, since internal implementation details may change, we'll wait for
-    # task completion if immediate failure doesn't occur.
-    actual_state = None
-    for status_api in [manager.api.get_task_status,
-                       manager.api.wait_task]:
-        status = await status_api(server.ip_addr, tid)
-        assert status is not None
-        actual_state = status['state']
-        if actual_state == 'failed':
-            break
-    else:
-        assert actual_state == 'failed'
 
 
 @pytest.mark.asyncio
