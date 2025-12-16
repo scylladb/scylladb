@@ -2,8 +2,11 @@
 
 ## What is ScyllaDB?
 
-ScyllaDB is a high-performance NoSQL database system, fully compatible with Apache Cassandra.
-ScyllaDB is released under the GNU Affero General Public License version 3 and the Apache License, ScyllaDB is free and open-source software.
+ScyllaDB is a high-performance NoSQL database optimized for speed and scalability.
+It is designed to efficiently handle large volumes of data with minimal latency,
+making it ideal for data-intensive applications.
+
+ScyllaDB is distributed under the [ScyllaDB Source Available License](https://github.com/scylladb/scylladb/blob/master/LICENSE-ScyllaDB-Source-Available.md).
 
 > [ScyllaDB](http://www.scylladb.com/)
 
