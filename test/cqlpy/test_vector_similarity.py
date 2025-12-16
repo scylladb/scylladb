@@ -5,6 +5,7 @@
 import pytest
 from .util import new_test_table, is_scylla
 from cassandra.protocol import InvalidRequest
+import math
 
 
 ###############################################################################
@@ -90,3 +91,72 @@ def test_vector_similarity_fails_on_vector_of_different_size(cql, test_keyspace,
             cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [1.1, 1.2]) FROM {table}")
         with pytest.raises(InvalidRequest, match="Invalid vector literal" if is_scylla(cql) else "All arguments must have the same vector dimensions"):
             cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [1.1, 1.2, 20.25, 123.7]) FROM {table}")
+
+
+def calculate_distance(similarity_function, v1, v2):
+    if similarity_function == "cosine":
+        dot = sum(a * b for a, b in zip(v1, v2))
+        norm_v = math.sqrt(sum(x**2 for x in v1))
+        norm_q = math.sqrt(sum(x**2 for x in v2))
+        cosine = dot / (norm_v * norm_q) if norm_v * norm_q != 0 else 0
+        return round(1 - cosine, 6)
+    elif similarity_function == "euclidean":
+        euclidean_sq = sum((a - b)**2 for a, b in zip(v1, v2))
+        return round(euclidean_sq, 6)
+    elif similarity_function == "dot_product":
+        dot_product = sum(a * b for a, b in zip(v1, v2))
+        return round(dot_product, 6)
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_with_column_and_literal(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    data = [
+        [0.267261, 0.534522, 0.801784],
+        [0.455842, 0.569803, 0.683763],
+        [0.502571, 0.574367, 0.646162],
+    ]
+    query_vector = [0.707107, 0.0, -0.707107]
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, {data[0]})")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (2, {data[1]})")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (3, {data[2]})")
+        result = cql.execute(f"SELECT v, similarity_{similarity_function}(v, {query_vector}) FROM {table}")
+
+        for row in result:
+            assert round(row[1], 6) == calculate_distance(similarity_function, row.v, query_vector)
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_with_two_columns(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key, v1 vector<float, 3>, v2 vector<float, 3>'
+    data = [
+        [0.267261, 0.534522, 0.801784],
+        [0.455842, 0.569803, 0.683763],
+        [0.502571, 0.574367, 0.646162],
+    ]
+    query_vector = [0.707107, 0.0, -0.707107]
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v1, v2) VALUES (1, {data[0]}, {query_vector})")
+        cql.execute(f"INSERT INTO {table} (pk, v1, v2) VALUES (2, {data[1]}, {query_vector})")
+        cql.execute(f"INSERT INTO {table} (pk, v1, v2) VALUES (3, {data[2]}, {query_vector})")
+        result = cql.execute(f"SELECT v1, v2, similarity_{similarity_function}(v1, v2) FROM {table}")
+
+        for row in result:
+            assert round(row[2], 6) == calculate_distance(similarity_function, row.v1, row.v2)
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_with_two_literals(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key'
+    v1 = [0.267261, 0.534522, 0.801784]
+    v2 = [0.707107, 0.0, -0.707107]
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk) VALUES (1)")
+        result = cql.execute(f"SELECT pk, similarity_{similarity_function}({v1}, {v2}) FROM {table}")
+
+        for row in result:
+            assert round(row[1], 6) == calculate_distance(similarity_function, v1, v2)
