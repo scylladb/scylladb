@@ -998,7 +998,7 @@ def test_transact_get_items_projection_expression(test_table_s):
 
 # ProjectionExpression also supports ExpressionAttributeNames.
 @pytest.mark.xfail(reason="#5064 - transactions not yet supported")
-def test_transact_get_items_projection_expression(test_table_s):
+def test_transact_get_items_projection_expression_attribute_names(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 1, 'y': 2, 'z': 3}
     test_table_s.put_item(Item=item)
