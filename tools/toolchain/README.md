@@ -88,20 +88,36 @@ Publishing an image is complicated since multiple architectures are supported.
 There are two procedures, one using emulation (can run on any x86 machine) and
 another using native systems, which requires access to aarch64 and s390x machines.
 
-## Emulated publishing procedure (slow)
+The sources for the toolchain are Internet builds of open-source projects,
+based on the current Fedora release for most packages, with supplements from
+pip (Python), cargo (Rust) and other binary repositories for projects not
+packaged by Fedora. We also package a ScyllaDB build of clang that is optimized
+for faster compilation, see tools/toolchain/optimized_clang.sh.
+
+Because the clang binary is self-packaged, there are different procedures depending
+on whether the clang version changed since the last toolchain generation or not.
+
+To obtain the clang version, use `./tools/toolchain/dbuild clang --version` for the
+current toolchain, and `podman run --rm docker.io/fedora:<version> dnf info clang`
+for the to-be-packaged version. If they are different, you must use the procedure
+that also regenerates clang.
+
+## Emulated publishing procedure (slow, no clang regeneration)
 
 1. Pick a new name for the image (in `tools/toolchain/image`) and
    commit it. The commit updating install-dependencies.sh should
    include the toolchain change, for atomicity. Do not push the commit
    to `next` yet.
-2. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive <filename to the archive>` and wait.
+2. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive>` and wait.
    The clang archive needs to be downloaded prior to build.
    It requires `buildah` and `qemu-user-static` to be installed
    (and will complain if they are not).
+   The clang archive is recorded in each commit that changes the toolchain (`git log -1 tools/toolchain/image`).
+   The URLs point to an object storage bucket we maintain.
 3. Publish the image using the instructions printed by the previous step.
 4. Push the `next` branch that refers to the new toolchain.
 
-## Native publishing procedure (complicated)
+## Native publishing procedure (complicated, no clang regeneration)
 
 1. Pick a new name for the image (in `tools/toolchain/image`) and
    commit it. The commit updating install-dependencies.sh should
@@ -112,12 +128,39 @@ another using native systems, which requires access to aarch64 and s390x machine
     1. check out the branch containing the new toolchain name
     2. Run `git submodule update --init --recursive` to make sure
        all the submodules are synchronized
-    3. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive <archive-path> --disable-multiarch`. This should complete relatively quickly.
+    3. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM  --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive> --disable-multiarch`. This should complete relatively quickly.
+       The clang archive is recorded in each commit that changes the toolchain (`git log -1 tools/toolchain/image`).
+       The URLs point to an object storage bucket we maintain.
 4. Now, create a multiarch image with the following:
     1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
     2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
     3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
 5. Now push the commit that updated the toolchain with `git push`.
+
+## Native publishing procedure (complicated, with clang regeneration)
+
+1. Pick a new name for the image (in `tools/toolchain/image`) and
+   commit it. The commit updating install-dependencies.sh should
+   include the toolchain change, for atomicity. Do not push the commit
+   to `next` yet.
+2. Push the commit to a personal repository/branch.
+3. Perform the following on an x86 and an ARM machine:
+    1. check out the branch containing the new toolchain name
+    2. Run `git submodule update --init --recursive` to make sure
+       all the submodules are synchronized
+    3. Make sure the clang generation directories are removed: ./build_profile and ./clang_build
+    4. Run `tools/toolchain/prepare --clang-build-mode INSTALL --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive>`. This will be quite slow as clang and scylla are built multiple times.
+       Pick a new name for the clang archive based on previous names. The names are recorded in each commit that
+       changes the toolchain (`git log -1 tools/toolchain/image`). The names include the Fedora version this is built on,
+       the clang version, and the architecture. The new name must be unique.
+       The URLs point to an object storage bucket we maintain.
+    5. Upload the generated clang image to its URL. Use `gsutil cp <filename> <GSURL>` where `GSURL` is the same
+       as `URL` except the protocol is `gs` instead of `https`.
+4. Now, create a multiarch image with the following:
+    1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
+    2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
+    3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
+5. Now push the commit that updated the toolchain with `git push`. Remember to record the clang archive URLs for future reference.
 
 ## Troubleshooting
 
