@@ -2257,8 +2257,15 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
 
     auto permit = co_await lock_endpoint(host_id, pid);
 
+    const auto tmptr = get_token_metadata_ptr();
+    // Make the generation of an excluded (and banned) node negative. This is needed on restart during an ongoing
+    // replace with the same IP in the Raft-based topology. We ensure that gossiper::get_host_id(inet_address endpoint)
+    // always returns the host ID of the replacing node, just like before restarting.
+    const auto* node = tmptr->get_topology().find_node(host_id);
+    generation_type generation(node && node->is_excluded() ? -1 : 0);
+
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
-    auto ep_state = endpoint_state(ep);
+    auto ep_state = endpoint_state(heart_beat_state(generation), ep);
     auto es = get_endpoint_state_ptr(host_id);
     if (es) {
         if (es->get_heart_beat_state().get_generation()) {
@@ -2273,7 +2280,6 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
     // As long as the endpoint_state has zero generation.
     // It will get updated as a whole by handle_major_state_change
     // via do_apply_state_locally when (remote_generation > local_generation)
-    const auto tmptr = get_token_metadata_ptr();
     ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
     auto tokens = tmptr->get_tokens(host_id);
     if (!tokens.empty()) {
@@ -2284,7 +2290,6 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
         ep_state.add_application_state(gms::application_state::DC, gms::versioned_value::datacenter(st.opt_dc_rack->dc));
         ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
     }
-    auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(std::move(ep_state), permit.id());
     _unreachable_endpoints[host_id] = now();
     logger.trace("Adding saved endpoint {} {}", ep, generation);
