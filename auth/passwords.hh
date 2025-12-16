@@ -76,11 +76,14 @@ sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
 
 ///
 /// Hash a password combined with an implementation-specific salt string.
-/// Deprecated in favor of `hash_with_salt_async`.
+/// Deprecated in favor of `hash_with_salt_async`. This function is still used
+/// when generating password hashes for storage to ensure that
+/// `hash_with_salt` and `hash_with_salt_async` produce identical results,
+/// preserving backward compatibility.
 ///
 /// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
 ///
-[[deprecated("Use hash_with_salt_async instead")]] sstring hash_with_salt(const sstring& pass, const sstring& salt);
+sstring hash_with_salt(const sstring& pass, const sstring& salt);
 
 ///
 /// Async version of `hash_with_salt` that returns a future.
