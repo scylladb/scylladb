@@ -10,6 +10,7 @@ import collections
 import time
 import re
 import requests
+import json
 import pytest
 from contextlib import contextmanager
 from botocore.hooks import HierarchicalEmitter
@@ -364,3 +365,54 @@ def scylla_config_temporary(dynamodb, name, value, nop = False):
         yield
     finally:
         scylla_config_write(dynamodb, name, original_value)
+
+# manual_request() can be used to send a DynamoDB API request without any
+# boto3 involvement in preparing the request - the operation name and
+# operation payload (a JSON string) are created by the caller. Use this
+# function sparingly - most tests should use boto3's resource API or when
+# needed, client_no_transform(). Although manual_request() does give the test
+# more control, not using it allows the test to check the natural requests
+# sent by a real-life SDK.
+def manual_request(dynamodb, op, payload):
+    req = get_signed_request(dynamodb, op, payload)
+    res = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    if res.status_code == 200:
+        return json.loads(res.text)
+    else:
+        err = json.loads(res.text)
+        error_code = res.status_code
+        error_type = err['__type'].split('#')[1]
+        # Normally, DynamoDB uses lowercase 'message', but in some cases
+        # it uses 'Message', and for some types of error it may be missing
+        # entirely (we'll return an empty string for that).
+        message = err.get('message', err.get('Message', ''))
+        raise ManualRequestError(error_code, error_type, message)
+
+class ManualRequestError(Exception):
+    def __init__(self, error_code, error_type, message):
+        super().__init__(message) # message is the main exception text
+        self.code = error_code
+        self.type = error_type
+        self.message = message
+    def __str__(self):
+        return f'{self.code} {self.type} {self.message}'
+    __repr__ = __str__
+
+def get_signed_request(dynamodb, op, payload):
+    # Usually "payload" will be a Python string and we'll write it as UTF-8.
+    # but in some tests we may want to write bytes directly - potentially
+    # bytes which include invalid UTF-8.
+    payload_bytes = payload if isinstance(payload, bytes) else payload.encode(encoding='UTF-8')
+    # NOTE: Signing routines use boto3 implementation details and may be prone
+    # to unexpected changes
+    class Request:
+        url=dynamodb.meta.client._endpoint.host
+        headers={'X-Amz-Target': 'DynamoDB_20120810.' + op, 'Content-Type': 'application/x-amz-json-1.0'}
+        body=payload_bytes
+        method='POST'
+        context={}
+        params={}
+    req = Request()
+    signer = dynamodb.meta.client._request_signer
+    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
+    return req

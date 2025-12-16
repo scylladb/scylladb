@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
+from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
 
 # All tests in this file are expected to fail with tablets due to #23838.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -1016,6 +1016,47 @@ def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :x',
             ExpressionAttributeValues={':x': 2})
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+        do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# The above test_streams_updateitem_identical tested that if we UpdateItem an
+# item changing an attribute to a value identical to the one it already has,
+# no event is generated on the stream. In this test we change an attribute
+# value from one map to another which are really the same value, but have
+# different serialization (the map's elements are ordered differently).
+# Since the value is nevertheless the same, here too we expect not to see
+# a change event in the stream. Reproduces issue #27375.
+@pytest.mark.xfail(reason="issue #27375")
+def test_streams_updateitem_equal_but_not_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        # We use manual_request() to let us be sure that we pass the JSON
+        # values to the server in exactly the order we want to, without the
+        # Python SDK possibly rearranging them.
+        # Set x to be a map: {'dog': 1, 'cat': 2, 'mouse': 3}.
+        payload = '''{
+            "TableName": "''' + table.name + '''",
+            "Key": {"p": {"S": "''' + p + '''"}, "c": {"S": "''' + c + '''"}},
+            "UpdateExpression": "SET x = :x",
+            "ExpressionAttributeValues": {":x": %s}
+            }'''
+        manual_request(dynamodb, 'UpdateItem',
+            payload % '{"M": {"dog": {"N": "1"}, "cat": {"N": "2"}, "mouse": {"N": "3"}}}')
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': {'dog': 1, 'cat': 2, 'mouse': 3}}])
+        # Overwriting x an identical map item shouldn't produce any events,
+        # so we won't add anything to the "events" list:
+        manual_request(dynamodb, 'UpdateItem',
+            payload % '{"M": {"dog": {"N": "1"}, "cat": {"N": "2"}, "mouse": {"N": "3"}}}')
+        # Now try to overwrite x with a map that has the same elements in
+        # a different order. These two values, despite not being identical
+        # in JSON form, should be considered equal and again no event should
+        # be generated.
+        manual_request(dynamodb, 'UpdateItem',
+            payload % '{"M": {"cat": {"N": "2"}, "dog": {"N": "1"}, "mouse": {"N": "3"}}}')
         return events
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')

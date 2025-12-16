@@ -33,9 +33,8 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.test_manual_requests import get_signed_request
 from test.alternator.test_cql_rbac import new_dynamodb, new_role
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
