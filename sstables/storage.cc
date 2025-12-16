@@ -650,6 +650,14 @@ public:
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
 };
 
+class gcp_storage : public object_storage_base {
+public:
+    gcp_storage(shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+        : object_storage_base("GS", std::move(client), std::move(bucket), std::move(loc), as)
+    {}
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+};
+
 object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
     if (!sst.generation().is_uuid_based()) {
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
@@ -738,6 +746,11 @@ s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f,
     }
     co_return make_file_data_source(
         co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_object_name(sst, type), abort_source())), offset, len, std::move(options));
+}
+
+future<data_source>
+gcp_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    co_return create_prefetch_source(co_await object_storage_base::make_data_or_index_source(sst, type, std::move(f), offset, len, std::move(options)));
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
@@ -834,7 +847,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
                 return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::gcp_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
