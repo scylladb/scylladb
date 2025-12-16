@@ -80,18 +80,18 @@ def test_table_sn_with_data(test_table_sn):
 def test_filter_expression_partition_key_1(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*Condition'):
-        got_items = full_query(table, FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
+        full_query(table, FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
 
 def test_filter_expression_partition_key_2(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* p'):
-        got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
+        full_query(table, KeyConditionExpression='p=:p', FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
 
 # FilterExpression is also not allowed on the sort key.
 def test_filter_expression_sort_key(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* key '):
-        got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='c=:c',
+        full_query(table, KeyConditionExpression='p=:p', FilterExpression='c=:c',
             ExpressionAttributeValues={':p': p, ':c': 3})
 
 # Test the "=" operator on different types of attributes (numeric, string,
@@ -387,7 +387,6 @@ def test_filter_expression_map_contains(test_table_sn_with_data):
     assert(got_items == expected_items)
     # One value from a map:
     i = next(iter(items[2]['m']))
-    v = items[2]['m'][i]
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(m, :i)',
         ExpressionAttributeValues={':p': p, ':i': i})
     #The following could have made sense, but it's what DynamoDB does:
