@@ -135,5 +135,5 @@ const std::string db::object_storage_endpoint_param::gs_type = "gs";
 
 auto fmt::formatter<db::object_storage_endpoint_param>::format(const db::object_storage_endpoint_param& e, fmt::format_context& ctx) const
     -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "object_storage_endpoint_param{{}}", e.to_json_string());
+    return fmt::format_to(ctx.out(), "object_storage_endpoint_param{}", e.to_json_string());
 }
