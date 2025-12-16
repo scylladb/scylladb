@@ -3415,7 +3415,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
         if (name != "manifest.json" && name != "schema.cql") {
             details.total += size;
         } else {
-            size = 0;
+            continue;
         }
 
         try {
