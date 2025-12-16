@@ -958,7 +958,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto ip = utils::resolve(cfg->prometheus_address || cfg->listen_address, family, preferred).get();
 
                 prometheus::config pctx;
-                pctx.metric_help = "Scylla server statistics";
                 pctx.prefix = cfg->prometheus_prefix();
                 pctx.allow_protobuf = cfg->prometheus_allow_protobuf();
                 prometheus::start(prometheus_server, pctx).get();
