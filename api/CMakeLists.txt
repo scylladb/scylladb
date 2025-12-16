@@ -31,6 +31,7 @@ set(swagger_files
   api-doc/column_family.json
   api-doc/commitlog.json
   api-doc/compaction_manager.json
+  api-doc/client_routes.json
   api-doc/config.json
   api-doc/cql_server_test.json
   api-doc/endpoint_snitch_info.json
@@ -68,6 +69,7 @@ target_sources(api
   PRIVATE
     api.cc
     cache_service.cc
+    client_routes.cc
     collectd.cc
     column_family.cc
     commitlog.cc

@@ -14,12 +14,13 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/net/api.hh>
+#include "service/client_routes.hh"
 
 namespace cql_transport {
 
 class event {
 public:
-    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE };
+    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE, CLIENT_ROUTES_CHANGE };
 
     const event_type type;
 private:
@@ -28,6 +29,7 @@ public:
     class topology_change;
     class status_change;
     class schema_change;
+    class client_routes_change;
 };
 
 class event::topology_change : public event {
@@ -77,6 +79,39 @@ public:
     template <typename... Ts>
     schema_change(change_type change, target_type target, sstring keyspace, Ts... arguments)
         : schema_change(change, target, keyspace, std::vector<sstring>{std::move(arguments)...}) {}
+};
+
+class event::client_routes_change : public event {
+public:
+    enum class change_type { UPDATE_NODES };
+
+    const change_type change;
+private:
+    const std::set<service::client_routes_service::client_route_key> client_route_keys;
+public:
+    client_routes_change(const std::set<service::client_routes_service::client_route_key>& client_route_keys)
+        : event(event_type::CLIENT_ROUTES_CHANGE)
+        , change(change_type::UPDATE_NODES)
+        , client_route_keys(client_route_keys)
+    { }
+
+    std::vector<sstring> get_connection_ids() const {
+        std::vector<sstring> v;
+        v.reserve(client_route_keys.size());
+        for (const auto& k : client_route_keys) {
+            v.emplace_back(k.connection_id);
+        }
+        return v;
+    }
+
+    std::vector<sstring> get_host_ids() const {
+        std::vector<sstring> v;
+        v.reserve(client_route_keys.size());
+        for (const auto& k : client_route_keys) {
+            v.emplace_back(fmt::to_string(k.host_id));
+        }
+        return v;
+    }
 };
 
 }

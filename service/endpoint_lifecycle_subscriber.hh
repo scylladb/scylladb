@@ -13,6 +13,7 @@
 #include "gms/inet_address.hh"
 #include "locator/host_id.hh"
 #include "utils/atomic_vector.hh"
+#include "service/client_routes.hh"
 
 namespace service {
 
@@ -65,6 +66,7 @@ public:
      * @param endpoint the endpoint marked DOWN.
      */
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id host_id) {}
+    virtual void on_client_routes_change(const client_routes_service::client_route_keys& client_route_keys) {}
 };
 
 class endpoint_lifecycle_notifier {
@@ -79,6 +81,8 @@ public:
     future<> notify_released(locator::host_id host_id);
     future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_joined(gms::inet_address endpoint, locator::host_id host_id);
+
+    future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
 };
 
 }

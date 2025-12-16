@@ -23,6 +23,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
+#include "service/client_routes.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
@@ -1795,6 +1796,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auth_cache.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing client routes service");
+            static sharded<service::client_routes_service> client_routes;
+            client_routes.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(group0_client), std::ref(qp), std::ref(lifecycle_notifier)).get();
+            auto stop_client_routes = defer_verbose_shutdown("client_routes", [&] {
+                client_routes.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1803,7 +1811,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(view_building_worker), std::ref(qp), std::ref(sl_controller),
-                std::ref(auth_cache),
+                std::ref(auth_cache), std::ref(client_routes),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)
@@ -2190,6 +2198,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         });
                     });
             }).get();
+
+            api::set_server_client_routes(ctx, client_routes).get();
+            auto stop_cr_api = defer_verbose_shutdown("client routes API", [&ctx] {
+                api::unset_server_client_routes(ctx).get();
+            });
 
             checkpoint(stop_signal, "join cluster");
             // Allow abort during join_cluster since bootstrap or replace
