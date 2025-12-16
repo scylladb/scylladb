@@ -1541,6 +1541,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ldap_bind_dn(this, "ldap_bind_dn", value_status::Used, "", "Distinguished name used by LDAPRoleManager for binding to LDAP server.")
     , ldap_bind_passwd(this, "ldap_bind_passwd", value_status::Used, "", "Password used by LDAPRoleManager for binding to LDAP server.")
     , saslauthd_socket_path(this, "saslauthd_socket_path", value_status::Used, "", "UNIX domain socket on which saslauthd is listening.")
+    , anthropic_api_key(this, "anthropic_api_key", value_status::Used, "",
+        "API key for Anthropic Claude, used by DIAGNOSE ERROR command.")
+    , anthropic_model(this, "anthropic_model", value_status::Used, "claude-sonnet-4-20250514",
+        "Claude model to use for error diagnosis.")
+    , session_error_history_size(this, "session_error_history_size", value_status::Used, 10,
+        "Maximum errors per session for LIST ERRORS / DIAGNOSE ERROR.")
     , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")

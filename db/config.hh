@@ -552,6 +552,11 @@ public:
     named_value<sstring> ldap_bind_passwd;
     named_value<sstring> saslauthd_socket_path;
 
+    // Error diagnosis configuration
+    named_value<sstring> anthropic_api_key;
+    named_value<sstring> anthropic_model;
+    named_value<uint32_t> session_error_history_size;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;

@@ -32,6 +32,7 @@ target_sources(cql3
     cf_name.cc
     cql3_type.cc
     description.cc
+    error_history.cc
     operation.cc
     index_name.cc
     keyspace_element_name.cc
@@ -103,7 +104,9 @@ target_sources(cql3
     statements/list_service_level_statement.cc
     statements/list_service_level_attachments_statement.cc
     statements/list_effective_service_level_statement.cc
+    statements/list_errors_statement.cc
     statements/describe_statement.cc
+    statements/diagnose_error_statement.cc
     update_parameters.cc
     util.cc
     ut_name.cc

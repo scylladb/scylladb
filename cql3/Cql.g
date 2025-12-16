@@ -51,6 +51,8 @@ options {
 #include "cql3/statements/raw/use_statement.hh"
 #include "cql3/statements/raw/batch_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"
+#include "cql3/statements/list_errors_statement.hh"
+#include "cql3/statements/diagnose_error_statement.hh"
 #include "cql3/statements/list_users_statement.hh"
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
@@ -359,6 +361,8 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
+    | st51=listErrorsStatement         { $stmt = std::move(st51); }
+    | st52=diagnoseErrorStatement      { $stmt = std::move(st52); }
     ;
 
 /*
@@ -1516,6 +1520,22 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
         { $stmt->with_internals_details(with_hashed_passwords); } )?
     ;
 
+/**
+ * LIST ERRORS;
+ */
+listErrorsStatement returns [std::unique_ptr<cql3::statements::raw::list_errors_statement> stmt]
+    : K_LIST K_ERRORS { $stmt = std::make_unique<cql3::statements::raw::list_errors_statement>(); }
+    ;
+
+/**
+ * DIAGNOSE ERROR [N];
+ */
+diagnoseErrorStatement returns [std::unique_ptr<cql3::statements::raw::diagnose_error_statement> stmt]
+    : K_DIAGNOSE K_ERROR
+      ( idx=INTEGER { $stmt = std::make_unique<cql3::statements::raw::diagnose_error_statement>(std::stoi($idx.text)); }
+      | { $stmt = std::make_unique<cql3::statements::raw::diagnose_error_statement>(); } )
+    ;
+
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
@@ -2275,6 +2295,8 @@ K_MODIFY:      M O D I F Y;
 K_AUTHORIZE:   A U T H O R I Z E;
 K_DESCRIBE:    D E S C R I B E;
 K_NORECURSIVE: N O R E C U R S I V E;
+K_ERRORS:      E R R O R S;
+K_DIAGNOSE:    D I A G N O S E;
 
 K_USER:        U S E R;
 K_USERS:       U S E R S;

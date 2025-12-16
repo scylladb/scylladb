@@ -21,6 +21,7 @@
 
 #include "transport/cql_protocol_extension.hh"
 #include "service/qos/service_level_controller.hh"
+#include "cql3/error_history.hh"
 
 namespace auth {
 class resource;
@@ -127,6 +128,8 @@ private:
 
     workload_type _workload_type = workload_type::unspecified;
 
+    std::unique_ptr<cql3::error_history> _error_history;
+
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -178,6 +181,16 @@ public:
             , _timeout_config(timeout_config) {
         if (!auth_service.underlying_authenticator().require_authentication()) {
             _user = auth::authenticated_user();
+        }
+        _error_history = std::make_unique<cql3::error_history>();
+    }
+
+    cql3::error_history* get_error_history() { return _error_history.get(); }
+    const cql3::error_history* get_error_history() const { return _error_history.get(); }
+
+    void record_error(const sstring& error_message, const sstring& query) {
+        if (_error_history) {
+            _error_history->record_error(error_message, query);
         }
     }
 
