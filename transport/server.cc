@@ -1003,19 +1003,37 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_return res;
 }
 
+void cql_server::connection::update_user_scheduling_group_v1(const std::optional<auth::authenticated_user>& usr) {
+    switch_tenant([this, usr] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
+        auto shg = co_await _server._sl_controller.get_user_scheduling_group(usr);
+        _current_scheduling_group = shg;
+        co_return co_await _server._sl_controller.with_user_service_level(usr, std::move(process_loop));
+    });
+}
+
+void cql_server::connection::update_user_scheduling_group_v2(const std::optional<auth::authenticated_user>& usr) {
+    auto shg_grp = _server._sl_controller.get_cached_user_scheduling_group(usr);
+    _current_scheduling_group = shg_grp;
+    switch_tenant([this, usr] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
+        co_return co_await _server._sl_controller.with_user_service_level(usr, std::move(process_loop));
+    });
+}
+
+void cql_server::connection::update_control_connection_scheduling_group() {
+    auto shg_grp = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+    _current_scheduling_group = shg_grp;
+    switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+        co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
+    });
+}
+
 void cql_server::connection::update_scheduling_group() {
     if (_client_state.is_control_connection()) {
-        switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
-            auto shg = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
-            _current_scheduling_group = shg;
-            co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
-        });
+        update_control_connection_scheduling_group();
+    } else if (_server._sl_controller.can_use_effective_service_level_cache()) {
+        update_user_scheduling_group_v2(_client_state.user());
     } else {
-        switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
-            auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
-            _current_scheduling_group = shg;
-            co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
-        });
+        update_user_scheduling_group_v1(_client_state.user());
     }
 }
 

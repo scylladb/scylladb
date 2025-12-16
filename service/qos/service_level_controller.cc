@@ -640,6 +640,16 @@ future<scheduling_group> service_level_controller::auth_integration::get_user_sc
     }
 }
 
+scheduling_group service_level_controller::auth_integration::get_user_cached_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
+    if (usr && usr->name) {
+        auto sl_opt = find_cached_effective_service_level(*usr->name);
+        auto& sl_name = (sl_opt && sl_opt->shares_name) ? *sl_opt->shares_name : default_service_level_name;
+        return _sl_controller.get_scheduling_group(sl_name);
+    } else {
+        return _sl_controller.get_default_scheduling_group();
+    }
+}
+
 future<scheduling_group> service_level_controller::get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
     // Special case:
     // -------------
@@ -654,6 +664,11 @@ future<scheduling_group> service_level_controller::get_user_scheduling_group(con
 
     SCYLLA_ASSERT(_auth_integration != nullptr);
     return _auth_integration->get_user_scheduling_group(usr);
+}
+
+scheduling_group service_level_controller::get_cached_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
+    SCYLLA_ASSERT(_auth_integration != nullptr);
+    return _auth_integration->get_user_cached_scheduling_group(usr);
 }
 
 std::optional<sstring> service_level_controller::get_active_service_level() {
@@ -772,6 +787,10 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
 
 future<service_levels_info> service_level_controller::get_distributed_service_level(sstring service_level_name) {
     return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
+}
+
+bool service_level_controller::can_use_effective_service_level_cache() const{
+    return _sl_data_accessor && _sl_data_accessor->can_use_effective_service_level_cache();
 }
 
 future<bool> service_level_controller::validate_before_service_level_add() {
