@@ -593,7 +593,7 @@ private:
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
-    schema_ptr _cdc_schema;
+    mutable schema_ptr _cdc_schema;
 
     const std::array<column_count_type, 3> _offsets;
 
@@ -957,6 +957,7 @@ public:
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
+    friend class schema_registry;
     // May be called from different shard
     schema_registry_entry* registry_entry() const noexcept;
     // Returns true iff this schema version was synced with on current node.
