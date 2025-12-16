@@ -49,6 +49,9 @@ RUN_ID = pytest.StashKey[int]()
 
 logger = logging.getLogger(__name__)
 
+# Store pytest config globally so we can access it in hooks that only receive report
+_pytest_config: pytest.Config | None = None
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -184,6 +187,52 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         )
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_logreport(report):
+    """Add custom XML attributes to JUnit testcase elements.
+
+    This hook wraps the node_reporter's to_xml method to add custom attributes
+    when the XML element is created. This approach works with pytest-xdist because
+    it modifies the XML element directly when it's generated, rather than trying
+    to modify attrs before finalize() is called.
+
+    Attributes added:
+    - function_path: The function path of the test case (excluding parameters).
+
+    Uses trylast=True to run after LogXML's hook has created the node_reporter.
+    """
+    from _pytest.junitxml import xml_key
+
+    # Only process call phase
+    if report.when != "call":
+        return
+
+    # Get the XML reporter
+    config = _pytest_config
+    if config is None:
+        return
+
+    xml = config.stash.get(xml_key, None)
+    if xml is None:
+        return
+
+    node_reporter = xml.node_reporter(report)
+
+    nodeid = report.nodeid
+    function_path = f'test/{nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
+
+    # Wrap the to_xml method to add custom attributes to the element
+    original_to_xml = node_reporter.to_xml
+
+    def custom_to_xml():
+        """Wrapper that adds custom attributes to the testcase element."""
+        element = original_to_xml()
+        element.set("function_path", function_path)
+        return element
+
+    node_reporter.to_xml = custom_to_xml
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
@@ -196,6 +245,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    global _pytest_config
+    _pytest_config = config
+
     config.build_modes = get_modes_to_run(config)
 
     if testpy_run_id := config.getoption("--run_id"):
