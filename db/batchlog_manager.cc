@@ -77,9 +77,11 @@ future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) 
                 });
             });
         }
-        co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
-            bm._last_replay = last_replay;
-        });
+        if (all_replayed == all_batches_replayed::yes) {
+            co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
+                bm._last_replay = last_replay;
+            });
+        }
         blogger.debug("Batchlog replay on shard {}: done", dest);
     });
 }
@@ -180,7 +182,14 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
+<<<<<<< HEAD
             return make_ready_future<stop_iteration>(stop_iteration::no);
+||||||| parent of e3dcb7e827 (test: extend test_batchlog_replay_failure_during_repair)
+            co_return stop_iteration::no;
+=======
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::no;
+>>>>>>> e3dcb7e827 (test: extend test_batchlog_replay_failure_during_repair)
         }
 
         // check version of serialization format
