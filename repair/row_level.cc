@@ -3873,3 +3873,83 @@ future<uint32_t> repair_service::get_next_repair_meta_id() {
 locator::host_id repair_service::my_host_id() const noexcept {
     return _gossiper.local().my_host_id();
 }
+
+future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2) {
+    if (ranges1.empty() || ranges2.empty()) {
+        co_return 0;
+    }
+
+    auto sort = [] (utils::chunked_vector<tablet_token_range>& ranges) {
+        std::sort(ranges.begin(), ranges.end(), [] (const auto& a, const auto& b) {
+            if (a.first_token != b.first_token) {
+                return a.first_token < b.first_token;
+            }
+            return a.last_token < b.last_token;
+        });
+    };
+
+    // First, merge overlapping and adjacent ranges in ranges2.
+    sort(ranges2);
+    utils::chunked_vector<tablet_token_range> merged;
+    merged.push_back(ranges2[0]);
+    for (size_t i = 1; i < ranges2.size(); ++i) {
+        co_await coroutine::maybe_yield();
+        // To avoid overflow with max() + 1, we check adjacency with `a - 1 <= b` instead of `a <= b + 1`
+        if (ranges2[i].first_token - 1 <= merged.back().last_token) {
+            merged.back().last_token = std::max(merged.back().last_token, ranges2[i].last_token);
+        } else {
+            merged.push_back(ranges2[i]);
+        }
+    }
+
+    // Count covered ranges using a linear scan
+    size_t covered_count = 0;
+    auto it = merged.begin();
+    auto end = merged.end();
+    sort(ranges1);
+    for (const auto& r1 : ranges1) {
+        co_await coroutine::maybe_yield();
+        // Advance the merged iterator only if the current merged range ends
+        // before the current r1 starts.
+        while (it != end && it->last_token < r1.first_token) {
+            co_await coroutine::maybe_yield();
+            ++it;
+        }
+        // If we have exhausted the merged ranges, no further r1 can be covered
+        if (it == end) {
+            break;
+        }
+        // Check if the current merged range covers r1.
+        if (it->first_token <= r1.first_token && r1.last_token <= it->last_token) {
+            covered_count++;
+        }
+    }
+
+    co_return covered_count;
+}
+
+future<std::optional<repair_task_progress>> repair_service::get_tablet_repair_task_progress(tasks::task_id task_uuid) {
+    utils::chunked_vector<tablet_token_range> requested_tablets;
+    utils::chunked_vector<tablet_token_range> finished_tablets;
+    table_id tid;
+    if (!_db.local().features().tablet_repair_tasks_table) {
+        co_return std::nullopt;
+    }
+    co_await _sys_ks.local().get_repair_task(task_uuid, [&tid, &requested_tablets, &finished_tablets] (const db::system_keyspace::repair_task_entry& entry) -> future<> {
+        rlogger.debug("repair_task_progress: Get entry operation={} first_token={} last_token={}", entry.operation, entry.first_token, entry.last_token);
+        if (entry.operation == db::system_keyspace::repair_task_operation::requested) {
+            requested_tablets.push_back({entry.first_token, entry.last_token});
+        } else if (entry.operation == db::system_keyspace::repair_task_operation::finished) {
+            finished_tablets.push_back({entry.first_token, entry.last_token});
+        }
+        tid = entry.table_uuid;
+        co_return;
+    });
+    auto requested = requested_tablets.size();
+    auto finished_nomerge = finished_tablets.size();
+    auto finished = co_await count_finished_tablets(std::move(requested_tablets), std::move(finished_tablets));
+    auto progress = repair_task_progress{requested, finished, tid};
+    rlogger.debug("repair_task_progress: task_uuid={} table_uuid={} requested_tablets={} finished_tablets={} progress={} finished_nomerge={}",
+            task_uuid, tid, requested, finished, progress.progress(), finished_nomerge);
+    co_return progress;
+}
