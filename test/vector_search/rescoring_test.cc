@@ -55,41 +55,63 @@ SEASTAR_TEST_CASE(index_option_quantization_invalid_value) {
 }
 
 SEASTAR_TEST_CASE(index_option_oversampling_valid_values) {
-    std::vector<float> valid_factors = {1.0, 50.5, 100.0};
+    std::vector<sstring> valid_factors = {"1.0", "50.5", "100.0", "10", "1e1", "1000000e-4", "0x10", "  10  "};
     for (const auto& factor : valid_factors) {
         co_await do_with_cql_env(
-                [factor](cql_test_env& env) -> future<> {
+                [&factor](cql_test_env& env) -> future<> {
                     auto schema = co_await create_test_table(env, "ks", "cf");
 
-                    co_await env.execute_cql(
-                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'oversampling': {}}};", factor));
+                    BOOST_REQUIRE_NO_THROW(co_await env.execute_cql(
+                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'oversampling': {}}};", factor)));
                 },
                 make_config());
     }
 }
 
-SEASTAR_TEST_CASE(index_option_oversampling_invalid_value_below_range) {
-    co_await do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
-                auto schema = co_await create_test_table(env, "ks", "cf");
+SEASTAR_TEST_CASE(index_option_oversampling_invalid_values) {
+    std::vector<sstring> invalid_factors = {"0.9", "100.1", "0", "-5", "abc", "   ", "NaN", "inf"};
+    for (const auto& factor : invalid_factors) {
+        co_await do_with_cql_env(
+                [&factor](cql_test_env& env) -> future<> {
+                    auto schema = co_await create_test_table(env, "ks", "cf");
 
-                BOOST_REQUIRE_THROW(
-                        co_await env.execute_cql("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={'oversampling': 0.9};"),
+                    BOOST_REQUIRE_THROW(
+                        co_await env.execute_cql(
+                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'oversampling': '{}'}};", factor)),
                         exceptions::invalid_request_exception);
-            },
-            make_config());
+                },
+                make_config());
+    }
 }
 
-SEASTAR_TEST_CASE(index_option_oversampling_invalid_value_above_range) {
-    co_await do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
-                auto schema = co_await create_test_table(env, "ks", "cf");
+SEASTAR_TEST_CASE(index_option_rescoring_valid_values) {
+    std::vector<sstring> valid_rescoring = {"true", "false", "True", "False", "TRUE", "FALSE"};
+    for (const auto& rescoring : valid_rescoring) {
+        co_await do_with_cql_env(
+                [&rescoring](cql_test_env& env) -> future<> {
+                    auto schema = co_await create_test_table(env, "ks", "cf");
 
-                BOOST_REQUIRE_THROW(
-                        co_await env.execute_cql("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={'oversampling': 100.1};"),
+                    BOOST_REQUIRE_NO_THROW(co_await env.execute_cql(
+                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'rescoring': '{}'}};", rescoring)));
+                },
+                make_config());
+    }
+}
+
+SEASTAR_TEST_CASE(index_option_rescoring_invalid_value) {
+    std::vector<sstring> invalid_rescoring = {"invalid_value", "0", "1", " true", "false "};
+    for (const auto& rescoring : invalid_rescoring) {
+        co_await do_with_cql_env(
+                [&rescoring](cql_test_env& env) -> future<> {
+                    auto schema = co_await create_test_table(env, "ks", "cf");
+
+                    BOOST_REQUIRE_THROW(
+                        co_await env.execute_cql(
+                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'rescoring': '{}'}};", rescoring)),
                         exceptions::invalid_request_exception);
-            },
-            make_config());
+                },
+                make_config());
+    }
 }
 
 SEASTAR_TEST_CASE(oversampling_multiplies_limit_for_vector_store_query) {
