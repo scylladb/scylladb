@@ -29,9 +29,6 @@ A CDC generation consists of:
 
 This is the mapping used to decide on which stream IDs to use when making writes, as explained in the :doc:`./cdc-streams` document. It is a global property of the cluster: it doesn't depend on the table you're making writes to.
 
-.. caution::
-   The tables mentioned in the following sections: ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` have been introduced in ScyllaDB 4.4. It is highly recommended to upgrade to 4.4 for efficient CDC usage. The last section explains how to run the below examples in ScyllaDB 4.3.
-
 When CDC generations change
 ---------------------------
 
