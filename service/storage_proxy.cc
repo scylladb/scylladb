@@ -1114,7 +1114,7 @@ private:
                 // only for a truncate which is still waiting.
                 if (_topology_state_machine._topology.global_request) {
                     utils::UUID ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
-                    const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id, true);
+                    const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id);
                     auto global_request = std::get<service::global_topology_request>(topology_requests_entry.request_type);
                     if (global_request == global_topology_request::truncate_table) {
                         std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;

@@ -20,6 +20,7 @@
 #include "service/client_routes.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/task_manager_module.hh"
 #include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/snitch_base.hh"
@@ -49,6 +50,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "mutation/timestamp.hh"
+#include "utils/UUID.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
 #include "service/topology_coordinator.hh"
@@ -227,6 +229,7 @@ private:
     future<> _node_ops_abort_thread;
     shared_ptr<node_ops::task_manager_module> _node_ops_module;
     shared_ptr<service::task_manager_module> _tablets_module;
+    shared_ptr<service::topo::task_manager_module> _global_topology_requests_module;
     gms::gossip_address_map& _address_map;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
@@ -934,6 +937,7 @@ public:
     bool topology_global_queue_empty() const {
         return !_topology_state_machine._topology.global_request.has_value();
     }
+    future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
 private:
@@ -1071,6 +1075,8 @@ public:
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
 
+    future<> abort_paused_rf_change(utils::UUID request_id);
+
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};
     // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
@@ -1148,6 +1154,7 @@ public:
     friend class node_ops::node_ops_virtual_task;
     friend class tasks::task_manager;
     friend class tablet_virtual_task;
+    friend class topo::global_topology_request_virtual_task;
 };
 
 }

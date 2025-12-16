@@ -64,6 +64,10 @@ bool query_processor::topology_global_queue_empty() {
     return remote().first.get().ss.topology_global_queue_empty();
 }
 
+future<bool> query_processor::ongoing_rf_change(const service::group0_guard& guard, sstring ks) {
+    return remote().first.get().ss.ongoing_rf_change(guard, std::move(ks));
+}
+
 static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }

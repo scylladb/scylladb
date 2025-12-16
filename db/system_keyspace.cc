@@ -311,6 +311,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("paused_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -3396,6 +3397,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             }
         }
 
+        if (some_row.has("paused_rf_change_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "paused_rf_change_requests")) {
+                ret.paused_rf_change_requests.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
         if (some_row.has("enabled_features")) {
             ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
@@ -3607,35 +3614,43 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     return entry;
 }
 
-future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id, bool require_entry) {
+future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id) {
+    auto r = co_await get_topology_request_entry_opt(id);
+    if (!r) {
+        on_internal_error(slogger, format("no entry for request id {}", id));
+    }
+    co_return std::move(*r);
+}
+
+future<std::optional<system_keyspace::topology_requests_entry>> system_keyspace::get_topology_request_entry_opt(utils::UUID id) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
 
     if (!rs || rs->empty()) {
-        if (require_entry) {
-            on_internal_error(slogger, format("no entry for request id {}", id));
-        } else {
-            co_return topology_requests_entry{
-                .id = utils::null_uuid()
-            };
-        }
+        co_return std::nullopt;
     }
 
     const auto& row = rs->one();
     co_return topology_request_row_to_entry(id, row);
 }
 
-future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops_request_entries(db_clock::time_point end_time_limit) {
+future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries(std::vector<std::variant<service::topology_request, service::global_topology_request>> request_types, db_clock::time_point end_time_limit) {
+    sstring request_types_str = "";
+    bool first = true;
+    for (const auto& rt : request_types) {
+        if (!std::exchange(first, false)) {
+            request_types_str += ", ";
+        }
+        request_types_str += std::visit([] (auto&& arg) { return fmt::format("'{}'", arg); }, rt);
+    }
+
     // Running requests.
     auto rs_running = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE done = false AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS,
-            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove));
-
+        format("SELECT * FROM system.{} WHERE done = false AND request_type IN ({}) ALLOW FILTERING", TOPOLOGY_REQUESTS, request_types_str));
 
     // Requests which finished after end_time_limit.
     auto rs_done = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE end_time > {} AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count(),
-            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove));
+        format("SELECT * FROM system.{} WHERE end_time > {} AND request_type IN ({}) ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count(), request_types_str));
 
     topology_requests_entries m;
     for (const auto& row: *rs_done) {
@@ -3651,6 +3666,16 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops
     }
 
     co_return m;
+}
+
+future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops_request_entries(db_clock::time_point end_time_limit) {
+    return get_topology_request_entries({
+        service::topology_request::join,
+        service::topology_request::replace,
+        service::topology_request::rebuild,
+        service::topology_request::leave,
+        service::topology_request::remove
+    }, end_time_limit);
 }
 
 future<mutation> system_keyspace::get_insert_dict_mutation(

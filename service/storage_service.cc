@@ -231,6 +231,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
         , _tablets_module(make_shared<service::task_manager_module>(tm, *this))
+        , _global_topology_requests_module(make_shared<service::topo::task_manager_module>(tm))
         , _address_map(address_map)
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
@@ -254,9 +255,11 @@ storage_service::storage_service(abort_source& abort_source,
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
+    tm.register_module(_global_topology_requests_module->get_name(), _global_topology_requests_module);
     if (this_shard_id() == 0) {
         _node_ops_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
         _tablets_module->make_virtual_task<service::tablet_virtual_task>(*this);
+        _global_topology_requests_module->make_virtual_task<service::topo::global_topology_request_virtual_task>(*this);
     }
     register_metrics();
 
@@ -1376,6 +1379,34 @@ public:
         co_return true;
     }
 };
+
+future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstring ks) const {
+    auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
+        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
+            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::keyspace_rf_change &&
+            req_entry.new_keyspace_rf_change_ks_name.has_value() && req_entry.new_keyspace_rf_change_ks_name.value() == ks;
+    };
+    if (_topology_state_machine._topology.global_request_id.has_value()) {
+        auto req_id = _topology_state_machine._topology.global_request_id.value();
+        if (co_await ongoing_ks_rf_change(req_id)) {
+            co_return true;
+        }
+    }
+    for (auto request_id : _topology_state_machine._topology.paused_rf_change_requests) {
+        if (co_await ongoing_ks_rf_change(request_id)) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
+        if (co_await ongoing_ks_rf_change(request_id)) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return false;
+}
 
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
     if (params.replaced_id.has_value()) {
@@ -3445,6 +3476,7 @@ future<> storage_service::stop() {
     _listeners.clear();
     co_await _tablets_module->stop();
     co_await _node_ops_module->stop();
+    co_await _global_topology_requests_module->stop();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
     _tablet_split_monitor_event.signal();
@@ -5027,6 +5059,50 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_paused_rf_change(request_id);
+        });
+    }
+
+    if (!_feature_service.rack_list_rf) {
+        throw std::runtime_error("The RACK_LIST_RF feature is not enabled on the cluster yet");
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        bool found = std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id);
+        if (!found) {
+            slogger.warn("RF change request with id '{}' is not paused, so it can't be aborted", request_id);
+            co_return;
+        }
+
+        utils::chunked_vector<canonical_mutation> updates;
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
+        updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                                    .done("Aborted by user request")
+                                                    .build()));
+
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+                format("aborting rf change request {}", request_id));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            slogger.info("aborting request {}: concurrent modification, retrying.", request_id);
+            continue;
+        }
+        break;
+    }
+}
+
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
@@ -5230,7 +5306,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             request_id = _topology_state_machine._topology.global_request_id.value();
         } else if (!_topology_state_machine._topology.global_requests_queue.empty()) {
             request_id = _topology_state_machine._topology.global_requests_queue[0];
-            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id, true);
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
             curr_req = std::get<global_topology_request>(req_entry.request_type);
         } else {
             request_id = utils::UUID{};

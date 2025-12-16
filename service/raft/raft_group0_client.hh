@@ -254,6 +254,10 @@ public:
     group0_batch(const group0_batch&) = delete;
     group0_batch(group0_batch&&) = default;
 
+    const group0_guard& guard() const {
+        return _guard.value();
+    }
+
     // Gets timestamp which should be used when building mutations.
     api::timestamp_type write_timestamp() const;
     utils::UUID new_group0_state_id() const;

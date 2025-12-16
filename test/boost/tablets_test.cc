@@ -8,6 +8,8 @@
 
 
 
+#include "utils/UUID.hh"
+#include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
@@ -444,6 +446,36 @@ SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
         }
     }, tablet_cql_test_config())
     .get();
+}
+
+SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        auto topology = e.get_system_keyspace().local().load_topology_state({}).get();
+
+        // Check scheduled_rf_change_requests.
+        std::unordered_set<utils::UUID> current_requests;
+        auto new_id1 = utils::make_random_uuid();
+        topo.pause_rf_change_request(new_id1);
+        current_requests.insert(new_id1);
+        auto new_id2 = utils::make_random_uuid();
+        topo.pause_rf_change_request(new_id2);
+        current_requests.insert(new_id2);
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_requests.size(), topology.paused_rf_change_requests.size());
+        for (const auto& request : current_requests) {
+            BOOST_REQUIRE(topology.paused_rf_change_requests.contains(request));
+        }
+
+        topo.resume_rf_change_request(current_requests, new_id1);
+        current_requests.erase(new_id1);
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_requests.size(), topology.paused_rf_change_requests.size());
+        for (const auto& request : current_requests) {
+            BOOST_REQUIRE(topology.paused_rf_change_requests.contains(request));
+        }
+    }, tablet_cql_test_config());
 }
 
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
@@ -1611,7 +1643,7 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::topology& topology) {
     for (auto&& mig : plan.migrations()) {
         co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -1622,6 +1654,9 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
         });
     }
     co_await apply_resize_plan(tm, plan);
+    if (auto request_id = plan.rack_list_colocation_plan().request_to_resume(); request_id) {
+        topology.paused_rf_change_requests.erase(request_id);
+    }
 }
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
@@ -1662,13 +1697,15 @@ void do_rebalance_tablets(cql_test_env& e,
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
+    auto& sys_ks = e.get_system_keyspace().local();
+    auto& topology = e.get_topology_state_machine().local()._topology;
 
     // Sanity limit to avoid infinite loops.
     // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats ? load_stats->get() : nullptr, skiplist).get();
         if (plan.empty()) {
             return;
         }
@@ -1676,7 +1713,7 @@ void do_rebalance_tablets(cql_test_env& e,
             return;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            return apply_plan(tm, plan);
+            return apply_plan(tm, plan, e.get_topology_state_machine().local()._topology);
         }).get();
 
         if (auto_split && load_stats) {
@@ -1734,7 +1771,7 @@ void rebalance_tablets(cql_test_env& e,
 static
 void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm, shared_load_stats& stats) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get(), stats.get()).get();
+        auto plan = talloc.balance_tablets(stm.get(), nullptr, nullptr, stats.get()).get();
         if (plan.empty()) {
             break;
         }
@@ -1885,7 +1922,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_migrations_in_the_plan) {
         auto& stm = e.shared_token_metadata().local();
         auto& talloc = e.get_tablet_allocator().local();
         talloc.set_load_stats(topo.get_load_stats());
-        migration_plan plan = talloc.balance_tablets(stm.get()).get();
+        migration_plan plan = talloc.balance_tablets(stm.get(), nullptr, nullptr).get();
 
         BOOST_REQUIRE(!plan.empty());
         std::set<global_tablet_id> tablets;
@@ -1976,7 +2013,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
         auto& stm = e.shared_token_metadata().local();
         auto& talloc = e.get_tablet_allocator().local();
         talloc.set_load_stats(topo.get_load_stats());
-        migration_plan plan = talloc.balance_tablets(stm.get()).get();
+        migration_plan plan = talloc.balance_tablets(stm.get(), nullptr, nullptr).get();
 
         // The plan should contain non-conflicting migrations.
         BOOST_REQUIRE(!plan.empty());
@@ -1987,6 +2024,101 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
         }
 
     }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host4 = topo.add_node(node_state::normal, shard_count);
+        auto rack3 = topo.start_new_rack();
+        [[maybe_unused]] auto host5 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host6 = topo.add_node(node_state::normal, shard_count);
+        auto dc2 = topo.start_new_dc().dc;
+        [[maybe_unused]] auto host7 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host8 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        // rack1: host1: A D    host2: C
+        // rack2: host3: A      host4: B
+        // rack3: host5: C      host6: B D
+        tablet_id A{0}, B{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            A = tid;
+            tmap.set_tablet(tid, tablet_info {  // A
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            B = tid;
+            tmap.set_tablet(tid, tablet_info {  // B
+                tablet_replica_set {
+                    tablet_replica{host4, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {  // C
+                tablet_replica_set {
+                    tablet_replica{host2, 0},
+                    tablet_replica{host5, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {  // D
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        // Build the map literal for CQL
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc1, rack1.rack, dc1, rack3.rack);
+
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.paused_rf_change_requests.insert(id);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        BOOST_REQUIRE(!plan.empty());
+        // A : host3 -> host5 / host6
+        // B : host4 -> host1 / host2
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Rack list colocation migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::migration);
+            BOOST_REQUIRE(mig.src.host == host3 || mig.src.host == host4);
+            if (mig.src.host == host3) {
+                BOOST_REQUIRE(mig.tablet.tablet == A);
+                BOOST_REQUIRE(mig.dst.host == host5 || mig.dst.host == host6);
+            } else {
+                BOOST_REQUIRE(mig.tablet.tablet == B);
+                BOOST_REQUIRE(mig.dst.host == host1 || mig.dst.host == host2);
+            }
+        }
+    }).get();
 }
 
 // Throws if tablets have more than 1 replica in a given rack.
@@ -2032,6 +2164,63 @@ void check_rack_list(const locator::topology& topo, const tablet_map& tmap, sstr
             throw std::runtime_error(fmt::format("Bad racks for tablet {}: expected {}, got {}", tid, racks, actual_racks));
         }
         return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_with_two_replicas_in_rack) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host4 = topo.add_node(node_state::normal, shard_count);
+        auto rack3 = topo.start_new_rack();
+        [[maybe_unused]] auto host5 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host6 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        tablet_id A{0}, B{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            A = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host2, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            B = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host5, 0},
+                    tablet_replica{host6, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        // Build the map literal for CQL
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc1, rack1.rack, dc1, rack2.rack);
+
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        auto& stm = e.shared_token_metadata().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.paused_rf_change_requests.insert(id);
+        rebalance_tablets(e);
+        check_rack_list(stm.get()->get_topology(), stm.get()->tablets().get_tablet_map(table1), dc1, {rack1.rack, rack2.rack});
     }).get();
 }
 
@@ -2940,14 +3129,14 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     rebalance_tablets(e, &topo.get_shared_load_stats());
 
     auto& stm = e.shared_token_metadata().local();
-    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get().empty());
+    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
     auto disable_injection = seastar::defer([&] {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
-    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get().empty());
+    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr,topo.get_load_stats()).get().empty());
   }).get();
 }
 #endif
@@ -3073,7 +3262,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         });
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -3084,7 +3273,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -3094,7 +3283,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -3105,7 +3294,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -3115,7 +3304,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
   }).get();
@@ -3147,7 +3336,7 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
             co_return;
         });
 
-        migration_plan plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+        migration_plan plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
         BOOST_REQUIRE(plan.has_nodes_to_drain());
         for (auto&& mig : plan.migrations()) {
             BOOST_REQUIRE(mig.kind != tablet_transition_kind::intranode_migration);
@@ -4751,7 +4940,7 @@ SEASTAR_THREAD_TEST_CASE(test_ensure_node_for_load_sketch) {
 
         auto& talloc = e.get_tablet_allocator().local();
         auto& stm = e.shared_token_metadata().local();
-        talloc.balance_tablets(stm.get(), topo.get_shared_load_stats().get()).get();
+        talloc.balance_tablets(stm.get(), nullptr, nullptr, topo.get_shared_load_stats().get()).get();
     }).get();
 }
 
