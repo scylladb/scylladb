@@ -92,6 +92,32 @@ SEASTAR_TEST_CASE(index_option_oversampling_invalid_value_above_range) {
             make_config());
 }
 
+SEASTAR_TEST_CASE(index_option_rescoring_valid_values) {
+    std::vector<sstring> valid_rescoring = {"True", "False"};
+    for (const auto& rescoring : valid_rescoring) {
+        co_await do_with_cql_env(
+                [&rescoring](cql_test_env& env) -> future<> {
+                    auto schema = co_await create_test_table(env, "ks", "cf");
+
+                    BOOST_REQUIRE_NO_THROW(co_await env.execute_cql(
+                            fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'rescoring': '{}'}};", rescoring)));
+                },
+                make_config());
+    }
+}
+
+SEASTAR_TEST_CASE(index_option_rescoring_invalid_value) {
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "cf");
+
+                BOOST_REQUIRE_THROW(
+                        co_await env.execute_cql("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={'rescoring': 'invalid_value'};"),
+                        exceptions::invalid_request_exception);
+            },
+            make_config());
+}
+
 SEASTAR_TEST_CASE(oversampling_multiplies_limit_for_vector_store_query) {
     auto server = co_await make_vs_mock_server();
     co_await do_with_cql_env(
