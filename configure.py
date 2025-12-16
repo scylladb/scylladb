@@ -2192,6 +2192,8 @@ def kmiplib():
     for id in os_ids:
         if id in { 'centos', 'fedora', 'rhel' }:
             return 'rhel84'
+        elif id in { 'ubuntu', 'debian' }:
+            return 'ubuntu'  # Temporarily use a placeholder for Ubuntu/Debian
     print('Could not resolve libkmip.a for platform {}'.format(os_ids))
     sys.exit(1)
 
