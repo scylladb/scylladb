@@ -43,6 +43,86 @@ async def guarantee_repair_time_next_second():
     # different than the previous one.
     await asyncio.sleep(1)
 
+async def do_test_tablet_repair_progress_split_merge(manager: ManagerClient, do_split=False, do_merge=False):
+    nr_tablets = 16
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, tablets=nr_tablets)
+    token = 'all'
+    logs = []
+    for s in servers:
+        logs.append(await manager.server_open_log(s.server_id))
+
+    # Skip repair for the listed tablet id
+    nr_tablets_skipped = 4
+    nr_tablets_repaired = nr_tablets - nr_tablets_skipped
+    await inject_error_on(manager, "tablet_repair_skip_sched", servers, params={'value':"0,1,5,8"})
+
+    # Request to repair all tablets
+    repair_res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, await_completion=False)
+    logging.info(f'{repair_res=}')
+    tablet_task_id = repair_res['tablet_task_id']
+
+    async def get_task_status(desc):
+        task_status = await manager.api.get_task_status(servers[0].ip_addr, tablet_task_id)
+        completed = int(task_status['progress_completed'])
+        total = int(task_status['progress_total'])
+        logging.info(f'{desc=} {completed=} {total=} {task_status=}')
+        return completed, total
+
+    async def wait_task_progress(wanted_complete, wanted_total):
+        while True:
+            completed, total = await get_task_status("wait_task_progress")
+            if completed == wanted_complete and total == wanted_total:
+                break
+            await asyncio.sleep(1)
+
+    async def get_task_status_and_check(desc):
+        completed, total = await get_task_status(desc)
+        assert completed == nr_tablets_repaired
+        assert total == nr_tablets
+
+    # 12 out of 16 tablets should finish
+    await wait_task_progress(nr_tablets_repaired, nr_tablets)
+
+    if do_split:
+        await get_task_status_and_check("before_split")
+
+        s1_mark = await logs[0].mark()
+        await inject_error_on(manager, "tablet_force_tablet_count_increase", servers)
+        await logs[0].wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await inject_error_off(manager, "tablet_force_tablet_count_increase", servers)
+
+        await get_task_status_and_check("after_split")
+
+    if do_merge:
+        await get_task_status_and_check("before_merge")
+
+        s1_mark = await logs[0].mark()
+        await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+        await logs[0].wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
+
+        await get_task_status_and_check("after_merge")
+
+    # Wait for all repair to finish after all tablets can be scheduled to run repair
+    await inject_error_off(manager, "tablet_repair_skip_sched", servers)
+    await wait_task_progress(nr_tablets, nr_tablets)
+
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_tablet_repair_progress(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_split=False, do_merge=False)
+
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_tablet_repair_progress_split(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26844")
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_progress_merge(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)
+
 @pytest.mark.asyncio
 async def test_tablet_manual_repair(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
