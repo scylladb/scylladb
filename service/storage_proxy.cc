@@ -7240,20 +7240,36 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
-    if (!_hints_manager.uses_host_id()) {
+    //
+    // Hint replay must be allowed throughout the execution of `drain_for`
+    // (it's a precondition of it). Once enabled in `main.cc`, it stays true
+    // throughout the life of the node.
+    //
+    // Note that if we don't perform draining here because hint replay is not
+    // allowed yet, it'll be conducted by a call to `db::hints::manager::drain_left_nodes()`,
+    // which is called by `main.cc` after hint replay is turned on.
+    if (_hints_manager.replay_allowed() && !_hints_manager.uses_host_id()) {
         (void) _hints_manager.drain_for(hid, endpoint);
     }
-    if (!_hints_for_views_manager.uses_host_id()) {
+    if (_hints_for_views_manager.replay_allowed() && !_hints_for_views_manager.uses_host_id()) {
         (void) _hints_for_views_manager.drain_for(hid, endpoint);
     }
 }
 
 void storage_proxy::on_released(const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
-    if (_hints_manager.uses_host_id()) {
+    //
+    // Hint replay must be allowed throughout the execution of `drain_for`
+    // (it's a precondition of it). Once enabled in `main.cc`, it stays true
+    // throughout the life of the node.
+    //
+    // Note that if we don't perform draining here because hint replay is not
+    // allowed yet, it'll be conducted by a call to `db::hints::manager::drain_left_nodes()`,
+    // which is called by `main.cc` after hint replay is turned on.
+    if (_hints_manager.replay_allowed() && _hints_manager.uses_host_id()) {
         (void) _hints_manager.drain_for(hid, {});
     }
-    if (_hints_for_views_manager.uses_host_id()) {
+    if (_hints_for_views_manager.replay_allowed() && _hints_for_views_manager.uses_host_id()) {
         (void) _hints_for_views_manager.drain_for(hid, {});
     }
 }
