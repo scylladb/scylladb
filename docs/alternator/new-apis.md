@@ -2,9 +2,9 @@
 
 Alternator's primary goal is to be compatible with Amazon DynamoDB(TM)
 and its APIs, so that any application written to use Amazon DynamoDB could
-be run, unmodified, against Scylla with Alternator enabled. The extent of
+be run, unmodified, against ScyllaDB with Alternator enabled. The extent of
 Alternator's compatibility with DynamoDB is described in the
-[Scylla Alternator for DynamoDB users](compatibility.md) document.
+[ScyllaDB Alternator for DynamoDB users](compatibility.md) document.
 
 But Alternator also adds several features and APIs that are not available in
 DynamoDB. These Alternator-specific APIs are documented here.
@@ -15,7 +15,7 @@ _conditional_ update or an update based on the old value of an attribute.
 The read and the write should be treated as a single transaction - protected
 (_isolated_) from other parallel writes to the same item.
 
-Alternator could do this isolation by using Scylla's LWT (lightweight
+Alternator could do this isolation by using ScyllaDB's LWT (lightweight
 transactions) for every write operation, but this significantly slows
 down writes, and not necessary for workloads which don't use read-modify-write
 (RMW) updates.
@@ -41,7 +41,7 @@ isolation policy for a specific table can be overridden by tagging the table
     which need a read before the write. An attempt to use such statements
     (e.g.,  UpdateItem with a ConditionExpression) will result in an error.
     In this mode, the remaining write requests which are allowed - pure writes
-    without a read - are performed using standard Scylla writes, not LWT,
+    without a read - are performed using standard ScyllaDB writes, not LWT,
     so they are significantly faster than they would have been in the
     `always_use_lwt`, but their isolation is still correct.
 
@@ -65,19 +65,19 @@ isolation policy for a specific table can be overridden by tagging the table
     read-modify-write updates. This mode is not recommended for any use case,
     and will likely be removed in the future.
 
-## Accessing system tables from Scylla
-Scylla exposes lots of useful information via its internal system tables,
+## Accessing system tables from ScyllaDB
+ScyllaDB exposes lots of useful information via its internal system tables,
 which can be found in system keyspaces: 'system', 'system\_auth', etc.
 In order to access to these tables via alternator interface,
 Scan and Query requests can use a special table name:
 `.scylla.alternator.KEYSPACE_NAME.TABLE_NAME`
-which will return results fetched from corresponding Scylla table.
+which will return results fetched from corresponding ScyllaDB table.
 
 This interface can be used only to fetch data from system tables.
 Attempts to read regular tables via the virtual interface will result
 in an error.
 
-Example: in order to query the contents of Scylla's `system.large_rows`,
+Example: in order to query the contents of ScyllaDB's `system.large_rows`,
 pass `TableName='.scylla.alternator.system.large_rows'` to a Query/Scan
 request.
 
@@ -113,14 +113,14 @@ connection (either active or idle), not necessarily an active request as
 in Alternator.
 
 ## Service discovery
-As explained in [Scylla Alternator for DynamoDB users](compatibility.md),
+As explained in [ScyllaDB Alternator for DynamoDB users](compatibility.md),
 Alternator requires a load-balancer or a client-side load-balancing library
-to distribute requests between all Scylla nodes. This load-balancer needs
-to be able to _discover_ the Scylla nodes. Alternator provides two special
+to distribute requests between all ScyllaDB nodes. This load-balancer needs
+to be able to _discover_ the ScyllaDB nodes. Alternator provides two special
 requests, `/` and `/localnodes`, to help with this service discovery, which
 we will now explain.
 
-Some setups know exactly which Scylla nodes were brought up, so all that
+Some setups know exactly which ScyllaDB nodes were brought up, so all that
 remains is to periodically verify that each node is still functional. The
 easiest way to do this is to make an HTTP (or HTTPS) GET request to the node,
 with URL `/`. This is a trivial GET request and does **not** need to be
@@ -133,10 +133,10 @@ $ curl http://localhost:8000/
 healthy: localhost:8000
 ```
 
-In other setups, the load balancer might not know which Scylla nodes exist.
-For example, it may be possible to add or remove Scylla nodes without a
+In other setups, the load balancer might not know which ScyllaDB nodes exist.
+For example, it may be possible to add or remove ScyllaDB nodes without a
 client-side load balancer knowing. For these setups we have the `/localnodes`
-request that can be used to discover which Scylla nodes exist: A load balancer
+request that can be used to discover which ScyllaDB nodes exist: A load balancer
 that already knows at least one live node can discover the rest by sending
 a `/localnodes` request to the known node. It's again an unauthenticated
 HTTP (or HTTPS) GET request:
@@ -160,7 +160,7 @@ list the nodes in a specific _data center_ or _rack_. These options are
 useful for certain use cases:
 
 * A `dc` option (e.g., `/localnodes?dc=dc1`) can be passed to list the
-  nodes in a specific Scylla data center, not the data center of the node
+  nodes in a specific ScyllaDB data center, not the data center of the node
   being contacted. This is useful when a client knowns of _some_ Scylla
   node belonging to an unknown DC, but wants to list the nodes in _its_
   DC, which it knows by name.
@@ -191,7 +191,7 @@ tells them to.
 
 If you want to influence whether a specific Alternator table is created with tablets or vnodes,
 you can do this by specifying the `system:initial_tablets` tag
-(in earlier versions of Scylla the tag was `experimental:initial_tablets`)
+(in earlier versions of ScyllaDB the tag was `experimental:initial_tablets`)
 in the CreateTable operation. The value of this tag can be:
 
 * Any valid integer as the value of this tag enables tablets.

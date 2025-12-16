@@ -11,7 +11,7 @@ This section will guide you through the steps for setting up the cluster:
    <https://hub.docker.com/r/scylladb/scylla/>, but add to every `docker run`
    command a `-p 8000:8000` before the image name and
    `--alternator-port=8000 --alternator-write-isolation=always` at the end.
-   The "alternator-port" option specifies on which port Scylla will listen for
+   The "alternator-port" option specifies on which port ScyllaDB will listen for
    the (unencrypted) DynamoDB API, and the "alternator-write-isolation" chooses
    whether or not Alternator will use LWT for every write.
    For example,
@@ -24,10 +24,10 @@ This section will guide you through the steps for setting up the cluster:
 By default, ScyllaDB run in this way will not have authentication or
 authorization enabled, and any DynamoDB API request will be honored without
 requiring them to be signed appropriately. See the
-[Scylla Alternator for DynamoDB users](compatibility.md#authentication-and-authorization)
+[ScyllaDB Alternator for DynamoDB users](compatibility.md#authentication-and-authorization)
 document on how to configure authentication and authorization.
 
-## Testing Scylla's DynamoDB API support:
+## Testing ScyllaDB's DynamoDB API support:
 ### Running AWS Tic Tac Toe demo app to test the cluster:
 1. Follow the instructions on the [AWS github page](https://github.com/awsdocs/amazon-dynamodb-developer-guide/blob/master/doc_source/TicTacToe.Phase1.md)
 2. Enjoy your tic-tac-toe game :-)

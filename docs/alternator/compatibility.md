@@ -1,6 +1,6 @@
 # ScyllaDB Alternator for DynamoDB users
 
-Scylla supports the DynamoDB API (this feature is codenamed "Alternator").
+ScyllaDB supports the DynamoDB API (this feature is codenamed "Alternator").
 Our goal is to support any application written for Amazon DynamoDB.
 Nevertheless, there are a few differences between DynamoDB and Scylla, and
 and a few DynamoDB features that have not yet been implemented in Scylla.
@@ -8,16 +8,16 @@ The purpose of this document is to inform users of these differences.
 
 ## Provisioning
 
-The most obvious difference between DynamoDB and Scylla is that while
-DynamoDB is a shared cloud service, Scylla is a dedicated service running
+The most obvious difference between DynamoDB and ScyllaDB is that while
+DynamoDB is a shared cloud service, ScyllaDB is a dedicated service running
 on your private cluster. Whereas DynamoDB allows you to "provision" the
 number of requests per second you'll need - or at an extra cost not even
-provision that - Scylla requires you to provision your cluster. You need
+provision that - ScyllaDB requires you to provision your cluster. You need
 to reason about the number and size of your nodes - not the throughput.
 
 Moreover, DynamoDB's per-table provisioning (`BillingMode=PROVISIONED`) is
 not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
-on a table need to be valid but are ignored, and Scylla behaves like DynamoDB's
+on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB's
 `BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
 throughput cap.
 
@@ -33,7 +33,7 @@ Instructions for doing this can be found in:
 
 ## Write isolation policies
 
-Scylla was designed to optimize the performance of pure write operations -
+ScyllaDB was designed to optimize the performance of pure write operations -
 writes which do not need to read the previous value of the item.
 In CQL, writes which do need the previous value of the item must explicitly
 use the slower LWT ("LightWeight Transaction") feature to be correctly
@@ -79,11 +79,11 @@ a _higher_ timestamp - and this will be the "last write" that wins.
 To avoid or mitigate this write reordering issue, users may consider
 one or more of the following:
 
-1. Use NTP to keep the clocks on the different Scylla nodes synchronized.
+1. Use NTP to keep the clocks on the different ScyllaDB nodes synchronized.
    If the delay between the two writes is longer than NTP's accuracy,
    they will not be reordered.
 2. If an application wants to ensure that two specific writes are not
-   reordered, it should send both requests to the same Scylla node.
+   reordered, it should send both requests to the same ScyllaDB node.
    Care should be taken when using a load balancer - which might redirect
    two requests to two different nodes.
 3. Consider using the `always_use_lwt` write isolation policy.
@@ -210,7 +210,7 @@ CREATE SERVICE_LEVEL IF NOT EXISTS oltp WITH SHARES = 1000;
 ATTACH SERVICE_LEVEL olap TO alice;
 ATTACH SERVICE_LEVEL oltp TO bob;
 ```
-Note that `alternator_enforce_authorization` has to be enabled in Scylla configuration.
+Note that `alternator_enforce_authorization` has to be enabled in ScyllaDB configuration.
 
 See [Authorization](##Authorization) section to learn more about roles and authorization.
 See [Workload Prioritization](../features/workload-prioritization)
@@ -218,11 +218,11 @@ to read about Workload Prioritization in detail.
 
 ## Metrics
 
-Scylla has an advanced and extensive monitoring framework for inspecting
-and graphing hundreds of different metrics of Scylla's usage and performance.
-Scylla's monitoring stack, based on Grafana and Prometheus, is described in
+ScyllaDB has an advanced and extensive monitoring framework for inspecting
+and graphing hundreds of different metrics of ScyllaDB's usage and performance.
+ScyllaDB's monitoring stack, based on Grafana and Prometheus, is described in
 <https://docs.scylladb.com/operating-scylla/monitoring/>.
-This monitoring stack is different from DynamoDB's offering - but Scylla's
+This monitoring stack is different from DynamoDB's offering - but ScyllaDB's
 is significantly more powerful and gives the user better insights on
 the internals of the database and its performance.
 
@@ -248,7 +248,7 @@ data in different partition order. Applications mustn't rely on that
 undocumented order.
 
 Note that inside each partition, the individual items will be sorted the same
-in DynamoDB and Scylla - determined by the _sort key_ defined for that table.
+in DynamoDB and ScyllaDB - determined by the _sort key_ defined for that table.
 
 ---
 
@@ -274,7 +274,7 @@ is different, or can be configured in Alternator:
 ## Experimental API features
 
 Some DynamoDB API features are supported by Alternator, but considered
-**experimental** in this release. An experimental feature in Scylla is a
+**experimental** in this release. An experimental feature in ScyllaDB is a
 feature whose functionality is complete, or mostly complete, but it is not
 as thoroughly tested or optimized as regular features. Also, an experimental
 feature's implementation is still subject to change and upgrades may not be
@@ -351,8 +351,8 @@ they should be easy to detect. Here is a list of these unimplemented features:
 
 * The on-demand backup APIs are not supported: CreateBackup, DescribeBackup,
   DeleteBackup, ListBackups, RestoreTableFromBackup.
-  For now, users can use Scylla's existing backup solutions such as snapshots
-  or Scylla Manager.
+  For now, users can use ScyllaDB's existing backup solutions such as snapshots
+  or ScyllaDB Manager.
   <https://github.com/scylladb/scylla/issues/5063>
 
 * Continuous backup (the ability to restore any point in time) is also not
@@ -370,7 +370,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   <https://github.com/scylladb/scylla/issues/5068>
 
 * DAX (DynamoDB Accelerator), an in-memory cache for DynamoDB, is not
-  available in for Alternator. Anyway, it should not be necessary - Scylla's
+  available in for Alternator. Anyway, it should not be necessary - ScyllaDB's
   internal cache is already rather advanced and there is no need to place
   another cache in front of the it. We wrote more about this here:
   <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
@@ -384,7 +384,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
 * The PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE expressions)
   and the operations ExecuteStatement, BatchExecuteStatement and
   ExecuteTransaction are not yet supported.
-  A user that is interested in an SQL-like syntax can consider using Scylla's
+  A user that is interested in an SQL-like syntax can consider using ScyllaDB's
   CQL protocol instead.
   This feature was added to DynamoDB in November 2020.
   <https://github.com/scylladb/scylla/issues/8787>
@@ -393,7 +393,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   which is different from AWS's. In particular, the operations
   DescribeContributorInsights, ListContributorInsights and
   UpdateContributorInsights that configure Amazon's "CloudWatch Contributor
-  Insights" are not yet supported. Scylla has different ways to retrieve the
+  Insights" are not yet supported. ScyllaDB has different ways to retrieve the
   same information, such as which items were accessed most often.
   <https://github.com/scylladb/scylla/issues/8788>
 
