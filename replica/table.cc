@@ -3414,6 +3414,13 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
         // add it to the size.
         if (name != "manifest.json" && name != "schema.cql") {
             details.total += size;
+            if (sd.number_of_links == 1) {
+                // File exists only in the snapshot directory.
+                details.live += size;
+                continue;
+            }
+            // If the number of linkes is greater than 1, it is still possible that the file is linked to another snapshot
+            // So check the datadir for the file too.
         } else {
             continue;
         }
