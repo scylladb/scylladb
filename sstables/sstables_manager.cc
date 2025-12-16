@@ -79,7 +79,7 @@ storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_sto
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
-    , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
+    , _config_updater(std::make_unique<config_updater>(cfg, *this))
 {
     for (auto& e : cfg.object_storage_endpoints()) {
         _object_storage_endpoints.emplace(std::make_pair(e.key(), e));
@@ -170,9 +170,7 @@ std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
-        return sstm.container().invoke_on_all([&cfg](auto& sstm) -> future<> {
-            co_await sstm.update_config(cfg);
-        });
+        return sstm.update_config(cfg);
     })
     , observer(cfg.object_storage_endpoints.observe(action.make_observer()))
 {}

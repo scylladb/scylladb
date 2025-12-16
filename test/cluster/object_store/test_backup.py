@@ -166,7 +166,6 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail
 async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient, object_storage):
     '''backup should fail if the endpoint is invalid/inaccessible
        after updating the config, it should succeed'''
