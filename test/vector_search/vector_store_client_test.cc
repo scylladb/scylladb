@@ -198,47 +198,62 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
-    auto count = 0;
+    bool fail_dns_resolution = true;
     auto as = abort_source_timeout();
+    auto address = inet_address("127.0.0.1");
     configure(vs)
             .with_dns_refresh_interval(milliseconds(10))
             .with_wait_for_client_timeout(milliseconds(20))
-            .with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
+            .with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
                 BOOST_CHECK_EQUAL(host, "good.authority.here");
-                count++;
-                if (count % 3 != 0) {
+                if (fail_dns_resolution) {
                     co_return std::nullopt;
                 }
-                co_return inet_address(format("127.0.0.{}", count));
+                co_return address;
             });
 
     vs.start_background_tasks();
 
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
-        co_return addrs.size() == 1;
-    }));
-    BOOST_CHECK_EQUAL(count, 3);
-    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
-    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
-    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.3");
-
-    vector_store_client_tester::trigger_dns_resolver(vs);
-
+    // Wait for the DNS resolution to fail
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.empty();
     }));
 
+    fail_dns_resolution = false;
+
+    // Wait for the DNS resolution to succeed
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.size() == 1;
     }));
-    BOOST_CHECK_EQUAL(count, 6);
-    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+    auto addrs1 = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+    BOOST_REQUIRE_EQUAL(addrs1.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs1[0]), "127.0.0.1");
 
-    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
-    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.6");
+    fail_dns_resolution = true;
+    // Trigger DNS resolver to check for address changes
+    // Resolver will not re-check automatically after successful resolution
+    vector_store_client_tester::trigger_dns_resolver(vs);
+
+    // Wait for the DNS resolution to fail again
+    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+        co_return addrs.empty();
+    }));
+
+    // Resolve to a different address
+    address = inet_address("127.0.0.2");
+    fail_dns_resolution = false;
+
+    // Wait for the DNS resolution to succeed
+    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+        co_return addrs.size() == 1;
+    }));
+    auto addrs2 = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+    BOOST_REQUIRE_EQUAL(addrs2.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs2[0]), "127.0.0.2");
 
     co_await vs.stop();
 }
