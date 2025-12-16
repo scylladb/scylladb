@@ -190,7 +190,6 @@ async def do_test_backup_abort(manager: ManagerClient, s3_server,
 async def do_test_backup_abort(manager: ManagerClient, object_storage,
 =======
 @pytest.mark.asyncio
-@pytest.mark.xfail
 async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient, object_storage):
     '''backup should fail if the endpoint is invalid/inaccessible
        after updating the config, it should succeed'''
