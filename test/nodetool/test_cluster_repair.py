@@ -385,7 +385,7 @@ def test_repair_options_hosts_and_dcs_tablets(nodetool, datacenter, hosts):
                                    [("--tablet-tokens", "1")],
                                    [("--tablet-tokens", "-1,2")],
                                    [("--tablet-tokens", "-1"), ("--tablet-tokens", "2")]])
-def test_repair_options_hosts_tablets(nodetool, tokens):
+def test_repair_options_tokens_tablets(nodetool, tokens):
     _do_test_repair_options_tablets(nodetool, tokens=tokens)
 
 def test_repair_all_with_vnode_keyspace(nodetool):
