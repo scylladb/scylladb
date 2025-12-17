@@ -45,10 +45,3 @@ Run cqlsh:
      
      cqlsh
 
-Run cassandra-stress:
-
-.. code-block:: console
-     
-     cassandra-stress write -mode cql3 native 
-
-
