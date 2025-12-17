@@ -1292,3 +1292,218 @@ async def test_tablet_rebuild(manager: ManagerClient):
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_rebuild_failure(manager: ManagerClient):
     await check_tablet_rebuild_with_repair(manager, True)
+<<<<<<< HEAD
+||||||| parent of ffa11d6a2d (test: Verify that repair doesn't block disabling of tablet load balancing)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_with_invalid_session_id(manager: ManagerClient):
+    injection = "handle_tablet_migration_repair_random_session"
+    token = -1
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+
+    matches = [await log.grep(r"std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
+    assert sum(len(x) for x in matches) > 0
+
+@pytest.mark.asyncio
+async def test_moving_replica_to_replica(manager: ManagerClient):
+    """
+    Verify that trying to move a tablet replica to a node that is already
+    a replica is prevented with an appropriate error message.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+
+    with pytest.raises(Exception, match=rf"Tablet .* has replica on {host_id2}"):
+        await manager.api.move_tablet(
+            node_ip=s1.ip_addr,
+            ks=ks,
+            table=table,
+            src_host=host_id1,
+            src_shard=0,
+            dst_host=host_id2,
+            dst_shard=0,
+            token=tablet_token)
+
+@pytest.mark.asyncio
+async def test_moving_replica_within_single_rack(manager: ManagerClient):
+    """
+    Verify that it's possible to move a tablet from a replica node to a node
+    that's not a replica.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+    host_id, _ = await get_tablet_replica(manager, s1, ks, table, tablet_token)
+
+    if host_id != host_id1:
+        s1, s2 = s2, s1
+        host_id1, host_id2 = host_id2, host_id1
+
+    await manager.api.move_tablet(
+        node_ip=s1.ip_addr,
+        ks=ks,
+        table=table,
+        src_host=host_id1,
+        src_shard=0,
+        dst_host=host_id2,
+        dst_shard=0,
+        token=tablet_token)
+=======
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_with_invalid_session_id(manager: ManagerClient):
+    injection = "handle_tablet_migration_repair_random_session"
+    token = -1
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+
+    matches = [await log.grep(r"std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
+    assert sum(len(x) for x in matches) > 0
+
+@pytest.mark.asyncio
+async def test_moving_replica_to_replica(manager: ManagerClient):
+    """
+    Verify that trying to move a tablet replica to a node that is already
+    a replica is prevented with an appropriate error message.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+
+    with pytest.raises(Exception, match=rf"Tablet .* has replica on {host_id2}"):
+        await manager.api.move_tablet(
+            node_ip=s1.ip_addr,
+            ks=ks,
+            table=table,
+            src_host=host_id1,
+            src_shard=0,
+            dst_host=host_id2,
+            dst_shard=0,
+            token=tablet_token)
+
+@pytest.mark.asyncio
+async def test_moving_replica_within_single_rack(manager: ManagerClient):
+    """
+    Verify that it's possible to move a tablet from a replica node to a node
+    that's not a replica.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+    host_id, _ = await get_tablet_replica(manager, s1, ks, table, tablet_token)
+
+    if host_id != host_id1:
+        s1, s2 = s2, s1
+        host_id1, host_id2 = host_id2, host_id1
+
+    await manager.api.move_tablet(
+        node_ip=s1.ip_addr,
+        ks=ks,
+        table=table,
+        src_host=host_id1,
+        src_shard=0,
+        dst_host=host_id2,
+        dst_shard=0,
+        token=tablet_token)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    coord_srv = servers[0]
+    await manager.api.enable_injection(coord_srv.ip_addr, "tablet_allocator_shuffle", one_shot=False)
+    await manager.api.enable_injection(coord_srv.ip_addr, "tablet_keep_repairing", one_shot=False)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy'}}") as ks:
+        cql = manager.get_cql()
+        log = await manager.server_open_log(coord_srv.server_id)
+        mark = await log.mark()
+
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await log.wait_for('Initiating tablet', from_mark=mark)
+
+        # Should preempt balancing
+        await manager.api.disable_tablet_balancing(coord_srv.ip_addr)
+>>>>>>> ffa11d6a2d (test: Verify that repair doesn't block disabling of tablet load balancing)
