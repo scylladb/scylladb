@@ -604,12 +604,6 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
         service_level_names = [sl.service_level for sl in service_levels]
         assert "driver" not in service_level_names
 
-def get_processed_tasks_for_group(metrics, group):
-    res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
-    if res is None:
-        return 0
-    return res
-
 @pytest.mark.asyncio
 async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
     number_of_requests = 3000
