@@ -17,6 +17,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "batchlog_manager.hh"
 #include "batchlog.hh"
