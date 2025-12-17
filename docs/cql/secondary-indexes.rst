@@ -148,6 +148,11 @@ The following options are supported for vector indexes. All of them are optional
 |                              | candidates. This can improve accuracy at the cost of latency. Supported values are                       |               |
 |                              | floating-point numbers between 1.0 (no oversampling) and 100.0.                                          |               |
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``rescoring``                | Flag enabling recalculation of similarity scores with full precision and re-ranking of the candidate set.| ``False``     |
+|                              | Valid only for quantization below ``f32``. Supported values are:                                         |               |
+|                              | * ``True``: Enable rescoring.                                                                            |               |
+|                              | * ``False``: Disable rescoring.                                                                          |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 
 
 .. _drop-index-statement:
