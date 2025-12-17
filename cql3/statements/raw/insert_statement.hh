@@ -42,6 +42,7 @@ public:
                   std::unique_ptr<attributes::raw> attrs,
                   std::vector<::shared_ptr<column_identifier::raw>> column_names,
                   std::vector<expr::expression> column_values,
+                  std::optional<expr::expression> cond_opt,
                   bool if_not_exists);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
@@ -63,7 +64,8 @@ public:
      * @param json_value JSON string representing names and values
      * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
      */
-    insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, expr::expression json_value, bool if_not_exists, bool default_unset);
+    insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, expr::expression json_value,
+                  std::optional<expr::expression> cond_opt, bool if_not_exists, bool default_unset);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
