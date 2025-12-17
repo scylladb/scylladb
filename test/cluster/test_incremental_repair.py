@@ -769,3 +769,49 @@ async def test_incremental_repair_rejoin_do_tablet_operation(manager):
                 await manager.api.message_injection(s.ip_addr, "repair_finish_wait")
                 await manager.api.disable_injection(s.ip_addr, "repair_finish_wait")
             await coord_log.wait_for("Finished tablet repair")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_incremental_retry_end_repair_stage(manager):
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=config)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            table = cf.split('.')[-1]
+
+            async def get_coord():
+                coord = await get_topology_coordinator(manager)
+                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_log = await manager.server_open_log(coord_serv.server_id)
+                return coord, coord_serv, coord_log
+
+            for s in servers:
+                await manager.api.enable_injection(s.ip_addr, "fail_rpc_repair_update_compaction_ctrl", one_shot=False)
+                await manager.api.enable_injection(s.ip_addr, "log_tablet_transition_stage_end_repair", one_shot=False)
+
+            coord, coord_serv, coord_log = await get_coord()
+
+            response = await manager.api.tablet_repair(servers[0].ip_addr, ks, table, "all", await_completion=False, incremental_mode="incremental")
+            task_id = response['tablet_task_id']
+
+            await coord_log.wait_for("Finished tablet repair")
+            await trigger_stepdown(manager, coord_serv)
+
+            coord, coord_serv, coord_log = await get_coord()
+            await coord_log.wait_for(r"Failed to perform repair_update_compaction_ctrl for tablet repair .* nr_retried=3")
+
+            for s in servers:
+                await manager.api.disable_injection(s.ip_addr, "fail_rpc_repair_update_compaction_ctrl")
+
+            await coord_log.wait_for(r"The end_repair stage finished for tablet repair")
+
+            try:
+                await manager.api.wait_task(servers[0].ip_addr, task_id)
+            except Exception as e:
+                # Currently wait_task throws task not found in case the task_id has finished
+                if "not found" not in str(e):
+                    raise e
+
+            # Run the second repair after the first is finished
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, table, "all", await_completion=True, incremental_mode="incremental")
