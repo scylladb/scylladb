@@ -154,7 +154,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
             std::unordered_set<locator::host_id> ignore_nodes);
 
 public:
-    std::unordered_map<service::session_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
+    std::unordered_map<locator::global_tablet_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
 
 public:
     repair_service(sharded<service::topology_state_machine>& tsm,

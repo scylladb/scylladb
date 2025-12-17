@@ -1243,6 +1243,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
         service::session_id session_id;
+        uint32_t repair_update_compaction_ctrl_retried = 0;
     };
 
     std::unordered_map<locator::global_tablet_id, tablet_migration_state> _tablets;
@@ -1836,22 +1837,37 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
+                        if (tablet_state.session_id.uuid().is_null()) {
+                            tablet_state.session_id = trinfo.session_id;
+                        }
                         if (action_failed(tablet_state.repair_update_compaction_ctrl)) {
-                            rtlogger.warn("Failed to perform repair_update_compaction_ctrl for tablet repair tablet_id={}", gid);
-                            _tablets.erase(gid);
-                            updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
-                            break;
+                            rtlogger.warn("Failed to perform repair_update_compaction_ctrl for tablet repair tablet_id={} session_id={} nr_retried={}",
+                                    gid, tablet_state.session_id, tablet_state.repair_update_compaction_ctrl_retried);
+                            // Do not erase the tablet from _tablets or delete
+                            // the transitions yet so we can retry the
+                            // repair_update_compaction_ctrl verb
+                            tablet_state.repair_update_compaction_ctrl_retried++;
                         }
                         bool feature = _feature_service.tablet_incremental_repair;
-                        if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [ms = &_messaging,
-                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas, feature] () -> future<> {
+                        if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [this, ms = &_messaging,
+                                    gid = gid, sid = tablet_state.session_id, feature, &tmap] () -> future<> {
                             if (feature) {
-                                auto replicas = std::move(_replicas);
-                                co_await coroutine::parallel_for_each(replicas, [replicas, ms, gid, sid] (locator::tablet_replica& r) -> future<> {
+                                if (utils::get_local_injector().enter("fail_rpc_repair_update_compaction_ctrl")) {
+                                    auto msg = fmt::format("Failed repair_update_compaction_ctrl for tablet repair tablet_id={} session_id={} due to error injection", gid, sid);
+                                    rtlogger.info("{}", msg);
+                                    throw std::runtime_error(msg);
+                                }
+                                auto& replicas = tmap.get_tablet_info(gid.tablet).replicas;
+                                co_await coroutine::parallel_for_each(replicas, [this, ms, gid, sid] (locator::tablet_replica r) -> future<> {
+                                    if (!is_excluded(raft::server_id(r.host.uuid()))) {
                                         co_await ser::repair_rpc_verbs::send_repair_update_compaction_ctrl(ms, r.host, gid, sid);
+                                    }
                                 });
                             }
                         })) {
+                            if (utils::get_local_injector().enter("log_tablet_transition_stage_end_repair")) {
+                                rtlogger.info("The end_repair stage finished for tablet repair tablet_id={} session_id={}", gid, tablet_state.session_id);
+                            }
                             _tablets.erase(gid);
                             updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
                         }
