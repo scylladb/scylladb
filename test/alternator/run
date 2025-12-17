@@ -63,6 +63,11 @@ def run_alternator_cmd(pid, dir):
     (cmd, env) = run_scylla_cmd(pid, dir)
     ip = run.pid_to_ip(pid)
     cmd += [
+        # this is required by test_streams.py test_parent_filtering and test_get_records_with_alternating_tablets_count
+        # setting the value using scylla_config_temporary won't work, because the value is read
+        # at the start and then periodically with `tablet-load-stats-refresh-interval-in-seconds`
+        # interval, which by default is 60 seconds.
+        '--tablet-load-stats-refresh-interval-in-seconds', '1',
         '--alternator-address', ip,
         '--alternator-enforce-authorization', '1',
         '--alternator-write-isolation', 'only_rmw_uses_lwt',

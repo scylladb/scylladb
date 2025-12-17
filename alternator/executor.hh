@@ -27,6 +27,7 @@
 
 namespace db {
     class system_distributed_keyspace;
+    class system_keyspace;
 }
 
 namespace query {
@@ -139,6 +140,7 @@ class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
+    db::system_keyspace &_system_keyspace;
     cdc::metadata& _cdc_metadata;
     utils::updateable_value<bool> _enforce_authorization;
     utils::updateable_value<bool> _warn_authorization;
@@ -175,6 +177,7 @@ public:
              service::storage_proxy& proxy,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
+             db::system_keyspace& system_keyspace,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
              utils::updateable_value<uint32_t> default_timeout_in_ms);
@@ -230,6 +233,10 @@ private:
     future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
         const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit);
+    sstring get_table_name_from_stream_arn(std::string_view arn);
+    table_id get_cdc_log_table_id_from_stream_arn(std::string_view arn);
+    std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(std::string_view arn);
+    std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(const rjson::value &request);
 
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&, const std::map<sstring, sstring> *tags = nullptr);

@@ -252,6 +252,7 @@ executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
+         db::system_keyspace& system_keyspace,
          cdc::metadata& cdc_metadata,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
@@ -259,6 +260,7 @@ executor::executor(gms::gossiper& gossiper,
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
+      _system_keyspace(system_keyspace),
       _cdc_metadata(cdc_metadata),
       _enforce_authorization(_proxy.data_dictionary().get_config().alternator_enforce_authorization),
       _warn_authorization(_proxy.data_dictionary().get_config().alternator_warn_authorization),
@@ -767,6 +769,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     // until the table is really available. So/ DescribeTable returns either
     // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
     // The states CREATING and UPDATING are not currently returned.
+    rjson::add(table_description, "TableSizeBytes", 1);
     rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
@@ -1793,10 +1796,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
                 const auto& topo = sp.local_db().get_token_metadata().get_topology();
                 auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
-                if (rs->uses_tablets()) {
-                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                    "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
-                }
             }
         }
         // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
@@ -1955,10 +1954,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
-                        if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                            "If you want to enable streams, re-create this table with vnodes (with the tag 'system:initial_tablets' set to 'none').");
-                        }
                         if (tab->cdc_options().enabled()) {
                             co_return api_error::validation("Table already has an enabled stream: TableName: " + tab->cf_name());
                         }
