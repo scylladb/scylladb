@@ -17,7 +17,7 @@ from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, new_tablet_keyspace
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -1616,3 +1616,21 @@ async def test_moving_replica_within_single_rack(manager: ManagerClient):
         dst_host=host_id2,
         dst_shard=0,
         token=tablet_token)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
+    server = await manager.server_add()
+    await manager.api.enable_injection(server.ip_addr, "tablet_allocator_shuffle", one_shot=False)
+    await manager.api.enable_injection(server.ip_addr, "tablet_keep_repairing", one_shot=False)
+
+    async with new_tablet_keyspace(manager, initial_tablets=10) as ks:
+        cql = manager.get_cql()
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await log.wait_for('Initiating tablet', from_mark=mark)
+
+        # Should preempt balancing
+        await manager.api.disable_tablet_balancing(server.ip_addr)
