@@ -25,6 +25,7 @@ Example output
    scope: keyspace
    state: running
    is_abortable: true
+   creation_time: 2024-07-29T15:48:50Z
    start_time: 2024-07-29T15:48:55Z
    end_time:
    error:

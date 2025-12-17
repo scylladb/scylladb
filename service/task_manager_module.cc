@@ -13,6 +13,7 @@
 #include "service/task_manager_module.hh"
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
+#include "utils/UUID_gen.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 
 namespace service {
@@ -57,9 +58,14 @@ static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tab
         .kind = tasks::task_kind::cluster,
         .scope = get_scope(task_info.request_type),
         .state = tasks::task_manager::task_state::running,
+        .sequence_number = 0,
         .keyspace = schema->ks_name(),
         .table = schema->cf_name(),
-        .start_time = task_info.request_time
+        .entity = "",
+        .shard = 0,
+        .creation_time = task_info.request_time,
+        .start_time = task_info.sched_time,
+        .end_time = db_clock::time_point{}
     };
 }
 
@@ -225,7 +231,8 @@ static void update_status(const locator::tablet_task_info& task_info, tasks::tas
     sched_nr += task_info.sched_nr;
     status.type = locator::tablet_task_type_to_string(task_info.request_type);
     status.scope = get_scope(task_info.request_type);
-    status.start_time = task_info.request_time;
+    status.creation_time = task_info.request_time;
+    status.start_time = task_info.sched_time;
 }
 
 future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint) {

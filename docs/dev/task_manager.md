@@ -45,6 +45,22 @@ immediately after it's finished.
 
 A flag which determines if a task can be aborted through API.
 
+# Task timing fields
+
+Tasks have three timing fields that track different stages of their lifecycle:
+
+- `creation_time` - When the task was created/queued. This is extracted from the task's
+  UUID (which is a timeuuid) and represents the moment the task request was submitted.
+- `start_time` - When the task actually began executing. For tasks that are queued, this
+  will be unspecified (equal to epoch) until execution starts. For node operations
+  like decommission, this is set when the request is picked up for execution by the
+  topology coordinator.
+- `end_time` - When the task completed (successfully or with an error). This is
+  unspecified (equal to epoch) until the task finishes.
+
+The difference between `creation_time` and `start_time` represents the time a task
+spent waiting in the queue before execution began.
+
 # Type vs scope vs kind
 
 `type` of a task describes what operation is covered by a task,

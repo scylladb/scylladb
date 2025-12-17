@@ -1139,8 +1139,7 @@ private:
             topology_mutation_builder builder(guard.write_timestamp());
             topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features.topology_requests_type_column);
             trbuilder.set_truncate_table_data(table_id)
-                     .set("done", false)
-                     .set("start_time", db_clock::now());
+                     .set("done", false);
 
             if (!_sp._features.topology_global_request_queue) {
                 builder.set_global_topology_request(global_topology_request::truncate_table)

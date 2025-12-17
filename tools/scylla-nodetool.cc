@@ -3174,7 +3174,7 @@ void tasks_print_status(const rjson::value& res) {
     auto status = res.GetObject();
     for (const auto& x: status) {
         if (x.value.IsString()) {
-            if (strcmp(x.name.GetString(), "start_time") == 0 || strcmp(x.name.GetString(), "end_time") == 0) {
+            if (strcmp(x.name.GetString(), "creation_time") == 0 || strcmp(x.name.GetString(), "start_time") == 0 || strcmp(x.name.GetString(), "end_time") == 0) {
                 fmt::print("{}: {}\n", x.name.GetString(), get_time(x.value.GetString()));
             } else {
                 fmt::print("{}: {}\n", x.name.GetString(), x.value.GetString());
@@ -3226,6 +3226,7 @@ void tasks_add_tree_to_statuses_lists(Tabulate& table, const rjson::value& res) 
                 rjson::to_string_view(status["scope"]),
                 rjson::to_string_view(status["state"]),
                 status["is_abortable"].GetBool(),
+                get_time(rjson::to_string_view(status["creation_time"])),
                 get_time(rjson::to_string_view(status["start_time"])),
                 get_time(rjson::to_string_view(status["end_time"])),
                 rjson::to_string_view(status["error"]),
@@ -3245,7 +3246,7 @@ void tasks_add_tree_to_statuses_lists(Tabulate& table, const rjson::value& res) 
 void tasks_print_trees(const std::vector<rjson::value>& res) {
     Tabulate table;
     table.add("id", "type", "kind", "scope", "state",
-        "is_abortable", "start_time", "end_time", "error", "parent_id",
+        "is_abortable", "creation_time", "start_time", "end_time", "error", "parent_id",
         "sequence_number", "shard", "keyspace", "table", "entity",
         "progress_units", "total", "completed", "children_ids");
 
@@ -3259,7 +3260,7 @@ void tasks_print_trees(const std::vector<rjson::value>& res) {
 void tasks_print_stats_list(const rjson::value& res) {
     auto stats = res.GetArray();
     Tabulate table;
-    table.add("task_id", "type", "kind", "scope", "state", "sequence_number", "keyspace", "table", "entity", "shard", "start_time", "end_time");
+    table.add("task_id", "type", "kind", "scope", "state", "sequence_number", "keyspace", "table", "entity", "shard", "creation_time", "start_time", "end_time");
     for (auto& element : stats) {
         const auto& s = element.GetObject();
 
@@ -3273,6 +3274,7 @@ void tasks_print_stats_list(const rjson::value& res) {
                 rjson::to_string_view(s["table"]),
                 rjson::to_string_view(s["entity"]),
                 s["shard"].GetUint(),
+                get_time(rjson::to_string_view(s["creation_time"])),
                 get_time(rjson::to_string_view(s["start_time"])),
                 get_time(rjson::to_string_view(s["end_time"])));
     }
