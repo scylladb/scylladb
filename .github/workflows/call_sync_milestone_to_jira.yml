@@ -1,0 +1,14 @@
+name: Call Jira release creation for new milestone
+
+on:
+  milestone:
+    types: [created]
+
+jobs:
+  sync-milestone-to-jira:
+    uses: scylladb/github-automation/.github/workflows/main_sync_milestone_to_jira_release.yml@main
+    with:
+      # Comma-separated list of Jira project keys
+      jira_project_keys: "SCYLLADB,CUSTOMER"
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
