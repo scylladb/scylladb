@@ -543,6 +543,23 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
     else:
         await manager.get_cql().run_async("DROP KEYSPACE " + keyspace, host=host)
 
+@asynccontextmanager
+async def new_tablet_keyspace(manager: ManagerClient, rf_per_dc=None, replication_factor=None, initial_tablets=None, host=None):
+    """
+    Creates a new tablet keyspace.
+    """
+    opts = "WITH replication = {'class': 'NetworkTopologyStrategy'"
+    if replication_factor:
+        opts += f" ', replication_factor': {replication_factor}"
+    if rf_per_dc:
+        opts += ', '.join(f"'{dc}': {rf}" for dc, rf in rf_per_dc)
+    opts += "} AND tablets = {'enabled': 'true'"
+    if initial_tablets:
+        opts += f", 'initial': {initial_tablets}"
+    opts += "}"
+    async with new_test_keyspace(manager, opts, host) as keyspace:
+        yield keyspace
+
 previously_used_table_names = []
 @asynccontextmanager
 async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
