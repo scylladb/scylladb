@@ -40,16 +40,8 @@ struct test_pinger: public direct_failure_detector::pinger {
                 co_return;
             }
 
-            promise<> p;
-            auto f = p.get_future();
-            auto sub = as.subscribe([&, p = std::move(p)] () mutable noexcept {
-                p.set_value();
-            });
-            if (!sub) {
-                throw abort_requested_exception{};
-            }
-            co_await std::move(f);
-            throw abort_requested_exception{};
+            // Simulate a blocking ping that only returns when aborted.
+            co_await sleep_abortable(std::chrono::hours(1), as);
         }, as);
         co_return ret;
     }
