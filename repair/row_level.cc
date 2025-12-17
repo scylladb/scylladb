@@ -1179,6 +1179,7 @@ private:
         bool full = is_incremental_repair_using_all_sstables();
         auto& tinfo = tmap.get_tablet_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
+        auto gid = locator::global_tablet_id{tid, id};
         // Consider this:
         // 1) n1 is the topology coordinator
         // 2) n1 schedules and executes a tablet repair with session id s1 for a tablet on n3 an n4.
@@ -1190,7 +1191,7 @@ private:
         // To avoid the deadlock, we can throw in step 7 so that n2 will
         // proceed to the end_repair stage and release the lock. After that,
         // the scheduler could schedule the tablet repair again.
-        if (_rs._repair_compaction_locks.contains(_frozen_topology_guard)) {
+        if (_rs._repair_compaction_locks.contains(gid)) {
             auto msg = fmt::format("Tablet repair session={} table={} is in progress", _frozen_topology_guard, tid);
             rlogger.info("{}", msg);
             throw std::runtime_error(msg);
@@ -1199,7 +1200,7 @@ private:
         co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(60s));
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
-            _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
+            _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
         }
         auto sstables = co_await table.take_storage_snapshot(_range);
         _incremental_repair_meta.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_schema, _range));
@@ -2838,9 +2839,20 @@ future<> repair_service::init_ms_handlers() {
             auto& table = local_repair.get_db().local().find_column_family(gid.table);
             auto erm = table.get_effective_replication_map();
             auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
+            auto* trinfo = tmap.get_tablet_transition_info(gid.tablet);
+            if (!trinfo) {
+                auto msg = fmt::format("Skipped repair_update_compaction_ctrl gid={} session_id={} since tablet is not in transition", gid, topo_guard);
+                rlogger.warn("{}", msg);
+                throw std::runtime_error(msg);
+            }
+            if (trinfo->stage != locator::tablet_transition_stage::end_repair) {
+                auto msg = fmt::format("Skipped repair_update_compaction_ctrl gid={} session_id={} since tablet is not in tablet_transition_stage::end_repair", gid, topo_guard);
+                rlogger.warn("{}", msg);
+                throw std::runtime_error(msg);
+            }
             auto range = tmap.get_token_range(gid.tablet);
             co_await table.clear_being_repaired_for_range(range);
-            auto removed = local_repair._repair_compaction_locks.erase(topo_guard);
+            auto removed = local_repair._repair_compaction_locks.erase(gid);
             rlogger.info("Got repair_update_compaction_ctrl gid={} session_id={} removed={}", gid, topo_guard, removed);
         });
     });
