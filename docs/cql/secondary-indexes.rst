@@ -177,6 +177,20 @@ The following options are supported for vector indexes. All of them are optional
 |                              | as ``efSearch``. Higher values lead to better recall (i.e., more relevant results are found)             |               |
 |                              | but increase query latency. Supported values are integers between 1 and 4096.                            |               |
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``quantization``             | The quantization method to use for compressing vectors in Vector Index. Vectors in base table            | ``f32``       |
+|                              | are never compressed. Supported values (case-insensitive) are:                                           |               |
+|                              |                                                                                                          |               |
+|                              | * ``f32``: 32-bit single-precision IEEE 754 floating-point.                                              |               |
+|                              | * ``f16``: 16-bit standard half-precision floating-point (IEEE 754).                                     |               |
+|                              | * ``bf16``: 16-bit "Brain" floating-point (optimized for ML workloads).                                  |               |
+|                              | * ``i8``: 8-bit signed integer.                                                                          |               |
+|                              | * ``b1``: 1-bit binary value (packed 8 per byte).                                                        |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``oversampling``             | A multiplier for the candidate set size during the search phase. For example, if a query asks for 10     | ``1.0``       |
+|                              | similar vectors (``LIMIT 10``) and ``oversampling`` is 2.0, the search will initially retrieve 20        |               |
+|                              | candidates. This can improve accuracy at the cost of latency. Supported values are                       |               |
+|                              | floating-point numbers between 1.0 (no oversampling) and 100.0.                                          |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 
 
 .. _drop-index-statement:
