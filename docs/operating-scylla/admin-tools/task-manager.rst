@@ -93,6 +93,25 @@ API calls
 
 Cluster tasks are not unregistered from task manager with API calls.
 
+Node operations module
+----------------------
+
+There is a module named ``node_ops``, which allows tracking node operations: decommission, removenode, bootstrap, replace, rebuild.
+
+The ``type`` field designates the operation, and is one of:
+  - ``decommission``
+  - ``remove node``
+  - ``bootstrap``
+  - ``replace``
+  - ``rebuild``
+
+The ``scope`` and ``kind`` fields are set to ``cluster``.
+
+The ``entity`` field holds the host id of the node which is being operated on, as long as the request
+is not finished. In case of the ``replace`` operation, it will hold the host id of the replacing node.
+
+``decommission`` and ``remove node`` tasks are abortable, but only before they finish tablet migration.
+
 Tasks API
 ---------
 
