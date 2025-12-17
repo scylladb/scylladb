@@ -86,7 +86,7 @@ Compaction Strategies with Materialized Views
 Materialized views, just like regular tables, use one of the available :doc:`compaction strategies </architecture/compaction/compaction-strategies>`.
 When a materialized view is created, it does not inherit its base table compaction strategy settings, because the data model
 of a view does not necessarily have the same characteristics as the one from its base table.
-Instead, the default compaction strategy (SizeTieredCompactionStrategy) is used.
+Instead, the default compaction strategy (IncrementalCompactionStrategy) is used.
 
 A compaction strategy for a new materialized view can be explicitly set during its creation, using the following command:
 
