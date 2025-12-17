@@ -1014,6 +1014,10 @@ public:
 
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
             const locator::repair_scheduler_config& config, const db_clock::time_point& now, db_clock::duration& diff) {
+        if (utils::get_local_injector().enter("tablet_keep_repairing")) {
+            lblogger.info("Forced auto-repair for tablet={}", gid);
+            co_return true;
+        }
         co_return false;
     }
 
