@@ -93,7 +93,7 @@ float similarity_euclidean_fct::compute_similarity(const std::vector<data_value>
         sum += diff * diff;
     }
 
-    return sum;
+    return 1.0f / (1.0f + sum);
 }
 
 float similarity_dot_product_fct::compute_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
