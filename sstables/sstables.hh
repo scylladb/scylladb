@@ -1084,7 +1084,8 @@ public:
         reader_permit permit,
         tracing::trace_state_ptr trace_state = {},
         use_caching caching = use_caching::yes,
-        bool single_partition_read = false);
+        bool single_partition_read = false,
+        use_caching use_partition_index_cache = use_caching::yes);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class

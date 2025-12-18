@@ -2539,8 +2539,10 @@ sstable::make_reader(
 ) {
     const auto reversed = slice.is_reversed();
 
-    auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
-    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
+    auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
+    auto index_caching = use_caching(global_cache_index_pages && !bypass_cache);
+    auto partition_index_caching = use_caching(global_partition_index_cache_enabled && !bypass_cache);
+    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular(), partition_index_caching);
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
         return mx::make_reader(
@@ -3712,7 +3714,8 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     reader_permit permit,
     tracing::trace_state_ptr trace_state,
     use_caching caching,
-    bool single_partition_read
+    bool single_partition_read,
+    use_caching use_partition_index_cache
 ) {
     if (!_index_file) {
         if (!_partitions_db_footer) [[unlikely]] {
@@ -3748,8 +3751,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             std::move(trace_state)
         );
     }
-    // For partition_index_cache, check the global_partition_index_cache_enabled flag
-    auto use_partition_index_cache = use_caching(caching && global_partition_index_cache_enabled);
+    // use_partition_index_cache is passed as a parameter from the call site
     return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read, use_partition_index_cache);
 }
 
