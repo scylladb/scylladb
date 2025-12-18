@@ -3301,8 +3301,11 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
-            auto sets = co_await smp::submit_to(shard, [&] {
-                return table_shards->take_snapshot(jsondir);
+            auto sets = co_await smp::submit_to(shard, [&] -> future<snapshot_file_set> {
+                auto& t = *table_shards;
+                auto [tables, permit] = co_await t.snapshot_sstables();
+                auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), jsondir);
+                co_return make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
             });
             file_sets.emplace_back(std::move(sets));
         });
@@ -3316,15 +3319,6 @@ future<std::pair<std::vector<sstables::shared_sstable>, table::sstable_list_perm
     auto permit = co_await get_sstable_list_permit();
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
     co_return std::make_pair(std::move(tables), std::move(permit));
-}
-
-future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
-    tlogger.trace("take_snapshot {}", jsondir);
-
-    auto [tables, permit] = co_await snapshot_sstables();
-    auto table_names = co_await _sstables_manager.take_snapshot(std::move(tables), jsondir);
-
-    co_return make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
 }
 
 future<> table::finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
