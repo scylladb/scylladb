@@ -3306,7 +3306,22 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         });
         co_await io_check(sync_directory, jsondir);
 
-        co_await t.finalize_snapshot(table_shards, std::move(jsondir), std::move(file_sets));
+        std::exception_ptr ex;
+
+        tlogger.debug("snapshot {}: writing schema.cql", jsondir);
+        co_await t.write_schema_as_cql(table_shards, jsondir).handle_exception([&] (std::exception_ptr ptr) {
+            tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
+            ex = std::move(ptr);
+        });
+        tlogger.debug("snapshot {}: seal_snapshot", jsondir);
+        co_await seal_snapshot(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+            tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
+            ex = std::move(ptr);
+        });
+
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
     });
 }
 
@@ -3314,25 +3329,6 @@ future<std::pair<std::vector<sstables::shared_sstable>, table::sstable_list_perm
     auto permit = co_await get_sstable_list_permit();
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
     co_return std::make_pair(std::move(tables), std::move(permit));
-}
-
-future<> table::finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
-    std::exception_ptr ex;
-
-    tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-    co_await write_schema_as_cql(table_shards, jsondir).handle_exception([&] (std::exception_ptr ptr) {
-        tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
-        ex = std::move(ptr);
-    });
-    tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-    co_await seal_snapshot(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
-        tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
-        ex = std::move(ptr);
-    });
-
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
 }
 
 future<bool> table::snapshot_exists(sstring tag) {

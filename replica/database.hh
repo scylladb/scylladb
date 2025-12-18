@@ -1041,8 +1041,6 @@ private:
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
-    // Writes the table schema and the manifest of all files in the snapshot directory.
-    future<> finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
