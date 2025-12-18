@@ -437,7 +437,7 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> snapshot(const sstring& dir) const;
+    future<> snapshot(const sstring& name) const;
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.

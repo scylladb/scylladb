@@ -402,7 +402,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
     if (abs) {
         snapshot_dir = dir;
     } else {
-        snapshot_dir = _dir.path() / dir;
+        snapshot_dir = _base_dir.path() / dir;
     }
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir, std::move(gen));
