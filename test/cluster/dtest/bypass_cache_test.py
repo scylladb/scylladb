@@ -50,6 +50,7 @@ class TestBypassCache(Tester):
         insert_data=True,
         smp=1,
         cache_index_pages=None,
+        partition_index_cache_enabled=None,
     ):
         self.keyspace_name = keyspace_name
         self.table_name = table_name
@@ -59,6 +60,8 @@ class TestBypassCache(Tester):
         jvm_args = ["--smp", str(smp)]
         if cache_index_pages is not None:
             jvm_args += ["--cache-index-pages", "1" if cache_index_pages else "0"]
+        if partition_index_cache_enabled is not None:
+            jvm_args += ["--partition-index-cache-enabled", "1" if partition_index_cache_enabled else "0"]
         cluster.populate(nodes).start(jvm_args=jvm_args)
         node1 = cluster.nodelist()[0]
         session = self.patient_cql_connection(node1)
@@ -309,3 +312,68 @@ class TestBypassCache(Tester):
         alter_cmd = f"ALTER TABLE {self.keyspace_name}.{self.table_name} WITH CACHING = {{'enabled': 'false'}}"
         session.execute(alter_cmd)
         assert not self.verify_used_memory_grow(node=node, session=session), "expected to have writes without cache"
+
+    def test_partition_index_cache_disabled_independently(self):
+        """
+        Test that partition_index_cache_enabled can be disabled independently of cache_index_pages.
+        When partition_index_cache_enabled=False but cache_index_pages=True:
+        - The cached_file cache (scylla_sstables_index_page_cache_*) should still be active
+        - The partition_index_cache (scylla_sstables_index_page_*) should NOT be populated
+        """
+        # Test with cache_index_pages=True but partition_index_cache_enabled=False
+        session = self.prepare(insert_data=False, cache_index_pages=True, partition_index_cache_enabled=False)
+        node = self.cluster.nodelist()[0]
+        create_c1c2_table(session, cf=self.table_name)
+        insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, cf=self.table_name, ks=self.keyspace_name)
+        node.flush()
+        query = f"select * from {self.table_name}"
+        
+        # When partition_index_cache is disabled:
+        # - For BIG-index sstables (me format), scylla_sstables_index_page_hits should NOT increase
+        #   because partition_index_cache is disabled (but cached_file cache should work)
+        # - For BTI-index sstables (ms format), only cached_file cache is used anyway
+        if self.sstable_format != "ms":
+            # For BIG-index format, verify partition_index_cache is not used
+            errors = self.run_query_and_check_metrics(
+                node,
+                session,
+                query,
+                metrics_validators={
+                    "scylla_sstables_index_page_hits": self.gen_less_than(self.cache_thresh()),
+                    "scylla_sstables_index_page_cache_hits": "increased_by_at_least_1",  # cached_file should still work
+                    "scylla_sstables_index_page_cache_misses": "increased_by_at_least_1",
+                    "scylla_sstables_index_page_cache_populations": "increased_by_at_least_1",
+                },
+            )
+            assert not errors, "partition_index_cache should be disabled while cached_file cache is enabled:\n" + "\n".join(errors)
+
+    def test_partition_index_cache_enabled_independently(self):
+        """
+        Test that partition_index_cache_enabled can be enabled independently of cache_index_pages.
+        When partition_index_cache_enabled=True but cache_index_pages=False:
+        - The cached_file cache (scylla_sstables_index_page_cache_*) should NOT be populated
+        - The partition_index_cache (scylla_sstables_index_page_*) should still be active (for BIG-index)
+        """
+        # Test with cache_index_pages=False but partition_index_cache_enabled=True
+        session = self.prepare(insert_data=False, cache_index_pages=False, partition_index_cache_enabled=True)
+        node = self.cluster.nodelist()[0]
+        create_c1c2_table(session, cf=self.table_name)
+        insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, cf=self.table_name, ks=self.keyspace_name)
+        node.flush()
+        query = f"select * from {self.table_name}"
+        
+        # When cache_index_pages is disabled but partition_index_cache is enabled:
+        # - For BIG-index sstables (me format), partition_index_cache should still populate
+        # - For BTI-index sstables (ms format), there's no partition_index_cache to use
+        if self.sstable_format != "ms":
+            # For BIG-index format, verify partition_index_cache is used
+            errors = self.run_query_and_check_metrics(
+                node,
+                session,
+                query,
+                metrics_validators={
+                    "scylla_sstables_index_page_hits": self.gen_more_than(self.cache_thresh()),
+                    "scylla_sstables_index_page_cache_hits": self.gen_less_than(self.cache_thresh()),  # cached_file should not be used much
+                },
+            )
+            assert not errors, "partition_index_cache should be enabled while cached_file cache is disabled:\n" + "\n".join(errors)
