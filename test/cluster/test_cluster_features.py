@@ -146,13 +146,13 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
 
     # Try to add a node that doesn't support the feature - should fail
     new_server_info = await manager.server_add(start=False, property_file=servers[0].property_file())
-    await manager.server_start(new_server_info.server_id, expected_error="Feature check failed")
+    await manager.server_start(new_server_info.server_id, expected_error="Feature check failed|received notification of being banned from the cluster from")
 
     # Try to replace with a node that doesn't support the feature - should fail
     await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id=servers[0].server_id, reuse_ip_addr=False, use_host_id=False)
     new_server_info = await manager.server_add(start=False, replace_cfg=replace_cfg, property_file=servers[0].property_file())
-    await manager.server_start(new_server_info.server_id, expected_error="Feature check failed")
+    await manager.server_start(new_server_info.server_id, expected_error="Feature check failed|received notification of being banned from the cluster from")
 
 
 @pytest.mark.asyncio
