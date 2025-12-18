@@ -3751,7 +3751,6 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             std::move(trace_state)
         );
     }
-    // use_partition_index_cache is passed as a parameter from the call site
     return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read, use_partition_index_cache);
 }
 

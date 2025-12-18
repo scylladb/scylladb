@@ -784,6 +784,8 @@ public:
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
+        // When use_partition_index_cache is true, use the global shared cache (_sstable->_index_cache).
+        // When false, create a local non-shared cache that won't persist across reads.
         , _local_index_cache(use_partition_index_cache ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
                                                       _sstable->manager().get_cache_tracker().region(),
