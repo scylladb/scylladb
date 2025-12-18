@@ -5870,6 +5870,18 @@ class scylla_read_stats(gdb.Command):
         gdb.Command.__init__(self, 'scylla read-stats', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     @staticmethod
+    def foreach_permit(semaphore, fn):
+        """Mirror of reader_concurrency_semaphore::foreach_permit()"""
+        for permit_list in (
+                semaphore['_permit_list'],
+                semaphore['_wait_list']['_admission_queue'],
+                semaphore['_wait_list']['_memory_queue'],
+                semaphore['_ready_list'],
+                semaphore['_inactive_reads']):
+            for permit in intrusive_list(permit_list):
+                fn(permit)
+
+    @staticmethod
     def dump_reads_from_semaphore(semaphore):
         try:
             permit_list = semaphore['_permit_list']
@@ -5883,7 +5895,7 @@ class scylla_read_stats(gdb.Command):
         permit_summaries = defaultdict(permit_stats)
         total = permit_stats()
 
-        for permit in intrusive_list(permit_list):
+        def summarize_permit(permit):
             schema_name = "*.*"
             schema = permit['_schema']
             try:
@@ -5903,6 +5915,8 @@ class scylla_read_stats(gdb.Command):
             permit_summaries[(schema_name, description, state)].add(summary)
             total.add(summary)
 
+        scylla_read_stats.foreach_permit(semaphore, summarize_permit)
+
         if not permit_summaries:
             return
 
@@ -5912,7 +5926,9 @@ class scylla_read_stats(gdb.Command):
         inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
         waiters = int(semaphore["_stats"]["waiters"])
 
-        gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
+        gdb.write("Semaphore ({}*) 0x{:x} {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
+                semaphore.type.name,
+                int(semaphore.address),
                 semaphore_name,
                 initial_count - int(semaphore['_resources']['count']), initial_count,
                 initial_memory - int(semaphore['_resources']['memory']), initial_memory,
