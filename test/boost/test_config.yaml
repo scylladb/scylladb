@@ -38,7 +38,7 @@ custom_args:
     cql_query_test:
         - '-c2 -m2G --fail-on-abandoned-failed-futures=true'
     reader_concurrency_semaphore_test:
-        - '-c1 -m256M'
+        - '-c1 -m256M --logger-log-level testlog=trace:reader_concurrency_semaphore=trace'
     multishard_mutation_query_test:
         - '-c2 -m3G'
     cache_algorithm_test:
