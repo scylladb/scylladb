@@ -4831,7 +4831,6 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
 
         rtlogger.info("request rebuild for: {} source_dc={}", raft_server.id(), sdc_param);
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_session(session_id(guard.new_group0_state_id()));
         sstring source_dc = sdc_param.value_or("");
         if (sdc_param.force() && !source_dc.empty()) {
             source_dc += ":force";
