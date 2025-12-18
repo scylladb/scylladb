@@ -1643,6 +1643,14 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 
 future<>
 table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+    co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", [] (auto& handler) -> future<> {
+        tlogger.info("flush_memtable_to_sstable_wait: waiting");
+        while (!handler.poll_for_message()) {
+            co_await sleep(std::chrono::milliseconds(1));
+        }
+        tlogger.info("flush_memtable_to_sstable_wait: released");
+    });
+
     auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
         // Note that due to our sharded architecture, it is possible that
         // in the face of a value change some shards will backup sstables
