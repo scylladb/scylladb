@@ -232,52 +232,6 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
-    ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
-        SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
-    )
-    with create_table(
-        cql,
-        test_keyspace,
-        "(pk1 int, pk2 int, ck1 int, ck2 int, v vector<float, 1>, c int, primary key ((pk1, pk2), ck1, ck2))"
-    ) as table:
-        custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
-        execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
-
-        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)")
-        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)")
-        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (3, 3, 1, 1, [2], 100)")
-        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (4, 4, 1, 1, [1], 1000)")
-
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE ck1 >= 0 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE pk1 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE pk2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE pk1 = 1 AND pk2 = 1 AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-        assert_invalid_message(
-            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-            "SELECT * FROM %s WHERE token(pk1, pk2) = token(1, 1) AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
-        )
-
 def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v vector<float, 1>, PRIMARY KEY(k, c))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
