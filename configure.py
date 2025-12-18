@@ -2251,15 +2251,6 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += ['-g', '-gz']
 
-    if 'clang' in cxx:
-        # Since AssignmentTracking was enabled by default in clang
-        # (llvm/llvm-project@de6da6ad55d3ca945195d1cb109cb8efdf40a52a)
-        # coroutine frame debugging info (`coro_frame_ty`) is broken.
-        #
-        # It seems that we aren't losing much by disabling AssigmentTracking,
-        # so for now we choose to disable it to get `coro_frame_ty` back.
-        cxxflags.append('-Xclang -fexperimental-assignment-tracking=disabled')
-
     return cxxflags
 
 
