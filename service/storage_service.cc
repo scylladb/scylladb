@@ -520,12 +520,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     std::vector<future<>> sys_ks_futures;
 
-    auto process_left_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip) -> future<> {
+    auto process_left_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip, bool notify) -> future<> {
         if (ip) {
             sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
 
             co_await _gossiper.force_remove_endpoint(host_id, gms::null_permit_id);
-            nodes_to_notify.left.push_back({*ip, host_id});
+            if (notify) {
+                nodes_to_notify.left.push_back({*ip, host_id});
+            }
         }
 
         if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
@@ -621,7 +623,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     for (const auto& id: t.left_nodes) {
         locator::host_id host_id{id.uuid()};
         auto ip = _address_map.find(host_id);
-        co_await process_left_node(id, host_id, ip);
+        co_await process_left_node(id, host_id, ip, id_to_ip_map.find(host_id) != id_to_ip_map.end());
         if (ip) {
             sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, id_to_ip_map, nullptr));
         }
