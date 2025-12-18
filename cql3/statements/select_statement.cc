@@ -1028,7 +1028,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
         if (it == indexes.end()) {
             throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
         } else {
-            if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
+            if (index_opt || parameters->allow_filtering() || !(restrictions->is_empty()) || check_needs_allow_filtering_anyway(*restrictions)) {
                 throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
             }
             index_opt = *it;
