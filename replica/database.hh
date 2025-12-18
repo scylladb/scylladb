@@ -1037,8 +1037,6 @@ public:
     db::replay_position set_low_replay_position_mark();
     db::replay_position highest_flushed_replay_position() const;
 
-    using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
-
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();

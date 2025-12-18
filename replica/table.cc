@@ -3227,7 +3227,9 @@ public:
     virtual ~snapshot_writer() = default;
 };
 
-static future<> write_manifest(snapshot_writer& writer, std::vector<table::snapshot_file_set> file_sets) {
+using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
+
+static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
@@ -3332,7 +3334,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
-        std::vector<table::snapshot_file_set> file_sets(smp::count);
+        std::vector<snapshot_file_set> file_sets(smp::count);
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
