@@ -3232,7 +3232,6 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 
     tlogger.debug("Storing manifest {}", jsonfile);
 
-    co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
     auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
