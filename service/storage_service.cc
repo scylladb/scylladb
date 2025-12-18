@@ -588,12 +588,16 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             }
             break;
         case node_state::decommissioning:
-            // A decommissioning node loses its tokens when topology moves to left_token_ring.
-            if (_topology_state_machine._topology.tstate == topology::transition_state::left_token_ring) {
-                break;
-            }
             [[fallthrough]];
         case node_state::removing:
+            // A decommissioning or removing node loses its tokens when topology moves to left_token_ring.
+            if (_topology_state_machine._topology.tstate == topology::transition_state::left_token_ring) {
+                if (rs.state == node_state::removing && !_feature_service.removenode_with_left_token_ring) {
+                    on_internal_error(
+                            rtlogger, "removenode operation can only enter the left_token_ring state when REMOVENODE_WITH_LEFT_TOKEN_RING feature is enabled");
+                }
+                break;
+            }
             if (_topology_state_machine._topology.tstate == topology::transition_state::rollback_to_normal) {
                 // no need for double writes anymore since op failed
                 co_await process_normal_node(id, host_id, ip, rs);

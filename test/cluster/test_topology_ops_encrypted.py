@@ -74,7 +74,7 @@ async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_e
 
     logger.info(f"Removing node {servers[0]} using {servers[1]}")
     await manager.remove_node(servers[1].server_id, servers[0].server_id)
-    await check_token_ring_and_group0_consistency(manager)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     servers = servers[1:]
 
     logger.info("Checking results of the background writes")

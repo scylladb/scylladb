@@ -3157,7 +3157,10 @@ static bool must_have_tokens(service::node_state nst) {
     // A decommissioning node doesn't have tokens at the end, they are
     // removed during transition to the left_token_ring state.
     case service::node_state::decommissioning: return false;
-    case service::node_state::removing: return true;
+    // A removing node might or might not have tokens depending on whether
+    // REMOVENODE_WITH_LEFT_TOKEN_RING feature is enabled. To support both
+    // cases, we allow removing nodes to not have tokens.
+    case service::node_state::removing: return false;
     case service::node_state::rebuilding: return true;
     case service::node_state::normal: return true;
     case service::node_state::left: return false;

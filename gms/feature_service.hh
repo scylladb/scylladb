@@ -177,6 +177,7 @@ public:
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
     gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
     gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
+    gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
