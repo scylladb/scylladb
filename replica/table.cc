@@ -3295,18 +3295,15 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
 
-        std::vector<table::snapshot_file_set> file_sets;
-        file_sets.reserve(smp::count);
+        std::vector<table::snapshot_file_set> file_sets(smp::count);
 
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-        co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
-            auto sets = co_await smp::submit_to(shard, [&] -> future<snapshot_file_set> {
+        co_await smp::invoke_on_all([&] -> future<> {
                 auto& t = *table_shards;
                 auto [tables, permit] = co_await t.snapshot_sstables();
                 auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), jsondir);
-                co_return make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
-            });
-            file_sets.emplace_back(std::move(sets));
+                auto sets = make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
+            file_sets[this_shard_id()] = std::move(sets);
         });
         co_await io_check(sync_directory, jsondir);
 
