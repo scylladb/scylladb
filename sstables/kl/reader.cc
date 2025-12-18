@@ -1192,8 +1192,9 @@ private:
     index_reader& get_index_reader() {
         if (!_index_reader) {
             auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
+            auto use_partition_index_cache = use_caching(caching && global_partition_index_cache_enabled);
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
-                                                           _consumer.trace_state(), caching, _single_partition_read);
+                                                           _consumer.trace_state(), caching, _single_partition_read, use_partition_index_cache);
         }
         return *_index_reader;
     }

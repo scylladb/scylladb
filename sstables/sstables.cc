@@ -105,6 +105,17 @@ namespace sstables {
 //
 thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
+// The below flag governs whether the partition_index_cache is enabled.
+//
+// If set to true, partition index entries are cached in a global partition_index_cache.
+// If false, each index_reader creates its own local partition_index_cache that is
+// not shared and not persistent across reads.
+//
+// This is independent from global_cache_index_pages, which controls caching of
+// the index file pages themselves (cached_file).
+//
+thread_local utils::updateable_value<bool> global_partition_index_cache_enabled(true);
+
 logging::logger sstlog("sstable");
 
 [[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename) {
@@ -3737,7 +3748,9 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             std::move(trace_state)
         );
     }
-    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read);
+    // For partition_index_cache, check the global_partition_index_cache_enabled flag
+    auto use_partition_index_cache = use_caching(caching && global_partition_index_cache_enabled);
+    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read, use_partition_index_cache);
 }
 
 // Returns error code, 0 is success

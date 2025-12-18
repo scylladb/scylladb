@@ -69,6 +69,7 @@ namespace sstables {
 struct abstract_index_reader;
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
+extern thread_local utils::updateable_value<bool> global_partition_index_cache_enabled;
 
 namespace mc {
 class writer;
