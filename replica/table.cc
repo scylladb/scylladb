@@ -3299,11 +3299,10 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
         co_await smp::invoke_on_all([&] -> future<> {
-                auto& t = *table_shards;
-                auto [tables, permit] = co_await t.snapshot_sstables();
-                auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), jsondir);
-                auto sets = make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
-            file_sets[this_shard_id()] = std::move(sets);
+            auto& t = *table_shards;
+            auto [tables, permit] = co_await t.snapshot_sstables();
+            auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), jsondir);
+            file_sets[this_shard_id()] = make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
         });
         co_await io_check(sync_directory, jsondir);
 
