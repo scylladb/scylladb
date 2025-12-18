@@ -7,6 +7,8 @@
  */
 
 
+#include "seastar/core/shard_id.hh"
+#include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
@@ -1855,6 +1857,65 @@ SEASTAR_TEST_CASE(test_max_purgeable_can_purge) {
     check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
+        auto found = e.db().map_reduce0([&] (replica::database& db) -> future<bool> {
+            auto& cf = db.find_column_family("ks", "cf");
+
+            if (!cf.needs_flush()) {
+                co_return false;
+            }
+
+            utils::get_local_injector().enable("flush_memtable_to_sstable_wait");
+
+            auto flushed_0 = cf.flush();
+            if (flushed_0.available()) {
+                testlog.error("Table flush completed too early");
+                BOOST_REQUIRE(!flushed_0.available());
+            }
+
+            if (!cf.needs_flush()) {
+                testlog.error("Expecting needs_flush when waiting in flush_memtable_to_sstable_wait");
+                BOOST_REQUIRE(cf.needs_flush());
+            }
+
+            // Now flush again when the active memtable is empty.
+            // Expect that this waits on the ongoing flush
+            auto flushed_1 = cf.flush();
+
+            // While flush_0 is blocked, flush_1 should be blocked behind it
+            if (flushed_0.available()) {
+                testlog.error("First table flush expected to be blocked on injected wait");
+                BOOST_REQUIRE(!flushed_0.available());
+            }
+            if (flushed_1.available()) {
+                testlog.error("Second table flush expected to be blocked behind first flush");
+                BOOST_REQUIRE(!flushed_1.available());
+            }
+            if (!cf.needs_flush()) {
+                testlog.error("Expecting needs_flush when waiting in second flush");
+                BOOST_REQUIRE(cf.needs_flush());
+            }
+
+            utils::get_local_injector().receive_message("flush_memtable_to_sstable_wait");
+            co_await std::move(flushed_0);
+            co_await std::move(flushed_1);
+            
+            if (cf.needs_flush()) {
+                testlog.error("Table is not expected to need flush after flush completed");
+                BOOST_REQUIRE(!cf.needs_flush());
+            }
+
+            co_return true;
+        }, false, std::logical_or<bool>()).get();
+        BOOST_REQUIRE(found);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
