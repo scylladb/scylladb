@@ -3219,6 +3219,12 @@ private:
     }
 };
 
+class snapshot_writer {
+public:
+    virtual sstring dir() = 0;
+    virtual ~snapshot_writer() = default;
+};
+
 static future<> write_manifest(sstring jsondir, std::vector<table::snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
@@ -3286,17 +3292,37 @@ static future<> write_schema_as_cql(sstring dir, cql3::description schema_desc) 
     }
 }
 
+class local_snapshot_writer : public snapshot_writer {
+    std::filesystem::path _dir;
+public:
+    local_snapshot_writer(std::filesystem::path dir, sstring name)
+            : _dir(dir / sstables::snapshots_dir / name)
+    {}
+    sstring dir() override {
+        return _dir.native();
+    }
+};
+
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
-    auto* so = std::get_if<storage_options::local>(&table_shards->get_storage_options().value);
-    if (so == nullptr) {
-        throw std::runtime_error("Snapshotting non-local tables is not implemented");
-    }
-    if (so->dir.empty()) { // virtual tables don't have initialized local storage
+    auto writer = std::visit(overloaded_functor{
+        [&name] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
+            if (loc.dir.empty()) {
+                // virtual tables don't have initialized local storage
+                return nullptr;
+            }
+
+            return std::make_unique<local_snapshot_writer>(loc.dir, name);
+        },
+        [] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
+            throw std::runtime_error("Snapshotting non-local tables is not implemented");
+        }
+    }, table_shards->get_storage_options().value);
+    if (!writer) {
         co_return;
     }
 
-    auto jsondir = (so->dir / sstables::snapshots_dir / name).native();
+    auto jsondir = writer->dir();
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
