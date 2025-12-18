@@ -24,6 +24,7 @@
 
 #include <seastar/core/sharded.hh>
 #include <unordered_map>
+#include "utils/chunked_vector.hh"
 
 namespace db {
 
@@ -109,9 +110,9 @@ struct frozen_schema_diff {
         extended_frozen_schema old_schema;
         extended_frozen_schema new_schema;
     };
-    std::vector<extended_frozen_schema> created;
-    std::vector<altered_schema> altered;
-    std::vector<extended_frozen_schema> dropped;
+    utils::chunked_vector<extended_frozen_schema> created;
+    utils::chunked_vector<altered_schema> altered;
+    utils::chunked_vector<extended_frozen_schema> dropped;
 };
 
 // schema_diff represents what is happening with tables or views during schema merge
@@ -121,9 +122,9 @@ struct schema_diff_per_shard {
         schema_ptr new_schema;
     };
 
-    std::vector<schema_ptr> created;
-    std::vector<altered_schema> altered;
-    std::vector<schema_ptr> dropped;
+    utils::chunked_vector<schema_ptr> created;
+    utils::chunked_vector<altered_schema> altered;
+    utils::chunked_vector<schema_ptr> dropped;
 
     future<frozen_schema_diff> freeze() const;
 
@@ -143,7 +144,7 @@ struct affected_tables_and_views_per_shard {
     schema_diff_per_shard tables;
     schema_diff_per_shard cdc;
     schema_diff_per_shard views;
-    std::vector<bool> columns_changed;
+    utils::chunked_vector<bool> columns_changed;
 };
 
 struct affected_tables_and_views {
