@@ -3222,6 +3222,7 @@ private:
 class snapshot_writer {
 public:
     virtual sstring dir() = 0;
+    virtual future<> init() = 0;
     virtual ~snapshot_writer() = default;
 };
 
@@ -3301,6 +3302,9 @@ public:
     sstring dir() override {
         return _dir.native();
     }
+    future<> init() override {
+        co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
+    }
 };
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
@@ -3332,7 +3336,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         std::vector<table::snapshot_file_set> file_sets(smp::count);
 
-        co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
+        co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
             auto [tables, permit] = co_await t.snapshot_sstables();
