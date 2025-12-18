@@ -3219,7 +3219,7 @@ private:
     }
 };
 
-static future<> seal_snapshot(sstring jsondir, std::vector<table::snapshot_file_set> file_sets) {
+static future<> write_manifest(sstring jsondir, std::vector<table::snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
@@ -3243,8 +3243,6 @@ static future<> seal_snapshot(sstring jsondir, std::vector<table::snapshot_file_
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-
-    co_await io_check(sync_directory, std::move(jsondir));
 }
 
 /*!
@@ -3326,14 +3324,15 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-        co_await seal_snapshot(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
             ex = std::move(ptr);
         });
-
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
+
+        co_await io_check(sync_directory, std::move(jsondir));
     });
 }
 
