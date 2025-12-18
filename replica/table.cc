@@ -3219,8 +3219,7 @@ private:
     }
 };
 
-future<>
-table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
+static future<> seal_snapshot(sstring jsondir, std::vector<table::snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {

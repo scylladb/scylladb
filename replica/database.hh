@@ -1037,11 +1037,10 @@ public:
     db::replay_position set_low_replay_position_mark();
     db::replay_position highest_flushed_replay_position() const;
 
-private:
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
+private:
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
-    static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 
