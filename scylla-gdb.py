@@ -4109,6 +4109,16 @@ class scylla_fiber(gdb.Command):
                     return res
             return None
 
+        # Coroutines need special handling as they allocate the future object on their frame.
+        if name.strip().endswith('[clone .resume]'):
+            self._maybe_log(f"Current task is a coroutine, trying to find the promise in the coroutine frame: 0x{ptr_meta.ptr:x}+{ptr_meta.size}\n", verbose)
+            # Skip the first two pointers, these are the coroutine resume and destroy function pointers.
+            for maybe_tptr in range(ptr_meta.ptr + 2 * _vptr_type().sizeof, ptr_meta.ptr + ptr_meta.size, _vptr_type().sizeof):
+                res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
+                if res is not None:
+                    return res
+            return None
+
         if name.startswith('vtable for seastar::internal::when_all_state'):
             when_all_state_base_ptr_type = gdb.lookup_type('seastar::internal::when_all_state_base').pointer()
             when_all_state_base = gdb.Value(int(ptr_meta.ptr)).reinterpret_cast(when_all_state_base_ptr_type)
