@@ -181,11 +181,14 @@ async def test_random_failures(manager: ManagerClient,
             LOGGER.info("Found following message in the coordinator's log:\n\t%s", matches[-1][0])
             await manager.server_stop(server_id=s_info.server_id)
 
+    BANNED_NOTIFICATION = "received notification of being banned from the cluster from"
+    STARTUP_FAILED_PATTERN = f"init - Startup failed:|{BANNED_NOTIFICATION}"
+
     if s_info in await manager.running_servers():
         LOGGER.info("Wait until the new node initialization completes or fails.")
-        await server_log.wait_for("init - (Startup failed:|Scylla version .* initialization completed)", timeout=120)
+        await server_log.wait_for(f"init - (Startup failed:|Scylla version .* initialization completed)|{BANNED_NOTIFICATION}", timeout=120)
 
-        if await server_log.grep("init - Startup failed:"):
+        if await server_log.grep(STARTUP_FAILED_PATTERN):
             LOGGER.info("Check that the new node is dead.")
             expected_statuses = [psutil.STATUS_DEAD]
         else:
@@ -216,7 +219,7 @@ async def test_random_failures(manager: ManagerClient,
     else:
         if s_info in await manager.running_servers():
             LOGGER.info("The new node is dead.  Check if it failed to startup.")
-            assert await server_log.grep("init - Startup failed:")
+            assert await server_log.grep(STARTUP_FAILED_PATTERN)
             await manager.server_stop(server_id=s_info.server_id)  # remove the node from the list of running servers
 
         LOGGER.info("Try to remove the dead new node from the cluster.")
