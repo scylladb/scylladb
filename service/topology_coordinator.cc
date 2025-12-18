@@ -3161,7 +3161,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     case topology_request::rebuild: {
                         topology_mutation_builder builder(node.guard.write_timestamp());
-                        builder.with_node(node.id)
+                        builder.set_session(session_id(node.guard.new_group0_state_id()))
+                               .with_node(node.id)
                                .set("node_state", node_state::rebuilding)
                                .del("topology_request");
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
