@@ -4205,6 +4205,9 @@ class scylla_fiber(gdb.Command):
         parser.add_argument("--force-fallback-mode", action="store_true", default=False,
                 help="Force fallback mode to be used, that is, scan a fixed-size region of memory"
                 " (configurable via --scanned-region-size), instead of relying on `scylla ptr` for determining the size of the task objects.")
+        parser.add_argument("--direction", action="store", choices=['forward', 'backward', 'both'], default='both',
+                help="Direction in which to walk the continuation chain. 'forward' walks futures waiting on the given task,"
+                " 'backward' walks futures the given task is waiting on, 'both' does both.")
         parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
 
         try:
@@ -4234,14 +4237,20 @@ class scylla_fiber(gdb.Command):
                 gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(initial_task_ptr))
                 return
 
-            backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            if (args.direction == 'backward' or args.direction == 'both'):
+                backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            else:
+                backwards_fiber = []
 
             for i, task_info in enumerate(reversed(backwards_fiber)):
                 format_task_line(i - len(backwards_fiber), task_info)
 
             format_task_line(0, this_task)
 
-            forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            if (args.direction == 'forward' or args.direction == 'both'):
+                forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            else:
+                forward_fiber = []
 
             for i, task_info in enumerate(forward_fiber):
                 format_task_line(i + 1, task_info)
