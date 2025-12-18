@@ -3200,7 +3200,7 @@ db::replay_position table::highest_flushed_replay_position() const {
 }
 
 struct manifest_json : public json::json_base {
-    json::json_chunked_list<sstring> files;
+    json::json_chunked_list<std::string_view> files;
 
     manifest_json() {
         register_params();
@@ -3224,7 +3224,7 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
-            manifest.files.push(std::move(rf));
+            manifest.files.push(std::string_view(rf));
         }
     }
     auto streamer = json::stream_object(std::move(manifest));
