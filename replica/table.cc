@@ -3301,9 +3301,10 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
-            file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
+            auto sets = co_await smp::submit_to(shard, [&] {
                 return table_shards->take_snapshot(jsondir);
-            }));
+            });
+            file_sets.emplace_back(std::move(sets));
         });
         co_await io_check(sync_directory, jsondir);
 
