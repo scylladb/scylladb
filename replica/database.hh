@@ -1039,10 +1039,7 @@ public:
 
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-private:
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
-public:
-    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
     static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
@@ -1998,6 +1995,7 @@ private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
     struct table_truncate_state;
 
+    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
 public:

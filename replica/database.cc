@@ -2816,7 +2816,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, t
         co_await flush_table_on_all_shards(sharded_db, uuid);
     }
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
+    co_await snapshot_table_on_all_shards(sharded_db, table_shards, tag);
 }
 
 future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
@@ -2952,7 +2952,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
+        co_await snapshot_table_on_all_shards(sharded_db, table_shards, name);
     }
 
     co_await sharded_db.invoke_on_all([&] (database& db) {
