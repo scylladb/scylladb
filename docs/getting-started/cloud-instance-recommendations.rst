@@ -20,7 +20,10 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 Amazon Web Services (AWS)
 -----------------------------
 
-The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`, :ref:`i4i <system-requirements-i4i-instances>`, :ref:`i7i <system-requirements-i7i-instances>`, and :ref:`i7ie <system-requirements-i7ie-instances>`.
+The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`,
+:ref:`i4i <system-requirements-i4i-instances>`, :ref:`i7i <system-requirements-i7i-instances>`,
+:ref:`i7ie <system-requirements-i7ie-instances>`, :ref:`i8g<system-requirements-i8g-instances>`,
+and :ref:`i8ge <system-requirements-i8ge-instances>`.
 
 .. note::
 
@@ -194,6 +197,118 @@ All i7i instances have the following specs:
 * Advanced Matrix Extensions (AMX) for accelerating CPU-based machine learning.
 
 See `Amazon EC2 I7i Instances <https://aws.amazon.com/ec2/instance-types/i7i/>`_ for details.
+
+
+.. _system-requirements-i8g-instances:
+
+i8g instances
+^^^^^^^^^^^^^^
+
+The following i8g instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i8g.large
+     - 2
+     - 16
+     - 1 x 468 GB
+   * - i8g.xlarge
+     - 4
+     - 32
+     - 1 x 937 GB
+   * - i8g.2xlarge
+     - 8
+     - 64
+     - 1 x 1,875 GB
+   * - i8g.4xlarge
+     - 16
+     - 128
+     - 1 x 3,750 GB
+   * - i8g.8xlarge
+     - 32
+     - 256
+     - 2 x 3,750 GB
+   * - i8g.12xlarge
+     - 48
+     - 384
+     - 3 x 3,750 GB
+   * - i8g.16xlarge
+     - 64
+     - 512
+     - 4 x 3,750 GB
+
+All i8g instances have the following specs:
+
+* Powered by AWS Graviton4 processors
+* 3rd generation AWS Nitro SSD storage
+* DDR5-5600 memory for improved throughput
+* Up to 100 Gbps of networking bandwidth and up to 60 Gbps of bandwidth to
+  Amazon Elastic Block Store (EBS)
+* Instance sizes offer up to 45 TB of total local NVMe instance storage
+
+See `Amazon EC2 I8g Instances <https://aws.amazon.com/ec2/instance-types/i8g/>`_ for details.
+
+.. _system-requirements-i8ge-instances:
+
+i8ge instances
+^^^^^^^^^^^^^^
+
+The following i8ge instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i8ge.large
+     - 2
+     - 16
+     - 1 x 1,250 GB
+   * - i8ge.xlarge
+     - 4
+     - 32
+     - 1 x 2,500 GB
+   * - i8ge.2xlarge
+     - 8
+     - 64
+     - 2 x 2,500 GB
+   * - i8ge.3xlarge
+     - 12
+     - 96
+     - 1 x 7,500 GB
+   * - i8ge.6xlarge
+     - 24
+     - 192
+     - 2 x 7,500 GB
+   * - i8ge.12xlarge
+     - 48
+     - 384
+     - 4 x 7,500 GB
+   * - i8ge.18xlarge
+     - 72
+     - 576
+     - 6 x 7,500 GB
+
+All i8ge instances have the following specs:
+
+* Powered by AWS Graviton4 processors
+* 3rd generation AWS Nitro SSD storage
+* DDR5-5600 memory for improved throughput
+* Up to 300 Gbps of networking bandwidth and up to 60 Gbps of bandwidth to
+  Amazon Elastic Block Store (EBS)
+* Instance sizes offer up to 120 TB of total local NVMe instance storage
+
+See `Amazon EC2 I8g Instances <https://aws.amazon.com/ec2/instance-types/i8g/>`_ for details.
+
 
 Im4gn and Is4gen instances
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
