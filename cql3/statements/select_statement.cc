@@ -1977,9 +1977,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }
-    if (index_opt || parameters->allow_filtering() || !(restrictions->is_empty()) || check_needs_allow_filtering_anyway(*restrictions)) {
-        throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
-    }
+    
     index_opt = *it;
 
     if (!index_opt) {
@@ -2275,7 +2273,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering(),
+    bool is_ann_query = !_parameters->orderings().empty() && std::holds_alternative<select_statement::ann_vector>(_parameters->orderings().front().second);
+
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
     if (_parameters->is_distinct()) {
