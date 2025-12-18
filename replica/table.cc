@@ -3312,12 +3312,16 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
     });
 }
 
+future<std::pair<std::vector<sstables::shared_sstable>, table::sstable_list_permit>> table::snapshot_sstables() {
+    auto permit = co_await get_sstable_list_permit();
+    auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
+    co_return std::make_pair(std::move(tables), std::move(permit));
+}
+
 future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
     tlogger.trace("take_snapshot {}", jsondir);
 
-    auto sstable_deletion_guard = co_await get_sstable_list_permit();
-
-    auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
+    auto [tables, permit] = co_await snapshot_sstables();
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
 
     co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
