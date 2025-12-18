@@ -3221,7 +3221,6 @@ private:
 
 class snapshot_writer {
 public:
-    virtual sstring dir() = 0;
     virtual future<> init() = 0;
     virtual future<> sync() = 0;
     virtual future<output_stream<char>> stream_for(sstring component) = 0;
@@ -3290,13 +3289,11 @@ static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description s
 
 class local_snapshot_writer : public snapshot_writer {
     std::filesystem::path _dir;
+
 public:
     local_snapshot_writer(std::filesystem::path dir, sstring name)
             : _dir(dir / sstables::snapshots_dir / name)
     {}
-    sstring dir() override {
-        return _dir.native();
-    }
     future<> init() override {
         co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
     }
@@ -3329,13 +3326,11 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         co_return;
     }
 
-    auto jsondir = writer->dir();
-    auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
-
+    auto orchestrator = std::hash<sstring>()(name) % smp::count;
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
         auto& t = *table_shards;
         auto s = t.schema();
-        tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
+        tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
         std::vector<table::snapshot_file_set> file_sets(smp::count);
 
@@ -3350,15 +3345,15 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         std::exception_ptr ex;
 
-        tlogger.debug("snapshot {}: writing schema.cql", jsondir);
+        tlogger.debug("snapshot {}: writing schema.cql", name);
         auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS);
         co_await write_schema_as_cql(*writer, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
-            tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
+            tlogger.error("Failed writing schema file in snapshot in {} with exception {}", name, ptr);
             ex = std::move(ptr);
         });
-        tlogger.debug("snapshot {}: seal_snapshot", jsondir);
+        tlogger.debug("snapshot {}: seal_snapshot", name);
         co_await write_manifest(*writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
-            tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
+            tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
         if (ex) {
