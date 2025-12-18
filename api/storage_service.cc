@@ -547,17 +547,13 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
                 vp.insert(b.second);
             }
         }
-        std::vector<sstring> res;
         replica::database& db = vb.local().get_db();
         auto uuid = validate_table(db, ks, cf_name);
         replica::column_family& cf = db.find_column_family(uuid);
-        res.reserve(cf.get_index_manager().list_indexes().size());
-        for (auto&& i : cf.get_index_manager().list_indexes()) {
-            if (vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
-                res.emplace_back(i.metadata().name());
-            }
-        }
-        co_return res;
+        co_return cf.get_index_manager().list_indexes()
+                | std::views::transform([] (const auto& i) { return i.metadata().name(); })
+                | std::views::filter([&vp] (const auto& n) { return vp.contains(secondary_index::index_table_name(n)); })
+                | std::ranges::to<std::vector>();
     });
 
 }
