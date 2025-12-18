@@ -3322,15 +3322,9 @@ future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
     tlogger.trace("take_snapshot {}", jsondir);
 
     auto [tables, permit] = co_await snapshot_sstables();
-    auto table_names = std::make_unique<std::unordered_set<sstring>>();
+    auto table_names = co_await _sstables_manager.take_snapshot(std::move(tables), jsondir);
 
-    co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
-        table_names->insert(sstable->component_basename(sstables::component_type::Data));
-        return io_check([sstable, &dir = jsondir] {
-            return sstable->snapshot(dir);
-        });
-    });
-    co_return make_foreign(std::move(table_names));
+    co_return make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
 }
 
 future<> table::finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
