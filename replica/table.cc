@@ -3228,7 +3228,7 @@ public:
     virtual ~snapshot_writer() = default;
 };
 
-static future<> write_manifest(sstring jsondir, std::vector<table::snapshot_file_set> file_sets) {
+static future<> write_manifest(snapshot_writer& writer, std::vector<table::snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
@@ -3236,12 +3236,7 @@ static future<> write_manifest(sstring jsondir, std::vector<table::snapshot_file
         }
     }
     auto streamer = json::stream_object(std::move(manifest));
-    auto jsonfile = jsondir + "/manifest.json";
-
-    tlogger.debug("Storing manifest {}", jsonfile);
-
-    auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
-    auto out = co_await make_file_output_stream(std::move(f));
+    auto out = co_await writer.stream_for("manifest.json");
     std::exception_ptr ex;
     try {
         co_await streamer(std::move(out));
@@ -3362,7 +3357,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-        co_await write_manifest(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(*writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
             ex = std::move(ptr);
         });
