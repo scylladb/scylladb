@@ -243,7 +243,7 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
             if not unpacked_marker.exists():
                 if not downloaded_marker.exists():
                     archive_path.unlink(missing_ok=True)
-                    await run_process(["curl", "--silent", "--show-error", "--output", archive_path, url])
+                    await run_process(["curl", "--retry", "10", "--fail", "--silent", "--show-error", "--output", archive_path, url])
                     downloaded_marker.touch()
                 shutil.rmtree(unpack_dir, ignore_errors=True)
                 unpack_dir.mkdir(exist_ok=True, parents=True)
