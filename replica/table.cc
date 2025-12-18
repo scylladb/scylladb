@@ -3224,6 +3224,7 @@ public:
     virtual sstring dir() = 0;
     virtual future<> init() = 0;
     virtual future<> sync() = 0;
+    virtual future<output_stream<char>> stream_for(sstring component) = 0;
     virtual ~snapshot_writer() = default;
 };
 
@@ -3269,11 +3270,9 @@ static future<> write_manifest(sstring jsondir, std::vector<table::snapshot_file
  * CREATE INDEX command.
  * The same is true for local index and MATERIALIZED VIEW.
  */
-static future<> write_schema_as_cql(sstring dir, cql3::description schema_desc) {
+static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description schema_desc) {
     auto schema_description = std::move(*schema_desc.create_statement);
-    auto schema_file_name = dir + "/schema.cql";
-    auto f = co_await open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate);
-    auto out = co_await make_file_output_stream(std::move(f));
+    auto out = co_await writer.stream_for("schema.cql");
     std::exception_ptr ex;
 
     auto view = managed_bytes_view(schema_description.as_managed_bytes());
@@ -3308,6 +3307,11 @@ public:
     }
     future<> sync() override {
         co_await io_check([this] { return sync_directory(_dir.native()); });
+    }
+    future<output_stream<char>> stream_for(sstring component) override {
+        auto file_name = (_dir / component).native();
+        auto f = co_await open_checked_file_dma(general_disk_error_handler, file_name, open_flags::wo | open_flags::create | open_flags::truncate);
+        co_return co_await make_file_output_stream(std::move(f));
     }
 };
 
@@ -3353,7 +3357,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         tlogger.debug("snapshot {}: writing schema.cql", jsondir);
         auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS);
-        co_await write_schema_as_cql(jsondir, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_schema_as_cql(*writer, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
             ex = std::move(ptr);
         });
