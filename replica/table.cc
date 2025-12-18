@@ -3247,11 +3247,23 @@ static future<> seal_snapshot(sstring jsondir, std::vector<table::snapshot_file_
     co_await io_check(sync_directory, std::move(jsondir));
 }
 
-future<> table::write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const {
-    auto schema_desc = schema()->describe(
-            replica::make_schema_describe_helper(table_shards),
-            cql3::describe_option::STMTS);
-
+/*!
+ * \brief write the schema to a 'schema.cql' file at the given directory.
+ *
+ * When doing a snapshot, the snapshot directory contains a 'schema.cql' file
+ * with a CQL command that can be used to generate the schema.
+ * The content is is similar to the result of the CQL DESCRIBE command of the table.
+ *
+ * When a schema has indexes, local indexes or views, those indexes and views
+ * are represented by their own schemas.
+ * In those cases, the method would write the relevant information for each of the schemas:
+ *
+ * The schema of the base table would output a file with the CREATE TABLE command
+ * and the schema of the view that is used for the index would output a file with the
+ * CREATE INDEX command.
+ * The same is true for local index and MATERIALIZED VIEW.
+ */
+static future<> write_schema_as_cql(sstring dir, cql3::description schema_desc) {
     auto schema_description = std::move(*schema_desc.create_statement);
     auto schema_file_name = dir + "/schema.cql";
     auto f = co_await open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate);
@@ -3308,7 +3320,8 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         std::exception_ptr ex;
 
         tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-        co_await t.write_schema_as_cql(table_shards, jsondir).handle_exception([&] (std::exception_ptr ptr) {
+        auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS);
+        co_await write_schema_as_cql(jsondir, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
             ex = std::move(ptr);
         });
