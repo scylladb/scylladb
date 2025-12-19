@@ -128,6 +128,9 @@ private:
     // My Raft ID. Shared between different Raft groups.
     raft::server_id _my_id;
 
+    bool _group0_is_alive = false;
+
+    void ensure_aborted(raft_server_for_group& server_for_group, sstring reason);
 public:
     raft_group_registry(raft::server_id my_id, netw::messaging_service& ms,
             direct_failure_detector::failure_detector& fd);
@@ -182,6 +185,9 @@ public:
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
+    bool is_group0_alive() const {
+        return _group0_is_alive;
+    }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
@@ -199,7 +205,7 @@ public:
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;
 
-    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) override;
 };
 
 // XXX: find a better place to put this?
@@ -208,6 +214,7 @@ struct direct_fd_clock : public direct_failure_detector::clock {
 
     direct_failure_detector::clock::timepoint_t now() noexcept override;
     future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
+    std::chrono::milliseconds to_milliseconds(direct_failure_detector::clock::timepoint_t tp) const override;
 };
 
 } // end of namespace service

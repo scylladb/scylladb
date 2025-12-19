@@ -19,26 +19,6 @@ class abort_source;
 
 namespace direct_failure_detector {
 
-class pinger {
-public:
-    // Opaque endpoint ID.
-    // A specific implementation of `pinger` maps those IDs to 'real' addresses.
-    using endpoint_id = utils::UUID;
-
-    // Send a message to `ep` and wait until it responds.
-    // The wait can be aborted using `as`.
-    // Abort should be signalized with `abort_requested_exception`.
-    //
-    // If the ping fails in an expected way (e.g. the endpoint is down and refuses to connect),
-    // returns `false`. If it succeeds, returns `true`.
-    virtual future<bool> ping(endpoint_id ep, abort_source& as) = 0;
-
-protected:
-    // The `pinger` object must not be destroyed through the `pinger` interface.
-    // `failure_detector` does not take ownership of `pinger`, only a non-owning reference.
-    ~pinger() = default;
-};
-
 // A clock that uses abstract units to measure time.
 // The implementation is responsible for periodically advancing the clock.
 //
@@ -60,10 +40,31 @@ public:
     // Aborts should be signalized using `seastar::sleep_aborted`.
     virtual future<> sleep_until(timepoint_t tp, abort_source& as) = 0;
 
+    virtual std::chrono::milliseconds to_milliseconds(timepoint_t tp) const = 0;
 protected:
     // The `clock` object must not be destroyed through the `clock` interface.
     // `failure_detector` does not take ownership of `clock`, only a non-owning reference.
     ~clock() = default;
+};
+
+class pinger {
+public:
+    // Opaque endpoint ID.
+    // A specific implementation of `pinger` maps those IDs to 'real' addresses.
+    using endpoint_id = utils::UUID;
+
+    // Send a message to `ep` and wait until it responds.
+    // The wait can be aborted using `as`.
+    // Abort should be signalized with `abort_requested_exception`.
+    //
+    // If the ping fails in an expected way (e.g. the endpoint is down and refuses to connect),
+    // returns `false`. If it succeeds, returns `true`.
+    virtual future<bool> ping(endpoint_id ep, clock::timepoint_t timeout, abort_source& as, clock& c) = 0;
+
+protected:
+    // The `pinger` object must not be destroyed through the `pinger` interface.
+    // `failure_detector` does not take ownership of `pinger`, only a non-owning reference.
+    ~pinger() = default;
 };
 
 class listener {
@@ -127,7 +128,10 @@ public:
 
         // Duration after which a ping is aborted, so that next ping can be started
         // (pings are sent sequentially).
-        clock::interval_t ping_timeout
+        clock::interval_t ping_timeout,
+
+        // Scheduling group used for fibers inside the failure detector.
+        seastar::scheduling_group sg
     );
 
     ~failure_detector();
