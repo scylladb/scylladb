@@ -16,6 +16,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/uuid_fcts.hh"
+#include "cql3/functions/vector_similarity_fcts.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
@@ -397,6 +398,14 @@ functions::get(data_dictionary::database db,
             return nullptr;
         }
     });
+
+    const auto func_name = name.has_keyspace() ? name : name.as_native_function();
+    if (SIMILARITY_FUNCTIONS.contains(func_name)) {
+        auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
+        auto fun = ::make_shared<vector_similarity_fct>(func_name.name, arg_types);
+        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        return fun;
+    }
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
