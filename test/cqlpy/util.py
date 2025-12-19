@@ -308,9 +308,12 @@ def local_process_id(cql):
         dir = f'/proc/{proc}/fd/'
         try:
             for fd in os.listdir(dir):
-                if os.readlink(dir + fd) == target:
-                    # Found the process!
-                    return proc
+                try:
+                    if os.readlink(dir + fd) == target:
+                        # Found the process!
+                        return proc
+                except:
+                    pass
         except:
             # Ignore errors. We can't check processes we don't own.
             pass
