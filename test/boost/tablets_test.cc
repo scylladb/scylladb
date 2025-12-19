@@ -2925,6 +2925,7 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
         auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 128);
         auto table1 = add_table(e, ks_name).get();
         load_stats.set_size(table1, 0);
+        load_stats.set_default_tablet_sizes(stm.get());
         testlog.info("Initial cluster ready");
 
         topo.add_i4i_large(rack1);
@@ -3003,6 +3004,1423 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
     }).get();
 }
 
+<<<<<<< HEAD
+||||||| parent of 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
+static table_id create_table_and_set_tablet_sizes(cql_test_env& e, topology_builder& topo, sstring ks_name, size_t tablet_count, uint64_t table_size_bytes) {
+    const uint64_t tablet_size = table_size_bytes / tablet_count;
+
+    std::map<sstring, sstring> tablet_options = {{"min_tablet_count", to_sstring(tablet_count)}};
+    auto table = add_table(e, ks_name, tablet_options).get();
+
+    auto& load_stats = topo.get_shared_load_stats();
+    load_stats.set_size(table, table_size_bytes);
+
+    auto& stm = e.shared_token_metadata().local();
+    auto& tmap = stm.get()->tablets().get_tablet_map(table);
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        auto replicas = tinfo.replicas;
+        for (auto& r : tinfo.replicas) {
+            locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
+            load_stats.set_tablet_size(r.host, rb_tid, tablet_size);
+        }
+        return make_ready_future<>();
+    }).get();
+
+    testlog.info("Created table {} of size {:i} with {} tablets and tablet size of {:i}",
+                table, utils::pretty_printed_data_size(table_size_bytes), tablet_count, utils::pretty_printed_data_size(tablet_size));
+
+    return table;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
+    // This test validates the table balance in size based load balancing.
+    // The initial tablet allocation during table creation is non-deterministic because of
+    // shuffle in network_topology_strategy.cc. This means that the tablet balancer will work on a different
+    // initial setup on every run, and that the final tablet distribution will also be different.
+    // With max_imbalance_threshold set to 1.4 and running the test 10000 times there were no failures.
+    // 1.5 was selected as a safety buffer to avoid flakyness.
+    //
+    // The following is a table of max_imbalance_threshold and failure rates for 10000 runs:
+    //
+    // threshold | # runs | # failures
+    // ----------+--------+------------
+    //     1.4   |  10000 |          0
+    //     1.3   |  10000 |          57
+    //     1.2   |  10000 |          539
+    auto cfg = tablet_cql_test_config();
+    do_with_cql_env_thread([&] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        endpoint_dc_rack dc_rack;
+        const uint64_t shard_capacity = 250UL * 1024UL * 1024UL * 1024UL;
+        const size_t tablet_count = 512;
+        const double max_imbalance_threshold = 1.5;
+        const double min_imbalance_threshold = 1 / max_imbalance_threshold;
+        uint64_t total_capacity = 0;
+
+        std::vector<host_id> hosts;
+
+        // Add disk capacity for the default node. Add all subsequent nodes to the same DC/rack
+        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+            dc_rack = node.dc_rack();
+            auto host = node.host_id();
+            auto num_shards = node.get_shard_count();
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Default node {} has {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        });
+
+        auto create_node = [&] (size_t num_shards) {
+            auto host = topo.add_node(node_state::normal, num_shards, dc_rack);
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Added node {} with {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        };
+
+        create_node(10);
+        create_node(8);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}});
+
+        // Add 3 tables: 0.5 of the current total storage, 0.25 of the total storage and 0.125 of the total storage
+        std::map<table_id, uint64_t> table_sizes;
+        uint64_t table_size = total_capacity / 2;
+        for (int c = 0; c < 3; c++) {
+            auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+            table_sizes[table_id] = table_size;
+            table_size /= 2;
+        }
+        // Add another table with 1 byte per tablet
+        table_size = tablet_count;
+        auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+        table_sizes[table_id] = table_size;
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto check_balance = [&] {
+            for (auto& [table, table_size] : table_sizes) {
+                load_sketch load(stm.get(), topo.get_shared_load_stats().get());
+                load.populate(std::nullopt, table).get();
+
+                const double ideal_table_load = double(table_size) / total_capacity;
+                min_max_tracker<double> table_load;
+                for (auto h : hosts) {
+                    auto shard_minmax_load = load.get_shard_minmax(h);
+                    table_load.update(shard_minmax_load);
+                    testlog.info("Table: {} ideal_load: {} host: {} load: {} min_shard_load: {} max_shard_load: {}",
+                                    table, ideal_table_load, h, load.get_load(h), shard_minmax_load.min(), shard_minmax_load.max());
+
+                    BOOST_REQUIRE_LT(min_imbalance_threshold, shard_minmax_load.min() / ideal_table_load);
+                    BOOST_REQUIRE_GT(max_imbalance_threshold, shard_minmax_load.max() / ideal_table_load);
+                }
+            }
+        };
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+        create_node(8);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
+    cql_test_config cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
+
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+        sstring dc1 = topo.dc();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+
+        auto dc2 = topo.start_new_dc().dc;
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+
+        auto ks_name1 = add_keyspace(e, {{dc1, 3}});
+        auto ks_name2 = add_keyspace(e, {{dc2, 2}});
+
+        // table1 overflows per-shard goal in dc1, should be scaled down.
+        // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
+        // which will be scaled down by a factor of 0.5 to achieve 100 tablets/shard, giving
+        // 200 tablets, scaled up to the nearest power of 2, which is 256.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 200}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        // table2 has 64 tablets/shard in dc2, should not be scaled down.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 64}}", ks_name2)).get();
+        auto table2 = e.local_db().find_schema(ks_name2, "table2")->id();
+
+        rebalance_tablets(e);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
+
+            load_sketch load(tm, load_stats.get());
+            load.populate().get();
+
+            for (auto h: hosts) {
+                auto l = load.get_shard_minmax_tablet_count(h);
+                testlog.info("Tablet count on host {}: min={}, max={}", h, l.min(), l.max());
+                BOOST_REQUIRE_LE(l.max(), 2 * per_shard_goal);
+            }
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats) {
+    // This checks that nodes with incomplete stats are not included in load balancing.
+    do_with_cql_env_thread([] (auto& e) {
+
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+        auto host3 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        abort_source as;
+        auto guard = e.get_raft_group0_client().start_operation(as).get();
+        auto& stm = e.shared_token_metadata().local();
+
+        // Move all tablets to shard 0 of host2
+        mutate_tablets(e, guard, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(16);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica {host2, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Set tablet sizes, then erase a tablet size from load_stats for host2
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        auto tablet_size_i = shared_stats.stats.tablet_stats.at(host2).tablet_sizes.at(table1).begin();
+        shared_stats.stats.tablet_stats.at(host2).tablet_sizes.at(table1).erase(tablet_size_i);
+
+        // Balancing should not issue any migrations because host2 will be ignored
+        // due to incomplete tablet sizes in load_stats
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+
+        // Balancing should issue migrations with host2 having all tablet sizes
+        shared_stats.set_default_tablet_sizes(stm.get());
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(!plan.empty());
+            BOOST_REQUIRE(!plan.migrations().empty());
+            for (auto&& mig : plan.migrations()) {
+                BOOST_REQUIRE_EQUAL(mig.src.host, host2);
+            }
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet_sizes) {
+    // This checks that the balancer will not issue migrations with incomplete tablet sizes
+    do_with_cql_env_thread([] (auto& e) {
+
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 64);
+        auto table1 = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Decommission host2
+        topo.set_node_state(host2, node_state::decommissioning);
+
+        // Set tablet sizes, then erase a tablet size from load_stats for host1 and host2
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+
+        auto erase_tablet_size = [&] (host_id host) {
+            auto tablet_size_i = shared_stats.stats.tablet_stats.at(host).tablet_sizes.at(table1).begin();
+            shared_stats.stats.tablet_stats.at(host).tablet_sizes.at(table1).erase(tablet_size_i);
+        };
+
+        erase_tablet_size(host1);
+        erase_tablet_size(host2);
+
+        // Balancing should not issue migrations due to missing tablet sizes
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+
+        // the target tablet size for a group of co-located tablets is the default
+        // target divided by the group size. see make_sizing_plan
+        const uint64_t target_tablet_size = service::default_target_tablet_size / 2;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        // avg tablet size = 3.5 * target > 2 * target
+        load_stats.set_size(table1, 3*target_tablet_size);
+        load_stats.set_size(table2, 4*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_split = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, 2);
+
+        // avg tablet size = (0.6 / 2) * target = 0.3 * target < 0.5 * target
+        load_stats.set_size(table1, 1.1*target_tablet_size);
+        load_stats.set_size(table2, 0.1*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_merge = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, 1);
+    }).get();
+}
+
+// This test verifies that per-table tablet count is adjusted
+// in reaction to changes of relevant config and schema options.
+SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.need_remote_proxy = true;
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 3 shards. default initial scale wants 30 (32) tablets.
+        // keyspace 'initial' wants 2 tablets.
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+
+        // min_per_shard_tablet_count wants 5 * 3 = 15 (16) tablets
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 5}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // Check that hint can be dropped.
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 WITH tablets = {{}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+
+        // Default kicks in if keyspace setting and hint are missing.
+        e.execute_cql(format("ALTER KEYSPACE {} with tablets = {{'enabled': true}}", ks_name1, dc)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 32);
+
+        // initial scale can be live-updated.
+        auto& cfg = e.db_config();
+        cfg.tablets_initial_scale_factor(5);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // per-shard goal can be live-updated.
+
+        // merge
+        cfg.tablets_per_shard_goal(1);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 4);
+
+        // split
+        cfg.tablets_per_shard_goal(100);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // initial scale can be smaller than 1.
+        // 0.5 tablet/shard * 3 shards = 1.5 tablets =~ 2 tablets.
+        cfg.tablets_initial_scale_factor(0.5);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.db_config->tablets_per_shard_goal(100);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 10 tablets/shard (initial_scale) * 16 shards = 160 tablets, rounded up to 256.
+        // That's 16 tablet replicas per shard per table.
+        // Creating 100 tables without scaling would give 1'600 tablets per shard,
+        // which would overshoot the per-shard limit significantly.
+        // This test verifies that scaling kicks in sooner as more tables are created,
+        // and we end up with fewer tablets even before tablet merging is executed.
+
+        auto host1 = topo.add_node(node_state::normal, 16);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}});
+        std::vector<table_id> tables;
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        const auto nr_tables = 100u;
+        parallel_for_each(std::views::iota(0u, nr_tables), [&] (auto i) -> future<> {
+            auto table_name = fmt::format("table_{}", i);
+            co_await e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))",
+                                               ks_name1, table_name));
+            table_id table = e.local_db().find_schema(ks_name1, table_name)->id();
+            tables.push_back(table);
+            load_stats.set_size(table, 0);
+        }).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        load_stats.set_default_tablet_sizes(stm.get());
+
+        {
+            load_sketch load(stm.get(), load_stats.get());
+            load.populate().get();
+            testlog.info("max tablet count: {}", load.get_shard_minmax_tablet_count(host1).max());
+            // The value 415 was determined empirically. If there was lack of scaling, it would be 1'600.
+            BOOST_REQUIRE(load.get_shard_minmax_tablet_count(host1).max() <= 415);
+        }
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            load_sketch load(stm.get(), load_stats.get());
+            load.populate().get();
+            testlog.info("max tablet count: {}", load.get_shard_minmax_tablet_count(host1).max());
+            BOOST_REQUIRE(load.get_shard_minmax_tablet_count(host1).max() <= 200);
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks the correctness of the load_stats reconciliation algorithm.
+    // We only attempt to reconcile tablet_sizes after a merge or a split.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        token_metadata_ptr old_tmptr = stm.get();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // This checks if the tablet sizes have been correctly reconciled after a merge
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i;
+            }
+
+            size_t tablet_count_after_merge = tablet_count / 2;
+            set_tablet_count(tablet_count_after_merge);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_merge);
+
+            locator::tablet_map tmap_after_merge(tablet_count_after_merge);
+            for (size_t i = 0; i < tablet_count_after_merge; ++i) {
+                dht::token_range trange {tmap_after_merge.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                uint64_t expected_sum = 0;
+                for (uint64_t i_sum = 0; i_sum < 2; ++i_sum) {
+                    expected_sum += i * 2 + i_sum;
+                }
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, expected_sum);
+            }
+        }
+
+        // This checks if the tablet sizes have been correctly reconciled after a split
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i * 2;
+            }
+
+            size_t tablet_count_after_split = tablet_count * 2;
+            set_tablet_count(tablet_count_after_split);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_split);
+
+            locator::tablet_map tmap_after_split(tablet_count_after_split);
+            for (size_t i = 0; i < tablet_count_after_split; ++i) {
+                dht::token_range trange {tmap_after_split.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, i / 2);
+            }
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks if the reconcile tablet algorithm returns nullptr when it
+    // can't find all the tablet sizes in load_stats
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        locator::load_stats stats;
+        locator::tablet_load_stats& tls = stats.tablet_stats[host];
+        // Add all tablet sizes except the last one. This will cause reconcile to return a nullptr
+        for (size_t i = 0; i < tablet_count - 1; ++i) {
+            const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+            tls.tablet_sizes[table][range] = i;
+        }
+
+        token_metadata_ptr old_tm { stm.get() };
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // Test if merge reconcile detects a missing sibling tablet in load_stats
+        set_tablet_count(tablet_count / 2);
+        auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+
+        // Test if split reconcile detects a missing tablet in load_stats
+        set_tablet_count(tablet_count * 2);
+        reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+    }, cfg).get();
+}
+
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
+
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const uint64_t tablet_size = 42;
+    range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+    global_tablet_id gid{table, tid};
+
+    // Check tablet size is correctly migrated
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(new_load_stats);
+
+        // Check tablet size is on host2
+        auto tablet_size_opt = new_load_stats->get_tablet_size(host2, rb_tid);
+        BOOST_REQUIRE(tablet_size_opt);
+        BOOST_REQUIRE(*tablet_size_opt == tablet_size);
+
+        // Check tablet size is not on host1
+        tablet_size_opt = new_load_stats->get_tablet_size(host1, rb_tid);
+        BOOST_REQUIRE(!tablet_size_opt);
+
+        // Check the migration removed the entry for the table after removing the last tablet size
+        BOOST_REQUIRE(!new_load_stats->tablet_stats.at(host1).tablet_sizes.contains(table));
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is not found on leaving replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1] = {};
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is already on pending replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when leaving and pending replicas are equal
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when pending host is not found in load_stats
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    return make_ready_future<>();
+}
+
+=======
+static table_id create_table_and_set_tablet_sizes(cql_test_env& e, topology_builder& topo, sstring ks_name, size_t tablet_count, uint64_t table_size_bytes) {
+    const uint64_t tablet_size = table_size_bytes / tablet_count;
+
+    std::map<sstring, sstring> tablet_options = {{"min_tablet_count", to_sstring(tablet_count)}};
+    auto table = add_table(e, ks_name, tablet_options).get();
+
+    auto& load_stats = topo.get_shared_load_stats();
+    load_stats.set_size(table, table_size_bytes);
+
+    auto& stm = e.shared_token_metadata().local();
+    auto& tmap = stm.get()->tablets().get_tablet_map(table);
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        auto replicas = tinfo.replicas;
+        for (auto& r : tinfo.replicas) {
+            locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
+            load_stats.set_tablet_size(r.host, rb_tid, tablet_size);
+        }
+        return make_ready_future<>();
+    }).get();
+
+    testlog.info("Created table {} of size {:i} with {} tablets and tablet size of {:i}",
+                table, utils::pretty_printed_data_size(table_size_bytes), tablet_count, utils::pretty_printed_data_size(tablet_size));
+
+    return table;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
+    // This test validates the table balance in size based load balancing.
+    // The initial tablet allocation during table creation is non-deterministic because of
+    // shuffle in network_topology_strategy.cc. This means that the tablet balancer will work on a different
+    // initial setup on every run, and that the final tablet distribution will also be different.
+    // With max_imbalance_threshold set to 1.4 and running the test 10000 times there were no failures.
+    // 1.5 was selected as a safety buffer to avoid flakyness.
+    //
+    // The following is a table of max_imbalance_threshold and failure rates for 10000 runs:
+    //
+    // threshold | # runs | # failures
+    // ----------+--------+------------
+    //     1.4   |  10000 |          0
+    //     1.3   |  10000 |          57
+    //     1.2   |  10000 |          539
+    auto cfg = tablet_cql_test_config();
+    do_with_cql_env_thread([&] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        endpoint_dc_rack dc_rack;
+        const uint64_t shard_capacity = 250UL * 1024UL * 1024UL * 1024UL;
+        const size_t tablet_count = 512;
+        const double max_imbalance_threshold = 1.5;
+        const double min_imbalance_threshold = 1 / max_imbalance_threshold;
+        uint64_t total_capacity = 0;
+
+        std::vector<host_id> hosts;
+
+        // Add disk capacity for the default node. Add all subsequent nodes to the same DC/rack
+        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+            dc_rack = node.dc_rack();
+            auto host = node.host_id();
+            auto num_shards = node.get_shard_count();
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Default node {} has {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        });
+
+        auto create_node = [&] (size_t num_shards) {
+            auto host = topo.add_node(node_state::normal, num_shards, dc_rack);
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Added node {} with {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        };
+
+        create_node(10);
+        create_node(8);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}});
+
+        // Add 3 tables: 0.5 of the current total storage, 0.25 of the total storage and 0.125 of the total storage
+        std::map<table_id, uint64_t> table_sizes;
+        uint64_t table_size = total_capacity / 2;
+        for (int c = 0; c < 3; c++) {
+            auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+            table_sizes[table_id] = table_size;
+            table_size /= 2;
+        }
+        // Add another table with 1 byte per tablet
+        table_size = tablet_count;
+        auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+        table_sizes[table_id] = table_size;
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto check_balance = [&] {
+            for (auto& [table, table_size] : table_sizes) {
+                load_sketch load(stm.get(), topo.get_shared_load_stats().get());
+                load.populate(std::nullopt, table).get();
+
+                const double ideal_table_load = double(table_size) / total_capacity;
+                min_max_tracker<double> table_load;
+                for (auto h : hosts) {
+                    auto shard_minmax_load = load.get_shard_minmax(h);
+                    table_load.update(shard_minmax_load);
+                    testlog.info("Table: {} ideal_load: {} host: {} load: {} min_shard_load: {} max_shard_load: {}",
+                                    table, ideal_table_load, h, load.get_load(h), shard_minmax_load.min(), shard_minmax_load.max());
+
+                    BOOST_REQUIRE_LT(min_imbalance_threshold, shard_minmax_load.min() / ideal_table_load);
+                    BOOST_REQUIRE_GT(max_imbalance_threshold, shard_minmax_load.max() / ideal_table_load);
+                }
+            }
+        };
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+        create_node(8);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+    }, std::move(cfg)).get();
+}
+
+static future<> run_imbalance_when_creating_plenty_of_tables_test(bool rf_rack_valid_keyspaces) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces.set(std::move(rf_rack_valid_keyspaces));
+
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 1);
+
+        for (int _ : std::views::iota(1, 100)) {
+            add_table(e, ks_name, {{"min_per_shard_tablet_count", "10.0"}}).get();
+        }
+        testlog.info("Initial cluster ready");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+
+            for (auto h: topo.hosts()) {
+                auto node_utilization = load.get_shard_minmax_tablet_count(h);
+                testlog.info("host {}: min={}, max={}", h, node_utilization.min(), node_utilization.max());
+                BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 1.1);
+            }
+        }
+    }, std::move(cfg));
+}
+
+// Reproduces https://github.com/scylladb/scylladb/issues/27620
+SEASTAR_THREAD_TEST_CASE(test_imbalance_when_creating_plenty_of_tables_with_RF_rack_valid_keyspaces_enforced) {
+    run_imbalance_when_creating_plenty_of_tables_test(true).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_imbalance_when_creating_plenty_of_tables_with_RF_rack_valid_keyspaces_disabled) {
+    run_imbalance_when_creating_plenty_of_tables_test(false).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
+    cql_test_config cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
+
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+        sstring dc1 = topo.dc();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+
+        auto dc2 = topo.start_new_dc().dc;
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+
+        auto ks_name1 = add_keyspace(e, {{dc1, 3}});
+        auto ks_name2 = add_keyspace(e, {{dc2, 2}});
+
+        // table1 overflows per-shard goal in dc1, should be scaled down.
+        // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
+        // which will be scaled down by a factor of 0.5 to achieve 100 tablets/shard, giving
+        // 200 tablets, scaled up to the nearest power of 2, which is 256.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 200}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        // table2 has 64 tablets/shard in dc2, should not be scaled down.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 64}}", ks_name2)).get();
+        auto table2 = e.local_db().find_schema(ks_name2, "table2")->id();
+
+        rebalance_tablets(e);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
+
+            load_sketch load(tm, load_stats.get());
+            load.populate().get();
+
+            for (auto h: hosts) {
+                auto l = load.get_shard_minmax_tablet_count(h);
+                testlog.info("Tablet count on host {}: min={}, max={}", h, l.min(), l.max());
+                BOOST_REQUIRE_LE(l.max(), 2 * per_shard_goal);
+            }
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats) {
+    // This checks that nodes with incomplete stats are not included in load balancing.
+    do_with_cql_env_thread([] (auto& e) {
+
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+        auto host3 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        abort_source as;
+        auto guard = e.get_raft_group0_client().start_operation(as).get();
+        auto& stm = e.shared_token_metadata().local();
+
+        // Move all tablets to shard 0 of host2
+        mutate_tablets(e, guard, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(16);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica {host2, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Set tablet sizes, then erase a tablet size from load_stats for host2
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        auto tablet_size_i = shared_stats.stats.tablet_stats.at(host2).tablet_sizes.at(table1).begin();
+        shared_stats.stats.tablet_stats.at(host2).tablet_sizes.at(table1).erase(tablet_size_i);
+
+        // Balancing should not issue any migrations because host2 will be ignored
+        // due to incomplete tablet sizes in load_stats
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+
+        // Balancing should issue migrations with host2 having all tablet sizes
+        shared_stats.set_default_tablet_sizes(stm.get());
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(!plan.empty());
+            BOOST_REQUIRE(!plan.migrations().empty());
+            for (auto&& mig : plan.migrations()) {
+                BOOST_REQUIRE_EQUAL(mig.src.host, host2);
+            }
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet_sizes) {
+    // This checks that the balancer will not issue migrations with incomplete tablet sizes
+    do_with_cql_env_thread([] (auto& e) {
+
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 64);
+        auto table1 = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Decommission host2
+        topo.set_node_state(host2, node_state::decommissioning);
+
+        // Set tablet sizes, then erase a tablet size from load_stats for host1 and host2
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+
+        auto erase_tablet_size = [&] (host_id host) {
+            auto tablet_size_i = shared_stats.stats.tablet_stats.at(host).tablet_sizes.at(table1).begin();
+            shared_stats.stats.tablet_stats.at(host).tablet_sizes.at(table1).erase(tablet_size_i);
+        };
+
+        erase_tablet_size(host1);
+        erase_tablet_size(host2);
+
+        // Balancing should not issue migrations due to missing tablet sizes
+        {
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+
+        // the target tablet size for a group of co-located tablets is the default
+        // target divided by the group size. see make_sizing_plan
+        const uint64_t target_tablet_size = service::default_target_tablet_size / 2;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        // avg tablet size = 3.5 * target > 2 * target
+        load_stats.set_size(table1, 3*target_tablet_size);
+        load_stats.set_size(table2, 4*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_split = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, 2);
+
+        // avg tablet size = (0.6 / 2) * target = 0.3 * target < 0.5 * target
+        load_stats.set_size(table1, 1.1*target_tablet_size);
+        load_stats.set_size(table2, 0.1*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_merge = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, 1);
+    }).get();
+}
+
+// This test verifies that per-table tablet count is adjusted
+// in reaction to changes of relevant config and schema options.
+SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.need_remote_proxy = true;
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 3 shards. default initial scale wants 30 (32) tablets.
+        // keyspace 'initial' wants 2 tablets.
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+
+        // min_per_shard_tablet_count wants 5 * 3 = 15 (16) tablets
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 5}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // Check that hint can be dropped.
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 WITH tablets = {{}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+
+        // Default kicks in if keyspace setting and hint are missing.
+        e.execute_cql(format("ALTER KEYSPACE {} with tablets = {{'enabled': true}}", ks_name1, dc)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 32);
+
+        // initial scale can be live-updated.
+        auto& cfg = e.db_config();
+        cfg.tablets_initial_scale_factor(5);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // per-shard goal can be live-updated.
+
+        // merge
+        cfg.tablets_per_shard_goal(1);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 4);
+
+        // split
+        cfg.tablets_per_shard_goal(100);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // initial scale can be smaller than 1.
+        // 0.5 tablet/shard * 3 shards = 1.5 tablets =~ 2 tablets.
+        cfg.tablets_initial_scale_factor(0.5);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.db_config->tablets_per_shard_goal(100);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 10 tablets/shard (initial_scale) * 16 shards = 160 tablets, rounded up to 256.
+        // That's 16 tablet replicas per shard per table.
+        // Creating 100 tables without scaling would give 1'600 tablets per shard,
+        // which would overshoot the per-shard limit significantly.
+        // This test verifies that scaling kicks in sooner as more tables are created,
+        // and we end up with fewer tablets even before tablet merging is executed.
+
+        auto host1 = topo.add_node(node_state::normal, 16);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}});
+        std::vector<table_id> tables;
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        const auto nr_tables = 100u;
+        parallel_for_each(std::views::iota(0u, nr_tables), [&] (auto i) -> future<> {
+            auto table_name = fmt::format("table_{}", i);
+            co_await e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))",
+                                               ks_name1, table_name));
+            table_id table = e.local_db().find_schema(ks_name1, table_name)->id();
+            tables.push_back(table);
+            load_stats.set_size(table, 0);
+        }).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        load_stats.set_default_tablet_sizes(stm.get());
+
+        {
+            load_sketch load(stm.get(), load_stats.get());
+            load.populate().get();
+            testlog.info("max tablet count: {}", load.get_shard_minmax_tablet_count(host1).max());
+            // The value 415 was determined empirically. If there was lack of scaling, it would be 1'600.
+            BOOST_REQUIRE(load.get_shard_minmax_tablet_count(host1).max() <= 415);
+        }
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            load_sketch load(stm.get(), load_stats.get());
+            load.populate().get();
+            testlog.info("max tablet count: {}", load.get_shard_minmax_tablet_count(host1).max());
+            BOOST_REQUIRE(load.get_shard_minmax_tablet_count(host1).max() <= 200);
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks the correctness of the load_stats reconciliation algorithm.
+    // We only attempt to reconcile tablet_sizes after a merge or a split.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        token_metadata_ptr old_tmptr = stm.get();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // This checks if the tablet sizes have been correctly reconciled after a merge
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i;
+            }
+
+            size_t tablet_count_after_merge = tablet_count / 2;
+            set_tablet_count(tablet_count_after_merge);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_merge);
+
+            locator::tablet_map tmap_after_merge(tablet_count_after_merge);
+            for (size_t i = 0; i < tablet_count_after_merge; ++i) {
+                dht::token_range trange {tmap_after_merge.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                uint64_t expected_sum = 0;
+                for (uint64_t i_sum = 0; i_sum < 2; ++i_sum) {
+                    expected_sum += i * 2 + i_sum;
+                }
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, expected_sum);
+            }
+        }
+
+        // This checks if the tablet sizes have been correctly reconciled after a split
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i * 2;
+            }
+
+            size_t tablet_count_after_split = tablet_count * 2;
+            set_tablet_count(tablet_count_after_split);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_split);
+
+            locator::tablet_map tmap_after_split(tablet_count_after_split);
+            for (size_t i = 0; i < tablet_count_after_split; ++i) {
+                dht::token_range trange {tmap_after_split.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, i / 2);
+            }
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks if the reconcile tablet algorithm returns nullptr when it
+    // can't find all the tablet sizes in load_stats
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        locator::load_stats stats;
+        locator::tablet_load_stats& tls = stats.tablet_stats[host];
+        // Add all tablet sizes except the last one. This will cause reconcile to return a nullptr
+        for (size_t i = 0; i < tablet_count - 1; ++i) {
+            const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+            tls.tablet_sizes[table][range] = i;
+        }
+
+        token_metadata_ptr old_tm { stm.get() };
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // Test if merge reconcile detects a missing sibling tablet in load_stats
+        set_tablet_count(tablet_count / 2);
+        auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+
+        // Test if split reconcile detects a missing tablet in load_stats
+        set_tablet_count(tablet_count * 2);
+        reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+    }, cfg).get();
+}
+
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
+
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const uint64_t tablet_size = 42;
+    range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+    global_tablet_id gid{table, tid};
+
+    // Check tablet size is correctly migrated
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(new_load_stats);
+
+        // Check tablet size is on host2
+        auto tablet_size_opt = new_load_stats->get_tablet_size(host2, rb_tid);
+        BOOST_REQUIRE(tablet_size_opt);
+        BOOST_REQUIRE(*tablet_size_opt == tablet_size);
+
+        // Check tablet size is not on host1
+        tablet_size_opt = new_load_stats->get_tablet_size(host1, rb_tid);
+        BOOST_REQUIRE(!tablet_size_opt);
+
+        // Check the migration removed the entry for the table after removing the last tablet size
+        BOOST_REQUIRE(!new_load_stats->tablet_stats.at(host1).tablet_sizes.contains(table));
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is not found on leaving replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1] = {};
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when tablet is already on pending replica
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when leaving and pending replicas are equal
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+        stats.tablet_stats[host2] = {};
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check migrate_tablet_size() returns nullptr when pending host is not found in load_stats
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
+
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    return make_ready_future<>();
+}
+
+>>>>>>> 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
