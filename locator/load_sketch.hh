@@ -68,12 +68,30 @@ class load_sketch {
             }
         }
 
+<<<<<<< HEAD
         load_type& load() noexcept {
             return _load;
         }
 
         const load_type& load() const noexcept {
             return _load;
+||||||| parent of 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
+        // Returns storage utilization for the node
+        load_type get_load() const noexcept {
+            return _du.get_load();
+=======
+        void normalize(load_type factor) {
+            _du.used /= factor;
+            for (shard_id i = 0; i < _shards.size(); ++i) {
+                _shards[i].du.used /= factor;
+            }
+            populate_shards_by_load();
+        }
+
+        // Returns storage utilization for the node
+        load_type get_load() const noexcept {
+            return _du.get_load();
+>>>>>>> 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
         }
     };
     std::unordered_map<host_id, node_load> _nodes;
@@ -114,11 +132,13 @@ public:
         : _tm(std::move(tm)) {
     }
 
+    future<> clear() {
+        return utils::clear_gently(_nodes);
+    }
+
     future<> populate(std::optional<host_id> host = std::nullopt,
                       std::optional<table_id> only_table = std::nullopt,
                       std::optional<sstring> only_dc = std::nullopt) {
-        co_await utils::clear_gently(_nodes);
-
         if (host) {
             ensure_node(*host);
         } else {
@@ -149,7 +169,28 @@ public:
         return populate(std::nullopt, std::nullopt, dc);
     }
 
+<<<<<<< HEAD
     shard_id next_shard(host_id node) {
+||||||| parent of 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
+    shard_id next_shard(host_id node, size_t tablet_count, uint64_t tablet_size_sum) {
+=======
+
+    future<> populate_with_normalized_load() {
+        co_await populate();
+
+        min_max_tracker<load_type> minmax;
+        minmax.update(1);
+        for (auto&& id : _nodes | std::views::keys) {
+            minmax.update(get_shard_minmax(id).max());
+        }
+
+        for (auto&& n : _nodes | std::views::values) {
+            n.normalize(minmax.max());
+        }
+    }
+
+    shard_id next_shard(host_id node, size_t tablet_count, uint64_t tablet_size_sum) {
+>>>>>>> 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
         auto shard = get_least_loaded_shard(node);
         pick(node, shard);
         return shard;
@@ -218,7 +259,53 @@ public:
             return 0;
         }
         auto& n = _nodes.at(node);
+<<<<<<< HEAD
         return double(n.load()) / n._shards.size();
+||||||| parent of 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
+        return double(n._tablet_count) / n._shards.size();
+    }
+
+    uint64_t get_disk_used(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        throw_on_incomplete_data(node);
+        return _nodes.at(node)._du.used;
+    }
+
+    uint64_t get_capacity(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        throw_on_incomplete_data(node, true);
+        return _nodes.at(node)._du.capacity;
+=======
+        return double(n._tablet_count) / n._shards.size();
+    }
+
+    double get_real_avg_shard_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        auto& n = _nodes.at(node);
+        return double(n.get_load()) / n._shards.size();
+    }
+
+    uint64_t get_disk_used(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        throw_on_incomplete_data(node);
+        return _nodes.at(node)._du.used;
+    }
+
+    uint64_t get_capacity(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        throw_on_incomplete_data(node, true);
+        return _nodes.at(node)._du.capacity;
+>>>>>>> 62313a6264 (load_sketch: Allow populating load_sketch with normalized current load)
     }
 
     shard_id get_shard_count(host_id node) const {
