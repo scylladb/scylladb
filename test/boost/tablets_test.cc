@@ -3000,6 +3000,51 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
     }).get();
 }
 
+static future<> run_imbalance_when_creating_plenty_of_tables_test(bool rf_rack_valid_keyspaces) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces.set(std::move(rf_rack_valid_keyspaces));
+
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 1);
+
+        for (int _ : std::views::iota(1, 100)) {
+            add_table(e, ks_name).get();
+        }
+        testlog.info("Initial cluster ready");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+
+            for (auto h: topo.hosts()) {
+                auto node_utilization = load.get_shard_minmax(h);
+                testlog.info("host {}: min={}, max={}", h, node_utilization.min(), node_utilization.max());
+                BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 1.1);
+            }
+        }
+    }, std::move(cfg));
+}
+
+// Reproduces https://github.com/scylladb/scylladb/issues/27620
+SEASTAR_THREAD_TEST_CASE(test_imbalance_when_creating_plenty_of_tables_with_RF_rack_valid_keyspaces_enforced) {
+    run_imbalance_when_creating_plenty_of_tables_test(true).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_imbalance_when_creating_plenty_of_tables_with_RF_rack_valid_keyspaces_disabled) {
+    run_imbalance_when_creating_plenty_of_tables_test(false).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     cql_test_config cfg = tablet_cql_test_config();
     // FIXME: This test creates two keyspaces with two different replication factors.
