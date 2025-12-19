@@ -604,18 +604,14 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
         service_level_names = [sl.service_level for sl in service_levels]
         assert "driver" not in service_level_names
 
-def get_processed_tasks_for_group(metrics, group):
-    res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
-    if res is None:
-        return 0
-    return res
-
 @pytest.mark.asyncio
 async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
-    number_of_requests = 1000
+    number_of_requests = 3000
 
     def get_processed_tasks_for_group(metrics, group):
         res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
+        logger.info(f"group={group}, tasks_processed={res}")
+
         if res is None:
             return 0
         return res
@@ -627,8 +623,10 @@ async def _verify_tasks_processed_metrics(manager, server, used_group, unused_gr
     await asyncio.gather(*[asyncio.to_thread(func) for i in range(number_of_requests)])
 
     metrics = await manager.metrics.query(server.ip_addr)
-    assert get_processed_tasks_for_group(metrics, used_group) - initial_tasks_processed_by_used_group > number_of_requests
-    assert get_processed_tasks_for_group(metrics, unused_group) - initial_tasks_processed_by_unused_group < number_of_requests
+    tasks_processed_by_used_group = get_processed_tasks_for_group(metrics, used_group)
+    tasks_processed_by_unused_group = get_processed_tasks_for_group(metrics, unused_group)
+    assert tasks_processed_by_used_group - initial_tasks_processed_by_used_group > number_of_requests
+    assert tasks_processed_by_unused_group - initial_tasks_processed_by_unused_group < number_of_requests
 
 @pytest.mark.asyncio
 async def test_driver_service_level_not_used_for_user_queries(manager: ManagerClient) -> None:
