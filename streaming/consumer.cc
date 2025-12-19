@@ -30,7 +30,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard,
         std::optional<int64_t> repaired_at,
-        lw_shared_ptr<sstables::sstable_list> sstable_list_to_mark_as_repaired) {
+        sstables::global_sstable_list* sstable_list_to_mark_as_repaired) {
     return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, repaired_at, sstable_list_to_mark_as_repaired] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
@@ -74,7 +74,9 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 if (repaired_at && sstables::repair_origin == origin) {
                     sst->being_repaired = frozen_guard;
                     if (sstable_list_to_mark_as_repaired) {
-                        sstable_list_to_mark_as_repaired->insert(sst);
+                        co_await sstable_list_to_mark_as_repaired->mutate([sst] (sstable_list& list) {
+                            list.insert(sst);
+                        });
                     }
                 }
                 if (offstrategy && sstables::repair_origin == origin) {

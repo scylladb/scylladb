@@ -554,7 +554,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     auto sharder = get_sharder_helper(t, *(w->schema()), _topo_guard);
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
             streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason),
-                _topo_guard, _repaired_at, w->get_sstable_list_to_mark_as_repaired()),
+                _topo_guard, _repaired_at, &w->get_sstable_list_to_mark_as_repaired()),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -2147,9 +2147,8 @@ public:
 
 public:
     future<> mark_sstable_as_repaired() {
-        auto sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (_incremental_repair_meta.sst_set || sstables) {
-            co_await seastar::async([&] {
+        auto& sstable_list = _repair_writer->get_sstable_list_to_mark_as_repaired();
+        // FIXME: indent
                 auto do_mark_sstable_as_repaired = [&] (const sstables::shared_sstable& sst, const sstring& type) {
                     auto filename = sst->toc_filename();
                     auto name = sst->component_basename(component_type::Data);
@@ -2158,18 +2157,20 @@ public:
                     rlogger.info("Marking filename={} name={} repaired_at={} being_repaired={} type={} for incremental repair",
                             filename, name, repaired_at, sst->being_repaired, type);
                 };
+        co_await seastar::async([&] {
                 _incremental_repair_meta.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
                     seastar::thread::maybe_yield();
                     do_mark_sstable_as_repaired(sst, "existing");
                 });
-                if (sstables) {
-                    for (auto& sst : *sstables) {
+        });
+        co_await sstable_list.mutate_all([&] (sstables::sstable_list& sstables) {
+            return seastar::async([&] {
+                    for (auto& sst : sstables) {
                         seastar::thread::maybe_yield();
                         do_mark_sstable_as_repaired(sst, "repair_produced");
                     }
-                }
             });
-        }
+        });
     }
 };
 

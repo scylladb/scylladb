@@ -9,6 +9,7 @@
 #pragma once
 
 #include "sstables/sstable_set.hh"
+#include "sstables/global_sstable_list.hh"
 #include "streaming/stream_reason.hh"
 #include "service/topology_guard.hh"
 #include <optional>
@@ -35,6 +36,6 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
     sstables::offstrategy offstrategy,
     service::frozen_topology_guard,
     std::optional<int64_t> repaired_at = std::nullopt,
-    lw_shared_ptr<sstables::sstable_list> sstable_list_to_mark_as_repaired = {});
+    sstables::global_sstable_list* sstable_list_to_mark_as_repaired = nullptr);
 
 }
