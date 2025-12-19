@@ -26,7 +26,7 @@ namespace locator {
 /// on shards of the whole cluster.
 class load_sketch {
     using shard_id = seastar::shard_id;
-    using load_type = ssize_t; // In tablets.
+    using load_type = double; // In tablets.
 
     struct shard_load {
         shard_id id;
@@ -205,20 +205,20 @@ public:
         return total;
     }
 
-    load_type get_avg_shard_load(host_id node) const {
+    ssize_t get_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         auto& n = _nodes.at(node);
-        return div_ceil(n.load(), n._shards.size());
+        return div_ceil(ssize_t(n.load()), n._shards.size());
     }
 
-    double get_real_avg_shard_load(host_id node) const {
+    load_type get_real_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         auto& n = _nodes.at(node);
-        return double(n.load()) / n._shards.size();
+        return n.load() / n._shards.size();
     }
 
     shard_id get_shard_count(host_id node) const {
@@ -250,7 +250,7 @@ public:
     }
 
     // Returns nullopt if capacity is not known.
-    std::optional<double> get_allocated_utilization(host_id node, const locator::load_stats& stats, uint64_t target_tablet_size) const {
+    std::optional<load_type> get_allocated_utilization(host_id node, const locator::load_stats& stats, uint64_t target_tablet_size) const {
         if (!_nodes.contains(node)) {
             return std::nullopt;
         }
@@ -259,7 +259,7 @@ public:
             return std::nullopt;
         }
         auto capacity = stats.capacity.at(node);
-        return capacity > 0 ? double(n.load() * target_tablet_size) / capacity : 0;
+        return capacity > 0 ? n.load() * target_tablet_size / capacity : 0;
     }
 };
 
