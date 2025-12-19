@@ -99,6 +99,14 @@ class load_sketch {
             _shards_by_load.insert(_shards.begin(), _shards.end());
         }
 
+        void normalize(load_type factor) {
+            _du.used /= factor;
+            for (shard_id i = 0; i < _shards.size(); ++i) {
+                _shards[i].du.used /= factor;
+            }
+            populate_shards_by_load();
+        }
+
         // Returns storage utilization for the node
         load_type get_load() const noexcept {
             return _du.get_load();
@@ -194,11 +202,13 @@ public:
         , _default_tablet_size(default_tablet_size) {
     }
 
+    future<> clear() {
+        return utils::clear_gently(_nodes);
+    }
+
     future<> populate(std::optional<host_id> host = std::nullopt,
                       std::optional<table_id> only_table = std::nullopt,
                       std::optional<sstring> only_dc = std::nullopt) {
-        co_await utils::clear_gently(_nodes);
-
         if (host) {
             ensure_node(*host);
         } else {
@@ -227,6 +237,21 @@ public:
 
     future<> populate_dc(const sstring& dc) {
         return populate(std::nullopt, std::nullopt, dc);
+    }
+
+
+    future<> populate_with_normalized_load() {
+        co_await populate();
+
+        min_max_tracker<load_type> minmax;
+        minmax.update(1);
+        for (auto&& id : _nodes | std::views::keys) {
+            minmax.update(get_shard_minmax(id).max());
+        }
+
+        for (auto&& n : _nodes | std::views::values) {
+            n.normalize(minmax.max());
+        }
     }
 
     shard_id next_shard(host_id node, size_t tablet_count, uint64_t tablet_size_sum) {
@@ -330,6 +355,14 @@ public:
         }
         auto& n = _nodes.at(node);
         return double(n._tablet_count) / n._shards.size();
+    }
+
+    double get_real_avg_shard_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        auto& n = _nodes.at(node);
+        return double(n.get_load()) / n._shards.size();
     }
 
     uint64_t get_disk_used(host_id node) const {
