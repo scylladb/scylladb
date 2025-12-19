@@ -82,6 +82,12 @@ float compute_dot_product_similarity(const std::vector<data_value>& v1, const st
 
 } // namespace
 
+thread_local const std::unordered_map<function_name, similarity_function_t> SIMILARITY_FUNCTIONS = {
+        {SIMILARITY_COSINE_FUNCTION_NAME, compute_cosine_similarity},
+        {SIMILARITY_EUCLIDEAN_FUNCTION_NAME, compute_euclidean_similarity},
+        {SIMILARITY_DOT_PRODUCT_FUNCTION_NAME, compute_dot_product_similarity},
+};
+
 std::vector<data_type> retrieve_vector_arg_types(const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args) {
     if (provided_args.size() != 2) {
         throw exceptions::invalid_request_exception(fmt::format("Invalid number of arguments for function {}(vector<float, n>, vector<float, n>)", name));
@@ -121,6 +127,23 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
     size_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
     auto type = vector_type_impl::get_instance(float_type, dimension);
     return {type, type};
+}
+
+bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) {
+    if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param) {
+            return !param;
+        })) {
+        return std::nullopt;
+    }
+
+    const auto& type = arg_types()[0];
+    data_value v1 = type->deserialize(*parameters[0]);
+    data_value v2 = type->deserialize(*parameters[1]);
+    const auto& v1_elements = value_cast<std::vector<data_value>>(v1);
+    const auto& v2_elements = value_cast<std::vector<data_value>>(v2);
+
+    float result = SIMILARITY_FUNCTIONS.at(_name)(v1_elements, v2_elements);
+    return float_type->decompose(result);
 }
 
 } // namespace functions
