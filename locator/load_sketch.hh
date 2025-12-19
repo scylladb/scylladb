@@ -68,6 +68,14 @@ class load_sketch {
             }
         }
 
+        void normalize(load_type factor) {
+            _load /= factor;
+            for (shard_id i = 0; i < _shards.size(); ++i) {
+                _shards[i] /= factor;
+            }
+            populate_shards_by_load();
+        }
+
         load_type& load() noexcept {
             return _load;
         }
@@ -114,11 +122,13 @@ public:
         : _tm(std::move(tm)) {
     }
 
+    future<> clear() {
+        return utils::clear_gently(_nodes);
+    }
+
     future<> populate(std::optional<host_id> host = std::nullopt,
                       std::optional<table_id> only_table = std::nullopt,
                       std::optional<sstring> only_dc = std::nullopt) {
-        co_await utils::clear_gently(_nodes);
-
         if (host) {
             ensure_node(*host);
         } else {
@@ -147,6 +157,20 @@ public:
 
     future<> populate_dc(const sstring& dc) {
         return populate(std::nullopt, std::nullopt, dc);
+    }
+
+    future<> populate_with_normalized_load() {
+        co_await populate();
+
+        min_max_tracker<load_type> minmax;
+        minmax.update(1);
+        for (auto&& id : _nodes | std::views::keys) {
+            minmax.update(get_shard_minmax(id).max());
+        }
+
+        for (auto&& [id, n] : _nodes) {
+            n.normalize(minmax.max());
+        }
     }
 
     shard_id next_shard(host_id node) {

@@ -3756,6 +3756,40 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
     }).get();
 }
 
+// Reproduces https://github.com/scylladb/scylladb/issues/27620
+SEASTAR_THREAD_TEST_CASE(test_imbalance_when_creating_plenty_of_tables) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 1);
+
+        for (int _ : std::views::iota(1, 100)) {
+            add_table(e, ks_name, {{"min_per_shard_tablet_count", "10.0"}}).get();
+        }
+        testlog.info("Initial cluster ready");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+
+            for (auto h: topo.hosts()) {
+                auto node_utilization = load.get_shard_minmax(h);
+                testlog.info("host {}: min={}, max={}", h, node_utilization.min(), node_utilization.max());
+                BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 1.1);
+            }
+        }
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     cql_test_config cfg = tablet_cql_test_config();
 
