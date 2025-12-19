@@ -46,14 +46,11 @@ stateDiagram-v2
     state replacing {
         rp_join_group0 : join_group0
         rp_left_token_ring : left_token_ring
-        rp_tablet_draining : tablet_draining 
         rp_write_both_read_old : write_both_read_old
         rp_write_both_read_new : write_both_read_new
         [*] --> rp_join_group0
         rp_join_group0 --> rp_left_token_ring: rollback
-        rp_join_group0 --> rp_tablet_draining
-        rp_tablet_draining --> rp_write_both_read_old
-        rp_tablet_draining --> rp_left_token_ring: rollback
+        rp_join_group0 --> rp_write_both_read_old
         rp_join_group0 --> [*]: rejected
         rp_write_both_read_old --> rp_write_both_read_new: streaming completed
         rp_write_both_read_old --> rp_left_token_ring: rollback
