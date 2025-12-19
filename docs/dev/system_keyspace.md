@@ -323,7 +323,7 @@ CREATE TABLE system.clients (
 - `username`: Authenticated username
 - `scheduling_group`: Workload prioritization group
 
-**Note:** This is a virtual table. The data was previously stored on disk (in the data directory) before and including version 4.5.
+**Note:** This is a virtual table. This table was previously persisted to disk (in the data directory) before and including version 4.5.
 
 ---
 
@@ -650,7 +650,7 @@ CREATE TABLE system.large_cells (
 - `clustering_key`: Clustering key of the row
 - `column_name`: Name of the column containing the large cell
 - `compaction_time`: When the large cell was detected during compaction
-- `collection_elements`: Number of elements if the cell is a collection
+- `collection_elements`: Number of elements in the collection (if the cell contains a collection type)
 
 **Note:** A collection is just one cell. There is no information about the size of each collection element. This table is currently only used with the MC SSTable format (issue #4868). Entries have a TTL of 30 days.
 
@@ -783,7 +783,7 @@ CREATE TABLE system.load_per_node (
 - `node`: Host ID of the node
 - `dc`: Data center name
 - `rack`: Rack name
-- `storage_allocated_load`: Disk space allocated for tablets, assuming each tablet has a fixed size (`target_tablet_size`)
+- `storage_allocated_load`: Estimated disk space for tablets based on the configured `target_tablet_size` (not actual current size)
 - `storage_allocated_utilization`: Fraction of node's disk capacity used for `storage_allocated_load` (1.0 means full utilization)
 - `storage_capacity`: Total disk capacity in bytes (by default equals file system capacity)
 - `tablets_allocated`: Number of tablet replicas on the node (migrating tablets are counted as if migration already finished)
@@ -1521,7 +1521,7 @@ CREATE TYPE system.tablet_task_info (
 - `tablet_count`: Number of tablets in the map
 - `table_name`: Name of the table (provided for convenience)
 - `keyspace_name`: Name of the keyspace
-- `base_table`: Optionally set with the `table_id` of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group. When `base_table` is set, the rest of the tablet map is empty, and the tablet map of `base_table` should be read instead.
+- `base_table`: Optionally set with the `table_id` of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group. When `base_table` is set, the rest of the tablet map is empty, and the tablet map of `base_table` should be read instead. When `base_table` is NULL, this table has its own independent tablet map stored in the remaining columns.
 - `resize_type`: Resize decision type that spans all tablets of a given table (`merge`, `split`, or `none`)
 - `resize_seq_number`: Sequence number (>= 0) of the resize decision that globally identifies it. It's monotonically increasing, incremented by one for every new decision, so a higher value means it came later in time.
 - `repair_scheduler_config`: Configuration for the repair scheduler containing:
