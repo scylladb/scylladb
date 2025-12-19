@@ -70,25 +70,25 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 co_await sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{});
                 co_await sst->open_data();
-                // FIXME: indent
-                    if (repaired_at && sstables::repair_origin == origin) {
-                        sst->being_repaired = frozen_guard;
-                        if (sstable_list_to_mark_as_repaired) {
-                            sstable_list_to_mark_as_repaired->insert(sst);
-                        }
-                    }
-                    if (offstrategy && sstables::repair_origin == origin) {
-                        sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
-                                cf->schema()->ks_name(), cf->schema()->cf_name());
-                        cf->enable_off_strategy_trigger();
-                    }
-                    co_await cf->add_sstable_and_update_cache(sst, offstrategy);
 
-                    if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
-                        co_await vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
-                    } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
-                        co_await vb.local().register_staging_sstable(sst, std::move(cf));
+                if (repaired_at && sstables::repair_origin == origin) {
+                    sst->being_repaired = frozen_guard;
+                    if (sstable_list_to_mark_as_repaired) {
+                        sstable_list_to_mark_as_repaired->insert(sst);
                     }
+                }
+                if (offstrategy && sstables::repair_origin == origin) {
+                    sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
+                            cf->schema()->ks_name(), cf->schema()->cf_name());
+                    cf->enable_off_strategy_trigger();
+                }
+                co_await cf->add_sstable_and_update_cache(sst, offstrategy);
+
+                if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
+                    co_await vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
+                } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
+                    co_await vb.local().register_staging_sstable(sst, std::move(cf));
+                }
             };
             if (!offstrategy) {
                 consumer = cs.make_interposer_consumer(metadata, std::move(consumer));
