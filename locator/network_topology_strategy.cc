@@ -317,6 +317,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
     natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
     load_sketch load(tm);
+    co_await load.populate_with_normalized_load();
     co_await load.populate(std::nullopt, s->id());
 
     tablet_logger.debug("Allocating tablets for {}.{} ({}): dc_rep_factor={} tablet_count={}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets.tablet_count());
@@ -433,7 +434,7 @@ tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
             // Assume that if there was a diff to add a rack, we don't already have a replica
             // in the target rack so all nodes in the rack are eligible.
             // FIXME: pick based on storage utilization: https://github.com/scylladb/scylladb/issues/26366
-            auto node_load = load.get_real_avg_tablet_count(node.get().host_id());
+            auto node_load = load.get_real_avg_shard_load(node.get().host_id());
             if (node_load < min_load) {
                 min_load = node_load;
                 min_node = node.get().host_id();
@@ -468,10 +469,10 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
     // Track all nodes with no replicas on them for this tablet, per rack.
     struct node_load {
         locator::host_id host;
-        uint64_t load;
+        double load;
     };
     // for sorting in descending load order
-    // (in terms of number of replicas)
+    // (in terms of load)
     auto node_load_cmp = [] (const node_load& a, const node_load& b) {
         return a.load > b.load;
     };
@@ -484,7 +485,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
     candidates_list existing_racks;
 
     // We use this list to start allocating from an
-    // unpoplated rack.
+    // unpopulated rack.
     candidates_list new_racks;
 
     for (const auto& [rack, nodes] : all_dc_racks) {
@@ -502,7 +503,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
                 // FIXME: https://github.com/scylladb/scylladb/issues/26366
-                candidate.nodes.emplace_back(host_id, load.get_avg_tablet_count(host_id));
+                candidate.nodes.emplace_back(host_id, load.get_real_avg_shard_load(host_id));
             }
         }
         if (candidate.nodes.empty()) {
