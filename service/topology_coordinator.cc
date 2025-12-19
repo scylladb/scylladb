@@ -2585,6 +2585,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                 break;
             case topology::transition_state::write_both_read_old: {
+                co_await utils::get_local_injector().inject(
+                        "topology_coordinator/write_both_read_old/before_global_token_metadata_barrier",
+                        utils::wait_for_message(std::chrono::minutes(5), &_as));
+
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
