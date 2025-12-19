@@ -20,6 +20,7 @@ You can set the following options:
 * ``none`` - Audit is disabled (default).
 * ``table`` - Audit is enabled, and messages are stored in a Scylla table.
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
+* ``syslog,table`` - Audit is enabled, and messages are stored in a Scylla table and sent to Syslog.
 
 Configuring any other value results in an error at Scylla startup.
 
