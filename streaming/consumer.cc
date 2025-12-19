@@ -52,22 +52,25 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             mutation_reader_consumer consumer =
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
-                offstrategy, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] (mutation_reader reader) {
+                offstrategy, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] (mutation_reader reader) -> future<> {
                 sstables::shared_sstable sst;
+                std::exception_ptr ex;
                 try {
                     sst = use_view_update_path == db::view::sstable_destination_decision::normal_directory ? cf->make_streaming_sstable_for_write() : cf->make_streaming_staging_sstable();
                 } catch (...) {
-                    return current_exception_as_future().finally([reader = std::move(reader)] () mutable {
-                        return reader.close();
-                    });
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    co_await reader.close();
+                    std::rethrow_exception(std::move(ex));
                 }
                 schema_ptr s = reader.schema();
 
                 auto cfg = cf->get_sstables_manager().configure_writer(origin);
-                return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
-                                             cfg, encoding_stats{}).then([sst] {
-                    return sst->open_data();
-                }).then([cf, sst, offstrategy, origin, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] -> future<> {
+                co_await sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
+                                             cfg, encoding_stats{});
+                co_await sst->open_data();
+                // FIXME: indent
                     if (repaired_at && sstables::repair_origin == origin) {
                         sst->being_repaired = frozen_guard;
                         if (sstable_list_to_mark_as_repaired) {
@@ -80,14 +83,12 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                         cf->enable_off_strategy_trigger();
                     }
                     co_await cf->add_sstable_and_update_cache(sst, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
+
                     if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
-                        return vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
+                        co_await vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
                     } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
-                        return vb.local().register_staging_sstable(sst, std::move(cf));
+                        co_await vb.local().register_staging_sstable(sst, std::move(cf));
                     }
-                    return make_ready_future<>();
-                });
             };
             if (!offstrategy) {
                 consumer = cs.make_interposer_consumer(metadata, std::move(consumer));
