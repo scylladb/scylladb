@@ -132,31 +132,35 @@ public:
         : _id(id), _val(M::init), _snapshots(snapshots) {}
 
     future<> apply(std::vector<raft::command_cref> cmds) override {
-        co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
-            for (auto& cref : cmds) {
-                _gate.check();
+        try {
+            co_await with_gate(_gate, [this, cmds = std::move(cmds)]() mutable -> future<> {
+                for (auto& cref : cmds) {
+                    _gate.check();
 
-                auto is = ser::as_input_stream(cref);
-                auto cmd_id = ser::deserialize(is, std::type_identity<cmd_id_t>{});
-                auto input = ser::deserialize(is, std::type_identity<typename M::input_t>{});
-                auto [new_state, output] = M::delta(std::move(_val), std::move(input));
-                _val = std::move(new_state);
+                    auto is = ser::as_input_stream(cref);
+                    auto cmd_id = ser::deserialize(is, std::type_identity<cmd_id_t>{});
+                    auto input = ser::deserialize(is, std::type_identity<typename M::input_t>{});
+                    auto [new_state, output] = M::delta(std::move(_val), std::move(input));
+                    _val = std::move(new_state);
 
-                auto it = _output_channels.find(cmd_id);
-                if (it != _output_channels.end()) {
-                    // We are on the leader server where the client submitted the command
-                    // and waits for the output. Send it to them.
-                    it->second.set_value(std::move(output));
-                    _output_channels.erase(it);
-                } else {
-                    // This is not the leader on which the command was submitted,
-                    // or it is but the client already gave up on us and deallocated the channel.
-                    // In any case we simply drop the output.
+                    auto it = _output_channels.find(cmd_id);
+                    if (it != _output_channels.end()) {
+                        // We are on the leader server where the client submitted the command
+                        // and waits for the output. Send it to them.
+                        it->second.set_value(std::move(output));
+                        _output_channels.erase(it);
+                    } else {
+                        // This is not the leader on which the command was submitted,
+                        // or it is but the client already gave up on us and deallocated the channel.
+                        // In any case we simply drop the output.
+                    }
+
+                    co_await coroutine::maybe_yield();
                 }
-
-                co_await coroutine::maybe_yield();
-            }
-        });
+            });
+        } catch (const seastar::gate_closed_exception&) {
+            throw abort_requested_exception{};
+        }
     }
 
     future<raft::snapshot_id> take_snapshot() override {
