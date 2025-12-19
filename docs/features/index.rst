@@ -17,6 +17,7 @@ This document highlights ScyllaDB's key data modeling features.
    Workload Prioritization </features/workload-prioritization>
    Backup and Restore </features/backup-and-restore>
    Incremental Repair </features/incremental-repair/>
+   Vector Search </features/vector-search/>
 
 .. panel-box::
   :title: ScyllaDB Features
@@ -43,3 +44,5 @@ This document highlights ScyllaDB's key data modeling features.
   * :doc:`Incremental Repair </features/incremental-repair/>` provides a much more
     efficient and lightweight approach to maintaining data consistency by
     repairing only the data that has changed since the last repair.
+  * :doc:`Vector Search in ScyllaDB </features/vector-search/>` enables
+    similarity-based queries on vector embeddings.
