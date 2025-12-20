@@ -368,6 +368,42 @@ def find_ninja():
     sys.exit(1)
 
 
+def find_compiler_cache(preference):
+    """
+    Find a compiler cache based on the preference.
+
+    Args:
+        preference: One of 'auto', 'sccache', 'ccache', 'none', or a path to a binary.
+
+    Returns:
+        Path to the compiler cache binary, or None if not found/disabled.
+    """
+    if preference == 'none':
+        return None
+
+    if preference == 'auto':
+        # Prefer sccache over ccache
+        for cache in ['sccache', 'ccache']:
+            path = which(cache)
+            if path:
+                return path
+        return None
+
+    if preference in ('sccache', 'ccache'):
+        path = which(preference)
+        if path:
+            return path
+        print(f"Warning: {preference} not found on PATH, disabling compiler cache")
+        return None
+
+    # Assume it's a path to a binary
+    if os.path.isfile(preference) and os.access(preference, os.X_OK):
+        return preference
+
+    print(f"Warning: compiler cache '{preference}' not found or not executable, disabling compiler cache")
+    return None
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -732,6 +768,8 @@ arg_parser.add_argument('--compiler', action='store', dest='cxx', default='clang
                         help='C++ compiler path')
 arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='clang',
                         help='C compiler path')
+arg_parser.add_argument('--compiler-cache', action='store', dest='compiler_cache', default='auto',
+                        help='Compiler cache to use: auto (default, prefers sccache), sccache, ccache, none, or a path to a binary')
 add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
                         help='Use dpdk (from seastar dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
@@ -2002,7 +2040,7 @@ def semicolon_separated(*flags):
 def real_relpath(path, start):
     return os.path.relpath(os.path.realpath(path), os.path.realpath(start))
 
-def configure_seastar(build_dir, mode, mode_config):
+def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     seastar_cxx_ld_flags = mode_config['cxx_ld_flags']
     # We want to "undo" coverage for seastar if we have it enabled.
     if args.coverage:
@@ -2049,6 +2087,10 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_IO_URING=ON',
     ]
 
+    if compiler_cache:
+        seastar_cmake_args += [f'-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_cache}',
+                               f'-DCMAKE_C_COMPILER_LAUNCHER={compiler_cache}']
+
     if args.stack_guards is not None:
         stack_guards = 'ON' if args.stack_guards else 'OFF'
         seastar_cmake_args += ['-DSeastar_STACK_GUARDS={}'.format(stack_guards)]
@@ -2080,7 +2122,7 @@ def configure_seastar(build_dir, mode, mode_config):
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
 
-def configure_abseil(build_dir, mode, mode_config):
+def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
     abseil_cflags = mode_config['lib_cflags']
     cxx_flags = mode_config['cxxflags']
     if '-DSANITIZE' in cxx_flags:
@@ -2105,6 +2147,10 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DCMAKE_CXX_STANDARD=23',
         '-DABSL_PROPAGATE_CXX_STD=ON',
     ]
+
+    if compiler_cache:
+        abseil_cmake_args += [f'-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_cache}',
+                              f'-DCMAKE_C_COMPILER_LAUNCHER={compiler_cache}']
 
     cmake_args = abseil_cmake_args[:]
     abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
@@ -2278,10 +2324,13 @@ def write_build_file(f,
                      scylla_product,
                      scylla_version,
                      scylla_release,
+                     compiler_cache,
                      args):
     use_precompiled_header = not args.disable_precompiled_header
     warnings = get_warning_options(args.cxx)
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
+    # If compiler cache is available, prefix the compiler with it
+    cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2360,7 +2409,7 @@ def write_build_file(f,
           command = llvm-profdata merge $in -output=$out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
-                    cxx=args.cxx,
+                    cxx=cxx_with_cache,
                     user_cflags=user_cflags,
                     warnings=warnings,
                     defines=defines,
@@ -2915,6 +2964,8 @@ def create_build_system(args):
 
     os.makedirs(outdir, exist_ok=True)
 
+    compiler_cache = find_compiler_cache(args.compiler_cache)
+
     scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
 
     for mode, mode_config in build_modes.items():
@@ -2931,8 +2982,8 @@ def create_build_system(args):
         # {outdir}/{mode}/seastar/build.ninja, and
         # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
         for mode, mode_config in build_modes.items():
-            configure_seastar(outdir, mode, mode_config)
-            configure_abseil(outdir, mode, mode_config)
+            configure_seastar(outdir, mode, mode_config, compiler_cache)
+            configure_abseil(outdir, mode, mode_config, compiler_cache)
         user_cflags += ' -isystem abseil'
 
     for mode, mode_config in build_modes.items():
@@ -2955,6 +3006,7 @@ def create_build_system(args):
                          scylla_product,
                          scylla_version,
                          scylla_release,
+                         compiler_cache,
                          args)
     generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
 
@@ -2997,6 +3049,9 @@ def configure_using_cmake(args):
     selected_modes = args.selected_modes or default_modes
     selected_configs = ';'.join(build_modes[mode].cmake_build_type for mode
                                 in selected_modes)
+
+    compiler_cache = find_compiler_cache(args.compiler_cache)
+
     settings = {
         'CMAKE_CONFIGURATION_TYPES': selected_configs,
         'CMAKE_CROSS_CONFIGS': selected_configs,
@@ -3014,6 +3069,11 @@ def configure_using_cmake(args):
         'Scylla_WITH_DEBUG_INFO' : 'ON' if args.debuginfo else 'OFF',
         'Scylla_USE_PRECOMPILED_HEADER': 'OFF' if args.disable_precompiled_header else 'ON',
     }
+
+    if compiler_cache:
+        settings['CMAKE_CXX_COMPILER_LAUNCHER'] = compiler_cache
+        settings['CMAKE_C_COMPILER_LAUNCHER'] = compiler_cache
+
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp
     if args.staticboost:
@@ -3045,7 +3105,7 @@ def configure_using_cmake(args):
 
     if not args.dist_only:
         for mode in selected_modes:
-            configure_seastar(build_dir, build_modes[mode].cmake_build_type, modes[mode])
+            configure_seastar(build_dir, build_modes[mode].cmake_build_type, modes[mode], compiler_cache)
 
     cmake_command = ['cmake']
     cmake_command += [f'-D{var}={value}' for var, value in settings.items()]
