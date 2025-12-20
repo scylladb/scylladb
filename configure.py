@@ -2376,6 +2376,8 @@ def write_build_file(f,
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
     # If compiler cache is available, prefix the compiler with it
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
+    # For Rust, sccache is used via RUSTC_WRAPPER environment variable
+    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache else ''
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2438,7 +2440,7 @@ def write_build_file(f,
             command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
             description = C2WASM $out
         rule rust2wasm
-            command = cargo build --target={rustc_target} --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+            command = {rustc_wrapper}cargo build --target={rustc_target} --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
                 && wasm-opt -Oz $builddir/wasm/{rustc_target}/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
                 && wasm-strip $builddir/wasm/$example.wasm
             description = RUST2WASM $out
@@ -2462,6 +2464,7 @@ def write_build_file(f,
                     user_ldflags=user_ldflags,
                     libs=libs,
                     rustc_target=rustc_target,
+                    rustc_wrapper=rustc_wrapper,
                     link_pool_depth=link_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
@@ -2546,10 +2549,10 @@ def write_build_file(f,
               description = TEST {mode}
             # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' {rustc_wrapper}cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms} {vector_search_validator_bins}\n'.format(
                 mode=mode,
@@ -3120,6 +3123,9 @@ def configure_using_cmake(args):
     if compiler_cache:
         settings['CMAKE_CXX_COMPILER_LAUNCHER'] = compiler_cache
         settings['CMAKE_C_COMPILER_LAUNCHER'] = compiler_cache
+        # For Rust, sccache is used via RUSTC_WRAPPER
+        if 'sccache' in compiler_cache:
+            settings['Scylla_RUSTC_WRAPPER'] = compiler_cache
 
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp
