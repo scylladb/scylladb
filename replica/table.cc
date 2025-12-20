@@ -3108,6 +3108,10 @@ bool compaction_group::can_flush() const {
     return _memtables->can_flush();
 }
 
+bool compaction_group::needs_flush() const {
+    return _memtables->needs_flush();
+}
+
 lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
 }
@@ -3140,6 +3144,14 @@ bool storage_group::can_flush() const {
 
 bool table::can_flush() const {
     return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::can_flush));
+}
+
+bool storage_group::needs_flush() const {
+    return std::ranges::any_of(compaction_groups(), std::mem_fn(&compaction_group::needs_flush));
+}
+
+bool table::needs_flush() const {
+    return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::needs_flush));
 }
 
 future<> compaction_group::clear_memtables() {
