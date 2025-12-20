@@ -368,6 +368,51 @@ def find_ninja():
     sys.exit(1)
 
 
+def find_compiler(name):
+    """
+    Find a compiler by name, skipping ccache wrapper directories.
+
+    This is useful when using sccache to avoid double-caching through ccache.
+
+    Args:
+        name: The compiler name (e.g., 'clang++', 'clang', 'gcc')
+
+    Returns:
+        Path to the compiler, skipping ccache directories, or None if not found.
+    """
+    ccache_dirs = {'/usr/lib/ccache', '/usr/lib64/ccache'}
+    for path_dir in os.environ.get('PATH', '').split(os.pathsep):
+        # Skip ccache wrapper directories
+        if os.path.realpath(path_dir) in ccache_dirs or path_dir in ccache_dirs:
+            continue
+        candidate = os.path.join(path_dir, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def resolve_compilers_for_sccache(args, compiler_cache):
+    """
+    When using sccache, resolve compiler paths to avoid ccache directories.
+
+    This prevents double-caching when ccache symlinks are in PATH.
+
+    Args:
+        args: The argument namespace with cc and cxx attributes.
+        compiler_cache: Path to the compiler cache binary, or None.
+    """
+    if not compiler_cache or 'sccache' not in compiler_cache:
+        return
+    if not os.path.isabs(args.cxx):
+        real_cxx = find_compiler(args.cxx)
+        if real_cxx:
+            args.cxx = real_cxx
+    if not os.path.isabs(args.cc):
+        real_cc = find_compiler(args.cc)
+        if real_cc:
+            args.cc = real_cc
+
+
 def find_compiler_cache(preference):
     """
     Find a compiler cache based on the preference.
@@ -2965,6 +3010,7 @@ def create_build_system(args):
     os.makedirs(outdir, exist_ok=True)
 
     compiler_cache = find_compiler_cache(args.compiler_cache)
+    resolve_compilers_for_sccache(args, compiler_cache)
 
     scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
 
@@ -3051,6 +3097,7 @@ def configure_using_cmake(args):
                                 in selected_modes)
 
     compiler_cache = find_compiler_cache(args.compiler_cache)
+    resolve_compilers_for_sccache(args, compiler_cache)
 
     settings = {
         'CMAKE_CONFIGURATION_TYPES': selected_configs,
