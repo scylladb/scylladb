@@ -259,6 +259,10 @@ public:
         return may_flush() && !empty();
     }
 
+    bool needs_flush() const noexcept {
+        return !empty();
+    }
+
     bool empty() const noexcept {
         for (auto& m : _memtables) {
            if (!m->empty()) {
@@ -1020,6 +1024,7 @@ public:
     void start();
     future<> stop();
     future<> flush(std::optional<db::replay_position> = {});
+    bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
