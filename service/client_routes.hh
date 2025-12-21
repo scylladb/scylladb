@@ -66,8 +66,8 @@ public:
     future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, const service::client_routes_service::client_route_key& key);
     future<mutation> make_update_client_route_mutation(api::timestamp_type ts, const client_route_entry& entry);
     future<std::vector<client_route_entry>> get_client_routes() const;
-    seastar::future<> set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
-    seastar::future<> delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys);
+    seastar::future<> set_client_routes(std::vector<service::client_routes_service::client_route_entry> route_entries);
+    seastar::future<> delete_client_routes(std::vector<service::client_routes_service::client_route_key> route_keys);
 
 
     // notifications
@@ -76,7 +76,7 @@ private:
     seastar::future<> set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries);
     seastar::future<> delete_client_routes_inner(const std::vector<service::client_routes_service::client_route_key>& route_keys);
     template <typename Func>
-    seastar::future<> with_retry(Func&& func) const;
+    seastar::future<> with_retry(Func func) const;
 
     abort_source& _abort_source;
     gms::feature_service& _feature_service;
