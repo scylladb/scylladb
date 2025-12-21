@@ -12,7 +12,7 @@ import sys
 import argparse
 import psutil
 from pathlib import Path
-from scylla_util import *
+from scylla_util import swap_exists, out, systemd_unit
 from subprocess import run
 
 def GB(n):

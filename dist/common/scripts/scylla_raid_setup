@@ -9,7 +9,6 @@
 
 import os
 import argparse
-import distutils.util
 import pwd
 import grp
 import sys
@@ -18,11 +17,21 @@ import logging
 import pyudev
 import psutil
 import platform
+import shutil
 from pathlib import Path
-from scylla_util import *
-from subprocess import run, SubprocessError
+from scylla_util import is_unused_disk, out, pkg_install, systemd_unit, SystemdException, is_debian_variant, is_redhat_variant, is_offline
+from subprocess import run, SubprocessError, Popen
 
 LOGGER = logging.getLogger(__name__)
+
+def strtobool(val):
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return 1
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return 0
+    else:
+        raise ValueError(f"invalid truth value {val!r}")
 
 class UdevInfo:
     def __init__(self, device_file):
@@ -145,7 +154,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Allow args.online_discard to be used as a boolean value
-    args.online_discard = distutils.util.strtobool(args.online_discard)
+    args.online_discard = strtobool(args.online_discard)
 
     root = args.root.rstrip('/')
     if args.volume_role == 'all':
@@ -227,7 +236,7 @@ if __name__ == '__main__':
                 with open(discard_path) as f:
                     discard = f.read().strip()
                 if discard != '0':
-                    proc = subprocess.Popen(['blkdiscard', disk])
+                    proc = Popen(['blkdiscard', disk])
                     procs.append(proc)
         for proc in procs:
             proc.wait()

@@ -7,9 +7,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
-from pathlib import Path
 from datetime import datetime
-from scylla_util import *
+from scylla_util import scylladir_p
 
 if __name__ == '__main__':
     log = scylladir_p() / 'scylla-server.log'

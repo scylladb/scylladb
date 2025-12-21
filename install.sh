@@ -273,8 +273,6 @@ fi
 # change directory to the package's root directory
 cd "$(dirname "$0")"
 
-product="$(cat ./SCYLLA-PRODUCT-FILE)"
-
 if [ -z "$p11_trust_paths" ]; then
     # our package builder is cross-distro, so we cannot detect distro by os-release
     if $packaging; then
@@ -515,11 +513,6 @@ install -m755 bin/nodetool "$rprefix/bin"
 
 SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
-
-cat << EOS > "$rprefix"/scripts/scylla_product.py
-PRODUCT="$product"
-EOS
-chmod 644 "$rprefix"/scripts/scylla_product.py
 
 if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d

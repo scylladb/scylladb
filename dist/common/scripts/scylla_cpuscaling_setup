@@ -10,9 +10,8 @@
 import os
 import sys
 import argparse
-import shlex
-import distro
-from scylla_util import *
+import shutil
+from scylla_util import is_debian_variant, pkg_install, systemd_unit, sysconfig_parser, is_gentoo, is_arch, is_amzn2, is_suse_variant, is_redhat_variant
 
 UNIT_DATA= '''
 [Unit]
