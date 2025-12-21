@@ -13,6 +13,7 @@ from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts
 from test.cluster.conftest import skip_mode
 
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -291,3 +292,121 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
             return True if batchlog_row_count == 0 else None
 
         await wait_for(batchlog_empty, time.time() + 60)
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_batchlog_replay_failure_during_repair(manager: ManagerClient) -> None:
+    """
+    We want to verify that repair_time will not be updated if batchlog replay fails.
+
+    This test reproduces scylladb/scylladb#24415.
+
+    1. Create a cluster with 2 nodes, a keyspace, and a table.
+    2. Do some preparations to ensure that mutations won't be removed from the batchlog.
+    3. Write a batch.
+    4. Delete a row (with the key that is modified in the batch).
+    5. Enable injections to make batchlog replay fail.
+    6. Run repair on the table.
+    7. Compact the keyspace.
+    8. Disable injection and wait for the replay to finish.
+    9. Verify that the row is deleted and there is no data resurrection.
+    """
+
+    cmdline=['--enable-cache', '0',
+             "--hinted-handoff-enabled", "0",
+             "--logger-log-level", "batchlog_manager=trace:repair=debug",
+             "--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    config = {"error_injections_at_startup": ["short_batchlog_manager_replay_interval"],
+              "write_request_timeout_in_ms": 2000,
+              'group0_tombstone_gc_refresh_interval_in_ms': 1000,
+              'tablets_mode_for_new_keyspaces': 'disabled'
+    }
+
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    s1, s2 = servers
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    host1, _ = hosts
+
+    async def get_batchlog_row_count():
+        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=host1)
+        row = rows[0]
+        assert hasattr(row, "count")
+
+        result = row.count
+        logger.debug(f"Batchlow row count={result}")
+
+        return result
+
+    async def enable_injection(injection: str) -> None:
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, injection, one_shot=False) for s in servers])
+
+    async def disable_injection(injection: str) -> None:
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
+
+    async def batchlog_empty() -> bool:
+        batchlog_row_count = await get_batchlog_row_count()
+        return True if batchlog_row_count == 0 else None
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.my_table (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '1'}} AND compaction = {{ 'class' : 'NullCompactionStrategy' }}")
+
+        await cql.run_async(f"BEGIN BATCH INSERT INTO {ks}.my_table (pk, ck, v) VALUES (0,0,0);"
+                                f"INSERT INTO {ks}.my_table (pk, ck, v) VALUES (1,1,1); APPLY BATCH")
+
+        await manager.api.flush_keyspace(s1.ip_addr, ks)
+        await manager.api.flush_keyspace(s2.ip_addr, ks)
+
+        await wait_for(batchlog_empty, time.time() + 60)
+
+        # Make sure the mutations stay in the batchlog.
+        await enable_injection("storage_proxy_fail_remove_from_batchlog")
+        # Make sure the mutations are not replayed too early (i.e. before dropping the table).
+        await enable_injection("skip_batch_replay")
+
+        s1_log = await manager.server_open_log(s1.server_id)
+
+        try:
+            await cql.run_async(f"BEGIN BATCH INSERT INTO {ks}.my_table (pk, ck, v) VALUES (0,0,1);"
+                                f"INSERT INTO {ks}.my_table (pk, ck, v) VALUES (1,1,2); APPLY BATCH")
+        except Exception as e:
+            # Injected error is expected.
+            logger.error(f"Error executing batch: {e}")
+
+        await cql.run_async(f"DELETE FROM {ks}.my_table WHERE pk=0 AND ck=0")
+
+        time.sleep(2)
+
+        batchlog_row_count = await get_batchlog_row_count()
+        assert batchlog_row_count > 0
+
+        s1_log = await manager.server_open_log(s1.server_id)
+        s1_mark = await s1_log.mark()
+
+        # Once the mutations are in the batchlog, waiting to be replayed, we can disable this.
+        await disable_injection("storage_proxy_fail_remove_from_batchlog")
+        await enable_injection("batch_replay_throw")
+        # Once the table is dropped, we can resume the replay. The bug can
+        # be triggered from now on (if it's present).
+        await disable_injection("skip_batch_replay")
+
+        await manager.api.repair(s1.ip_addr, ks, "my_table")
+
+        await manager.api.flush_keyspace(s1.ip_addr, ks)
+        await manager.api.flush_keyspace(s2.ip_addr, ks)
+
+        await manager.api.keyspace_compaction(s1.ip_addr, ks)
+        await manager.api.keyspace_compaction(s2.ip_addr, ks)
+
+        await disable_injection("batch_replay_throw")
+
+        await s1_log.wait_for("Replaying batch", timeout=60, from_mark=s1_mark)
+        await s1_log.wait_for("Finished replayAllFailedBatches", timeout=60, from_mark=s1_mark)
+
+        await wait_for(batchlog_empty, time.time() + 60)
+
+        batchlog_row_count = await get_batchlog_row_count()
+        assert batchlog_row_count == 0
+
+        res = await cql.run_async(f"SELECT * FROM {ks}.my_table WHERE pk=0 BYPASS CACHE")
+        assert len(res) == 0
