@@ -82,7 +82,7 @@ seastar::future<> service::client_routes_service::set_client_routes_inner(const 
     auto guard = co_await _group0_client.start_operation(_abort_source, service::raft_timeout{});
     utils::chunked_vector<canonical_mutation> cmuts;
 
-    for (auto& entry : route_entries) {
+    for (const auto& entry : route_entries) {
         auto mut = co_await make_update_client_route_mutation(guard.write_timestamp(), entry);
         cmuts.emplace_back(std::move(mut));
     }
@@ -103,24 +103,24 @@ seastar::future<> service::client_routes_service::delete_client_routes_inner(con
     co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
 }
 
-seastar::future<> service::client_routes_service::set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
-    return container().invoke_on(0, [route_entries = std::move(route_entries)] (service::client_routes_service& cr) -> future<> {
-        return cr.with_retry([&] {
+seastar::future<> service::client_routes_service::set_client_routes(std::vector<service::client_routes_service::client_route_entry> route_entries) {
+    return container().invoke_on(0, [route_entries = std::move(route_entries)] (service::client_routes_service& cr) mutable -> future<> {
+        return cr.with_retry([&cr, route_entries = std::move(route_entries)]  {
             return cr.set_client_routes_inner(route_entries);
         });
     });
 }
 
-seastar::future<> service::client_routes_service::delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys) {
-    return container().invoke_on(0, [route_keys = std::move(route_keys)] (service::client_routes_service& cr) -> future<> {
-        return cr.with_retry([&] {
+seastar::future<> service::client_routes_service::delete_client_routes(std::vector<service::client_routes_service::client_route_key> route_keys) {
+    return container().invoke_on(0, [route_keys = std::move(route_keys)] (service::client_routes_service& cr) mutable -> future<> {
+        return cr.with_retry([&cr, route_keys = std::move(route_keys)]  {
             return cr.delete_client_routes_inner(route_keys);
         });
     });
 }
 
 template <typename Func>
-seastar::future<> service::client_routes_service::with_retry(Func&& func) const {
+seastar::future<> service::client_routes_service::with_retry(Func func) const {
     int retries = 10;
     while (true) {
         try {

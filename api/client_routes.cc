@@ -100,9 +100,8 @@ rest_set_client_routes(http_context& ctx, sharded<service::client_routes_service
     rapidjson::Document root;
     auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
     root.Parse(content.c_str());
-    const auto route_entries = parse_set_client_array(root);
 
-    co_await cr.local().set_client_routes(route_entries);
+    co_await cr.local().set_client_routes(parse_set_client_array(root));
     co_return seastar::json::json_void();
 }
 
@@ -132,8 +131,7 @@ rest_delete_client_routes(http_context& ctx, sharded<service::client_routes_serv
     auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
     root.Parse(content.c_str());
 
-    const auto route_keys = parse_delete_client_array(root);
-    co_await cr.local().delete_client_routes(route_keys);
+    co_await cr.local().delete_client_routes(parse_delete_client_array(root));
     co_return seastar::json::json_void();
 }
 
