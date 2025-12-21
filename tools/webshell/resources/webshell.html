@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ScyllaDB Web Shell</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0">
+    <style>
+        #terminal-wrapper {
+            width: 100%;
+        }
+        #terminal-wrapper * {
+            font-family: monospace;
+            font-size: 16px;
+        }
+        #terminal-readonly {
+            width: 100%;
+        }
+        #terminal-input {
+            width: 100%;
+            height: 1.5em;
+            border: none;
+            resize: none;
+            padding: 0px;
+        }
+        #terminal-input:focus {
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal-wrapper">
+        <div id="terminal-readonly"></div>
+        <textarea id="terminal-input" readonly></textarea>
+    </div>
+    <script src="webshell.js"></script>
+</body>
+</html>

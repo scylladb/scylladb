@@ -474,6 +474,13 @@ public:
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
 
+    named_value<sstring> webshell_http_address;
+    named_value<uint16_t> webshell_http_port;
+    named_value<sstring> webshell_https_address;
+    named_value<uint16_t> webshell_https_port;
+    named_value<string_map> webshell_https_encryption_options;
+    named_value<sstring> webshell_resource_manifest_path;
+
     named_value<bool> abort_on_ebadf;
 
     named_value<bool> sanitizer_report_backtrace;
