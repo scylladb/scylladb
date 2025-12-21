@@ -105,7 +105,7 @@ seastar::future<> service::client_routes_service::delete_client_routes_inner(con
 
 seastar::future<> service::client_routes_service::set_client_routes(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
     return container().invoke_on(0, [route_entries = std::move(route_entries)] (service::client_routes_service& cr) -> future<> {
-        return cr.with_retry([&] {
+        return cr.with_retry([&cr, route_entries = std::move(route_entries)] () mutable {
             return cr.set_client_routes_inner(route_entries);
         });
     });
@@ -113,7 +113,7 @@ seastar::future<> service::client_routes_service::set_client_routes(const std::v
 
 seastar::future<> service::client_routes_service::delete_client_routes(const std::vector<service::client_routes_service::client_route_key>& route_keys) {
     return container().invoke_on(0, [route_keys = std::move(route_keys)] (service::client_routes_service& cr) -> future<> {
-        return cr.with_retry([&] {
+        return cr.with_retry([&cr, route_keys = std::move(route_keys)] () mutable {
             return cr.delete_client_routes_inner(route_keys);
         });
     });
