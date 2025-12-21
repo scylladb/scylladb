@@ -10,7 +10,7 @@
 import os
 import sys
 import argparse
-from scylla_util import *
+from scylla_util import etcdir_p
 
 if __name__ == '__main__':
     if os.getuid() > 0:

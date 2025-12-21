@@ -10,7 +10,7 @@
 import os
 import sys
 import shutil
-from scylla_util import *
+from scylla_util import pkg_install
 from subprocess import run, DEVNULL
 
 if __name__ == '__main__':

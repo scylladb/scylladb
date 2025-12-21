@@ -10,9 +10,8 @@
 import os
 import sys
 import argparse
-import subprocess
 import re
-from scylla_util import *
+from scylla_util import sysconfig_parser, sysconfdir_p, get_set_nic_and_disks_config_value, is_valid_nic, check_sysfs_numa_topology_is_valid, out, perftune_base_command, hex2list
 from subprocess import run
 
 def bool2str(val):
