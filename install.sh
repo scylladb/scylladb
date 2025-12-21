@@ -516,11 +516,6 @@ install -m755 bin/nodetool "$rprefix/bin"
 SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 
-cat << EOS > "$rprefix"/scripts/scylla_product.py
-PRODUCT="$product"
-EOS
-chmod 644 "$rprefix"/scripts/scylla_product.py
-
 if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d
     install -m644 dist/common/systemd/scylla-server.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-server.service.d

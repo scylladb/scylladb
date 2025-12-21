@@ -54,7 +54,7 @@ if __name__ == '__main__':
                              'Keyboard shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
                              '',
                              'By default it would work with the Prometheus API and does not require configuration.',
-                             'For collectd, you need to configure the unix-sock plugin for collectd'
+                             'For collectd, you need to configure the unix-sock plugin for collectd',
                              'before you can use this, use the --print-config option to give you a configuration example',
                              'enjoy!'])
     parser = argparse.ArgumentParser(description=description)

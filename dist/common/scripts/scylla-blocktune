@@ -8,7 +8,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import argparse
-from scylla_blocktune import *
+from scylla_blocktune import tune_yaml, tune_fs, tune_dev
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
