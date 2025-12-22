@@ -5123,10 +5123,15 @@ class scylla_small_objects(gdb.Command):
             span_end = int(span_start + span.size() * self._page_size)
 
             # span's free list
-            span_next_free = span.page['freelist']
-            while span_next_free:
-                self._free_in_span.add(int(span_next_free))
-                span_next_free = span_next_free['next']
+            try:
+                span_next_free = span.page['freelist']
+                while span_next_free:
+                    self._free_in_span.add(int(span_next_free))
+                    span_next_free = span_next_free['next']
+            except gdb.error:
+                # This loop sometimes steps on "Cannot access memory at address", causing CI instability.
+                # Catch the exception and break the freelist traversal loop gracefully.
+                gdb.write(f"Warning: error traversing freelist of span [0x{span_start:x}, 0x{span_end:x}), some of the listed objects in this span may be free objects.\n")
 
             return span_start, span_end
 
