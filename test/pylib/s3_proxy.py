@@ -148,8 +148,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 self.request.shutdown_request()
             except OSError:
                 pass
-            finally:
-                return
+            return
         code, error_name = self.get_retryable_http_codes()
         self.send_response(code)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
