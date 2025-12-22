@@ -485,6 +485,34 @@ async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
     raise AssertionError(f"Node with host id {coordinator_host_id} was not found in cluster host ids {host_ids}")
 
 
+async def ensure_group0_leader_on(manager: ManagerClient, server: ServerInfo, timeout_seconds = 60):
+    """
+    Ensure that raft group0 leader runs on a given server, triggering stepdowns if necessary.
+    Assumes that servers are not added concurrently.
+    """
+
+    deadline = time.time() + timeout_seconds
+    servers_by_host = await manager.all_servers_by_host_id()
+    desired_host_id = await manager.get_host_id(server.server_id)
+
+    while True:
+        if time.time() > deadline:
+            raise RuntimeError(f"timed out")
+
+        await read_barrier(manager.api, server.ip_addr)
+        coord = await manager.api.get_raft_leader(server.ip_addr)
+        if coord == desired_host_id:
+            break
+
+        if not coord:
+            logger.info("no leader")
+            continue
+
+        logger.info(f"group0 leader is {coord}, want {desired_host_id}")
+        coord_host = servers_by_host[coord]
+        logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr}")
+        await manager.api.client.post("/raft/trigger_stepdown", host=coord_host.ip_addr)
+
 async def get_non_coordinator_host(manager: ManagerClient) -> ServerInfo | None:
     """Get first non-coordinator ServerInfo."""
 
