@@ -30,7 +30,7 @@ class operation;
 
 namespace statements {
 
-class strongly_consistent_modification_statement;
+class broadcast_tables_modification_statement;
 
 namespace raw { class modification_statement; }
 
@@ -256,7 +256,9 @@ public:
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
-    virtual ::shared_ptr<strongly_consistent_modification_statement> prepare_for_broadcast_tables() const;
+    virtual ::shared_ptr<broadcast_tables_modification_statement> prepare_for_broadcast_tables() const;
+
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
     /**
@@ -265,8 +267,6 @@ protected:
      * @throws InvalidRequestException
      */
     virtual void validate_where_clause_for_conditions() const;
-
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
     friend class raw::modification_statement;
 };

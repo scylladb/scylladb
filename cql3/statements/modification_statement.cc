@@ -11,7 +11,8 @@
 #include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/statements/broadcast_tables_modification_statement.hh"
+#include "cql3/statements/strongly_consistent_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -546,7 +547,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
     }
 }
 
-::shared_ptr<strongly_consistent_modification_statement>
+::shared_ptr<broadcast_tables_modification_statement>
 modification_statement::prepare_for_broadcast_tables() const {
     // FIXME: implement for every type of `modification_statement`.
     throw service::broadcast_tables::unsupported_operation_error{};
@@ -560,6 +561,9 @@ modification_statement::prepare_statement(data_dictionary::database db, prepare_
 
     if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
         return statement->prepare_for_broadcast_tables();
+    } else if (db.find_keyspace(keyspace()).is_strongly_consistent()) {
+        return ::make_shared<cql3::statements::strongly_consistent_statement>(
+            std::move(statement));
     } else {
         return statement;
     }
