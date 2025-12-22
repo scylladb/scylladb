@@ -277,35 +277,38 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // change is applied and the state ID is updated or none of this happens.
     // E.g. use a write-ahead-entry which contains all this information and make sure it's replayed during restarts.
 
+    std::optional<storage_service::state_change_hint> topology_state_change_hint;
+    modules_to_reload modules_to_reload;
+
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
-        auto modules_to_reload = get_modules_to_reload(chng.mutations);
+        modules_to_reload = get_modules_to_reload(chng.mutations);
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
-        co_await reload_modules(std::move(modules_to_reload));
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
         _client.set_query_result(cmd.new_state_id, std::move(result));
     },
     [&] (topology_change& chng) -> future<> {
-        auto modules_to_reload = get_modules_to_reload(chng.mutations);
-        auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
+        modules_to_reload = get_modules_to_reload(chng.mutations);
+        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
-        co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
-        co_await reload_modules(std::move(modules_to_reload));
     },
     [&] (mixed_change& chng) -> future<> {
-        auto modules_to_reload = get_modules_to_reload(chng.mutations);
+        modules_to_reload = get_modules_to_reload(chng.mutations);
+        topology_state_change_hint.emplace();
         co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
-        co_await _ss.topology_transition();
-        co_await reload_modules(std::move(modules_to_reload));
     },
     [&] (write_mutations& muts) -> future<> {
-        auto modules_to_reload = get_modules_to_reload(muts.mutations);
+        modules_to_reload = get_modules_to_reload(muts.mutations);
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
-        co_await reload_modules(std::move(modules_to_reload));
     }
     ), cmd.change);
+
+    if (topology_state_change_hint) {
+        co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+    }
+    co_await reload_modules(std::move(modules_to_reload));
 
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
 }
