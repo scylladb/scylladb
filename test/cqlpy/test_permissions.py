@@ -171,7 +171,6 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
 # Test that permissions for user-defined functions are serialized in a Cassandra-compatible way
 def test_udf_permissions_serialization(cql):
     schema = "a int primary key"
-    user = "cassandra"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace, new_user(cql) as user:
         with new_test_table(cql, keyspace, schema) as table:
             # Creating a bilingual function makes this test case work for both Scylla and Cassandra
@@ -247,7 +246,6 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
 # permissions. Cassandra erroneously reports the unrelated missing permissions.
 # Reported to Cassandra as CASSANDRA-19005.
 def test_drop_udf_with_same_name(cql, cassandra_bug):
-    schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
         body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
@@ -288,7 +286,6 @@ def test_drop_udf_with_same_name(cql, cassandra_bug):
 # Tests for ALTER are separate, because they are qualified as cassandra_bug
 def test_grant_revoke_udf_permissions(cql):
     schema = "a int primary key, b list<int>"
-    user = "cassandra"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
@@ -335,7 +332,6 @@ def test_grant_revoke_udf_permissions(cql):
 # and yet it's not enforced
 def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
     schema = "a int primary key"
-    user = "cassandra"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"

@@ -74,7 +74,6 @@ def test_cast_int_literal_with_type_hint_to_blob(cql, table1, scylla_only):
 # An int can always be converted to a valid blob, but blobs might have wrong amount of bytes
 # and can't be converted to a valid int.
 def test_cast_blob_literal_to_int(cql, table1):
-    pk = unique_key_int()
     with pytest.raises(InvalidRequest, match='HEX'):
         cql.execute(f"INSERT INTO {table1} (pk) VALUES (0xBAAAAAAD)")
     with pytest.raises(InvalidRequest, match='blob'):
