@@ -1,5 +1,7 @@
 name: Call Jira release creation for new milestone
 
+permissions: read-all
+
 on:
   milestone:
     types: [created]
