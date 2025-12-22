@@ -14,7 +14,7 @@ Enable ScyllaDB :doc:`Authentication </operating-scylla/security/authentication>
 Enabling Audit
 ---------------
 
-By default, auditing is **disabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
+By default, auditing is **enabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
 You can set the following options:
 
 * ``none`` - Audit is disabled (default).
