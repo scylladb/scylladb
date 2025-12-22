@@ -2,6 +2,9 @@ name: "Docs / Build PR"
 # For more information,
 # see https://sphinx-theme.scylladb.com/stable/deployment/production.html#available-workflows
 
+permissions:
+  contents: read
+
 env:
   FLAG: ${{ github.repository == 'scylladb/scylla-enterprise' && 'enterprise' || 'opensource' }}
 
