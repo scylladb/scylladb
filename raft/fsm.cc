@@ -176,7 +176,7 @@ void fsm::become_leader() {
 
     _last_election_time = _clock.now();
     _ping_leader = false;
-    // a new leader needs to commit at lease one entry to make sure that
+    // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
     // (3.4). Do both of those by committing a dummy entry.
