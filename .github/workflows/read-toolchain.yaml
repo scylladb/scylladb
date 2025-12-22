@@ -10,6 +10,8 @@ on:
 jobs:
   read-toolchain:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       image: ${{ steps.read.outputs.image }}
     steps:
