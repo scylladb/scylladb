@@ -41,12 +41,12 @@ Unless the task was aborted, the worker will eventually reply that the task was 
 it temporarily saves list of ids of finished tasks and removes those tasks from group0 state (pernamently marking them as finished) in 200ms intervals. (*)
 This batching of removing finished tasks is done in order to reduce number of generated group0 operations.
 
-On the other hand, view buildind tasks can can also be aborted due to 2 main reasons:
+On the other hand, view building tasks can can also be aborted due to 2 main reasons:
 - a keyspace/view was dropped
 - tablet operations (see [tablet operations section](#tablet-operations))
 In the first case we simply delete relevant view building tasks as they are no longer needed.
-But if a task needs to be aborted due to tablet operation, we're firstly setting the `aborted` flag to true. We need to do this because we need the task informations
-to created a new adjusted tasks (if the operation succeeded) or rollback them (if the operation failed).
+But if a task needs to be aborted due to tablet operation, we're firstly setting the `aborted` flag to true. We need to do this because we need the task information
+to create new adjusted tasks (if the operation succeeded) or rollback them (if the operation failed).
 Once a task is aborted by setting the flag, this cannot be revoked, so rolling back a task means creating its duplicate and removing the original task.
 
 (*) - Because there is a time gap between when the coordinator learns that a task is finished (from the RPC response) and when the task is marked as completed,
