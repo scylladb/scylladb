@@ -691,6 +691,7 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.client_options = _client_state.get_client_options();
 
     cd.ssl_enabled = _ssl_enabled;
     cd.ssl_protocol = _ssl_protocol;
@@ -958,11 +959,16 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     }
 
     if (auto driver_ver_opt = options.find("DRIVER_VERSION"); driver_ver_opt != options.end()) {
-        _client_state.set_driver_version(driver_ver_opt->second);
+        co_await _client_state.set_driver_version(_server._connection_options_keys_and_values, driver_ver_opt->second);
     }
     if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
-        _client_state.set_driver_name(driver_name_opt->second);
+        co_await _client_state.set_driver_name(_server._connection_options_keys_and_values, driver_name_opt->second);
     }
+
+    // Store all received client options for later exposure in the system.clients 'client_options' column
+    // (a frozen map<text, text>). Options are cached to reduce memory overhead by deduplicating
+    // identical key/value sets across multiple connections (e.g., same driver name/version).
+    co_await _client_state.set_client_options(_server._connection_options_keys_and_values, options);
 
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
@@ -1647,6 +1653,9 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
+    // CLIENT_OPTIONS value is a JSON string that can be used to pass client-specific configuration,
+    // e.g. CQL driver configuration.
+    opts.insert({"CLIENT_OPTIONS", ""});
     if (_server._config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
@@ -2308,11 +2317,11 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
     return _response_metadata_id.value();
 }
 
-future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
-    utils::chunked_vector<client_data> ret;
+future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> cql_server::get_client_data() {
+    utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>> ret;
     co_await for_each_gently([&ret] (const generic_server::connection& c) {
         const connection& conn = dynamic_cast<const connection&>(c);
-        ret.emplace_back(conn.make_client_data());
+        ret.emplace_back(make_foreign(std::make_unique<client_data>(conn.make_client_data())));
     });
     co_return ret;
 }

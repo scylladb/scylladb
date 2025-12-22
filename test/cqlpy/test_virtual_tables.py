@@ -76,6 +76,7 @@ def test_clients(scylla_only, cql):
         'ssl_enabled',
         'ssl_protocol',
         'username',
+        'client_options',
     ])
     cls = list(cql.execute(f"SELECT {columns} FROM system.clients"))
     # There must be at least one connection - the one that sent this SELECT
@@ -84,6 +85,9 @@ def test_clients(scylla_only, cql):
     for cl in cls:
         assert(cl[0] == '127.0.0.1')
         assert(cl[2] == 'cql')
+        client_options = cl[13]
+        assert(client_options.get('DRIVER_NAME') == cl[4])
+        assert(client_options.get('DRIVER_VERSION') == cl[5])
 
 # We only want to check that the table exists with the listed columns, to assert
 # backwards compatibility.

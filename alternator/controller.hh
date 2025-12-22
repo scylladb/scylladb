@@ -93,7 +93,7 @@ public:
     // This virtual function is called (on each shard separately) when the
     // virtual table "system.clients" is read. It is expected to generate a
     // list of clients connected to this server (on this shard).
-    virtual future<utils::chunked_vector<client_data>> get_client_data() override;
+    virtual future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() override;
 };
 
 }

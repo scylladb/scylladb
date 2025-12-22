@@ -708,8 +708,12 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // As long as the system_clients_entry object is alive, this request will
     // be visible in the "system.clients" virtual table. When requested, this
     // entry will be formatted by server::ongoing_request::make_client_data().
+    auto user_agent_header = co_await _connection_options_keys_and_values.get_or_load(req->get_header("User-Agent"), [] (const client_options_cache_key_type&) {
+        return make_ready_future<options_cache_value_type>(options_cache_value_type{});
+    });
+
     auto system_clients_entry = _ongoing_requests.emplace(
-        req->get_client_address(), req->get_header("User-Agent"),
+        req->get_client_address(), std::move(user_agent_header),
         username, current_scheduling_group(),
         req->get_protocol_name() == "https");
 
@@ -985,10 +989,10 @@ client_data server::ongoing_request::make_client_data() const {
     return cd;
 }
 
-future<utils::chunked_vector<client_data>> server::get_client_data() {
-    utils::chunked_vector<client_data> ret;
+future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> server::get_client_data() {
+    utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>> ret;
     co_await _ongoing_requests.for_each_gently([&ret] (const ongoing_request& r) {
-        ret.emplace_back(r.make_client_data());
+        ret.emplace_back(make_foreign(std::make_unique<client_data>(r.make_client_data())));
     });
     co_return ret;
 }

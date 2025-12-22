@@ -74,6 +74,8 @@ The keys and values are:
     as an indicator to which shard client wants to connect. The desired shard number
     is calculated as: `desired_shard_no = client_port % SCYLLA_NR_SHARDS`.
     Its value is a decimal representation of type `uint16_t`, by default `19142`.
+  - `CLIENT_OPTIONS` is a string containing a JSON object representation that
+    contains CQL Driver configuration, e.g. load balancing policy, retry policy, timeouts, etc.
 
 Currently, one `SCYLLA_SHARDING_ALGORITHM` is defined,
 `biased-token-round-robin`. To apply the algorithm,
