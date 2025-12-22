@@ -390,6 +390,18 @@ api::timestamp_type compaction_group::min_memtable_timestamp() const {
         ));
 }
 
+api::timestamp_type compaction_group::max_memtable_timestamp() const {
+    if (_memtables->empty()) {
+        return api::min_timestamp;
+    }
+
+    return std::ranges::max(
+        *_memtables
+        | std::views::transform(
+            [](const shared_memtable& m) { return m->get_max_timestamp(); }
+        ));
+}
+
 api::timestamp_type compaction_group::min_memtable_live_timestamp() const {
     if (_memtables->empty()) {
         return api::max_timestamp;
@@ -4011,6 +4023,13 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
         throw;
     }
     _stats.writes.mark(lc);
+}
+
+api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
+    return std::ranges::max(storage_group_for_id(tid.value()).compaction_groups_immediate()
+        | std::views::transform([](const compaction_group_ptr& cg_ptr) {
+            return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
+        }));
 }
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {

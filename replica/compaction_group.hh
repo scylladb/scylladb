@@ -186,6 +186,8 @@ public:
     size_t memtable_count() const noexcept;
     // Returns minimum timestamp from memtable list
     api::timestamp_type min_memtable_timestamp() const;
+    // Returns maximum timestamp from memtable list
+    api::timestamp_type max_memtable_timestamp() const;
     // Returns minimum timestamp of live data from memtable list
     api::timestamp_type min_memtable_live_timestamp() const;
     // Returns minimum timestamp of live row markers from memtable list
