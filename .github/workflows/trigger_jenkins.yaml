@@ -1,5 +1,8 @@
 name: Trigger next gating
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
