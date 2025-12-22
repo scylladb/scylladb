@@ -1039,6 +1039,14 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
                 os << " USING '" << *custom_index_class << "'";
             }
 
+            os << " WITH ";
+            if (with_internals) {
+                os << "ID = " << id().to_sstring() << "\n    AND ";
+            }
+            if (is_compact_table()) {
+                os << "COMPACT STORAGE\n    AND ";
+            }
+            schema_properties(helper, os);
             os << ";\n";
 
             return std::move(os).to_managed_string();
@@ -1205,7 +1213,7 @@ fragmented_ostringstream& schema::schema_properties(const schema_describe_helper
     for (auto& [type, ext] : extensions()) {
         os << "\n    AND " << type << " = " << ext->options_to_string();
     }
-    if (helper.type == schema_describe_helper::type::view) {
+    if (helper.type == schema_describe_helper::type::view || helper.type == schema_describe_helper::type::index) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
         if (is_sync_update.has_value()) {
             os << "\n    AND synchronous_updates = " << *is_sync_update;
