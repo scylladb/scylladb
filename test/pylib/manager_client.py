@@ -225,6 +225,13 @@ class ManagerClient:
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
                 for info in server_info_list]
 
+    async def all_servers_by_host_id(self) -> Dict[HostID, ServerInfo]:
+        result = dict()
+        servers = await self.all_servers()
+        for s in servers:
+            result[await self.get_host_id(s.server_id)] = s
+        return result
+
     async def starting_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of servers currently
            starting. Can be useful for killing (with server_stop()) a server
