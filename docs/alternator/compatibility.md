@@ -271,6 +271,9 @@ is different, or can be configured in Alternator:
   So for example, if you create a table whose name is 192 characters, you
   can't create a GSI whose name is longer than 29 characters.
 
+* Alternator doesn't currently emit up to date table byte size in
+  DescribeTable response - instead it always returns 1.
+
 ## Experimental API features
 
 Some DynamoDB API features are supported by Alternator, but considered

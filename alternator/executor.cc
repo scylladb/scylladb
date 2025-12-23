@@ -294,16 +294,6 @@ static double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
-void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    auto creation_time = get_table_creation_time(schema);
-
-    rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
-    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
-
-    executor::supplement_table_stream_info(descr, schema, sp);
-}
-
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
 // But Scylla creates a directory whose name is the table's name plus 33
 // bytes (dash and UUID), and since directory names are limited to 255 bytes,
@@ -763,13 +753,16 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
 
     auto creation_timestamp = get_table_creation_time(*schema);
 
+    // TableSizeBytes is not currently tracked in Alternator (until #24634), nevertheless
+    // Kinesis Client Library checks for it, so we emit fake 1 byte size for now.
+    rjson::add(table_description, "TableSizeBytes", 1);
+
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
     // until the table is really available. So/ DescribeTable returns either
     // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
     // The states CREATING and UPDATING are not currently returned.
-    rjson::add(table_description, "TableSizeBytes", 1);
     rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
@@ -1561,7 +1554,8 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
 }
 
 static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request,
-            service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization, bool warn_authorization, stats& stats, const db::tablets_mode_t::mode tablets_mode) {
+            service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization, bool warn_authorization, stats& stats, const db::tablets_mode_t::mode tablets_mode,
+            service_permit permit) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1664,12 +1658,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         }
     }
 
-    rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
+    const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     if (gsi) {
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
-        for (rjson::value& g : gsi->GetArray()) {
+        for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
                 co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
@@ -1723,11 +1717,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             }
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
-
-            // we need to add those two attributes as return value requires them
-            rjson::add(g, "IndexStatus", "CREATING");
-            rjson::add(g, "Backfilling", rjson::value(true));
-
         }
     }
     if (!unused_attribute_definitions.empty()) {
@@ -1794,7 +1783,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features(), tablets_mode);
-        // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
@@ -1865,8 +1853,8 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
 
     co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
-    executor::supplement_table_info(request, *schema, sp);
-    rjson::add(status, "TableDescription", std::move(request));
+    rjson::value table_description = co_await fill_table_description(schema, table_status::creating, sp, client_state, trace_state, permit);    
+    rjson::add(status, "TableDescription", std::move(table_description));
     co_return rjson::print(std::move(status));
 }
 
@@ -1874,10 +1862,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), &e = this->container(), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization)]
+    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), &e = this->container(), client_state_other_shard = client_state.move_to_other_shard(), permit = std::move(permit), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization)]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         const db::tablets_mode_t::mode tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces(); // type cast
-        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization, warn_authorization, e.local()._stats, std::move(tablets_mode));
+        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization, warn_authorization, e.local()._stats, std::move(tablets_mode), std::move(permit));
     });
 }
 
@@ -1955,7 +1943,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
