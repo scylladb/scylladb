@@ -7,7 +7,9 @@
  */
 
 #include "utils/assert.hh"
+#include <seastar/core/sstring.hh>
 #include <fmt/ranges.h>
+#include <fmt/format.h>
 
 #include <seastar/core/future.hh>
 #include <seastar/testing/test_case.hh>
@@ -27,7 +29,7 @@ namespace fs = std::filesystem;
 
 using namespace sstables;
 using namespace tests;
-#if 1
+
 static future<> create_file_of_size(fs::path file, size_t dest_size) {
     auto f = co_await seastar::open_file_dma(file.string(), open_flags::wo|open_flags::create);
     auto os = co_await make_file_output_stream(std::move(f));
@@ -46,7 +48,7 @@ static future<> create_file_of_size(fs::path file, size_t dest_size) {
     co_await os.flush();
     co_await os.close();
 }
-#endif
+
 static future<> compare_streams(input_stream<char>& is1, input_stream<char>& is2, size_t total) {
     uint64_t read = 0;
     while (!is1.eof()) {
@@ -58,6 +60,7 @@ static future<> compare_streams(input_stream<char>& is1, input_stream<char>& is2
         BOOST_REQUIRE_EQUAL(buf, buf2);
         read += buf.size();
     }
+    BOOST_REQUIRE((co_await is1.read()).empty());
     BOOST_REQUIRE((co_await is2.read()).empty());
     BOOST_REQUIRE_EQUAL(read, total);
 }
@@ -70,8 +73,10 @@ future<> test_file_upload(test_env_config cfg, size_t size) {
         auto client = env.manager().get_endpoint_client(ep);
 
         tmpdir tmp;
-        auto path = tmp.path() / "testfile";
-        object_name name(bucket, "testfile");
+        //for multiple tests that may run in CI in the same time we want different files to be used in each test
+        sstring test_file_name = fmt::format("testfile-{}-{}", std::chrono::system_clock::now().time_since_epoch().count(), tests::random::get_int(0, 1000000));
+        auto path = tmp.path() / test_file_name;
+        object_name name(bucket, test_file_name);
         utils::upload_progress up;
         create_file_of_size(path, size).get();
 
