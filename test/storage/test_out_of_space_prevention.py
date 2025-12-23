@@ -28,7 +28,7 @@ def write_generator(table, size_in_kb: int):
         yield f"INSERT INTO {table} (pk, t) VALUES ({idx}, '{'x' * 1020}')"
 
 
-class random_content_file:
+class RandomContentFile:
     def __init__(self, path: str, size_in_bytes: int):
         path = pathlib.Path(path)
         self.filename = path if path.is_file() else path / str(uuid.uuid4())
@@ -68,7 +68,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
@@ -95,7 +95,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                     assert await log.grep("database - Set critical disk utilization mode: false", from_mark=mark) == []
 
                     try:
-                        cql.execute(f"INSERT INTO {cf} (pk, t) VALUES (-1, 'x')", host=host[0], execution_profile=cl_one_profile).result()
+                        cql.execute(f"INSERT INTO {cf} (pk, t) VALUES (-1, 'x')", host=hosts[0], execution_profile=cl_one_profile).result()
                     except Exception:
                         pass
                     else:
@@ -111,7 +111,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 
 
 @pytest.mark.asyncio
-async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmdline = [*global_cmdline,
                "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmdline) as servers:
@@ -134,7 +134,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -175,7 +175,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain")
 
 
@@ -198,7 +198,7 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         s1_mark, _ = await s1_log.wait_for("compaction_manager - Drained", from_mark=s1_mark)
 
@@ -206,7 +206,7 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
                     s2_mark = await s2_log.mark()
                     cql.execute_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': 32}}")
 
-                    s2_log.wait_for(f"compaction .* Split {cf}", from_mark=s2_mark)
+                    await s2_log.wait_for(f"compaction .* Split {cf}", from_mark=s2_mark)
                     assert await s1_log.grep(f"compaction .* Split {cf}", from_mark=s1_mark) == []
 
 
@@ -236,7 +236,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("repair - Drained", from_mark=mark)
 
@@ -315,7 +315,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
                 mark = await log.mark()
 
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
@@ -371,7 +371,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with RandomContentFile(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -382,7 +382,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     coord_log = await manager.server_open_log(coord_serv.server_id)
 
                     await cql.run_async(f"ALTER TABLE {cf} WITH tablets = {{'min_tablet_count': 2}};")
-                    coord_log.wait_for(f"Generating resize decision for table {table_id} of type split")
+                    await coord_log.wait_for(f"Generating resize decision for table {table_id} of type split")
 
                     await manager.server_restart(servers[0].server_id, wait_others=2)
 
