@@ -477,7 +477,8 @@ class ScyllaServer:
         return "DEFAULT_RACK"
     
     def server_info(self) -> ServerInfo:
-        return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack)
+        pid = self.cmd.pid if self.cmd else None
+        return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack, pid)
 
     def change_rpc_address(self, rpc_address: IPAddress) -> None:
         """Change RPC IP address of the current server. Pre: the server is
