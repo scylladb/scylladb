@@ -279,9 +279,9 @@ def setup_cgroup(is_required: bool) -> None:
                 check=True,
             )
 
-        if is_podman or is_docker:
-            cmd = ["chown", "-R", f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup']
-            subprocess.run(["sudo"] + cmd if is_docker else cmd,check=True)
+        if is_docker:
+            cmd = ["sudo", "chown", "-R", f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup']
+            subprocess.run(cmd, check=True)
 
         configured = False
         for directory in [CGROUP_INITIAL, CGROUP_TESTS]:
