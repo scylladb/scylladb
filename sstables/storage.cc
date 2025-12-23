@@ -50,7 +50,14 @@ class filesystem_storage final : public sstables::storage {
     std::optional<std::filesystem::path> _temp_dir; // Valid while the sstable is being created, until sealed
 
 private:
-    using mark_for_removal = bool_class<class mark_for_removal_tag>;
+    struct mark_for_removal_tag {};
+    struct leave_unsealed_tag {};
+
+    enum class link_mode {
+        default_mode,
+        mark_for_removal,
+        leave_unsealed,
+    };
 
     template <typename Comp>
     requires std::is_same_v<Comp, component_type> || std::is_same_v<Comp, sstring>
@@ -61,7 +68,9 @@ private:
     future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
     future<> remove_temp_dir();
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const override;
-    future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+    future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, link_mode mode) const;
+    future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal_tag) const;
+    future<> create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> gen, leave_unsealed_tag) const;
     future<> create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> dst_gen) const;
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
@@ -83,7 +92,7 @@ public:
     {}
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -356,8 +365,13 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
 /// \param sst - the sstable to work on
 /// \param dst_dir - the destination directory.
 /// \param generation - the generation of the destination sstable
-/// \param mark_for_removal - mark the sstable for removal after linking it to the destination dst_dir
-future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
+/// \param mode - what will be done after all components were linked
+///     mark_for_removal - mark the sstable for removal after linking it to the destination dst_dir
+///     leave_unsealed - leaves the destination sstable unsealed
+future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type generation, link_mode mode) const {
+    // They're mutually exclusive, so we can assume only one is set.
+    bool mark_for_removal = mode == link_mode::mark_for_removal;
+    bool leave_unsealed = mode == link_mode::leave_unsealed;
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", sst.get_filename(), dst_dir, generation, mark_for_removal);
     auto comps = sst.all_components();
     co_await check_create_links_replay(sst, dst_dir, generation, comps);
@@ -366,7 +380,11 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     co_await sst.sstable_write_io_check(idempotent_link_file, fmt::to_string(sst.filename(component_type::TOC)), std::move(dst));
     auto dir = opened_directory(dst_dir);
     co_await dir.sync(sst._write_error_handler);
-    co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation] (auto p) {
+    co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation, leave_unsealed] (auto p) {
+        // Skips the linking of TOC file if the destination will be left unsealed.
+        if (leave_unsealed && p.first == component_type::TOC) {
+            return make_ready_future<>();
+        }
         auto src = filename(sst, _dir.native(), sst._generation, p.second);
         auto dst = filename(sst, dst_dir, generation, p.second);
         return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
@@ -379,9 +397,10 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
         auto src_temp_toc = filename(sst, _dir.native(), sst._generation, component_type::TemporaryTOC);
         co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
         co_await _dir.sync(sst._write_error_handler);
-    } else {
+    } else if (!leave_unsealed) {
         // Now that the source sstable is linked to dir, remove
         // the TemporaryTOC file at the destination.
+        // This is bypassed if destination will be left unsealed.
         co_await sst.sstable_write_io_check(remove_file, std::move(dst_temp_toc));
     }
     co_await dir.sync(sst._write_error_handler);
@@ -389,15 +408,23 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
 }
 
+future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal_tag) const {
+    return create_links_common(sst, dst_dir, dst_gen, link_mode::mark_for_removal);
+}
+
+future<> filesystem_storage::create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> gen, leave_unsealed_tag) const {
+    return create_links_common(sst, dir.native(), gen.value_or(sst._generation), link_mode::leave_unsealed);
+}
+
 future<> filesystem_storage::create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> gen) const {
-    return create_links_common(sst, dir.native(), gen.value_or(sst._generation), mark_for_removal::no);
+    return create_links_common(sst, dir.native(), gen.value_or(sst._generation), link_mode::default_mode);
 }
 
 future<> filesystem_storage::create_links(const sstable& sst, const std::filesystem::path& dir) const {
-    return create_links_common(sst, dir.native(), sst._generation, mark_for_removal::no);
+    return create_links_common(sst, dir.native(), sst._generation, link_mode::default_mode);
 }
 
-future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
+future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed leave_unsealed) const {
     std::filesystem::path snapshot_dir;
     if (abs) {
         snapshot_dir = dir;
@@ -405,7 +432,11 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
         snapshot_dir = _dir.path() / dir;
     }
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
-    co_await create_links_common(sst, snapshot_dir, std::move(gen));
+    if (leave_unsealed) {
+        co_await create_links_common(sst, snapshot_dir, std::move(gen), leave_unsealed_tag{});
+    } else {
+        co_await create_links_common(sst, snapshot_dir, std::move(gen));
+    }
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
@@ -413,7 +444,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
     sstring old_dir = _dir.native();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
-    co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
+    co_await create_links_common(sst, new_dir, new_generation, mark_for_removal_tag{});
     co_await change_dir(new_dir);
     generation_type old_generation = sst._generation;
     co_await coroutine::parallel_for_each(sst.all_components(), [&sst, old_generation, old_dir] (auto p) {
@@ -598,7 +629,7 @@ public:
     {}
 
     future<> seal(const sstable& sst) override;
-    future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>) const override;
+    future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>, storage::leave_unsealed) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -815,7 +846,7 @@ future<> object_storage_base::unlink_component(const sstable& sst, component_typ
     }
 }
 
-future<> object_storage_base::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
+future<> object_storage_base::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const {
     on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
     co_return;
 }

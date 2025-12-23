@@ -91,7 +91,7 @@ public:
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _sstables_manager;
     }
-    sstables::shared_sstable make_sstable() const override {
+    sstables::shared_sstable make_sstable(sstables::sstable_state) const override {
         return table().make_sstable();
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {

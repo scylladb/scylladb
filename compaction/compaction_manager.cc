@@ -416,7 +416,9 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
     descriptor.creator = [&t] (shard_id) {
-        return t.make_sstable();
+        // All compaction types going through this path will work on normal input sstables only.
+        // Off-strategy, for example, waits until the sstables move out of staging state.
+        return t.make_sstable(sstables::sstable_state::normal);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
@@ -1847,6 +1849,10 @@ protected:
                 throw make_compaction_stopped_exception();
             }
         }, false);
+        if (utils::get_local_injector().is_enabled("split_sstable_force_stop_exception")) {
+            throw make_compaction_stopped_exception();
+        }
+
         co_return co_await do_rewrite_sstable(std::move(sst));
     }
 };
@@ -2284,12 +2290,16 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
 }
 
 future<std::vector<sstables::shared_sstable>>
-compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
+compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
-    if (!can_proceed(&t)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
+    // Throw an error if split cannot be performed due to e.g. out of space prevention.
+    // We don't want to prevent split because compaction is temporarily disabled on a view only for synchronization,
+    // which is uneeded against new sstables that aren't part of any set yet, so never use can_proceed(&t) here.
+    if (is_disabled()) {
+        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(format("Cannot split {} because manager has compaction disabled, " \
+                                                                                         "reason might be out of space prevention", sst->get_filename()))));
     }
     std::vector<sstables::shared_sstable> ret;
 
@@ -2297,8 +2307,11 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction
     compaction_progress_monitor monitor;
     compaction_data info = create_compaction_data();
     compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
+    desc.creator = [&t, sst] (shard_id _) {
+        // NOTE: preserves the sstable state, since we want the output to be on the same state as the original.
+        // For example, if base table has views, it's important that sstable produced by repair will be
+        // in the staging state.
+        return t.make_sstable(sst->state());
     };
     desc.replacer = [&] (compaction_completion_desc d) {
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));

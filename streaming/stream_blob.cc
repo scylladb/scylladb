@@ -52,8 +52,16 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
-        co_await sst->load(erm->get_sharder(*t.schema()));
-        co_await t.add_sstable_and_update_cache(sst);
+        sstables::sstable_open_config cfg { .unsealed_sstable = true };
+        co_await sst->load(erm->get_sharder(*t.schema()), cfg);
+        auto on_add = [sst, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
+            if (loading_sst == sst) {
+                auto cfg = sstm.configure_writer(sst->get_origin());
+                co_await loading_sst->seal_sstable(cfg.backup);
+            }
+            co_return;
+        };
+        auto new_sstables = co_await t.add_new_sstable_and_update_cache(sst, on_add);
         blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
 
         if (state == sstables::sstable_state::staging) {
@@ -64,7 +72,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
             // so then, the view building coordinator can decide to process it once the migration
             // is finished.
             // (Instead of registering the sstable to view update generator which may process it immediately.)
-            co_await sharded_vbw.local().register_staging_sstable_tasks({sst}, t.schema()->id());
+            co_await sharded_vbw.local().register_staging_sstable_tasks(new_sstables, t.schema()->id());
         }
     });
 }
@@ -343,7 +351,11 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
 
         auto& table = db.find_column_family(meta.table);
         auto& sstm = table.get_sstables_manager();
-        auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, meta.fops == file_ops::load_sstables);
+        // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
+        // left sealed on the table directory.
+        sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
+                                                .leave_unsealed = true };
+        auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
         auto out = co_await sstable_sink->output(foptions, stream_options);
         co_return output_result{
             [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
@@ -351,7 +363,7 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
                     co_await sstable_sink->abort();
                     co_return;
                 }
-                auto sst = co_await sstable_sink->close_and_seal();
+                auto sst = co_await sstable_sink->close();
                 if (sst) {
                     blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
                     auto desc = sst->get_descriptor(sstables::component_type::TOC);
