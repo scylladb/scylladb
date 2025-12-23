@@ -923,7 +923,7 @@ class LcovFile:
         )
         old_records = self.records()
         self.records = OrderedDict()
-        for key in common_records():
+        for key in common_records:
             self.records[key] = old_records[key].intersection(other.records[key])
         self.prune()
         return self
