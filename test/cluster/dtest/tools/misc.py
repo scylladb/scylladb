@@ -37,7 +37,7 @@ def retry_till_success[T, **P](fun: Callable[P, T], *args: P.args, **kwargs: P.k
         time.sleep(0.1)
 
 
-def list_to_hashed_dict(query_response_list):
+def list_to_hashed_dict(query_response_list: list) -> dict:
     """
     takes a list and hashes the contents and puts them into a dict so the contents can be compared
     without order. unfortunately, we need to do a little massaging of our input; the result from
