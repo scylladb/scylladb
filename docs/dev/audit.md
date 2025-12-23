@@ -1,6 +1,6 @@
 # Introduction
 
-Similar to the approach described in CASSANDRA-14471, we add the
+Similar to the approach described in CASSANDRA-12151, we add the
 concept of an audit specification.  An audit has a target (syslog or a
 table) and a set of events/actions that it wants recorded.  We
 introduce new CQL syntax for Scylla users to describe and manipulate
