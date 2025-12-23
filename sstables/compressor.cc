@@ -24,6 +24,7 @@
 #include "sstables/sstable_compressor_factory.hh"
 #include "compressor.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/assert.hh"
 #include "utils/config_file_impl.hh"
 #include "utils/class_registrator.hh"
 #include "gms/feature_service.hh"
@@ -295,7 +296,7 @@ size_t zstd_processor::uncompress(const char* input, size_t input_len, char* out
         if (_ddict) {
             return ZSTD_decompress_usingDDict(dctx, output, output_len, input, input_len, _ddict->dict());
         } else {
-            SCYLLA_ASSERT(!_cdict && "Write-only compressor used for reading");
+            scylla_assert(!_cdict && "Write-only compressor used for reading");
             return ZSTD_decompressDCtx(dctx, output, output_len, input, input_len);
         }
     });
@@ -310,7 +311,7 @@ size_t zstd_processor::compress(const char* input, size_t input_len, char* outpu
         if (_cdict) {
             return ZSTD_compress_usingCDict(cctx, output, output_len, input, input_len, _cdict->dict());
         } else {
-            SCYLLA_ASSERT(!_ddict && "Read-only compressor used for writing");
+            scylla_assert(!_ddict && "Read-only compressor used for writing");
             return ZSTD_compressCCtx(cctx, output, output_len, input, input_len, _compression_level);
         }
     });
@@ -627,7 +628,7 @@ size_t lz4_processor::uncompress(const char* input, size_t input_len,
     if (_ddict) {
         ret = LZ4_decompress_safe_usingDict(input, output, input_len, output_len, reinterpret_cast<const char*>(_ddict->raw().data()), _ddict->raw().size());
     } else {
-        SCYLLA_ASSERT(!_cdict && "Write-only compressor used for reading");
+        scylla_assert(!_cdict && "Write-only compressor used for reading");
         ret = LZ4_decompress_safe(input, output, input_len, output_len);
     }
     if (ret < 0) {
@@ -657,7 +658,7 @@ size_t lz4_processor::compress(const char* input, size_t input_len,
             LZ4_resetStream_fast(ctx);
         }
     } else {
-        SCYLLA_ASSERT(!_ddict && "Read-only compressor used for writing");
+        scylla_assert(!_ddict && "Read-only compressor used for writing");
         ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
     }
     if (ret == 0) {
@@ -1268,7 +1269,7 @@ lz4_cdict::~lz4_cdict() {
 }
 
 std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory_for_tests_in_thread() {
-    SCYLLA_ASSERT(thread::running_in_thread());
+    scylla_assert(thread::running_in_thread());
     struct wrapper : sstable_compressor_factory {
         using impl = default_sstable_compressor_factory;
         sharded<impl> _impl;

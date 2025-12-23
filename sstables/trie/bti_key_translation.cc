@@ -8,6 +8,7 @@
 
 #include "bti_key_translation.hh"
 #include "sstables/mx/types.hh"
+#include "utils/assert.hh"
 
 namespace sstables::trie {
 
@@ -56,7 +57,7 @@ void lazy_comparable_bytes_from_ring_position::init_first_fragment(dht::token dh
 }
 
 void lazy_comparable_bytes_from_ring_position::trim(const size_t n) {
-    SCYLLA_ASSERT(n <= _size);
+    scylla_assert(n <= _size);
     _size = n;
 }
 
@@ -127,7 +128,7 @@ lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clust
 {}
 
 void lazy_comparable_bytes_from_clustering_position::trim(unsigned n) {
-    SCYLLA_ASSERT(n <= _size);
+    scylla_assert(n <= _size);
     _size = n;
 }
 

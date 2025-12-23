@@ -10,6 +10,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "replica/database.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/assert.hh"
 
 static logging::logger corrupt_data_logger("corrupt_data");
 
@@ -75,14 +76,14 @@ future<corrupt_data_handler::entry_id> system_table_corrupt_data_handler::do_rec
 
     auto set_cell_raw = [this, &entry_row, &corrupt_data_schema, timestamp] (const char* cell_name, managed_bytes cell_value) {
         auto cdef = corrupt_data_schema->get_column_definition(cell_name);
-        SCYLLA_ASSERT(cdef);
+        scylla_assert(cdef);
 
         entry_row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, timestamp, cell_value, _entry_ttl));
     }; 
 
     auto set_cell = [this, &entry_row, &corrupt_data_schema, timestamp] (const char* cell_name, data_value cell_value) {
         auto cdef = corrupt_data_schema->get_column_definition(cell_name);
-        SCYLLA_ASSERT(cdef);
+        scylla_assert(cdef);
 
         entry_row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, timestamp, cell_value.serialize_nonnull(), _entry_ttl));
     };

@@ -187,12 +187,12 @@ public:
             size_t buffer_size = default_sstable_buffer_size);
 
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint) const {
-        SCYLLA_ASSERT(_storage != nullptr);
+        scylla_assert(_storage != nullptr);
         return _storage->get_endpoint_client(std::move(endpoint));
     }
 
     bool is_known_endpoint(sstring endpoint) const {
-        SCYLLA_ASSERT(_storage != nullptr);
+        scylla_assert(_storage != nullptr);
         return _storage->is_known_endpoint(std::move(endpoint));
     }
 
@@ -243,7 +243,7 @@ public:
 
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
-        SCYLLA_ASSERT(_sstables_registry && "sstables_registry is not plugged");
+        scylla_assert(_sstables_registry && "sstables_registry is not plugged");
         return *_sstables_registry;
     }
 

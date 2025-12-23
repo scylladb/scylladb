@@ -406,7 +406,7 @@ inline void trie_writer<Output>::complete_until_depth(size_t depth) {
 
 template <trie_writer_sink Output>
 inline void trie_writer<Output>::add(size_t depth, const_bytes key_tail, const trie_payload& p) {
-    SCYLLA_ASSERT(p._payload_bits);
+    scylla_assert(p._payload_bits);
     add_partial(depth, key_tail);
     _stack.back()->set_payload(p);
 }
@@ -416,10 +416,10 @@ template <trie_writer_sink Output>
 inline void trie_writer<Output>::add_partial(size_t depth, const_bytes key_frag) {
     expensive_log("writer_node::add_partial: end, stack={}, depth={}, _current_depth={} tail={}", _stack.size(), depth, _current_depth, fmt_hex(key_frag));
     expensive_assert(_stack.size() >= 1);
-    SCYLLA_ASSERT(_current_depth >= depth);
+    scylla_assert(_current_depth >= depth);
     // There is only one case where a zero-length tail is legal:
     // when inserting the empty key.
-    SCYLLA_ASSERT(!key_frag.empty() || depth == 0);
+    scylla_assert(!key_frag.empty() || depth == 0);
 
     complete_until_depth(depth);
     if (key_frag.size()) {
@@ -444,7 +444,7 @@ inline sink_pos trie_writer<Output>::finish() {
     if (!try_write(_stack[0])) {
         _out.pad_to_page_boundary();
         bool ok = try_write(_stack[0]);
-        SCYLLA_ASSERT(ok);
+        scylla_assert(ok);
     }
     auto root_pos = _stack[0]->_pos;
 

@@ -46,7 +46,7 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
         // any reject during snapshot transfer is stray one
         return true;
     default:
-        SCYLLA_ASSERT(false);
+        scylla_assert(false, "invalid follower_progress state: {}", static_cast<int>(state));
     }
     return false;
 }
@@ -87,7 +87,7 @@ bool follower_progress::can_send_to() {
         // before starting to sync the log.
         return false;
     }
-    SCYLLA_ASSERT(false);
+    scylla_assert(false, "invalid follower_progress state in can_send_to: {}", static_cast<int>(state));
     return false;
 }
 

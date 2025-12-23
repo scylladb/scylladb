@@ -203,7 +203,7 @@ private:
     [[nodiscard]] ptr<T> alloc_impl(size_t n) {
         using value_type = ptr<T>::value_type;
         expensive_assert(n < _segment_size / sizeof(value_type));
-        SCYLLA_ASSERT(n > 0);
+        scylla_assert(n > 0);
         auto sz = n * sizeof(value_type);
         _remaining -= _remaining % alignof(value_type);
         if (sz > _remaining) [[unlikely]] {
@@ -230,7 +230,7 @@ private:
 
 public:
     bump_allocator(size_t segment_size) : _segment_size(segment_size) {
-        SCYLLA_ASSERT(_segment_size % alignof(max_align_t) == 0);
+        scylla_assert(_segment_size % alignof(max_align_t) == 0);
     }
 
     // Total memory usage by this allocator.

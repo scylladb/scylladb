@@ -36,6 +36,7 @@
 
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
+#include "utils/assert.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -4091,7 +4092,7 @@ future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_typ
 }
 
 future<data_source> file_io_extension::wrap_source(const sstable& sst, component_type c, data_source) {
-    SCYLLA_ASSERT(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
+    scylla_assert(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
 }
 
 namespace trie {

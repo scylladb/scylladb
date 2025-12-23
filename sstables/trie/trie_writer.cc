@@ -9,6 +9,7 @@
 #include <seastar/util/log.hh>
 #include "writer_node.hh"
 #include "common.hh"
+#include "utils/assert.hh"
 
 seastar::logger trie_logger("trie");
 
@@ -27,7 +28,7 @@ auto writer_node::create(const_bytes b, bump_allocator& alctr) -> ptr<writer_nod
 }
 
 auto writer_node::add_child(const_bytes b, bump_allocator& alctr) -> ptr<writer_node> {
-    SCYLLA_ASSERT(get_children().empty() || b[0] > get_children().back()->_transition[0]);
+    scylla_assert(get_children().empty() || b[0] > get_children().back()->_transition[0]);
     reserve_children(get_children().size() + 1, alctr);
     auto new_child = create(b, alctr);
     push_child(new_child, alctr);

@@ -59,7 +59,7 @@ private:
                 // Live entry_ptr should keep the entry alive, except when the entry failed on loading.
                 // In that case, entry_ptr holders are not supposed to use the pointer, so it's safe
                 // to nullify those entry_ptrs.
-                SCYLLA_ASSERT(!ready());
+                scylla_assert(!ready());
             }
         }
 
