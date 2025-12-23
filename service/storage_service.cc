@@ -4223,7 +4223,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120)).get();
 
         // Step 5: Sync data for bootstrap
-        _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens).get();
+        _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens, null_topology_guard).get();
         on_streaming_finished();
 
         // Step 6: Finish
@@ -4277,7 +4277,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
             auto tmptr = get_token_metadata_ptr();
             auto ignore_nodes = replace_info.ignore_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
-            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes), replace_info.host_id).get();
+            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes), replace_info.host_id, null_topology_guard).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
@@ -4715,7 +4715,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             for (auto& node : req.leaving_nodes) {
                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using repair, coordinator={}", req.ops_uuid, node, coordinator);
-                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), _gossiper.get_host_id(node), ops).get();
+                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), _gossiper.get_host_id(node), ops, topo_guard).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
                     removenode_with_stream(_gossiper.get_host_id(node), topo_guard, as).get();
@@ -5461,7 +5461,7 @@ future<> storage_service::rebuild(utils::optional_param source_dc) {
             auto tmptr = ss.get_token_metadata_ptr();
             auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
             if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                co_await ss._repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(source_dc));
+                co_await ss._repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(source_dc), null_topology_guard);
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
                         tmptr->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
@@ -5583,7 +5583,7 @@ future<> storage_service::unbootstrap() {
     slogger.info("Finished batchlog replay for decommission");
 
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
-        co_await _repair.local().decommission_with_repair(get_token_metadata_ptr());
+        co_await _repair.local().decommission_with_repair(get_token_metadata_ptr(), null_topology_guard);
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream;
 
@@ -6232,6 +6232,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
                     const auto rs = _topology_state_machine._topology.find(id)->second;
                     auto tstate = _topology_state_machine._topology.tstate;
+                    auto session = _topology_state_machine._topology.session;
                     if (!rs.ring || rs.ring->tokens.empty()) {
                         rtlogger.warn("got {} request but the node does not own any tokens and is in the {} state", cmd.cmd, rs.state);
                         co_return;
@@ -6262,11 +6263,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
                                 auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                        parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, [this, &rs] (this auto) -> future<> {
+                                        parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, [this, &rs, session] (this auto) -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                         co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
-                                        co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
+                                        co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, session);
                                     } else {
                                         dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                             locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
@@ -6281,7 +6282,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         } else {
                             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                             auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                    parent_info.id, streaming::stream_reason::replace, _bootstrap_result, [this, &rs, &id, replaced_id] (this auto) -> future<> {
+                                    parent_info.id, streaming::stream_reason::replace, _bootstrap_result, [this, &rs, &id, replaced_id, session] (this auto) -> future<> {
                                 if (!_topology_state_machine._topology.req_param.contains(id)) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
                                 }
@@ -6292,7 +6293,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                     auto tmptr = get_token_metadata_ptr();
                                     auto replaced_node = locator::host_id(replaced_id.uuid());
-                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes), replaced_node);
+                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes), replaced_node, session);
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
@@ -6332,7 +6333,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.debug("streaming to remove node {}", id);
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}] (this auto) {
+                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) {
                             auto as = make_shared<abort_source>();
                             auto sub = _abort_source.subscribe([as] () noexcept {
                                 if (!as->abort_requested()) {
@@ -6344,7 +6345,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     return locator::host_id(id.uuid());
                                 }) | std::ranges::to<std::list<locator::host_id>>();
                                 auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops);
+                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
                             } else {
                                 return removenode_with_stream(id, _topology_state_machine._topology.session, as);
                             }
@@ -6358,7 +6359,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc] (this auto) -> future<> {
+                                parent_info.id, streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc, session] (this auto) -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
@@ -6370,7 +6371,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 if (!source_dc.empty()) {
                                     sdc_param.emplace(source_dc).set_user_provided().set_force(force);
                                 }
-                                co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param));
+                                co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param), session);
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
