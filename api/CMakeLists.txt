@@ -4,7 +4,7 @@ function(generate_swagger)
   set(one_value_args TARGET VAR IN_FILE OUT_DIR)
   cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
   get_filename_component(in_file_name ${args_IN_FILE} NAME)
-  set(generator ${PROJECT_SOURCE_DIR}/seastar/scripts/seastar-json2code.py)
+  set(generator ${PROJECT_SOURCE_DIR}/seastar-json2code.py)
   set(header_out ${args_OUT_DIR}/${in_file_name}.hh)
   set(source_out ${args_OUT_DIR}/${in_file_name}.cc)
 
@@ -31,6 +31,7 @@ set(swagger_files
   api-doc/column_family.json
   api-doc/commitlog.json
   api-doc/compaction_manager.json
+  api-doc/client_routes.json
   api-doc/config.json
   api-doc/cql_server_test.json
   api-doc/endpoint_snitch_info.json
@@ -68,6 +69,7 @@ target_sources(api
   PRIVATE
     api.cc
     cache_service.cc
+    client_routes.cc
     collectd.cc
     column_family.cc
     commitlog.cc
