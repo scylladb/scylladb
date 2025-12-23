@@ -208,7 +208,9 @@ async def run(command: list[str], cpuset: Optional[str] = None, **kwargs) -> Pro
 
     orig_cmd = cmd[:] # Copy the command here for the purpose of logging, before it's uglified up by the wrappers below.
 
-    kwargs.setdefault("process_group", 0)
+    downstream_kwargs = dict()
+    downstream_kwargs.update(kwargs)
+    downstream_kwargs.setdefault("process_group", 0)
 
     # Optionally log standard streams to the per-process log and to the global log.
     logdir = LOGDIR.get()
@@ -230,11 +232,11 @@ async def run(command: list[str], cpuset: Optional[str] = None, **kwargs) -> Pro
         n_handlers -= 1
 
     if not SUBPROCESS_OUTPUT.get():
-        kwargs.setdefault("stdout", asyncio.subprocess.DEVNULL)
-        kwargs.setdefault("stderr", asyncio.subprocess.DEVNULL)
+        downstream_kwargs.setdefault("stdout", asyncio.subprocess.DEVNULL)
+        downstream_kwargs.setdefault("stderr", asyncio.subprocess.DEVNULL)
 
     process_logger.info(f"Running a process: {orig_cmd}")
-    p = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+    p = await asyncio.create_subprocess_exec(*cmd, **downstream_kwargs)
 
     logfile = f"{logdir}/{p.pid}.log" if logdir else None
     proc = Process(p, orig_cmd, logfile)
@@ -526,10 +528,11 @@ async def cs(run_kwargs: dict[str, Any] = {}, **params: Any) -> Process:
     """Runs a cassandra-stress process.
     Raises an exception if it reports a workload failure.
     """
-    run_kwargs.setdefault('cpuset', CS_CPUSET.get())
+    downstream_kwargs = dict(run_kwargs)
+    downstream_kwargs.setdefault('cpuset', CS_CPUSET.get())
     cmd = cs_command(**params)
     training_logger.info(f"Running cassandra-stress: {cmd}")
-    proc, *_ = await run_checked(cs_command(**params), **run_kwargs)
+    proc, *_ = await run_checked(cs_command(**params), **downstream_kwargs)
     training_logger.info(f"cassandra-stress finished successfully")
     return proc
 
