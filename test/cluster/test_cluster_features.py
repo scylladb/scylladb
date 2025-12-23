@@ -112,7 +112,8 @@ async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
 
     # There is one node that is not upgraded. The feature should not be enabled.
     for srv in servers:
-        assert TEST_FEATURE_NAME not in await get_enabled_features(cql, host)
+        srv_host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
+        assert TEST_FEATURE_NAME not in await get_enabled_features(cql, srv_host)
 
     # Downgrade, in reverse order
     for srv in upgrading_servers[::-1]:
