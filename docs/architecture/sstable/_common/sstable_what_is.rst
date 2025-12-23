@@ -8,28 +8,22 @@ SSTable Version Support
 ------------------------
 
 .. list-table::
-   :widths: 33 33 33
+   :widths: 50 50
    :header-rows: 1
 
    * - SSTable Version
-     - ScyllaDB Enterprise Version
-     - ScyllaDB Open Source Version
+     - ScyllaDB Version
    * - 3.x ('ms')
      - 2025.4 and above
-     - None
    * - 3.x ('me')
      - 2022.2 and above
-     - 5.1 and above
    * - 3.x ('md')
      - 2021.1
-     - 4.3, 4.4, 4.5, 4.6, 5.0
-   * - 3.0 ('mc')
-     - 2019.1, 2020.1
-     - 3.x, 4.1, 4.2
-   * - 2.2 ('la')
-     - N/A
-     - 2.3
-   * - 2.1.8 ('ka')
-     - 2018.1
-     - 2.2
-     
+
+* The supported formats are ``me`` and ``ms``.
+* The ``md`` format is used only when upgrading from an existing cluster using
+  ``md``. The ``sstable_format`` parameter is ignored if it is set to ``md``.
+* Note: The ``sstable_format`` parameter specifies the SSTable format used for
+  **writes**. The legacy SSTable formats (``ka``, ``la``, ``mc``) remain
+  supported for reads, which is essential for restoring clusters from existing
+  backups.
