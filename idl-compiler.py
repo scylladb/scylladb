@@ -405,8 +405,8 @@ class RpcVerbParam(ASTBase):
     argument as an `foreign_ptr<lw_shared_ptr<>>`
     If the [[ref]] attribute is specified the send function signature will contain this type as const reference"""
     def __init__(self, type, name, attributes=Attributes()):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attributes = attributes
 
     def __str__(self):
