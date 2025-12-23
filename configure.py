@@ -2805,38 +2805,35 @@ def write_build_file(f,
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write('build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n'
-                .format(**locals()))
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
-        f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = seastar\n'.format(**locals()))
-        f.write('build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n'
-                .format(**locals()))
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
-        f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = seastar_testing\n'.format(**locals()))
-        f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_testing\n')
+        f.write(f'  profile_dep = {profile_dep}\n')
 
         for lib in abseil_libs:
-            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n'.format(**locals()))
-            f.write('  pool = submodule_pool\n')
-            f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
-            f.write('  target = {lib}\n'.format(**locals()))
-            f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
+            f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
+            f.write(f'  pool = submodule_pool\n')
+            f.write(f'  subdir = $builddir/{mode}/abseil\n')
+            f.write(f'  target = {lib}\n')
+            f.write(f'  profile_dep = {profile_dep}\n')
 
         f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
 
-        f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n'
-                .format(**locals()))
+        f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = submodule_pool\n')
-        f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = iotune\n'.format(**locals()))
-        f.write('  profile_dep = {profile_dep}\n'.format(**locals()))
-        f.write(textwrap.dedent('''\
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = iotune\n')
+        f.write(f'  profile_dep = {profile_dep}\n')
+        f.write(textwrap.dedent(f'''\
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             build $builddir/{mode}/iotune.stripped: strip $builddir/{mode}/iotune
             build $builddir/{mode}/iotune.debug: phony $builddir/{mode}/iotune.stripped
-            ''').format(**locals()))
+            '''))
         if args.dist_only:
             include_scylla_and_iotune = ''
             include_scylla_and_iotune_stripped = ''
@@ -2845,16 +2842,16 @@ def write_build_file(f,
             include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf'
             include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped'
             include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug'
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter | always\n'.format(**locals()))
-        f.write('  mode = {mode}\n'.format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.stripped | always\n'.format(**locals()))
-        f.write('  mode = {mode}\n'.format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz: debuginfo_package {include_scylla_and_iotune_debug} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.debug | always\n'.format(**locals()))
-        f.write('  mode = {mode}\n'.format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz\n'.format(**locals()))
-        f.write('  mode = {mode}\n'.format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz\n'.format(**locals()))
-        f.write('  mode = {mode}\n'.format(**locals()))
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter | always\n')
+        f.write(f'  mode = {mode}\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.stripped | always\n')
+        f.write(f'  mode = {mode}\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz: debuginfo_package {include_scylla_and_iotune_debug} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.debug | always\n')
+        f.write(f'  mode = {mode}\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
+        f.write(f'  mode = {mode}\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
+        f.write(f'  mode = {mode}\n')
 
         f.write(f'build $builddir/dist/{mode}/redhat: rpmbuild $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'  mode = {mode}\n')
