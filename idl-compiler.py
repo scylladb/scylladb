@@ -990,7 +990,7 @@ def optional_add_methods(typ):
         added_type = param_type(typ) + "_view"
     else:
         print("non supported optional type ", typ)
-        raise "non supported optional type " + param_type(typ)
+        raise TypeError("non supported optional type " + param_type(typ))
     res = res + reindent(4, f"""
     void write(const {added_type}& obj) {{
         serialize(_out, true);
