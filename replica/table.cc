@@ -2694,6 +2694,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
     , _repair_sstable_classifier(std::move(repair_classifier))
+    , _lowest_rp(db::replay_position::max)
 {
 }
 
@@ -3460,11 +3461,23 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush() noexcept {
+future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcept {
+    if (pos && *pos < _lowest_rp) {
+        co_return;
+    }
+    // This is not 100% kosher. We assume the flush will happen, and memtable
+    // be sent to disk. Unfortunately, memtable::flush can both _not_ run, and
+    // of course also fail (and there is a permit wait before anything).
+    // We still update this threshold guard, as doing more ranged flushes
+    // here probably would not help, and waiting would negate the point of
+    // the guard anyway.
+    auto old_low = std::exchange(_lowest_rp, db::replay_position::max);
     try {
-        return _memtables->flush();
+        co_await _memtables->flush();
     } catch (...) {
-        return current_exception_as_future<>();
+        // If we fail, we need to restore this. We might still see data loss though.
+        _lowest_rp = std::min(old_low, _lowest_rp);
+        throw;
     }
 }
 
@@ -3491,17 +3504,13 @@ size_t storage_group::memtable_count() const {
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
-    if (pos && *pos < _flush_rp) {
-        co_return;
-    }
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
         co_return;
     }
     auto op = _pending_flushes_phaser.start();
-    auto fp = _highest_rp;
-    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::flush));
-    _flush_rp = std::max(_flush_rp, fp);
+    // no std::bind_back in the clang version I'm on... :-(
+    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
 }
 
 bool storage_group::can_flush() const {
@@ -3862,6 +3871,11 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     check_valid_rp(rp);
     try {
         cg.memtables()->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        // keep track of lowest written RP in compaction group. This is the new
+        // flush range guard.
+        cg._lowest_rp = std::min(cg._lowest_rp, rp);
+        // must also retain highest RP in table, since this is required for
+        // truncation etc.
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
