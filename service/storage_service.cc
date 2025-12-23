@@ -5787,7 +5787,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     } else {
                                         dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                             locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
+                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, session);
                                     }
                                 }));
                                 co_await task->done();
@@ -5827,7 +5827,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, locator::host_id{replaced_id.uuid()});
+                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, session, locator::host_id{replaced_id.uuid()});
                                 }
                             }));
                             co_await task->done();
@@ -5891,7 +5891,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
 >>>>>>> 3fe596d556 (service: pass topology guard to RBNO)
                             } else {
-                                return removenode_with_stream(id, _topology_state_machine._topology.session, as);
+                                return removenode_with_stream(id, session, as);
                             }
                         }));
                         co_await task->done();
@@ -5932,8 +5932,16 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 >>>>>>> 3fe596d556 (service: pass topology guard to RBNO)
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
+<<<<<<< HEAD
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_host_ids()));
+||||||| parent of 2be5ee9f9d (service: use session variable for streaming)
+                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
+                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
+=======
+                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, session);
+                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
+>>>>>>> 2be5ee9f9d (service: use session variable for streaming)
                                 if (source_dc != "") {
                                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
                                 }
