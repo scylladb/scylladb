@@ -1,6 +1,13 @@
 find_program(CARGO cargo
   REQUIRED)
 
+# Set up RUSTC_WRAPPER for sccache support if configured
+if(Scylla_RUSTC_WRAPPER)
+  set(RUSTC_WRAPPER_ENV "RUSTC_WRAPPER=${Scylla_RUSTC_WRAPPER}")
+else()
+  set(RUSTC_WRAPPER_ENV "")
+endif()
+
 function(add_rust_library name)
   # used for profiles defined in Cargo.toml
   if(CMAKE_CONFIGURATION_TYPES)
@@ -16,7 +23,7 @@ function(add_rust_library name)
   set(library ${target_dir}/lib${name}.a)
   add_custom_command(
     OUTPUT ${library}
-    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${CARGO} build --locked --target-dir=${target_dir} --profile=${profile}
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --target-dir=${target_dir} --profile=${profile}
     COMMAND ${CMAKE_COMMAND} -E copy ${target_dir}/${profile}/lib${name}.a ${library}
     DEPENDS Cargo.lock
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

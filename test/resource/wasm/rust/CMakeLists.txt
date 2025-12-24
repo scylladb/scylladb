@@ -3,6 +3,13 @@ find_program(CARGO cargo
 find_program(RUSTC rustc
   REQUIRED)
 
+# Set up RUSTC_WRAPPER for sccache support if configured
+if(Scylla_RUSTC_WRAPPER)
+  set(RUSTC_WRAPPER_ENV "RUSTC_WRAPPER=${Scylla_RUSTC_WRAPPER}")
+else()
+  set(RUSTC_WRAPPER_ENV "")
+endif()
+
 function(pick_rustc_target output_var candidates)
   execute_process(
     COMMAND
@@ -33,6 +40,7 @@ function(compile_rust_to_wasm target input)
   add_custom_command(
     OUTPUT ${output}
     COMMAND
+      ${CMAKE_COMMAND} -E env ${RUSTC_WRAPPER_ENV}
       ${CARGO} build
       --target=${target}
       --example=${basename}
