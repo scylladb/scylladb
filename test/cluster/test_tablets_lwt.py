@@ -317,15 +317,15 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (key int PRIMARY KEY, val int)")
         await cql.run_async(f"INSERT INTO {ks}.test (key, val) VALUES(1, 0)")
-        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+        with pytest.raises(InvalidRequest, match=fr"{ks}\.test.*LWT is not yet supported with tablets"):
             await cql.run_async(f"INSERT INTO {ks}.test (key, val) VALUES(1, 1) IF NOT EXISTS")
         # The query is rejected during the execution phase,
         # so preparing the LWT query is expected to succeed.
         stmt = cql.prepare(
             f"UPDATE {ks}.test SET val = 1 WHERE KEY = ? IF EXISTS")
-        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+        with pytest.raises(InvalidRequest, match=fr"{ks}\.test.*LWT is not yet supported with tablets"):
             await cql.run_async(stmt, [1])
-        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+        with pytest.raises(InvalidRequest, match=fr"{ks}\.test.*LWT is not yet supported with tablets"):
             await cql.run_async(f"DELETE FROM {ks}.test WHERE key = 1 IF EXISTS")
         res = await cql.run_async(f"SELECT val FROM {ks}.test WHERE key = 1")
         assert res[0].val == 0

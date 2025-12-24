@@ -194,7 +194,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         await stop_task
         # During shutdown, errors mentioning 'seastar::abort_requested_exception' is expected as we do abort the compaction midway.
         # Verify that the shutdown completed without any other unexpected errors
-        assert len(await log.grep(expr="ERROR .*", filter_expr=".* seastar::abort_requested_exception \(abort requested\)", from_mark=mark)) == 0
+        assert len(await log.grep(expr="ERROR .*", filter_expr=r".* seastar::abort_requested_exception \(abort requested\)", from_mark=mark)) == 0
 
         # For dropping the keyspace
         await manager.server_start(server.server_id)

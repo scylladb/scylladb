@@ -800,7 +800,7 @@ def test_udt_sorting(scylla_only, cql, test_keyspace, random_seed):
                     if row.type == "type":
                         # Extract UDTs used in current UDT
                         # Names of all UDTs begin with `unique_name_prefix`
-                        for it in re.finditer(f"<({unique_name_prefix}[^\s\>]+)>", row.create_statement):
+                        for it in re.finditer(fr"<({unique_name_prefix}[^\s\>]+)>", row.create_statement):
                             assert f"{test_keyspace}.{it.group(1)}" in visited_udts
                         visited_udts.add(f"{row.keyspace_name}.{row.name}")
                 
