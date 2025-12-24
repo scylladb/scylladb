@@ -9,6 +9,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <variant>
 #include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/util/optimized_optional.hh>
@@ -1188,6 +1189,12 @@ inline void check_row_key(const schema& s, position_in_partition_view pos, is_du
     }
 }
 
+// Returns true if the schema has no clustering keys, meaning partitions can have at most one row.
+// When true, mutation_partition uses std::optional<deletable_row> instead of full rows_type container.
+inline bool use_single_row_storage(const schema& s) {
+    return s.clustering_key_size() == 0;
+}
+
 // Represents a set of writes made to a single partition.
 //
 // The object is schema-dependent. Each instance is governed by some
@@ -1228,20 +1235,45 @@ inline void check_row_key(const schema& s, position_in_partition_view pos, is_du
 class mutation_partition final {
 public:
     using rows_type = rows_entry::container_type;
+    using rows_storage_type = std::variant<rows_type, std::optional<deletable_row>>;
     friend class size_calculator;
 private:
     tombstone _tombstone;
     lazy_row _static_row;
     bool _static_row_continuous = true;
-    rows_type _rows;
+    rows_storage_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
+    // Note: empty when using single-row storage (std::optional<deletable_row> variant)
     range_tombstone_list _row_tombstones;
 #ifdef SEASTAR_DEBUG
     table_schema_version _schema_version;
 #endif
 
     friend class converting_mutation_partition_applier;
+
+    // Returns true if this partition uses single-row storage
+    bool uses_single_row_storage() const {
+        return std::holds_alternative<std::optional<deletable_row>>(_rows);
+    }
+
+    // Get reference to rows container (multi-row storage)
+    rows_type& get_rows_storage() {
+        return std::get<rows_type>(_rows);
+    }
+
+    const rows_type& get_rows_storage() const {
+        return std::get<rows_type>(_rows);
+    }
+
+    // Get reference to single row storage
+    std::optional<deletable_row>& get_single_row_storage() {
+        return std::get<std::optional<deletable_row>>(_rows);
+    }
+
+    const std::optional<deletable_row>& get_single_row_storage() const {
+        return std::get<std::optional<deletable_row>>(_rows);
+    }
 public:
     struct copy_comparators_only {};
     struct incomplete_tag {};
@@ -1251,14 +1283,14 @@ public:
         return mutation_partition(incomplete_tag(), s, t);
     }
     mutation_partition(const schema& s)
-        : _rows()
+        : _rows(use_single_row_storage(s) ? rows_storage_type(std::optional<deletable_row>{}) : rows_storage_type(rows_type{}))
         , _row_tombstones(s)
 #ifdef SEASTAR_DEBUG
         , _schema_version(s.version())
 #endif
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
-        : _rows()
+        : _rows(other._rows.index() == 0 ? rows_storage_type(rows_type{}) : rows_storage_type(std::optional<deletable_row>{}))
         , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
 #ifdef SEASTAR_DEBUG
         , _schema_version(other._schema_version)
