@@ -151,9 +151,8 @@ class MinioServer:
             yield random.randint(min_port, max_port)
 
     @staticmethod
-    def create_conf(address: str, port: int, region: str):
+    def create_conf(address: str, region: str):
         endpoint = {'name': address,
-                    'port': port,
                     # don't put credentials here. We're exporing env vars, which should
                     # be picked up properly by scylla.
                     # https://github.com/scylladb/scylla-pkg/issues/3845
@@ -161,7 +160,7 @@ class MinioServer:
                     #'aws_secret_access_key': secret_key,
                     'aws_region': region,
                     'iam_role_arn': '',
-                    'use_https': False
+                    'type': 's3'
                     }
         return [endpoint]
 
