@@ -72,22 +72,6 @@ future<> lister::scan_dir(fs::path dir, lister::dir_entry_types type, lister::sh
     });
 }
 
-future<> lister::rmdir(fs::path dir) {
-    // first, kill the contents of the directory
-    return lister::scan_dir(dir, {}, show_hidden::yes, [] (fs::path parent_dir, directory_entry de) mutable {
-        fs::path current_entry_path(parent_dir / de.name.c_str());
-
-        if (de.type.value() == directory_entry_type::directory) {
-            return rmdir(std::move(current_entry_path));
-        } else {
-            return remove_file(current_entry_path.native());
-        }
-    }).then([dir] {
-        // ...then kill the directory itself
-        return remove_file(dir.native());
-    });
-}
-
 directory_lister::~directory_lister() {
     if (_gen) {
         on_internal_error(llogger, "directory_lister not closed when destroyed");
