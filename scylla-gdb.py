@@ -4109,6 +4109,16 @@ class scylla_fiber(gdb.Command):
                     return res
             return None
 
+        # Coroutines need special handling as they allocate the future object on their frame.
+        if name.strip().endswith('[clone .resume]'):
+            self._maybe_log(f"Current task is a coroutine, trying to find the promise in the coroutine frame: 0x{ptr_meta.ptr:x}+{ptr_meta.size}\n", verbose)
+            # Skip the first two pointers, these are the coroutine resume and destroy function pointers.
+            for maybe_tptr in range(ptr_meta.ptr + 2 * _vptr_type().sizeof, ptr_meta.ptr + ptr_meta.size, _vptr_type().sizeof):
+                res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
+                if res is not None:
+                    return res
+            return None
+
         if name.startswith('vtable for seastar::internal::when_all_state'):
             when_all_state_base_ptr_type = gdb.lookup_type('seastar::internal::when_all_state_base').pointer()
             when_all_state_base = gdb.Value(int(ptr_meta.ptr)).reinterpret_cast(when_all_state_base_ptr_type)
@@ -4195,6 +4205,9 @@ class scylla_fiber(gdb.Command):
         parser.add_argument("--force-fallback-mode", action="store_true", default=False,
                 help="Force fallback mode to be used, that is, scan a fixed-size region of memory"
                 " (configurable via --scanned-region-size), instead of relying on `scylla ptr` for determining the size of the task objects.")
+        parser.add_argument("--direction", action="store", choices=['forward', 'backward', 'both'], default='both',
+                help="Direction in which to walk the continuation chain. 'forward' walks futures waiting on the given task,"
+                " 'backward' walks futures the given task is waiting on, 'both' does both.")
         parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
 
         try:
@@ -4224,14 +4237,20 @@ class scylla_fiber(gdb.Command):
                 gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(initial_task_ptr))
                 return
 
-            backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            if (args.direction == 'backward' or args.direction == 'both'):
+                backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            else:
+                backwards_fiber = []
 
             for i, task_info in enumerate(reversed(backwards_fiber)):
                 format_task_line(i - len(backwards_fiber), task_info)
 
             format_task_line(0, this_task)
 
-            forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            if (args.direction == 'forward' or args.direction == 'both'):
+                forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            else:
+                forward_fiber = []
 
             for i, task_info in enumerate(forward_fiber):
                 format_task_line(i + 1, task_info)
@@ -5851,6 +5870,18 @@ class scylla_read_stats(gdb.Command):
         gdb.Command.__init__(self, 'scylla read-stats', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     @staticmethod
+    def foreach_permit(semaphore, fn):
+        """Mirror of reader_concurrency_semaphore::foreach_permit()"""
+        for permit_list in (
+                semaphore['_permit_list'],
+                semaphore['_wait_list']['_admission_queue'],
+                semaphore['_wait_list']['_memory_queue'],
+                semaphore['_ready_list'],
+                semaphore['_inactive_reads']):
+            for permit in intrusive_list(permit_list):
+                fn(permit)
+
+    @staticmethod
     def dump_reads_from_semaphore(semaphore):
         try:
             permit_list = semaphore['_permit_list']
@@ -5864,7 +5895,7 @@ class scylla_read_stats(gdb.Command):
         permit_summaries = defaultdict(permit_stats)
         total = permit_stats()
 
-        for permit in intrusive_list(permit_list):
+        def summarize_permit(permit):
             schema_name = "*.*"
             schema = permit['_schema']
             try:
@@ -5884,6 +5915,8 @@ class scylla_read_stats(gdb.Command):
             permit_summaries[(schema_name, description, state)].add(summary)
             total.add(summary)
 
+        scylla_read_stats.foreach_permit(semaphore, summarize_permit)
+
         if not permit_summaries:
             return
 
@@ -5893,7 +5926,9 @@ class scylla_read_stats(gdb.Command):
         inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
         waiters = int(semaphore["_stats"]["waiters"])
 
-        gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
+        gdb.write("Semaphore ({}*) 0x{:x} {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
+                semaphore.type.name,
+                int(semaphore.address),
                 semaphore_name,
                 initial_count - int(semaphore['_resources']['count']), initial_count,
                 initial_memory - int(semaphore['_resources']['memory']), initial_memory,
