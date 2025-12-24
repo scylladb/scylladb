@@ -1301,6 +1301,8 @@ public:
     mutation_partition(const mutation_partition&, const schema&, query::clustering_key_filter_ranges);
     mutation_partition(mutation_partition&&, const schema&, query::clustering_key_filter_ranges);
     ~mutation_partition();
+    // Returns the mutation_partition containing the given rows_type.
+    // Can only be used when the mutation_partition uses multi-row storage.
     static mutation_partition& container_of(rows_type&);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
@@ -1494,9 +1496,31 @@ public:
     const lazy_row& static_row() const { return _static_row; }
 
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
-    const rows_type& clustered_rows() const noexcept { return _rows; }
-    utils::immutable_collection<rows_type> clustered_rows() noexcept { return _rows; }
-    rows_type& mutable_clustered_rows() noexcept { return _rows; }
+    // For single-row storage (clustering_key_size() == 0), returns an empty container.
+    // Callers should check uses_single_row_storage() and use get_single_row() for single-row case.
+    const rows_type& clustered_rows() const noexcept { 
+        if (uses_single_row_storage()) {
+            static const rows_type empty_rows;
+            return empty_rows;
+        }
+        return get_rows_storage(); 
+    }
+    utils::immutable_collection<rows_type> clustered_rows() noexcept { 
+        return const_cast<const mutation_partition*>(this)->clustered_rows();
+    }
+    rows_type& mutable_clustered_rows() noexcept { 
+        // Should only be called when NOT using single-row storage
+        return get_rows_storage(); 
+    }
+
+    // Access the single row when using single-row storage (clustering_key_size() == 0)
+    const std::optional<deletable_row>& get_single_row() const {
+        return get_single_row_storage();
+    }
+
+    std::optional<deletable_row>& get_single_row() {
+        return get_single_row_storage();
+    }
 
     const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
     utils::immutable_collection<range_tombstone_list> row_tombstones() noexcept { return _row_tombstones; }
@@ -1514,8 +1538,14 @@ public:
     rows_type::iterator upper_bound(const schema& schema, const query::clustering_range& r);
     std::ranges::subrange<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
     // Returns an iterator range of rows_entry, with only non-dummy entries.
+    // For single-row storage, returns an empty range.
     auto non_dummy_rows() const {
-        return std::ranges::subrange(_rows.begin(), _rows.end())
+        if (uses_single_row_storage()) {
+            static const rows_type empty_rows;
+            return std::ranges::subrange(empty_rows.begin(), empty_rows.end())
+                | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
+        }
+        return std::ranges::subrange(get_rows_storage().begin(), get_rows_storage().end())
             | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
     void accept(const schema&, mutation_partition_visitor&) const;

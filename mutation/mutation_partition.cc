@@ -45,7 +45,9 @@ mutation_partition::mutation_partition(const schema& s, const mutation_partition
         : _tombstone(x._tombstone)
         , _static_row(s, column_kind::static_column, x._static_row)
         , _static_row_continuous(x._static_row_continuous)
-        , _rows()
+        , _rows(use_single_row_storage(s) ? 
+            rows_storage_type(std::optional<deletable_row>{}) : 
+            rows_storage_type(rows_type{}))
         , _row_tombstones(x._row_tombstones)
 #ifdef SEASTAR_DEBUG
         , _schema_version(s.version())
@@ -54,10 +56,30 @@ mutation_partition::mutation_partition(const schema& s, const mutation_partition
 #ifdef SEASTAR_DEBUG
     SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
-    auto cloner = [&s] (const rows_entry* x) -> rows_entry* {
-        return current_allocator().construct<rows_entry>(s, *x);
-    };
-    _rows.clone_from(x._rows, cloner, current_deleter<rows_entry>());
+    if (use_single_row_storage(s)) {
+        // Copy single row if it exists
+        if (x.uses_single_row_storage()) {
+            const auto& x_row = x.get_single_row_storage();
+            if (x_row) {
+                get_single_row_storage() = deletable_row(s, *x_row);
+            }
+        } else if (!x.get_rows_storage().empty()) {
+            // Converting from multi-row to single-row - take the first row
+            // This shouldn't normally happen as schema doesn't change this way
+            on_internal_error(mplog, "mutation_partition: cannot convert multi-row partition to single-row");
+        }
+    } else {
+        // Multi-row storage
+        if (x.uses_single_row_storage()) {
+            // Converting from single-row to multi-row - this shouldn't normally happen
+            on_internal_error(mplog, "mutation_partition: cannot convert single-row partition to multi-row");
+        } else {
+            auto cloner = [&s] (const rows_entry* x) -> rows_entry* {
+                return current_allocator().construct<rows_entry>(s, *x);
+            };
+            get_rows_storage().clone_from(x.get_rows_storage(), cloner, current_deleter<rows_entry>());
+        }
+    }
 }
 
 mutation_partition::mutation_partition(const mutation_partition& x, const schema& schema,
@@ -65,7 +87,9 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         : _tombstone(x._tombstone)
         , _static_row(schema, column_kind::static_column, x._static_row)
         , _static_row_continuous(x._static_row_continuous)
-        , _rows()
+        , _rows(use_single_row_storage(schema) ? 
+            rows_storage_type(std::optional<deletable_row>{}) : 
+            rows_storage_type(rows_type{}))
         , _row_tombstones(x._row_tombstones, range_tombstone_list::copy_comparator_only())
 #ifdef SEASTAR_DEBUG
         , _schema_version(schema.version())
@@ -74,19 +98,37 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
 #ifdef SEASTAR_DEBUG
     SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
-    try {
-        for(auto&& r : ck_ranges) {
-            for (const rows_entry& e : x.range(schema, r)) {
-                auto ce = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(schema, e));
-                _rows.insert_before_hint(_rows.end(), std::move(ce), rows_entry::tri_compare(schema));
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: just copy the row if it exists
+        if (x.uses_single_row_storage()) {
+            const auto& x_row = x.get_single_row_storage();
+            if (x_row) {
+                get_single_row_storage() = deletable_row(schema, *x_row);
             }
-            for (auto&& rt : x._row_tombstones.slice(schema, r)) {
-                _row_tombstones.apply(schema, rt.tombstone());
+        } else {
+            // Filtering from multi-row - shouldn't happen with consistent schema
+            on_internal_error(mplog, "mutation_partition: filtering from multi-row to single-row storage");
+        }
+    } else {
+        // Multi-row storage with filtering
+        if (x.uses_single_row_storage()) {
+            on_internal_error(mplog, "mutation_partition: filtering from single-row to multi-row storage");
+        } else {
+            try {
+                for(auto&& r : ck_ranges) {
+                    for (const rows_entry& e : x.range(schema, r)) {
+                        auto ce = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(schema, e));
+                        get_rows_storage().insert_before_hint(get_rows_storage().end(), std::move(ce), rows_entry::tri_compare(schema));
+                    }
+                    for (auto&& rt : x._row_tombstones.slice(schema, r)) {
+                        _row_tombstones.apply(schema, rt.tombstone());
+                    }
+                }
+            } catch (...) {
+                get_rows_storage().clear_and_dispose(current_deleter<rows_entry>());
+                throw;
             }
         }
-    } catch (...) {
-        _rows.clear_and_dispose(current_deleter<rows_entry>());
-        throw;
     }
 }
 
