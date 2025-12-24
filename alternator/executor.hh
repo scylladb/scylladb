@@ -17,11 +17,13 @@
 #include "service/client_state.hh"
 #include "service_permit.hh"
 #include "db/timeout_clock.hh"
+#include "db/config.hh"
 
 #include "alternator/error.hh"
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "utils/simple_value_with_expiry.hh"
 
 #include "tracing/trace_state.hh"
 
@@ -41,6 +43,7 @@ namespace cql3::selection {
 namespace service {
     class storage_proxy;
     class cas_shard;
+    class storage_service;
 }
 
 namespace cdc {
@@ -57,6 +60,7 @@ class schema_builder;
 
 namespace alternator {
 
+enum class table_status;
 class rmw_operation;
 class put_or_delete_item;
 
@@ -136,6 +140,7 @@ class expression_cache;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
+    service::storage_service& _ss;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
@@ -148,6 +153,11 @@ class executor : public peering_sharded_service<executor> {
 
     std::unique_ptr<parsed::expression_cache> _parsed_expression_cache;
 
+    struct describe_table_info_manager;
+    std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
+
+    future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
+    future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
     using client_state = service::client_state;
     // request_return_type is the return type of the executor methods, which
@@ -173,6 +183,7 @@ public:
 
     executor(gms::gossiper& gossiper,
              service::storage_proxy& proxy,
+             service::storage_service& ss,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
              cdc::metadata& cdc_metadata,
@@ -220,6 +231,8 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr, const std::map<sstring, sstring> *tags = nullptr);
+    future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization, const db::tablets_mode_t::mode tablets_mode);
 
     future<> do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,

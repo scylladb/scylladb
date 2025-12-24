@@ -271,6 +271,12 @@ is different, or can be configured in Alternator:
   So for example, if you create a table whose name is 192 characters, you
   can't create a GSI whose name is longer than 29 characters.
 
+* DynamoDB's DescribeTable will return information about the table. According to
+  AWS documentation, fields TableSizeBytes, IndexSizeBytes and ItemCount can
+  lag behind by up to 6 hours.
+  The `alternator_describe_table_info_cache_validity_in_seconds` parameter allows
+  users to change this timeout - the default value in seconds is set to 21600 (6 hours).
+
 ## Experimental API features
 
 Some DynamoDB API features are supported by Alternator, but considered
@@ -375,11 +381,11 @@ they should be easy to detect. Here is a list of these unimplemented features:
   another cache in front of the it. We wrote more about this here:
   <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
 
-* The DescribeTable is missing information about size estimates, and 
-  also part of the information about indexes enabled on the table.
+* The DescribeTable is missing some information about size estimates
+  (IndexSizeBytes and ItemCount - TableSizeBytes is available), and also
+  part of the information about indexes enabled on the table.
   <https://github.com/scylladb/scylla/issues/5320>
   <https://github.com/scylladb/scylla/issues/7550>
-  <https://github.com/scylladb/scylla/issues/7551>
 
 * The PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE expressions)
   and the operations ExecuteStatement, BatchExecuteStatement and
