@@ -63,7 +63,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
     await injection_handler.message()
 
     matches = await leader_log_file.grep("topology change coordinator fiber got error "
-                                         f"data_dictionary::no_such_keyspace \(Can't find a keyspace {ks}\)")
+                                         fr"data_dictionary::no_such_keyspace \(Can't find a keyspace {ks}\)")
     assert not matches
 
     with pytest.raises(InvalidRequest, match=f"Can't ALTER keyspace {ks}, keyspace doesn't exist|Can't find a keyspace {ks}") as e:
