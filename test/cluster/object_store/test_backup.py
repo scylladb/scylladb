@@ -941,6 +941,10 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
         res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
 
         assert res[0].count == expected_rows, f"number of rows after restore is incorrect: {res[0].count}"
+        log = await manager.server_open_log(server.server_id)
+        await log.wait_for("fully contained SSTables to local node from object storage", timeout=10)
+        # just make sure we had partially contained sstables as well
+        await log.wait_for("partially contained SSTables", timeout=10)
 
 @pytest.mark.asyncio
 async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClient, object_storage):
