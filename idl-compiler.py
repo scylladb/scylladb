@@ -405,8 +405,8 @@ class RpcVerbParam(ASTBase):
     argument as an `foreign_ptr<lw_shared_ptr<>>`
     If the [[ref]] attribute is specified the send function signature will contain this type as const reference"""
     def __init__(self, type, name, attributes=Attributes()):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attributes = attributes
 
     def __str__(self):
@@ -990,7 +990,7 @@ def optional_add_methods(typ):
         added_type = param_type(typ) + "_view"
     else:
         print("non supported optional type ", typ)
-        raise "non supported optional type " + param_type(typ)
+        raise TypeError("non supported optional type " + param_type(typ))
     res = res + reindent(4, f"""
     void write(const {added_type}& obj) {{
         serialize(_out, true);
