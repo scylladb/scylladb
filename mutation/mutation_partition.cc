@@ -146,14 +146,20 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
 #ifdef SEASTAR_DEBUG
     SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
-    {
-        auto deleter = current_deleter<rows_entry>();
-        auto it = _rows.begin();
-        for (auto&& range : ck_ranges.ranges()) {
-            _rows.erase_and_dispose(it, lower_bound(schema, range), deleter);
-            it = upper_bound(schema, range);
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: no filtering needed, row either exists or doesn't
+        // The move constructor has already moved the row if it exists
+    } else {
+        // Multi-row storage: filter the rows
+        if (!uses_single_row_storage()) {
+            auto deleter = current_deleter<rows_entry>();
+            auto it = get_rows_storage().begin();
+            for (auto&& range : ck_ranges.ranges()) {
+                get_rows_storage().erase_and_dispose(it, lower_bound(schema, range), deleter);
+                it = upper_bound(schema, range);
+            }
+            get_rows_storage().erase_and_dispose(it, get_rows_storage().end(), deleter);
         }
-        _rows.erase_and_dispose(it, _rows.end(), deleter);
     }
     {
         for (auto&& range : ck_ranges.ranges()) {
@@ -169,7 +175,11 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
 }
 
 mutation_partition::~mutation_partition() {
-    _rows.clear_and_dispose(current_deleter<rows_entry>());
+    if (uses_single_row_storage()) {
+        // Single-row storage: optional destructor handles cleanup
+    } else {
+        get_rows_storage().clear_and_dispose(current_deleter<rows_entry>());
+    }
 }
 
 mutation_partition&
@@ -183,10 +193,14 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 
 void mutation_partition::ensure_last_dummy(const schema& s) {
     check_schema(s);
-    if (_rows.empty() || !_rows.rbegin()->is_last_dummy()) {
+    if (uses_single_row_storage()) {
+        // Single-row storage doesn't use dummy entries
+        return;
+    }
+    if (get_rows_storage().empty() || !get_rows_storage().rbegin()->is_last_dummy()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
-        _rows.insert_before(_rows.end(), std::move(e));
+        get_rows_storage().insert_before(get_rows_storage().end(), std::move(e));
     }
 }
 
@@ -2261,15 +2275,22 @@ public:
 mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const schema& s, tombstone t)
     : _tombstone(t)
     , _static_row_continuous(!s.has_static_columns())
-    , _rows()
+    , _rows(use_single_row_storage(s) ? 
+        rows_storage_type(std::optional<deletable_row>{}) : 
+        rows_storage_type(rows_type{}))
     , _row_tombstones(s)
 #ifdef SEASTAR_DEBUG
     , _schema_version(s.version())
 #endif
 {
-    auto e = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
-    _rows.insert_before(_rows.end(), std::move(e));
+    if (use_single_row_storage(s)) {
+        // Single-row storage: no dummy entries needed, leave row as empty optional
+    } else {
+        // Multi-row storage: add last dummy entry for discontinuous partition
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
+        get_rows_storage().insert_before(get_rows_storage().end(), std::move(e));
+    }
 }
 
 bool mutation_partition::is_fully_continuous() const {

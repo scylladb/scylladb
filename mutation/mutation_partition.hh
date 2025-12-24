@@ -1579,7 +1579,21 @@ private:
 
 inline
 mutation_partition& mutation_partition::container_of(rows_type& rows) {
-    return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition::_rows);
+    // This method can only be called when using multi-row storage (rows_type variant alternative).
+    // With std::variant, when rows_type is the active alternative (index 0), it's stored at the beginning of the variant.
+    // We can use pointer arithmetic to get back to the mutation_partition.
+    
+    // Calculate offset from rows_type to the containing variant
+    // The rows reference should be the active rows_type inside the variant
+    static_assert(std::is_same_v<std::variant_alternative_t<0, rows_storage_type>, rows_type>,
+                  "rows_type must be the first alternative in rows_storage_type");
+    
+    // Get address of the variant containing this rows_type
+    // When rows_type is active (index 0), it's at offset 0 in the variant's storage
+    rows_storage_type* variant_ptr = reinterpret_cast<rows_storage_type*>(&rows);
+    
+    // Now get the mutation_partition from the variant
+    return *boost::intrusive::get_parent_from_member(variant_ptr, &mutation_partition::_rows);
 }
 
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
