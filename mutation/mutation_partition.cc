@@ -560,97 +560,178 @@ void mutation_partition::apply_insert(const schema& s, clustering_key_view key, 
     clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
 }
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
-    auto e = alloc_strategy_unique_ptr<rows_entry>(
-        current_allocator().construct<rows_entry>(key, std::move(row)));
-    _rows.insert_before_hint(_rows.end(), std::move(e), rows_entry::tri_compare(s));
+    if (use_single_row_storage(s)) {
+        // Single-row storage: just set the row
+        get_single_row_storage() = std::move(row);
+    } else {
+        // Multi-row storage: insert into B-tree
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(key, std::move(row)));
+        get_rows_storage().insert_before_hint(get_rows_storage().end(), std::move(e), rows_entry::tri_compare(s));
+    }
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
     check_schema(s);
-    auto e = alloc_strategy_unique_ptr<rows_entry>(
-        current_allocator().construct<rows_entry>(s, key, row));
-    _rows.insert_before_hint(_rows.end(), std::move(e), rows_entry::tri_compare(s));
+    if (use_single_row_storage(s)) {
+        // Single-row storage: just copy the row
+        get_single_row_storage() = row;
+    } else {
+        // Multi-row storage: insert into B-tree
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(s, key, row));
+        get_rows_storage().insert_before_hint(get_rows_storage().end(), std::move(e), rows_entry::tri_compare(s));
+    }
 }
 
 const row*
 mutation_partition::find_row(const schema& s, const clustering_key& key) const {
     check_schema(s);
-    auto i = _rows.find(key, rows_entry::tri_compare(s));
-    if (i == _rows.end()) {
+    if (use_single_row_storage(s)) {
+        // Single-row storage: return the single row's cells if it exists
+        const auto& row_opt = get_single_row_storage();
+        if (row_opt) {
+            return &row_opt->cells();
+        }
         return nullptr;
+    } else {
+        // Multi-row storage: search in B-tree
+        auto i = get_rows_storage().find(key, rows_entry::tri_compare(s));
+        if (i == get_rows_storage().end()) {
+            return nullptr;
+        }
+        return &i->row().cells();
     }
-    return &i->row().cells();
 }
 
 deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
     check_schema(s);
     check_row_key(s, key, is_dummy::no);
-    auto i = _rows.find(key, rows_entry::tri_compare(s));
-    if (i == _rows.end()) {
-        auto e = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(std::move(key)));
-        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+    
+    if (use_single_row_storage(s)) {
+        // Single-row storage: create row if it doesn't exist
+        auto& row_opt = get_single_row_storage();
+        if (!row_opt) {
+            row_opt = deletable_row();
+        }
+        return *row_opt;
+    } else {
+        // Multi-row storage: find or insert in B-tree
+        auto i = get_rows_storage().find(key, rows_entry::tri_compare(s));
+        if (i == get_rows_storage().end()) {
+            auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(std::move(key)));
+            i = get_rows_storage().insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+        }
+        return i->row();
     }
-    return i->row();
 }
 
 deletable_row&
 mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
     check_schema(s);
     check_row_key(s, key, is_dummy::no);
-    auto i = _rows.find(key, rows_entry::tri_compare(s));
-    if (i == _rows.end()) {
-        auto e = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(key));
-        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+    
+    if (use_single_row_storage(s)) {
+        // Single-row storage: create row if it doesn't exist
+        auto& row_opt = get_single_row_storage();
+        if (!row_opt) {
+            row_opt = deletable_row();
+        }
+        return *row_opt;
+    } else {
+        // Multi-row storage: find or insert in B-tree
+        auto i = get_rows_storage().find(key, rows_entry::tri_compare(s));
+        if (i == get_rows_storage().end()) {
+            auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(key));
+            i = get_rows_storage().insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+        }
+        return i->row();
     }
-    return i->row();
 }
 
 deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     check_schema(s);
     check_row_key(s, key, is_dummy::no);
-    auto i = _rows.find(key, rows_entry::tri_compare(s));
-    if (i == _rows.end()) {
-        auto e = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(key));
-        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+    
+    if (use_single_row_storage(s)) {
+        // Single-row storage: create row if it doesn't exist
+        auto& row_opt = get_single_row_storage();
+        if (!row_opt) {
+            row_opt = deletable_row();
+        }
+        return *row_opt;
+    } else {
+        // Multi-row storage: find or insert in B-tree
+        auto i = get_rows_storage().find(key, rows_entry::tri_compare(s));
+        if (i == get_rows_storage().end()) {
+            auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(key));
+            i = get_rows_storage().insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+        }
+        return i->row();
     }
-    return i->row();
 }
 
 rows_entry&
 mutation_partition::clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     check_schema(s);
     check_row_key(s, pos, dummy);
-    auto i = _rows.find(pos, rows_entry::tri_compare(s));
-    if (i == _rows.end()) {
+    
+    if (use_single_row_storage(s)) {
+        // Single-row storage doesn't use rows_entry - this shouldn't be called
+        on_internal_error(mplog, "mutation_partition::clustered_rows_entry() called with single-row storage");
+    }
+    
+    auto i = get_rows_storage().find(pos, rows_entry::tri_compare(s));
+    if (i == get_rows_storage().end()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
-        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+        i = get_rows_storage().insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
     return *i;
 }
 
 deletable_row&
 mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
-    return clustered_rows_entry(s, pos, dummy, continuous).row();
+    if (use_single_row_storage(s)) {
+        // Single-row storage: ignore dummy/continuous flags, just get/create the row
+        check_row_key(s, pos, dummy);
+        auto& row_opt = get_single_row_storage();
+        if (!row_opt) {
+            row_opt = deletable_row();
+        }
+        return *row_opt;
+    } else {
+        return clustered_rows_entry(s, pos, dummy, continuous).row();
+    }
 }
 
 deletable_row&
 mutation_partition::append_clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     check_schema(s);
     check_row_key(s, pos, dummy);
+    
+    if (use_single_row_storage(s)) {
+        // Single-row storage: just create/get the row
+        auto& row_opt = get_single_row_storage();
+        if (!row_opt) {
+            row_opt = deletable_row();
+        }
+        return *row_opt;
+    }
+    
     const auto cmp = rows_entry::tri_compare(s);
-    auto i = _rows.end();
-    if (!_rows.empty() && (cmp(*std::prev(i), pos) >= 0)) {
+    auto i = get_rows_storage().end();
+    if (!get_rows_storage().empty() && (cmp(*std::prev(i), pos) >= 0)) {
         on_internal_error(mplog, format("mutation_partition::append_clustered_row(): cannot append clustering row with key {} to the partition"
                 ", last clustering row is equal or greater: {}", pos, std::prev(i)->position()));
     }
     auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
-    i = _rows.insert_before_hint(i, std::move(e), cmp).first;
+    i = get_rows_storage().insert_before_hint(i, std::move(e), cmp).first;
 
     return i->row();
 }
@@ -1433,7 +1514,15 @@ bool mutation_partition::empty() const
     if (_tombstone.timestamp != api::missing_timestamp) {
         return false;
     }
-    return !_static_row.size() && _rows.empty() && _row_tombstones.empty();
+    if (_static_row.size() || !_row_tombstones.empty()) {
+        return false;
+    }
+    
+    if (uses_single_row_storage()) {
+        return !get_single_row_storage().has_value();
+    } else {
+        return get_rows_storage().empty();
+    }
 }
 
 bool
