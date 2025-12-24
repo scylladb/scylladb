@@ -10,6 +10,7 @@ Admin Tools
    Admin REST API </operating-scylla/rest>
    Tracing </using-scylla/tracing>
    ScyllaDB SStable </operating-scylla/admin-tools/scylla-sstable/>
+   ScyllaDB SStable Script API </operating-scylla/admin-tools/scylla-sstable-script-api/>
    ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>
    sstableloader
    cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>
