@@ -74,6 +74,7 @@
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/lock_holder.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -177,7 +178,7 @@ namespace replica {
 
 struct compaction_reenablers_and_lock_holders {
     std::vector<std::unique_ptr<compaction::compaction_reenabler>> cres;
-    std::vector<seastar::rwlock::holder> lock_holders;
+    std::vector<utils::rwlock_holder> lock_holders;
 };
 
 using shared_memtable = lw_shared_ptr<memtable>;
