@@ -475,9 +475,18 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
     check_schema(schema);
     row_tombstone t = row_tombstone(range_tombstone_for_row(schema, key));
 
-    auto j = _rows.find(key, rows_entry::tri_compare(schema));
-    if (j != _rows.end()) {
-        t.apply(j->row().deleted_at(), j->row().marker());
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: check if the single row exists and has tombstone
+        const auto& row_opt = get_single_row_storage();
+        if (row_opt) {
+            t.apply(row_opt->deleted_at(), row_opt->marker());
+        }
+    } else {
+        // Multi-row storage: search in B-tree
+        auto j = get_rows_storage().find(key, rows_entry::tri_compare(schema));
+        if (j != get_rows_storage().end()) {
+            t.apply(j->row().deleted_at(), j->row().marker());
+        }
     }
 
     return t;
@@ -739,19 +748,33 @@ mutation_partition::append_clustered_row(const schema& s, position_in_partition_
 mutation_partition::rows_type::const_iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
-    if (!r.start()) {
-        return std::cbegin(_rows);
+    
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: always return end iterator (empty range)
+        static const rows_type empty_rows;
+        return empty_rows.end();
     }
-    return _rows.lower_bound(position_in_partition_view::for_range_start(r), rows_entry::tri_compare(schema));
+    
+    if (!r.start()) {
+        return std::cbegin(get_rows_storage());
+    }
+    return get_rows_storage().lower_bound(position_in_partition_view::for_range_start(r), rows_entry::tri_compare(schema));
 }
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
-    if (!r.end()) {
-        return std::cend(_rows);
+    
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: always return end iterator (empty range)
+        static const rows_type empty_rows;
+        return empty_rows.end();
     }
-    return _rows.lower_bound(position_in_partition_view::for_range_end(r), rows_entry::tri_compare(schema));
+    
+    if (!r.end()) {
+        return std::cend(get_rows_storage());
+    }
+    return get_rows_storage().lower_bound(position_in_partition_view::for_range_end(r), rows_entry::tri_compare(schema));
 }
 
 std::ranges::subrange<mutation_partition::rows_type::const_iterator>
@@ -762,17 +785,32 @@ mutation_partition::range(const schema& schema, const query::clustering_range& r
 
 std::ranges::subrange<mutation_partition::rows_type::iterator>
 mutation_partition::range(const schema& schema, const query::clustering_range& r) {
-    return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: return empty range (rows_entry iteration not applicable)
+        static rows_type empty_rows;
+        return std::ranges::subrange(empty_rows.begin(), empty_rows.end());
+    }
+    return unconst(get_rows_storage(), static_cast<const mutation_partition*>(this)->range(schema, r));
 }
 
 mutation_partition::rows_type::iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) {
-    return unconst(_rows, static_cast<const mutation_partition*>(this)->lower_bound(schema, r));
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: return end iterator (empty range)
+        static rows_type empty_rows;
+        return empty_rows.end();
+    }
+    return unconst(get_rows_storage(), static_cast<const mutation_partition*>(this)->lower_bound(schema, r));
 }
 
 mutation_partition::rows_type::iterator
 mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) {
-    return unconst(_rows, static_cast<const mutation_partition*>(this)->upper_bound(schema, r));
+    if (use_single_row_storage(schema)) {
+        // Single-row storage: return end iterator (empty range)
+        static rows_type empty_rows;
+        return empty_rows.end();
+    }
+    return unconst(get_rows_storage(), static_cast<const mutation_partition*>(this)->upper_bound(schema, r));
 }
 
 template<typename Func>
@@ -1567,7 +1605,11 @@ mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_t
 
 uint64_t
 mutation_partition::row_count() const {
-    return _rows.calculate_size();
+    if (uses_single_row_storage()) {
+        return get_single_row_storage().has_value() ? 1 : 0;
+    } else {
+        return get_rows_storage().calculate_size();
+    }
 }
 
 rows_entry::rows_entry(rows_entry&& o) noexcept
