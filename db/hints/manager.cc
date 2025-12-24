@@ -26,6 +26,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/util/file.hh>
 
 // Boost features.
 
@@ -899,7 +900,7 @@ future<> manager::migrate_ip_directories() {
     co_await coroutine::parallel_for_each(dirs_to_remove, [] (auto& directory) -> future<> {
         try {
             manager_logger.warn("Removing hint directory {}", directory.native());
-            co_await lister::rmdir(directory);
+            co_await seastar::recursive_remove_directory(directory);
         } catch (...) {
             on_internal_error(manager_logger,
                     seastar::format("Removing a hint directory has failed. Reason: {}", std::current_exception()));
