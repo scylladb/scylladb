@@ -318,8 +318,8 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
     std::unordered_map<int32_t, replay_stats> replay_stats_per_shard;
 
-    // Use a stable `now` accross all batches, so skip/replay decisions are the
-    // same accross a while prefix of written_at (accross all ids).
+    // Use a stable `now` across all batches, so skip/replay decisions are the
+    // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
     auto batch = [this, cleanup, limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
