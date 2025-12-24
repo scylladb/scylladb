@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include "utils/log.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/sstable_directory.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
@@ -425,6 +426,19 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     });
 
     co_await storage.atomic_delete_complete(std::move(ctx));
+}
+
+future<std::unordered_set<sstring>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
+    std::unordered_set<sstring> table_names;
+
+    co_await _dir_semaphore.parallel_for_each(ssts, [&name, &table_names] (sstables::shared_sstable sstable) {
+        table_names.insert(sstable->component_basename(sstables::component_type::Data));
+        return io_check([sstable, &name] {
+            return sstable->snapshot(name);
+        });
+    });
+
+    co_return table_names;
 }
 
 future<> sstables_manager::close() {

@@ -3299,8 +3299,17 @@ private:
     }
 };
 
-future<>
-table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
+class snapshot_writer {
+public:
+    virtual future<> init() = 0;
+    virtual future<> sync() = 0;
+    virtual future<output_stream<char>> stream_for(sstring component) = 0;
+    virtual ~snapshot_writer() = default;
+};
+
+using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
+
+static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
     manifest_json manifest;
     for (const auto& fsp : file_sets) {
         for (auto& rf : *fsp) {
@@ -3308,13 +3317,7 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
         }
     }
     auto streamer = json::stream_object(std::move(manifest));
-    auto jsonfile = jsondir + "/manifest.json";
-
-    tlogger.debug("Storing manifest {}", jsonfile);
-
-    co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
-    auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
-    auto out = co_await make_file_output_stream(std::move(f));
+    auto out = co_await writer.stream_for("manifest.json");
     std::exception_ptr ex;
     try {
         co_await streamer(std::move(out));
@@ -3325,19 +3328,27 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-
-    co_await io_check(sync_directory, std::move(jsondir));
 }
 
-future<> table::write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const {
-    auto schema_desc = schema()->describe(
-            replica::make_schema_describe_helper(table_shards),
-            cql3::describe_option::STMTS);
-
+/*!
+ * \brief write the schema to a 'schema.cql' file at the given directory.
+ *
+ * When doing a snapshot, the snapshot directory contains a 'schema.cql' file
+ * with a CQL command that can be used to generate the schema.
+ * The content is is similar to the result of the CQL DESCRIBE command of the table.
+ *
+ * When a schema has indexes, local indexes or views, those indexes and views
+ * are represented by their own schemas.
+ * In those cases, the method would write the relevant information for each of the schemas:
+ *
+ * The schema of the base table would output a file with the CREATE TABLE command
+ * and the schema of the view that is used for the index would output a file with the
+ * CREATE INDEX command.
+ * The same is true for local index and MATERIALIZED VIEW.
+ */
+static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description schema_desc) {
     auto schema_description = std::move(*schema_desc.create_statement);
-    auto schema_file_name = dir + "/schema.cql";
-    auto f = co_await open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate);
-    auto out = co_await make_file_output_stream(std::move(f));
+    auto out = co_await writer.stream_for("schema.cql");
     std::exception_ptr ex;
 
     auto view = managed_bytes_view(schema_description.as_managed_bytes());
@@ -3358,73 +3369,87 @@ future<> table::write_schema_as_cql(const global_table_ptr& table_shards, sstrin
     }
 }
 
-// Runs the orchestration code on an arbitrary shard to balance the load.
-future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
-    auto* so = std::get_if<storage_options::local>(&table_shards->get_storage_options().value);
-    if (so == nullptr) {
-        throw std::runtime_error("Snapshotting non-local tables is not implemented");
+class local_snapshot_writer : public snapshot_writer {
+    std::filesystem::path _dir;
+
+public:
+    local_snapshot_writer(std::filesystem::path dir, sstring name)
+            : _dir(dir / sstables::snapshots_dir / name)
+    {}
+    future<> init() override {
+        co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
     }
-    if (so->dir.empty()) { // virtual tables don't have initialized local storage
+    future<> sync() override {
+        co_await io_check([this] { return sync_directory(_dir.native()); });
+    }
+    future<output_stream<char>> stream_for(sstring component) override {
+        auto file_name = (_dir / component).native();
+        auto f = co_await open_checked_file_dma(general_disk_error_handler, file_name, open_flags::wo | open_flags::create | open_flags::truncate);
+        co_return co_await make_file_output_stream(std::move(f));
+    }
+};
+
+// Runs the orchestration code on an arbitrary shard to balance the load.
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
+    auto writer = std::visit(overloaded_functor{
+        [&name] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
+            if (loc.dir.empty()) {
+                // virtual tables don't have initialized local storage
+                return nullptr;
+            }
+
+            return std::make_unique<local_snapshot_writer>(loc.dir, name);
+        },
+        [] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
+            throw std::runtime_error("Snapshotting non-local tables is not implemented");
+        }
+    }, table_shards->get_storage_options().value);
+    if (!writer) {
         co_return;
     }
 
-    auto jsondir = (so->dir / sstables::snapshots_dir / name).native();
-    auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
-
+    auto orchestrator = std::hash<sstring>()(name) % smp::count;
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
         auto& t = *table_shards;
         auto s = t.schema();
-        tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
+        tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
-        std::vector<table::snapshot_file_set> file_sets;
-        file_sets.reserve(smp::count);
+        std::vector<snapshot_file_set> file_sets(smp::count);
 
-        co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-        co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
-            file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
-                return table_shards->take_snapshot(jsondir);
-            }));
+        co_await writer->init();
+        co_await smp::invoke_on_all([&] -> future<> {
+            auto& t = *table_shards;
+            auto [tables, permit] = co_await t.snapshot_sstables();
+            auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), name);
+            file_sets[this_shard_id()] = make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
         });
-        co_await io_check(sync_directory, jsondir);
+        co_await writer->sync();
 
-        co_await t.finalize_snapshot(table_shards, std::move(jsondir), std::move(file_sets));
+        std::exception_ptr ex;
+
+        tlogger.debug("snapshot {}: writing schema.cql", name);
+        auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS);
+        co_await write_schema_as_cql(*writer, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
+            tlogger.error("Failed writing schema file in snapshot in {} with exception {}", name, ptr);
+            ex = std::move(ptr);
+        });
+        tlogger.debug("snapshot {}: seal_snapshot", name);
+        co_await write_manifest(*writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+            tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
+            ex = std::move(ptr);
+        });
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+
+        co_await writer->sync();
     });
 }
 
-future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
-    tlogger.trace("take_snapshot {}", jsondir);
-
-    auto sstable_deletion_guard = co_await get_sstable_list_permit();
-
+future<std::pair<std::vector<sstables::shared_sstable>, table::sstable_list_permit>> table::snapshot_sstables() {
+    auto permit = co_await get_sstable_list_permit();
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
-    auto table_names = std::make_unique<std::unordered_set<sstring>>();
-
-    co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
-        table_names->insert(sstable->component_basename(sstables::component_type::Data));
-        return io_check([sstable, &dir = jsondir] {
-            return sstable->snapshot(dir);
-        });
-    });
-    co_return make_foreign(std::move(table_names));
-}
-
-future<> table::finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
-    std::exception_ptr ex;
-
-    tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-    co_await write_schema_as_cql(table_shards, jsondir).handle_exception([&] (std::exception_ptr ptr) {
-        tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
-        ex = std::move(ptr);
-    });
-    tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-    co_await seal_snapshot(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
-        tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
-        ex = std::move(ptr);
-    });
-
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
+    co_return std::make_pair(std::move(tables), std::move(permit));
 }
 
 future<bool> table::snapshot_exists(sstring tag) {

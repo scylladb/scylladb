@@ -1057,36 +1057,10 @@ public:
     db::replay_position set_low_replay_position_mark();
     db::replay_position highest_flushed_replay_position() const;
 
-private:
-    using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
-
-    future<snapshot_file_set> take_snapshot(sstring jsondir);
-    // Writes the table schema and the manifest of all files in the snapshot directory.
-    future<> finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets);
-    static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
-public:
-    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
+    future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
     static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
-
-    /*!
-     * \brief write the schema to a 'schema.cql' file at the given directory.
-     *
-     * When doing a snapshot, the snapshot directory contains a 'schema.cql' file
-     * with a CQL command that can be used to generate the schema.
-     * The content is is similar to the result of the CQL DESCRIBE command of the table.
-     *
-     * When a schema has indexes, local indexes or views, those indexes and views
-     * are represented by their own schemas.
-     * In those cases, the method would write the relevant information for each of the schemas:
-     *
-     * The schema of the base table would output a file with the CREATE TABLE command
-     * and the schema of the view that is used for the index would output a file with the
-     * CREATE INDEX command.
-     * The same is true for local index and MATERIALIZED VIEW.
-     */
-    future<> write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const;
 
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
@@ -2040,6 +2014,7 @@ private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
     struct table_truncate_state;
 
+    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
 public:

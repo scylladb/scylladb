@@ -2489,9 +2489,9 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
-future<> sstable::snapshot(const sstring& dir) const {
+future<> sstable::snapshot(const sstring& name) const {
     auto lock = co_await get_units(_mutate_sem, 1);
-    co_await _storage->snapshot(*this, dir, storage::absolute_path::yes);
+    co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name), storage::absolute_path::no);
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
