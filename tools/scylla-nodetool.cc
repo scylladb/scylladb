@@ -643,7 +643,7 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
         const auto n = clock::now();
         const auto t = clock::to_time_t(n);
         const auto ms = (n - clock::from_time_t(t)) / 1ms;
-        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+        fmt::print("[{:%F %T},{:03d}] {}\n", *std::localtime(&t), ms, msg);
     };
 
     int exit_code = EXIT_SUCCESS;
@@ -715,7 +715,7 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 std::string format_compacted_at(int64_t compacted_at) {
     const auto compacted_at_time = std::time_t(compacted_at / 1000);
     const auto milliseconds = compacted_at % 1000;
-    return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
+    return fmt::format("{:%FT%T}.{}", *std::localtime(&compacted_at_time), milliseconds);
 }
 
 template<typename Writer, typename Entry>
@@ -1830,7 +1830,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         const auto n = clock::now();
         const auto t = clock::to_time_t(n);
         const auto ms = (n - clock::from_time_t(t)) / 1ms;
-        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+        fmt::print("[{:%F %T},{:03d}] {}\n", *std::localtime(&t), ms, msg);
     };
 
     for (const auto& keyspace : keyspaces) {
