@@ -52,6 +52,13 @@
 #include "service/raft/raft_group0_client.hh"
 #include "utils/shared_dict.hh"
 #include "replica/database.hh"
+<<<<<<< HEAD
+||||||| parent of f60033db63 (db: system_keyspace: get_group0_history: unfreeze_gently)
+#include "db/compaction_history_entry.hh"
+=======
+#include "db/compaction_history_entry.hh"
+#include "mutation/async_utils.hh"
+>>>>>>> f60033db63 (db: system_keyspace: get_group0_history: unfreeze_gently)
 
 #include <unordered_map>
 
@@ -2956,7 +2963,9 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
     SCYLLA_ASSERT(rs);
     auto& ps = rs->partitions();
     for (auto& p: ps) {
-        auto mut = p.mut().unfreeze(s);
+        // Note: we could decorate the frozen_mutation's key to check if it's the expected one
+        // but since this is a single partition table, we can just check after unfreezing the whole mutation.
+        auto mut = co_await unfreeze_gently(p.mut(), s);
         auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
         if (partition_key == GROUP0_HISTORY_KEY) {
             co_return mut;
