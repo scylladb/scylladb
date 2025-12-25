@@ -531,7 +531,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         print(f"Restore task status on server {server.server_id}: {final_status}")
         assert (final_status is not None) and (final_status['state'] == 'failed')
     logs = [await manager.server_open_log(server.server_id) for server in servers]
-    await wait_for_first_completed([l.wait_for("Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
+    await wait_for_first_completed([l.wait_for(r"Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="a very slow test (20+ seconds), skipping it")

@@ -1534,7 +1534,7 @@ async def test_repair_with_invalid_session_id(manager: ManagerClient):
     [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
 
-    matches = [await log.grep("std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep(r"std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) > 0
 
 @pytest.mark.asyncio
