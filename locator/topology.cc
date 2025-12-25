@@ -55,23 +55,24 @@ thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
     .rack = locator::production_snitch_base::default_rack,
 };
 
-node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, this_node is_this_node, node::idx_type idx)
+node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, this_node is_this_node, node::idx_type idx, bool draining)
     : _topology(topology)
     , _host_id(id)
     , _dc_rack(std::move(dc_rack))
     , _state(state)
     , _shard_count(std::move(shard_count))
     , _excluded(excluded)
+    , _draining(draining)
     , _is_this_node(is_this_node)
     , _idx(idx)
 {}
 
-node_holder node::make(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, node::this_node is_this_node, node::idx_type idx) {
-    return std::make_unique<node>(topology, std::move(id), std::move(dc_rack), std::move(state), shard_count, excluded, is_this_node, idx);
+node_holder node::make(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, node::this_node is_this_node, node::idx_type idx, bool draining) {
+    return std::make_unique<node>(topology, std::move(id), std::move(dc_rack), std::move(state), shard_count, excluded, is_this_node, idx, draining);
 }
 
 node_holder node::clone() const {
-    return make(nullptr, host_id(), dc_rack(), get_state(), get_shard_count(), is_excluded(), is_this_node());
+    return make(nullptr, host_id(), dc_rack(), get_state(), get_shard_count(), is_excluded(), is_this_node(), -1, is_draining());
 }
 
 std::string node::to_string(node::state s) {

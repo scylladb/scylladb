@@ -585,6 +585,7 @@ class load_balancer {
         uint64_t tablet_count = 0;
         std::optional<uint64_t> capacity; // Invariant: bool(capacity) || drained.
         bool drained = false;
+        bool excluded = false; // Permanently down, marked so by "nodetool removenode".
         const locator::node* node; // never nullptr
 
         // The average shard load on this node.
@@ -991,6 +992,7 @@ public:
         load.node = node;
         load.shard_count = node->get_shard_count();
         load.shards.resize(load.shard_count);
+        load.excluded = node->is_excluded();
         if (!load.shard_count) {
             throw std::runtime_error(format("Shard count of {} not found in topology", host));
         }
@@ -1045,7 +1047,8 @@ public:
         node_load_map nodes;
         // TODO: share code with make_plan()
         topo.for_each_node([&] (const locator::node& node) {
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+            bool is_drained = node.is_draining()
+                              || node.get_state() == locator::node::state::being_decommissioned
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
                 ensure_node(nodes, node.host_id());
@@ -1446,6 +1449,18 @@ public:
                     });
                 }
 
+                // Node which is draining is either being decommissioned or removed.
+                // If involved node is excluded, co-locating migration will surely fail, so it's pointless.
+                // We should wait until the node is removed.
+                // Also, it can fail the removenode request, as failure of this migration is interpreted as
+                // draining failure.
+                // In case of decommission, draining is more important than co-location, so postponing is good.
+                if (nodes.at(dst.host).drained || nodes.at(src.host).drained) {
+                    lblogger.debug("Co-locating migration ({}, {}) -> ({}, {}) involves draining nodes, postponing",
+                        t2_id, src, t1_id, dst);
+                    return make_ready_future<>();
+                }
+
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
                 auto skip = check_constraints(src, dst);
                 if (skip) {
@@ -1584,7 +1599,7 @@ public:
         std::unordered_map<endpoint_dc_rack, unsigned> shards_per_rack;
         std::unordered_map<sstring, std::unordered_set<sstring>> racks_per_dc;
         _tm->for_each_token_owner([&] (const node& n) {
-            if (n.is_normal()) {
+            if (n.is_normal() && !n.is_draining()) {
                 shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
                 shards_per_rack[n.dc_rack()] += n.get_shard_count();
                 racks_per_dc[n.dc_rack().dc].insert(n.dc_rack().rack);
@@ -3089,8 +3104,11 @@ public:
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
                         auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
-                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
-                                                        tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                        auto reason = fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
+                                    tablet, src, nodes_to_drain, nodes_by_load_dst, replicas);
+                        lblogger.warn("{}", reason);
+                        plan.add(drain_failure(src_node_info.id, reason));
+                        return;
                     }
                     lblogger.debug("Adding replica {} of candidate {} to skipped list with the viable targets {}", src, candidate, skip.viable_targets);
                     src_node_info.skipped_candidates.emplace_back(src, tablets, std::move(skip.viable_targets));
@@ -3100,6 +3118,9 @@ public:
                 if (skip) {
                     for (auto&& [skip_info, tablets] : *skip) {
                         process_skip_info(tablets, skip_info);
+                    }
+                    if (!plan.drain_failures().empty()) {
+                        break;
                     }
                     continue;
                 }
@@ -3113,7 +3134,8 @@ public:
             }
 
             tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
-                                           || src_node_info.state() == locator::node::state::left)
+                                           || src_node_info.state() == locator::node::state::left
+                                           || (src_node_info.drained && src_node_info.excluded))
                        ? locator::choose_rebuild_transition_kind(_db.features()) : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
             auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
@@ -3258,7 +3280,8 @@ public:
             if (!node_filter(node)) {
                 return;
             }
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+            bool is_drained = node.is_draining()
+                              || node.get_state() == locator::node::state::being_decommissioned
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
                 if (is_drained) {
@@ -3392,15 +3415,15 @@ public:
             }
             auto level = (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
-                                " stream_read={} stream_write={}",
+                                " stream_read={} stream_write={} draining={}",
                          host, dc, load.rack(), load.avg_load, load.tablet_count, load.shard_count,
-                         load.tablets_per_shard(), load.state(), load.capacity, read, write);
+                         load.tablets_per_shard(), load.state(), load.capacity, read, write, load.drained);
         }
 
         if (!min_load_node) {
-            if (!nodes_to_drain.empty()) {
-                throw std::runtime_error(format("There are nodes with tablets to drain but no candidate nodes in DC {}."
-                                                " Consider adding new nodes or reducing replication factor.", dc));
+            for (auto host : nodes_to_drain) {
+                plan.add(drain_failure(host, format("No candidate nodes in DC {} to drain {}."
+                                              " Consider adding new nodes or reducing replication factor.", dc, host)));
             }
             lblogger.debug("No candidate nodes");
             _stats.for_dc(dc).stop_no_candidates++;
