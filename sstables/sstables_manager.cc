@@ -69,8 +69,16 @@ void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
 }
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
+<<<<<<< HEAD
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
+||||||| parent of 132aa753da (sstables/storage_manager: Fix configured endpoints observer)
+    : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
+    , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
+=======
+    : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
+    , _config_updater(std::make_unique<config_updater>(cfg, *this))
+>>>>>>> 132aa753da (sstables/storage_manager: Fix configured endpoints observer)
 {
     for (auto& e : cfg.object_storage_endpoints()) {
         _s3_endpoints.emplace(std::make_pair(std::move(e.endpoint), make_lw_shared<s3::endpoint_config>(std::move(e.config))));
@@ -147,9 +155,7 @@ bool storage_manager::is_known_endpoint(sstring endpoint) const {
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
-        return sstm.container().invoke_on_all([&cfg](auto& sstm) -> future<> {
-            co_await sstm.update_config(cfg);
-        });
+        return sstm.update_config(cfg);
     })
     , observer(cfg.object_storage_endpoints.observe(action.make_observer()))
 {}
