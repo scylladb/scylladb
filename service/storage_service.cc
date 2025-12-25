@@ -7915,45 +7915,66 @@ void storage_service::init_messaging_service() {
             return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
         });
     });
-    ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
-        return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
+    ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc, &feat = _feature_service] (raft::server_id dst_id, raft_snapshot_pull_params params) {
+        return handle_raft_rpc(dst_id, [params = std::move(params), &feat] (storage_service& ss) -> future<raft_snapshot> {
             check_raft_rpc_scheduling_group(ss._db.local(), ss._feature_service, "raft_pull_snapshot");
             utils::chunked_vector<canonical_mutation> mutations;
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
             auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
 
-            // We may need to send additional raft-based tables to the requester that
+            // In the new mode, we ignore the parameter and always send all tables.
+            // In the legacy mode, we may need to send additional raft-based tables to the requester that
             // are not indicated in the parameter.
             // For example, when a node joins, it requests a snapshot before it knows
             // which features are enabled, so it doesn't know yet if these tables exist
             // on other nodes.
-            // In the current "legacy" mode we assume the requesting node sends 2 RPCs - one for
+            // In the legacy mode we assume the requesting node sends 2 RPCs - one for
             // topology tables and one for auth tables, service levels, and additional tables.
             // When we detect it's the second RPC, we add additional tables based on our feature flags.
-            // In the future we want to deprecate this parameter, so this condition should
-            // apply only for "legacy" snapshot pull RPCs.
-            std::vector<table_id> additional_tables;
-            if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
+
+            const bool new_mode = feat.snapshot_rpc_v2;
+            const bool legacy_mode_non_topology_tables = params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id();
+
+            std::vector<table_id> tables;
+
+            if (new_mode) {
+                tables.push_back(db::system_keyspace::topology()->id());
+                tables.push_back(db::system_keyspace::topology_requests()->id());
+                tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+
+                auto auth_tables = db::system_keyspace::auth_tables();
+                for (const auto& schema : auth_tables) {
+                    tables.push_back(schema->id());
+                }
+                tables.push_back(db::system_keyspace::service_levels_v2()->id());
+            } else {
+                tables = params.tables;
+            }
+
+            // send all non-topology group0-based tables:
+            // * in new mode: always, because there is a single RPC for all tables
+            // * in legacy mode: only in the second RPC for non-topology tables
+            if (new_mode || legacy_mode_non_topology_tables) {
                 if (ss._feature_service.view_build_status_on_group0) {
-                    additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+                    tables.push_back(db::system_keyspace::view_build_status_v2()->id());
                 }
                 if (ss._feature_service.compression_dicts) {
-                    additional_tables.push_back(db::system_keyspace::dicts()->id());
+                    tables.push_back(db::system_keyspace::dicts()->id());
                 }
                 if (ss._feature_service.view_building_coordinator) {
-                    additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
+                    tables.push_back(db::system_keyspace::view_building_tasks()->id());
                 }
                 if (ss._feature_service.cdc_with_tablets) {
-                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
-                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                    tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
                 if (ss._feature_service.client_routes) {
-                    additional_tables.push_back(db::system_keyspace::client_routes()->id());
+                    tables.push_back(db::system_keyspace::client_routes()->id());
                 }
             }
 
-            for (const auto& table : boost::join(params.tables, additional_tables)) {
+            for (const auto& table : tables) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
