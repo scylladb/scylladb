@@ -92,7 +92,7 @@ public:
     {}
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const override;
+    virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -425,19 +425,10 @@ future<> filesystem_storage::create_links(const sstable& sst, const std::filesys
     return create_links_common(sst, dir.native(), sst._generation, link_mode::default_mode);
 }
 
-future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed leave_unsealed) const {
-    std::filesystem::path snapshot_dir;
-    if (abs) {
-        snapshot_dir = dir;
-    } else {
-        snapshot_dir = _base_dir.path() / dir;
-    }
+future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {
+    std::filesystem::path snapshot_dir = _base_dir.path() / name;
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
-    if (leave_unsealed) {
-        co_await create_links_common(sst, snapshot_dir, std::move(gen), leave_unsealed_tag{});
-    } else {
-        co_await create_links_common(sst, snapshot_dir, std::move(gen));
-    }
+    co_await create_links_common(sst, snapshot_dir, {});
 }
 future<> filesystem_storage::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
     if (leave_unsealed) {
@@ -637,7 +628,7 @@ public:
     {}
 
     future<> seal(const sstable& sst) override;
-    future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>, storage::leave_unsealed) const override;
+    future<> snapshot(const sstable& sst, sstring name) const override;
     future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -855,7 +846,7 @@ future<> object_storage_base::unlink_component(const sstable& sst, component_typ
     }
 }
 
-future<> object_storage_base::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const {
+future<> object_storage_base::snapshot(const sstable& sst, sstring name) const {
     on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
     co_return;
 }
