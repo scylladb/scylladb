@@ -2659,7 +2659,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
         co_await utils::get_local_injector().inject("add_new_view_pause_last_shard", utils::wait_for_message(5min));
     }
 
-    co_await _sys_ks.register_view_for_building_for_all_shards(view->ks_name(), view->cf_name(), step.current_token());
+    co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
 }
 
