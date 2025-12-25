@@ -552,9 +552,22 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     replica::table& t = _db.local().find_column_family(_schema->id());
     rlogger.debug("repair_writer: keyspace={}, table={}, estimated_partitions={}", w->schema()->ks_name(), w->schema()->cf_name(), w->get_estimated_partitions());
     auto sharder = get_sharder_helper(t, *(w->schema()), _topo_guard);
+    bool mark_as_repaired = t.uses_tablets() && _repaired_at.has_value();
+    auto& sst_list = w->get_sstable_list_to_mark_as_repaired();
+    auto shard = this_shard_id();
+    auto inc_repair_handler = [&sst_list, mark_as_repaired, shard, sid = _topo_guard] (sstables::shared_sstable sst) mutable {
+        if (!mark_as_repaired) {
+            return;
+        }
+        if (shard != this_shard_id()) {
+            return;
+        }
+        sst->being_repaired = sid;
+        sst_list.insert(sst);
+    };
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
             streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason),
-                _topo_guard, _repaired_at, w->get_sstable_list_to_mark_as_repaired()),
+                _topo_guard, inc_repair_handler),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -2148,8 +2161,8 @@ public:
 
 public:
     future<> mark_sstable_as_repaired() {
-        auto sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (_incremental_repair_meta.sst_set || sstables) {
+        auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
+        if (_incremental_repair_meta.sst_set || !sstables.empty()) {
             co_await seastar::async([&] {
                 auto do_mark_sstable_as_repaired = [&] (const sstables::shared_sstable& sst, const sstring& type) {
                     auto filename = sst->toc_filename();
@@ -2163,11 +2176,9 @@ public:
                     seastar::thread::maybe_yield();
                     do_mark_sstable_as_repaired(sst, "existing");
                 });
-                if (sstables) {
-                    for (auto& sst : *sstables) {
-                        seastar::thread::maybe_yield();
-                        do_mark_sstable_as_repaired(sst, "repair_produced");
-                    }
+                for (auto& sst : sstables) {
+                    seastar::thread::maybe_yield();
+                    do_mark_sstable_as_repaired(sst, "repair_produced");
                 }
             });
         }
