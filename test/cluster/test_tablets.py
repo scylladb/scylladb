@@ -1018,7 +1018,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     # try starting the server again
     logger.info("Start node1 with the orphaned sstables and expect it to fail")
     # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table {ks}.test"
-    await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
+    await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet", expected_crash=True)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
