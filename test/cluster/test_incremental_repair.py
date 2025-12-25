@@ -9,7 +9,9 @@ from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import find_server_by_host_id, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
+from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
+
+from cassandra.query import ConsistencyLevel
 
 import pytest
 import asyncio
@@ -815,3 +817,52 @@ async def test_incremental_retry_end_repair_stage(manager):
 
             # Run the second repair after the first is finished
             await manager.api.tablet_repair(servers[0].ip_addr, ks, table, "all", await_completion=True, incremental_mode="incremental")
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27666.
+# This test checks both tablet and vnode table. It tests the code path dealing
+# with appending sstables produced by repair to a list work correctly with
+# multishard writer when the shard count is different.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_tablet", [False, True])
+async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_tablet):
+    cmdline0 = [ '--smp', '2']
+    cmdline1 = [ '--smp', '3']
+    servers = await manager.servers_add(1, cmdline=cmdline0, auto_rack_dc="dc1")
+    servers.append(await manager.server_add(cmdline=cmdline1, property_file={'dc': 'dc1', 'rack': 'rack2'}))
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND TABLETS = {{ 'enabled': {str(use_tablet).lower()} }}  ") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        async def write_with_cl_one(range_start, range_end):
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ONE
+            pks = range(range_start, range_end)
+            await asyncio.gather(*[cql.run_async(insert_stmt, (k, k)) for k in pks])
+
+        logger.info("Adding data only on first node")
+        await manager.api.flush_keyspace(servers[1].ip_addr, ks)
+        await manager.server_stop(servers[1].server_id)
+        manager.driver_close()
+        cql = await reconnect_driver(manager)
+        await write_with_cl_one(0, 10)
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        logger.info("Adding data only on second node")
+        await manager.server_start(servers[1].server_id)
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+        await manager.server_stop(servers[0].server_id)
+        manager.driver_close()
+        cql = await reconnect_driver(manager)
+        await write_with_cl_one(10, 20)
+
+        await manager.server_start(servers[0].server_id)
+        await manager.servers_see_each_other(servers)
+
+        if use_tablet:
+            logger.info("Starting tablet repair")
+            await manager.api.tablet_repair(servers[1].ip_addr, ks, "test", token='all', incremental_mode="incremental")
+        else:
+            logger.info("Starting vnode repair")
+            await manager.api.repair(servers[1].ip_addr, ks, "test")
