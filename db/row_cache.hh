@@ -57,7 +57,7 @@ class cache_entry {
     } _flags{};
     friend class size_calculator;
 
-    mutation_reader do_read(row_cache&, cache::read_context& ctx);
+    mutation_reader do_read(row_cache&, cache::read_context& ctx, std::unique_ptr<cache::read_context> ctx_holder);
     mutation_reader do_read(row_cache&, std::unique_ptr<cache::read_context> unique_ctx);
 public:
     friend class row_cache;

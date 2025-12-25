@@ -1394,12 +1394,12 @@ void rows_entry::on_evicted_shallow() noexcept {
 mutation_reader cache_entry::read(row_cache& rc, read_context& reader) {
     auto source_and_phase = rc.snapshot_of(_key);
     reader.enter_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
-    return do_read(rc, reader);
+    return do_read(rc, reader, nullptr);
 }
 
 mutation_reader cache_entry::read(row_cache& rc, read_context& reader, row_cache::phase_type phase) {
     reader.enter_partition(_key, phase);
-    return do_read(rc, reader);
+    return do_read(rc, reader, nullptr);
 }
 
 mutation_reader cache_entry::read(row_cache& rc, std::unique_ptr<read_context> unique_ctx) {
@@ -1414,26 +1414,18 @@ mutation_reader cache_entry::read(row_cache& rc, std::unique_ptr<read_context> u
 }
 
 // Assumes reader is in the corresponding partition
-mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
+mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader, std::unique_ptr<read_context> holder) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), reader.native_slice(), _key.key());
     schema_ptr entry_schema = to_query_domain(reader.slice(), schema());
-    auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(snp));
+    auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(holder), std::move(snp));
     r.upgrade_schema(to_query_domain(reader.slice(), rc.schema()));
     r.upgrade_schema(reader.schema());
     return r;
 }
 
 mutation_reader cache_entry::do_read(row_cache& rc, std::unique_ptr<read_context> unique_ctx) {
-    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, unique_ctx->phase());
-    auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), unique_ctx->native_slice(), _key.key());
-    schema_ptr reader_schema = unique_ctx->schema();
-    schema_ptr entry_schema = to_query_domain(unique_ctx->slice(), schema());
-    auto rc_schema = to_query_domain(unique_ctx->slice(), rc.schema());
-    auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, std::move(unique_ctx), std::move(snp));
-    r.upgrade_schema(rc_schema);
-    r.upgrade_schema(reader_schema);
-    return r;
+    return do_read(rc, *unique_ctx, std::move(unique_ctx));
 }
 
 const schema_ptr& row_cache::schema() const {
