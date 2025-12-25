@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager, contextmanager, suppress
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from cassandra.util import datetime_from_uuid1           # type: ignore # pylint: disable=no-name-in-module
+from cassandra.protocol import InvalidRequest            
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
@@ -657,3 +658,46 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+async def wait_for_keyspace_rf_change_to_complete(cql, ks_name: str, timeout: float = 120.0, period: float = 1.0) -> None:
+    """
+    Waits for any ongoing replication factor change for the specified keyspace to complete.
+    """
+    deadline = time.time() + timeout
+
+    async def no_pending_rf_change():
+        rows = await cql.run_async(
+            "SELECT request_type, done, new_keyspace_rf_change_ks_name FROM system.topology_requests " \
+            f"WHERE request_type = 'keyspace_rf_change' AND  new_keyspace_rf_change_ks_name = '{ks_name}' ALLOW FILTERING"
+        )
+        for row in rows:
+            if not row.done:
+                return None
+        return True
+
+    await wait_for(no_pending_rf_change, deadline=deadline, period=period)
+
+
+async def run_statement_with_rf_retry(cql, ks_name: str, statement: str, attempts: int = 3, simulate_error: bool = False) -> None:
+    """
+    Runs the given CQL statement, retrying if there is an ongoing replication factor change
+    """
+    while attempts > 0:
+        try:
+            if simulate_error:
+                simulate_error = False
+                raise InvalidRequest("Another RF change for this keyspace is already in progress (test_case)")
+            await cql.run_async(statement)
+            # We are done
+            return
+        except InvalidRequest as exc:
+            if "Another RF change for this keyspace" not in str(exc):
+                # There is some other error that we need to fix
+                raise
+            logging.info(f"RF change still in progress attempts left {attempts}")
+            await wait_for_keyspace_rf_change_to_complete(cql, ks_name, timeout=40, period=1.0)
+            attempts -= 1
+
+    #If we exit the loop, we couldn't complete ALTER KEYSPACE after all retry attempts
+    raise InvalidRequest("Exceeded max attempts to run ALTER KEYSPACE with RF change")

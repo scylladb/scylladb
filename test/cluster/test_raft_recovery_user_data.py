@@ -19,8 +19,7 @@ from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.conftest import cluster_con
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
-        reconnect_driver, start_writes, wait_for_cdc_generations_publishing
-
+        reconnect_driver, start_writes, wait_for_cdc_generations_publishing, run_statement_with_rf_retry
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
@@ -150,8 +149,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
         for i in range(1, rf + 1):
             # ALTER KEYSPACE with tablets can decrease RF only by one.
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""")
+            await run_statement_with_rf_retry(cql, ks_name, f"""ALTER KEYSPACE {ks_name} WITH replication =
+                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""", simulate_error=(i==1))
 
         logging.info(f'Removing {dead_servers}')
         for i, being_removed in enumerate(dead_servers):
@@ -194,7 +193,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     if remove_dead_nodes_with == "remove":
         logging.info(f'Increasing RF of {ks_name} back to {rf} in dc2')
         for i in range(1, rf + 1):
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
+            await run_statement_with_rf_retry(cql, ks_name, f"""ALTER KEYSPACE {ks_name} WITH replication =
                                 {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
