@@ -54,6 +54,7 @@ set(idl_headers
   sstables.idl.hh
   storage_proxy.idl.hh
   storage_service.idl.hh
+  strong_consistency/state_machine.idl.hh
   group0_state_machine.idl.hh
   mapreduce_request.idl.hh
   replica_exception.idl.hh
