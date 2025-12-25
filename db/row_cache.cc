@@ -1331,6 +1331,26 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
+cache_entry::cache_entry(dummy_entry_tag)
+    : _key{dht::token(), partition_key::make_empty()}
+{
+    _flags._dummy_entry = true;
+}
+
+cache_entry::cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
+    : _key(key)
+    , _pe(partition_entry::make_evictable(*s, mutation_partition(*s, p)))
+{ }
+
+cache_entry::cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p)
+    : cache_entry(evictable_tag(), s, std::move(key), partition_entry::make_evictable(*s, std::move(p)))
+{ }
+
+cache_entry::cache_entry(evictable_tag, schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
+    : _key(std::move(key))
+    , _pe(std::move(pe))
+{ }
+
 void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
     row_cache::partitions_type::iterator it(this);
     std::next(it)->set_continuous(false);

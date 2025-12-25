@@ -48,11 +48,7 @@ public:
 
     friend class memtable;
 
-    memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
-        : _key(std::move(key))
-        , _pe(*s, std::move(p))
-    { }
-
+    memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p);
     memtable_entry(memtable_entry&& o) noexcept;
     // Frees elements of the entry in batches.
     // Returns stop_iteration::yes iff there are no more elements to free.

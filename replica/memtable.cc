@@ -827,6 +827,11 @@ mutation_source memtable::as_data_source() {
     });
 }
 
+memtable_entry::memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
+    : _key(std::move(key))
+    , _pe(*s, std::move(p))
+{ }
+
 memtable_entry::memtable_entry(memtable_entry&& o) noexcept
     : _key(std::move(o._key))
     , _pe(std::move(o._pe))
