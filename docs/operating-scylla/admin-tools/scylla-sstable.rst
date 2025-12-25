@@ -667,7 +667,7 @@ write
 Writes an SStable based on a description of the content.
 The description can be provided in two formats: ``CQL`` and ``JSON``.
 The input format can be selected with the ``--input-format`` flag. Default is ``cql``.
-In both cases the input is expected to be provided via the file whoose path is passed to ``--input-file``.
+In both cases the input is expected to be provided via the file whose path is passed to ``--input-file``.
 
 CQL input format
 ~~~~~~~~~~~~~~~~
