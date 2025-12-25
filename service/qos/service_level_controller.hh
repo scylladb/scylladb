@@ -299,7 +299,7 @@ public:
         // For the discussion, see: scylladb/scylladb#26816.
         //
         // TODO: Get rid of this.
-        if (!usr.has_value() || auth::is_anonymous(usr.value())) {
+        if (!usr.has_value() || auth::is_anonymous(usr.value()) || auth::is_maintenance(usr.value())) {
             return with_scheduling_group(get_default_scheduling_group(), std::forward<Func>(func));
         }
 

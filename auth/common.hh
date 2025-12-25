@@ -46,6 +46,8 @@ extern constinit const std::string_view USERS_CF;
 constexpr std::string_view DEFAULT_SUPERUSER_NAME("cassandra");
 extern constinit const std::string_view AUTH_PACKAGE_NAME;
 
+constexpr std::string_view MAINTENANCE_ROLE_NAME("$MAINTENANCE$");
+
 } // namespace meta
 
 constexpr std::string_view PERMISSIONS_CF = "role_permissions";
