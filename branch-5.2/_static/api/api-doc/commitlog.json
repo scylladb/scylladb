@@ -1,0 +1,149 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/commitlog",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/commitlog/recover/{path}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Recover a single file",
+               "type":"void",
+               "nickname":"commitlog_recover",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"path",
+                     "description":"Full path of file or directory",
+                     "required":true,
+                     "allowMultiple":true,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/commitlog/segments/active",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"file names (not full paths) of active commit log segments (segments containing unflushed data)",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_active_segment_names",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/commitlog/segments/archiving",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns files which are pending for archival attempt. Does NOT include failed archive attempts",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_archiving_segment_names",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/commitlog/metrics/completed_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get completed tasks",
+          "type": "long",
+          "nickname": "get_completed_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/commitlog/metrics/pending_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks",
+          "type": "long",
+          "nickname": "get_pending_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/commitlog/metrics/total_commit_log_size",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get total commit log size",
+          "type": "long",
+          "nickname": "get_total_commit_log_size",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/commit_log/metrics/waiting_on_segment_allocation",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get waiting on segment allocation",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_waiting_on_segment_allocation",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/commit_log/metrics/waiting_on_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get waiting on commit",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_waiting_on_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
+   ]
+}
