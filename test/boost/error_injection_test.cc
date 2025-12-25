@@ -152,9 +152,14 @@ SEASTAR_TEST_CASE(test_inject_future_disabled) {
     utils::error_injection<true> errinj;
 
     auto start_time = steady_clock::now();
-    return errinj.inject("futid", sleep_msec).then([start_time] {
+    static constexpr milliseconds long_sleep_msec(10000);
+    return errinj.inject("futid", long_sleep_msec).then([start_time] {
         auto wait_time = steady_clock::now() - start_time;
-        BOOST_REQUIRE_LT(wait_time, sleep_msec);
+        // Because the injection "futid" was not enabled, we expect the
+        // sleep to have not happened. If we measure the time that passed,
+        // it's obviously not zero (especially in a slow debug build on a
+        // busy test machine), but certainly not the full long_sleep_msec.
+        BOOST_REQUIRE_LT(wait_time, long_sleep_msec);
         return make_ready_future<>();
     });
 }
