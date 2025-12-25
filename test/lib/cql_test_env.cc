@@ -70,6 +70,7 @@
 #include "debug.hh"
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
+#include "service/strong_consistency/groups_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -165,6 +166,7 @@ private:
     sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
+    sharded<service::strong_consistency::groups_manager> _groups_manager;
     sharded<service::storage_service> _ss;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
@@ -946,6 +948,10 @@ private:
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
+                std::ref(_db), std::ref(_feature_service)).get();
+            auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -969,7 +975,8 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*_disk_space_monitor_shard0)
+                only_on_shard0(&*_disk_space_monitor_shard0),
+                std::ref(_groups_manager)
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
@@ -1092,6 +1099,10 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            _groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                return m.start();
+            }).get();
 
             _view_building_worker.start(std::ref(_db), std::ref(_sys_ks), std::ref(_mnotifier), std::ref(group0_service), std::ref(_view_update_generator), std::ref(_ms), std::ref(_view_building_state_machine)).get();
             auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [this] {

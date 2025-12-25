@@ -109,6 +109,7 @@
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
+#include "service/strong_consistency/groups_manager.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -1807,6 +1808,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing strongly consistent groups manager");
+            sharded<service::strong_consistency::groups_manager> groups_manager;
+            groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
+                std::ref(db), std::ref(feature_service)).get();
+            auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
+                groups_manager.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1818,7 +1827,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(auth_cache), std::ref(client_routes),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*disk_space_monitor_shard0)
+                only_on_shard0(&*disk_space_monitor_shard0),
+                std::ref(groups_manager)
             ).get();
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
@@ -2182,6 +2192,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+
+            // The call to setup_group0_if_exists() above guarantees that, if group0 is
+            // created and started, the locally persisted group0 state has been applied
+            // before it returns. As a result, tablet Raft groups are started using
+            // tablet metadata that is at least as recent as the locally persisted version.
+            // groups_manager::start() waits for all these Raft groups to start, so when
+            // we begin RPC messaging below, the system is ready to accept proxied requests
+            // from other replicas.
+            groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                return m.start();
+            }).get();
 
             api::set_server_storage_service(ctx, ss, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
