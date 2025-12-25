@@ -2599,7 +2599,16 @@ SEASTAR_TEST_CASE(test_unselected_column) {
 }
 
 SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
-    db::view::node_update_backlog b(2, 100ms);
+    // This test was originally written assuming we have (at least) two
+    // shards and the test doesn't run on shard 1...
+    BOOST_ASSERT(this_shard_id() != 1);
+    BOOST_ASSERT(smp::count >= 2);
+
+    // First, check that a db::view::node_update_backlog object doesn't
+    // recalculate the backlog if the interval hasn't yet passed (we use
+    // a long 10 second interval that will certainly not pass during this
+    // test).
+    db::view::node_update_backlog b(2, 10s);
     auto backlog = [] (size_t size) { return db::view::update_backlog{size, 1000}; };
     smp::submit_to(0, [&b, &backlog] {
         b.add(backlog(10));
@@ -2610,12 +2619,20 @@ SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
         b.fetch();
     }).get();
     BOOST_REQUIRE(b.load() == backlog(10));
-    sleep(101ms).get();
-    smp::submit_to(1, [&b, &backlog] {
-        b.add(backlog(100));
-        b.fetch();
+    // Second, check that the backlog *is* recalculated if the interval
+    // has passed. We use a very short interval (10ms) and sleep a bit more
+    // to make sure it has passed.
+    db::view::node_update_backlog b2(2, 10ms);
+    smp::submit_to(0, [&b2, &backlog] {
+        b2.add(backlog(10));
+        b2.fetch();
     }).get();
-    BOOST_REQUIRE(b.load() == backlog(100));
+    sleep(11ms).get();
+    smp::submit_to(1, [&b2, &backlog] {
+        b2.add(backlog(100));
+        b2.fetch();
+    }).get();
+    BOOST_REQUIRE(b2.load() == backlog(100));
 }
 
 SEASTAR_TEST_CASE(hide_ttl_and_writetime_for_virtual_columns) {
