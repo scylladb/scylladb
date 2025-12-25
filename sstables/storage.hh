@@ -95,9 +95,7 @@ class storage {
 public:
     virtual ~storage() {}
 
-    using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
-    using leave_unsealed = bool_class<struct leave_unsealed_tag>;
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring name) const = 0;

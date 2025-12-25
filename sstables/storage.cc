@@ -50,9 +50,6 @@ class filesystem_storage final : public sstables::storage {
     std::optional<std::filesystem::path> _temp_dir; // Valid while the sstable is being created, until sealed
 
 private:
-    struct mark_for_removal_tag {};
-    struct leave_unsealed_tag {};
-
     enum class link_mode {
         default_mode,
         mark_for_removal,
