@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use crate::common;
-use async_backtrace::framed;
-use vector_search_validator_tests::TestCase;
+use std::time::Duration;
+use vector_search_validator_tests::common;
+use vector_search_validator_tests::*;
 
-#[framed]
 pub(crate) async fn new() -> TestCase {
-    let timeout = common::DEFAULT_TEST_TIMEOUT;
+    let timeout = Duration::from_secs(30);
     TestCase::empty()
         .with_init(timeout, common::init)
         .with_cleanup(timeout, common::cleanup)
