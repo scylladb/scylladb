@@ -19,6 +19,7 @@
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
 #include "exceptions/exceptions.hh"
+#include <boost/algorithm/string/predicate.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
@@ -67,6 +68,110 @@ bool is_internal_keyspace(std::string_view name);
 namespace cql3 {
 
 namespace statements {
+static std::string_view get_similarity_function_name(const secondary_index::index& index) {
+    if (index.metadata().options().count("similarity_function")) {
+        auto sim_func = index.metadata().options().at("similarity_function");
+        if (boost::iequals(sim_func, "euclidean")) {
+            return "similarity_euclidean";
+        } else if (boost::iequals(sim_func, "dot_product")) {
+            return "similarity_dot_product";
+        }
+    }
+    // Default to cosine similarity
+    return "similarity_cosine";
+}
+
+static statements::prepared_statement::checked_weak_ptr prepare_rescore_statement(query_processor& qp,
+        schema_ptr schema, const secondary_index::index& index, const column_definition* vector_column) {
+    
+    auto where_columns = schema->primary_key_columns() | std::views::transform([](const column_definition& col) {
+        return col.name_as_cql_string() + " = ?";
+    });
+
+    sstring query_string = seastar::format("SELECT {}({}, ?) FROM {}.{} WHERE {}",
+            get_similarity_function_name(index), vector_column->name_as_cql_string(),
+            cql3::util::maybe_quote(schema->ks_name()), cql3::util::maybe_quote(schema->cf_name()),
+            fmt::join(where_columns, " AND " )
+    );
+
+    return qp.prepare_internal(query_string);
+}
+
+future<vector_search::vector_store_client::primary_keys>
+vector_indexed_table_select_statement::rescore(
+        query_processor& qp, service::query_state& state, const query_options& options,
+        vector_search::vector_store_client::primary_keys pkeys,
+        uint64_t limit, db::timeout_clock::time_point timeout) const {
+    auto prepared_stmt = prepare_rescore_statement(qp, _schema, _index, _prepared_ann_ordering.first);
+    std::vector<std::pair<vector_search::primary_key, float>> scores;
+    scores.reserve(pkeys.size());
+
+    // For each candidate, execute the prepared statement to fetch the vector and compute similarity
+    co_await seastar::parallel_for_each(pkeys, [&] (const vector_search::primary_key& pkey) -> future<> {
+        // Build bind values: one data_value per primary key component
+        std::vector<data_value_or_unset> bind_values;
+        
+        // Set the query vector as the first bind value
+        auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
+        auto values = ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes());
+        bind_values.emplace_back(values);
+
+        // Add partition key components
+        const auto& partition_key = pkey.partition.key();
+        for (size_t i = 0; i < _schema->partition_key_size(); ++i) {
+            auto& col = _schema->partition_key_columns()[i];
+            auto value_bytes = partition_key.get_component(*_schema, i);
+            bind_values.emplace_back(col.type->deserialize(value_bytes));
+        }
+        
+        // Add clustering key components
+        const auto& clustering_key = pkey.clustering;
+        for (size_t i = 0; i < clustering_key.size(*_schema); ++i) {
+            auto& col = _schema->clustering_key_columns()[i];
+            auto value_bytes = clustering_key.get_component(*_schema, i);
+            bind_values.emplace_back(col.type->deserialize(value_bytes));
+        }
+
+        // Build query options with bind values
+        auto opts = qp.make_internal_options(prepared_stmt, bind_values, options.get_consistency());
+        
+        // Execute the prepared statement to fetch the vector column
+        auto msg = co_await prepared_stmt->statement->execute(qp, state, opts, {});
+        if (!msg) {
+            co_return;
+        }
+        
+        // Convert to untyped_result_set
+        auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        if (!rms || rms->rs().result_set().empty()) {
+            co_return;
+        }
+
+        // Get the similarity score from the first column
+        const auto& row = rms->rs().result_set().rows().front();
+        float similarity = value_cast<float>(float_type->deserialize(row.at(0).value()));
+        scores.emplace_back(pkey, similarity);
+        co_return;
+    });
+
+    if (scores.size() <= limit) {
+        std::sort(scores.begin(), scores.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second;  // Higher scores first
+        });
+    } else {
+        std::partial_sort(scores.begin(), scores.begin() + limit, scores.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second;  // Higher scores first
+        });
+    }
+
+    vector_search::vector_store_client::primary_keys rescored_pkeys;
+    rescored_pkeys.reserve(std::min(scores.size(), static_cast<size_t>(limit)));
+    for (auto& pair : scores | std::ranges::views::take(limit)) {
+        rescored_pkeys.push_back(std::move(pair.first));
+    }
+    co_return std::move(rescored_pkeys);
+}
+
 namespace {
 
 constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
@@ -2033,11 +2138,21 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
+        std::optional<float> overfetch = secondary_index::vector_index::get_rescoring_factor(_index.metadata().options());
+        bool needs_rescore = secondary_index::vector_index::is_quantization_enabled(_index.metadata().options()) && overfetch.has_value();
+        auto fetch = limit;
+        if (overfetch.has_value()) {
+            fetch = static_cast<uint64_t>(std::ceil(limit * overfetch.value()));
+        }
         auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+        }
+
+        if (needs_rescore) {
+            pkeys = co_await rescore(qp, state, options, std::move(pkeys.value()), limit, timeout);
         }
 
         co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);

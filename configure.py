@@ -725,7 +725,8 @@ raft_tests = set([
 vector_search_tests = set([
     'test/vector_search/vector_store_client_test',
     'test/vector_search/load_balancer_test',
-    'test/vector_search/client_test'
+    'test/vector_search/client_test',
+    'test/vector_search/rescoring_test'
 ])
 
 vector_search_validator_bin = 'vector-search-validator/bin/vector-search-validator'
@@ -1034,6 +1035,7 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/functions/aggregate_fcts.cc',
                 'cql3/functions/castas_fcts.cc',
                 'cql3/functions/error_injection_fcts.cc',
+                'cql3/functions/vector_similarity_fcts.cc',
                 'cql3/statements/cf_prop_defs.cc',
                 'cql3/statements/cf_statement.cc',
                 'cql3/statements/authentication_statement.cc',
@@ -1780,6 +1782,7 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
 deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/rescoring_test'] = ['test/vector_search/rescoring_test.cc'] + scylla_tests_dependencies
 
 boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
 
