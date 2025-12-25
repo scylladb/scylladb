@@ -101,6 +101,7 @@ public:
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen = {}, leave_unsealed lu = leave_unsealed::no) const = 0;
+    virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;

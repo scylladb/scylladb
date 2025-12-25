@@ -93,6 +93,7 @@ public:
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const override;
+    virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -438,6 +439,13 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
         co_await create_links_common(sst, snapshot_dir, std::move(gen));
     }
 }
+future<> filesystem_storage::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
+    if (leave_unsealed) {
+        co_await create_links_common(sst, _dir.path(), std::move(gen), leave_unsealed_tag{});
+    } else {
+        co_await create_links_common(sst, _dir.path(), std::move(gen));
+    }
+}
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     co_await touch_directory(new_dir);
@@ -630,6 +638,7 @@ public:
 
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>, storage::leave_unsealed) const override;
+    future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -848,6 +857,11 @@ future<> object_storage_base::unlink_component(const sstable& sst, component_typ
 
 future<> object_storage_base::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen, storage::leave_unsealed) const {
     on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
+    co_return;
+}
+
+future<> object_storage_base::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
+    on_internal_error(sstlog, "Cloning S3 objects not implemented");
     co_return;
 }
 
