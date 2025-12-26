@@ -315,7 +315,7 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
                     auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
 
                     // Current replicas in this DC. There might be multiple replicas in the same rack.
-                    auto dc_replicas = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
+                    auto dc_replicas = ti.replicas() | std::views::filter([&] (const tablet_replica& r) {
                         return get_node(r.host).dc_rack().dc == dc;
                     }) | std::ranges::to<std::vector<tablet_replica>>();
 
@@ -822,13 +822,13 @@ class load_balancer {
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
 private:
-    tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+    tablet_replica_set get_replicas_for_tablet_load(const shared_tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
         // optimistically assuming that they will succeed.
         return trinfo ? trinfo->next : ti.replicas;
     }
 
-    tablet_replica_set sorted_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+    tablet_replica_set sorted_replicas_for_tablet_load(const shared_tablet_info& ti, const tablet_transition_info* trinfo) const {
         auto set = get_replicas_for_tablet_load(ti, trinfo);
         std::ranges::sort(set, std::less<tablet_replica>());
         return set;
@@ -881,7 +881,7 @@ private:
 
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
-    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+    get_migration_streaming_infos(const locator::topology& topology, const shared_tablet_map& tmap, const migration_vector& infos) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
             auto& ti = tmap.get_tablet_info(info.tablet.tablet);
@@ -1004,8 +1004,7 @@ public:
 
     future<> consider_scheduled_load(node_load_map& nodes) {
         const locator::topology& topo = _tm->get_topology();
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
@@ -1022,7 +1021,7 @@ public:
 
         for (const tablet_migration_info& tmi : mplan.migrations()) {
             co_await coroutine::maybe_yield();
-            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
+            auto& tmap = tablet_meta.get_shared_tablet_map(tmi.tablet.table);
             auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
             auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
             apply_load(nodes, streaming_info);
@@ -1060,7 +1059,6 @@ public:
 
         struct repair_plan {
             locator::global_tablet_id gid;
-            locator::tablet_info tinfo;
             dht::token_range range;
             dht::token last_token;
             db_clock::duration repair_time_diff;
@@ -1068,9 +1066,14 @@ public:
 
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
             co_await coroutine::maybe_yield();
+
+            // repair for non-base co-located tables requires tablet_map_per_table.
+            if (!_db.features().tablet_map_per_table && !_tm->tablets().is_base_table(table)) {
+                continue;
+            }
+
             auto& config = tmap.repair_scheduler_config();
             auto now = db_clock::now();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
@@ -1083,27 +1086,27 @@ public:
                 }
 
                 // Skip the tablet that is about to be in transition.
-                if (migration_tablet_ids.contains(gid)) {
+                auto base_gid = locator::global_tablet_id{_tm->tablets().get_base_table(table), id};
+                if (migration_tablet_ids.contains(base_gid)) {
                     co_return;
                 }
 
                 // Skip the tablet that has excluded replica node.
-                auto& tinfo = tmap.get_tablet_info(id);
-                if (tablet_has_excluded_node(topo, tinfo)) {
+                if (tablet_has_excluded_node(topo, info)) {
                     co_return;
                 }
 
                 // Avoid rescheduling a failed tablet repair in a loop
                 // TODO: Allow user to config
                 const auto min_reschedule_time = std::chrono::seconds(5);
-                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                if (now - info.repair_task_info().sched_time < min_reschedule_time) {
                     lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
                     co_return;
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
-                if (is_user_reuqest) {
+                auto is_user_request = info.repair_task_info().is_user_repair_request();
+                if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
                     auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff);
@@ -1113,7 +1116,14 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff});
+                plans.push_back(repair_plan{gid, range, last_token, diff});
+
+                // don't schedule repairs of colocated tablets together.
+                // currently there are some technical limitations that prevent us from scheduling repairs
+                // of colocated tablets in parallel because the repair transition is shared.
+                // when some tablet is scheduled for repair, the tablet and all its colocated tablets will move to repair transition stage, so
+                // we can't schedule repair for them until the transition is finished.
+                migration_tablet_ids.insert(base_gid);
             });
         }
 
@@ -1129,7 +1139,7 @@ public:
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
-            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
+            tmsi = get_migration_streaming_info(topo, _tm->tablets().get_tablet_map(plan.gid.table).get_tablet_info(plan.gid.tablet), trinfo);
             if (can_accept_load(nodes, tmsi)) {
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
@@ -1260,7 +1270,7 @@ public:
 
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
             // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            all_colocated &= bool(merge_tablet_info(t1.info, t2.info));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -1273,7 +1283,7 @@ public:
         migration_plan plan;
         table_resize_plan resize_plan;
 
-        auto can_proceed_with_colocation = [this] (table_id tid, const locator::tablet_map& tmap) {
+        auto can_proceed_with_colocation = [this] (table_id tid, const locator::shared_tablet_map& tmap) {
             if (tmap.needs_merge()) {
                 // Tablet merge in base tables is only safe if there is at most one replica in each rack.
                 // For more details why, see https://github.com/scylladb/scylladb/issues/17265.
@@ -1285,21 +1295,20 @@ public:
             }
         };
 
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
             if (!can_proceed_with_colocation(table, tmap)) {
                 continue;
             }
 
             // Also filter out replicas that don't belong to the DC being worked on.
-            auto get_replicas = [this, &nodes] (const tablet_desc& t) {
+            auto get_replicas = [this, &nodes] (const shared_tablet_desc& t) {
                 auto ret = sorted_replicas_for_tablet_load(*t.info, t.transition);
                 const auto [first, last] = std::ranges::remove_if(ret, [&] (tablet_replica r) { return !nodes.contains(r.host); });
                 ret.erase(first, last);
                 return ret;
             };
 
-            auto migrating = [this, table] (const tablet_desc& t) {
+            auto migrating = [this, table] (const shared_tablet_desc& t) {
                 return bool(t.transition) || _scheduled_tablets.contains(global_tablet_id{table, t.tid});
             };
             auto rack_of = [&topo = _tm->get_topology()] (tablet_replica tr) -> const sstring& {
@@ -1380,7 +1389,7 @@ public:
                 return tablet_migration_info{kind, gid, src, dst};
             };
 
-            co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
+            co_await tmap.for_each_sibling_tablets([&] (shared_tablet_desc t1, std::optional<shared_tablet_desc> t2_opt) -> future<> {
                 // Be optimistic about migrating tablets, as if they succeeded.
                 // Merge finalization will have to recheck that all sibling tablets are co-located.
 
@@ -1688,7 +1697,7 @@ public:
         };
 
         for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto& tmap = _tm->tablets().get_shared_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
 
             auto tablet_options = combine_tablet_options(
@@ -1850,9 +1859,9 @@ public:
             }
 
             // shard presence of a table across the cluster
-            size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
-                [] (size_t shard_count, const locator::tablet_info& info) {
-                    return shard_count + info.replicas.size();
+            size_t shard_count = std::ranges::fold_left(tmap.tablets(), size_t(0),
+                [] (size_t shard_count, const auto& p) {
+                    return shard_count + p.second.replicas().size();
                 });
 
             resize_decision new_resize_decision;
@@ -1927,8 +1936,8 @@ public:
                 continue;
             }
 
-            auto& tmap = _tm->tablets().get_tablet_map(table);
-            const auto& table_groups = _tm->tablets().all_table_groups();
+            auto& tmap = _tm->tablets().get_shared_tablet_map(table);
+            const auto& table_group = _tm->tablets().all_table_groups().at(table);
 
             auto finalize_decision = [&] {
                 if (utils::get_local_injector().enter("tablet_resize_finalization_postpone")) {
@@ -1942,7 +1951,7 @@ public:
             // If all replicas have completed split work for the current sequence number, it means that
             // load balancer can emit finalize decision, for split to be completed.
             if (tmap.needs_split()) {
-                bool all_tables_ready = std::ranges::all_of(table_groups.at(table), [&, seq_num = tmap.resize_decision().sequence_number] (table_id table) {
+                bool all_tables_ready = std::ranges::all_of(table_group, [&, seq_num = tmap.resize_decision().sequence_number] (table_id table) {
                     const auto* table_stats = load_stats_for_table(table);
                     return table_stats && table_stats->split_ready_seq_number == seq_num;
                 });
@@ -1952,9 +1961,18 @@ public:
                                   table, tmap.resize_decision().sequence_number);
                 }
             // If all sibling tablets are co-located across all DCs, then merge can be finalized.
-            } else if (tmap.needs_merge() && co_await all_sibling_tablet_replicas_colocated(table, tmap) && !bypass_merge_completion()) {
-                finalize_decision();
-                lblogger.info("Finalizing resize decision for table {} as all replicas are co-located", table);
+            } else if (tmap.needs_merge()) {
+                bool all_siblings_colocated = true;
+                for (auto table : table_group) {
+                    if (!co_await all_sibling_tablet_replicas_colocated(table, _tm->tablets().get_tablet_map(table))) {
+                        all_siblings_colocated = false;
+                        break;
+                    }
+                }
+                if (all_siblings_colocated && !bypass_merge_completion()) {
+                    finalize_decision();
+                    lblogger.info("Finalizing resize decision for table {} as all replicas are co-located", table);
+                }
             }
         }
 
@@ -2191,7 +2209,7 @@ public:
         }
     }
 
-    void maybe_erase_colocated_candidate(shard_load& shard_info, const tablet_map& tmap, global_tablet_id tablet) {
+    void maybe_erase_colocated_candidate(shard_load& shard_info, const shared_tablet_map& tmap, global_tablet_id tablet) {
         if (!tmap.needs_merge()) {
             return;
         }
@@ -2204,10 +2222,10 @@ public:
         erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
     }
 
-    void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
+    void erase_candidates(node_load_map& nodes, const shared_tablet_map& tmap, const migration_tablet_set& tablets) {
       // FIXME: indentation.
       for (auto tablet : tablets.tablets()) {
-        auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+        const auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
         for (auto&& r : src_tinfo.replicas) {
             if (nodes.contains(r.host)) {
                 lblogger.trace("Erasing tablet {} from {}", tablet, r);
@@ -2433,7 +2451,7 @@ public:
 
             auto mig = get_migration_info(tablets, tablet_transition_kind::intranode_migration,
                                           tablet_replica{host, src}, tablet_replica{host, dst});
-            auto& tmap = tmeta.get_tablet_map(tablets.table());
+            auto& tmap = tmeta.get_shared_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
             if (!can_accept_load(nodes, mig_streaming_info)) {
@@ -2482,7 +2500,7 @@ public:
     // replication constraints (no increase in replica co-location on nodes, racks).
     // Returns std::nullopt if it does not and the movement is allowed.
     std::optional<skip_info> check_constraints(node_load_map& nodes,
-                                               const locator::tablet_map& tmap,
+                                               const locator::shared_tablet_map& tmap,
                                                node_load& src_info,
                                                node_load& dst_info,
                                                global_tablet_id tablet,
@@ -2599,7 +2617,7 @@ public:
     using skip_info_vector = std::vector<std::pair<skip_info, migration_tablet_set>>;
     std::optional<skip_info_vector>
     check_constraints(node_load_map& nodes,
-                      const locator::tablet_map& tmap,
+                      const locator::shared_tablet_map& tmap,
                       node_load& src_info,
                       node_load& dst_info,
                       migration_tablet_set tablet_set,
@@ -3073,7 +3091,7 @@ public:
             src = candidate.src;
             dst = candidate.dst;
 
-            auto& tmap = tmeta.get_tablet_map(source_tablets.table());
+            auto& tmap = tmeta.get_shared_tablet_map(source_tablets.table());
             // If best candidate is co-located sibling tablets, then convergence is re-checked to avoid oscillations.
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 lblogger.debug("No more candidates. Load would be inverted.");
@@ -3088,7 +3106,7 @@ public:
                 auto process_skip_info = [&] (migration_tablet_set tablets, skip_info skip) {
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
-                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+                        const auto& replicas = tmap.get_tablet_info(tablet.tablet).replicas;
                         throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
@@ -3180,14 +3198,14 @@ public:
     }
 
     class sibling_tablets_replicas_processor {
-        const tablet_desc _t1;
-        const std::optional<tablet_desc> _t2;
+        const shared_tablet_desc _t1;
+        const std::optional<shared_tablet_desc> _t2;
         tablet_replica_set _t1_replicas;
         tablet_replica_set _t2_replicas;
         tablet_replica_set::iterator _current_t1;
         tablet_replica_set::iterator _current_t2;
     public:
-        sibling_tablets_replicas_processor(const tablet_desc t1, const std::optional<tablet_desc> t2,
+        sibling_tablets_replicas_processor(const shared_tablet_desc t1, const std::optional<shared_tablet_desc> t2,
                                            tablet_replica_set t1_replicas, tablet_replica_set t2_replicas)
             : _t1(std::move(t1))
             , _t2(std::move(t2))
@@ -3288,10 +3306,8 @@ public:
 
         // Compute tablet load on nodes.
 
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
-
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const shared_tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 // Check if any replica is on a node which has left.
@@ -3423,17 +3439,16 @@ public:
         co_await _load_sketch->populate_dc(dc);
         _tablet_count_per_table.clear();
 
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_base_tables()) {
             uint64_t total_load = 0;
 
-            auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
+            auto get_replicas = [this] (std::optional<shared_tablet_desc> t) -> tablet_replica_set {
                 return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
             };
-            auto migrating = [&] (std::optional<tablet_desc> t) {
+            auto migrating = [&] (std::optional<shared_tablet_desc> t) {
                 return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
-            auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
+            auto maybe_apply_load = [&] (std::optional<shared_tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
                     apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
                 }
@@ -3443,7 +3458,7 @@ public:
             // even though each tablet replica will be migrated independently. Next invocation of load balancer is able to exclude both
             // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
             // they're not co-located if only one of them completed migration.
-            co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
+            co_await tmap.for_each_sibling_tablets([&, table = table] (shared_tablet_desc t1, std::optional<shared_tablet_desc> t2) -> future<> {
                 maybe_apply_load(t1);
                 maybe_apply_load(t2);
 
@@ -3577,7 +3592,7 @@ public:
     }
 
     // Allocates new tablets for a table which is not co-located with another table.
-    tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
+    shared_tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
@@ -3629,25 +3644,28 @@ public:
             // for the other tables in the group, create a co-located tablet map.
             for (const auto& [base_id, group_schemas] : table_groups) {
 
-                auto create_colocated_tablet_maps = [&] (const tablet_map& base_map) {
+                auto create_colocated_tablet_maps = [&] (const shared_tablet_map& base_map) {
                     for (auto sp : group_schemas) {
                         const auto& s = *sp;
                         if (s.id() != base_id) {
                             lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
-                            muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
+                            colocated_tablet_map_to_mutations(base_map, per_table_tablet_map(), s.id(), s.ks_name(), s.cf_name(), base_id, ts, _db.features(), [&] (mutation m) {
+                                muts.emplace_back(std::move(m));
+                                return make_ready_future<>();
+                            }).get();
                             _db.get_notifier().before_allocate_tablet_map_in_notification(base_map, s, muts, ts);
                         }
                     }
                 };
 
                 if (tm->tablets().has_tablet_map(base_id)) {
-                    const auto& base_map = tm->tablets().get_tablet_map(base_id);
+                    const auto& base_map = tm->tablets().get_shared_tablet_map(base_id);
                     create_colocated_tablet_maps(base_map);
                 } else {
                     const auto& s = *new_cfms_map[base_id];
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
                     auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
-                    tablet_map_to_mutations(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features(), [&] (mutation m) {
+                    tablet_map_to_mutations(base_map, per_table_tablet_map(), s.id(), s.ks_name(), s.cf_name(), ts, _db.features(), [&] (mutation m) {
                         muts.emplace_back(std::move(m));
                         return make_ready_future<>();
                     }).get();
@@ -3703,10 +3721,11 @@ private:
     // (x << 1) + 1.
     // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
     // into ids 2 and 3, and so on.
-    future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> split_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() * 2);
+        shared_tablet_map new_tablets(tablets.tablet_count() * 2);
+        per_table_tablet_map new_per_table_tablets;
 
         for (tablet_id tid : tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -3714,23 +3733,27 @@ private:
             tablet_id new_left_tid = tablet_id(tid.value() << 1);
             tablet_id new_right_tid = tablet_id(new_left_tid.value() + 1);
 
-            auto& tablet_info = tablets.get_tablet_info(tid);
+            const auto& tablet_info = tablets.get_tablet_info(tid);
 
-            new_tablets.set_tablet(new_left_tid, tablet_info);
-            new_tablets.set_tablet(new_right_tid, tablet_info);
+            new_tablets.set_tablet(new_left_tid, tablet_info.shared);
+            new_per_table_tablets.set_tablet(new_left_tid, tablet_info.per_table);
+
+            new_tablets.set_tablet(new_right_tid, tablet_info.shared);
+            new_per_table_tablets.set_tablet(new_right_tid, tablet_info.per_table);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
-        co_return std::move(new_tablets);
+        co_return std::make_pair(std::move(new_tablets), std::move(new_per_table_tablets));
     }
 
     // The merging of tablet is completely based on the power-of-two constraint.
     // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
-    future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() / 2);
+        shared_tablet_map new_tablets(tablets.tablet_count() / 2);
+        per_table_tablet_map new_per_table_tablets;
 
         for (tablet_id tid : new_tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -3738,15 +3761,15 @@ private:
             tablet_id old_left_tid = tablet_id(tid.value() << 1);
             tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
 
-            auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
-            auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+            const auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
+            const auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
 
             auto sorted = [] (tablet_replica_set set) {
                 std::ranges::sort(set, std::less<tablet_replica>());
                 return set;
             };
-            auto left_tablet_replicas = sorted(left_tablet_info.replicas);
-            auto right_tablet_replicas = sorted(right_tablet_info.replicas);
+            auto left_tablet_replicas = sorted(left_tablet_info.replicas());
+            auto right_tablet_replicas = sorted(right_tablet_info.replicas());
             if (left_tablet_replicas != right_tablet_replicas) {
                 throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
@@ -3756,17 +3779,18 @@ private:
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
+            lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->second.sstables_repaired_at);
 
-            new_tablets.set_tablet(tid, *merged_tablet_info);
+            new_tablets.set_tablet(tid, merged_tablet_info->first);
+            new_per_table_tablets.set_tablet(tid, merged_tablet_info->second);
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
-        co_return std::move(new_tablets);
+        co_return std::make_pair(std::move(new_tablets), std::move(new_per_table_tablets));
     }
 public:
-    future<tablet_map> resize_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> resize_tablets(token_metadata_ptr tm, table_id table) {
         auto& tmap = tm->tablets().get_tablet_map(table);
         if (tmap.needs_split()) {
             return split_tablets(std::move(tm), table);
@@ -3816,7 +3840,7 @@ void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balan
     impl().set_use_tablet_aware_balancing(use_tablet_aware_balancing);
 }
 
-future<locator::tablet_map> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
+future<std::pair<locator::shared_tablet_map, locator::per_table_tablet_map>> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
     return impl().resize_tablets(std::move(tm), table);
 }
 
