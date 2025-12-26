@@ -26,7 +26,7 @@ namespace locator {
 /// on shards of the whole cluster.
 class load_sketch {
     using shard_id = seastar::shard_id;
-    using load_type = ssize_t; // In tablets.
+    using load_type = double; // In tablets.
 
     struct shard_load {
         shard_id id;
@@ -66,6 +66,14 @@ class load_sketch {
             for (shard_id i = 0; i < _shards.size(); ++i) {
                 _shards_by_load.insert(shard_load{i, _shards[i]});
             }
+        }
+
+        void normalize(load_type factor) {
+            _load /= factor;
+            for (shard_id i = 0; i < _shards.size(); ++i) {
+                _shards[i] /= factor;
+            }
+            populate_shards_by_load();
         }
 
         load_type& load() noexcept {
@@ -114,11 +122,13 @@ public:
         : _tm(std::move(tm)) {
     }
 
+    future<> clear() {
+        return utils::clear_gently(_nodes);
+    }
+
     future<> populate(std::optional<host_id> host = std::nullopt,
                       std::optional<table_id> only_table = std::nullopt,
                       std::optional<sstring> only_dc = std::nullopt) {
-        co_await utils::clear_gently(_nodes);
-
         if (host) {
             ensure_node(*host);
         } else {
@@ -147,6 +157,20 @@ public:
 
     future<> populate_dc(const sstring& dc) {
         return populate(std::nullopt, std::nullopt, dc);
+    }
+
+    future<> populate_with_normalized_load() {
+        co_await populate();
+
+        min_max_tracker<load_type> minmax;
+        minmax.update(1);
+        for (auto&& id : _nodes | std::views::keys) {
+            minmax.update(get_shard_minmax(id).max());
+        }
+
+        for (auto&& [id, n] : _nodes) {
+            n.normalize(minmax.max());
+        }
     }
 
     shard_id next_shard(host_id node) {
@@ -205,20 +229,20 @@ public:
         return total;
     }
 
-    load_type get_avg_shard_load(host_id node) const {
+    ssize_t get_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         auto& n = _nodes.at(node);
-        return div_ceil(n.load(), n._shards.size());
+        return div_ceil(ssize_t(n.load()), n._shards.size());
     }
 
-    double get_real_avg_shard_load(host_id node) const {
+    load_type get_real_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         auto& n = _nodes.at(node);
-        return double(n.load()) / n._shards.size();
+        return n.load() / n._shards.size();
     }
 
     shard_id get_shard_count(host_id node) const {
@@ -250,7 +274,7 @@ public:
     }
 
     // Returns nullopt if capacity is not known.
-    std::optional<double> get_allocated_utilization(host_id node, const locator::load_stats& stats, uint64_t target_tablet_size) const {
+    std::optional<load_type> get_allocated_utilization(host_id node, const locator::load_stats& stats, uint64_t target_tablet_size) const {
         if (!_nodes.contains(node)) {
             return std::nullopt;
         }
@@ -259,7 +283,7 @@ public:
             return std::nullopt;
         }
         auto capacity = stats.capacity.at(node);
-        return capacity > 0 ? double(n.load() * target_tablet_size) / capacity : 0;
+        return capacity > 0 ? n.load() * target_tablet_size / capacity : 0;
     }
 };
 
