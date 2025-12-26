@@ -134,6 +134,7 @@ class group0_info;
 class raft_group0_client;
 class tablet_virtual_task;
 class task_manager_module;
+class sc_groups_manager;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -280,7 +281,8 @@ public:
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
         std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
-        utils::disk_space_monitor* disk_space_minitor);
+        utils::disk_space_monitor* disk_space_minitor,
+        sc_groups_manager& sc_groups);
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;
@@ -1141,6 +1143,8 @@ private:
     std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
+
+    sc_groups_manager& _sc_groups;
 
 public:
     future<uint64_t> estimate_total_sstable_volume(table_id);

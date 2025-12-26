@@ -302,7 +302,8 @@ async def get_sstable_metadata(manager: ManagerClient, server: ServerInfo, keysp
     res = subprocess.check_output([scylla_path, "sstable", "dump-scylla-metadata",
                                    "--scylla-yaml-file",
                                    os.path.join(node_workdir, "conf", "scylla.yaml"),
-                                   "--sstables"] + scylla_sstables)
+                                   "--sstables"] + scylla_sstables,
+                                  stderr=subprocess.PIPE)
     scylla_metadata = json.loads(res.decode('utf-8', 'ignore'))
     return scylla_metadata
 
@@ -330,7 +331,8 @@ async def validate_sstables_encryption(manager: ManagerClient, server: ServerInf
             res = subprocess.check_output([scylla_path, "sstable", "query",
                                            "--scylla-yaml-file", 
                                            os.path.join(node_workdir, "conf", "scylla.yaml"),
-                                           "--output-format", "json", "--sstables"] + sstables)
+                                           "--output-format", "json", "--sstables"] + sstables,
+                                          stderr=subprocess.PIPE)
             scylla_data = json.loads(res.decode('utf-8', 'ignore'))
             actual_data = [list(r.values()) for r in scylla_data]
             assert actual_data == expected_data
