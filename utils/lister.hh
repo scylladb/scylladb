@@ -87,14 +87,6 @@ public:
     }
 
     /**
-     * Removes the given directory with all its contents (like 'rm -rf <dir>' shell command).
-     *
-     * @param dir Directory to remove.
-     * @return A future that resolves when the operation is complete or an error occurs.
-     */
-    static future<> rmdir(fs::path dir);
-
-    /**
      * Constructor
      *
      * @param f A file instance for the directory to scan.

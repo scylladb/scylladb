@@ -719,7 +719,7 @@ future<> sstable_directory::filesystem_components_lister::cleanup_column_family_
             fs::path dirpath = _directory / de->name;
             if (dirpath.extension().string() == tempdir_extension) {
                 dirlog.info("Found temporary sstable directory: {}, removing", dirpath);
-                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return seastar::recursive_remove_directory(dirpath); }));
             }
         }
         co_return futures;
