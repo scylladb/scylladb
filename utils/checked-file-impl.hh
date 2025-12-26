@@ -104,6 +104,18 @@ public:
             return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
         });
     }
+
+    virtual coroutine::experimental::generator<directory_entry> experimental_list_directory() override {
+        try {
+            auto gen = get_file_impl(_file)->experimental_list_directory();
+            while (auto de = co_await gen()) {
+                co_yield *de;
+            }
+        } catch (...) {
+            _error_handler(std::current_exception());
+            throw;
+        }
+    }
 private:
     const io_error_handler& _error_handler;
     file _file;
