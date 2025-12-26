@@ -421,28 +421,26 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        return _read_context->create_underlying().then([this, phase] {
-          return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
-            if (!mfopt) {
-                if (phase == _cache.phase_of(_read_context->range().start()->value())) {
-                    _cache._read_section(_cache._tracker.region(), [this] {
-                        _cache.find_or_create_missing(_read_context->key());
-                    });
-                } else {
-                    _cache._tracker.on_mispopulate();
-                }
-                _end_of_stream = true;
-            } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
-                _reader = _cache._read_section(_cache._tracker.region(), [&] {
-                    cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
-                    return e.read(_cache, *_read_context, phase);
+        co_await _read_context->create_underlying();
+        auto mfopt = co_await _read_context->underlying().underlying()();
+        if (!mfopt) {
+            if (phase == _cache.phase_of(_read_context->range().start()->value())) {
+                _cache._read_section(_cache._tracker.region(), [this] {
+                    _cache.find_or_create_missing(_read_context->key());
                 });
             } else {
                 _cache._tracker.on_mispopulate();
-                _reader = read_directly_from_underlying(*_read_context, std::move(*mfopt));
             }
-          });
-        });
+            _end_of_stream = true;
+        } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
+            _reader = _cache._read_section(_cache._tracker.region(), [&] {
+                cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
+                return e.read(_cache, *_read_context, phase);
+            });
+        } else {
+            _cache._tracker.on_mispopulate();
+            _reader = read_directly_from_underlying(*_read_context, std::move(*mfopt));
+        }
     }
 public:
     single_partition_populating_reader(row_cache& cache,
