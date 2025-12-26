@@ -3124,6 +3124,22 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
     BOOST_REQUIRE_EQUAL(evaluate(empty_is_not_null, evaluation_inputs{}), make_bool_raw(true));
 }
 
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is) {
+    expression false_is_binop = binary_operator(make_int_const(1), oper_t::IS, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(false_is_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression true_is_binop =
+        binary_operator(constant::make_null(int32_type), oper_t::IS, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(true_is_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression forbidden_is_binop = binary_operator(make_int_const(1), oper_t::IS, make_int_const(2));
+    BOOST_REQUIRE_THROW(evaluate(forbidden_is_binop, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression empty_is_null =
+        binary_operator(make_empty_const(int32_type), oper_t::IS, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_is_null, evaluation_inputs{}), make_bool_raw(false));
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
     expression true_like_binop = binary_operator(make_text_const("some_text"), oper_t::LIKE, make_text_const("some_%"));
     BOOST_REQUIRE_EQUAL(evaluate(true_like_binop, evaluation_inputs{}), make_bool_raw(true));
@@ -3768,6 +3784,8 @@ enum struct expected_rhs_type {
     float_in_list,
     // list<tuple<float, int, text, double>
     multi_column_tuple_in_list,
+    // IS allows only NULL as the RHS, everything else is invalid
+    is_null_rhs,
     // IS_NOT allows only NULL as the RHS, everything else is invalid
     is_not_null_rhs
 };
@@ -4485,6 +4503,28 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_not_null) {
         test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
 
         test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::is_not_null_rhs, db,
+                                                        table_schema);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_null) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare =
+            binary_operator(unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)},
+                            oper_t::IS, make_null_untyped(), comp_order);
+
+        expression expected = binary_operator(column_value(table_schema->get_column_definition("float_col")),
+                                              oper_t::IS, constant::make_null(float_type), comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::is_null_rhs, db,
                                                         table_schema);
     }
 }

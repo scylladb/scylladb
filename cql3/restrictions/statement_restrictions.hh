@@ -277,7 +277,7 @@ public:
 private:
     std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(const secondary_index::secondary_index_manager& sim) const;
     void add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
-    void add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
+    void add_is_null_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
     void add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
     void add_token_partition_key_restriction(const expr::binary_operator& restr);
     void add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering);
