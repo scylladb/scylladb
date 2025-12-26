@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 import distro
 from scylla_sysconfdir import SYSCONFDIR
+from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
 
