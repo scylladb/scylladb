@@ -25,6 +25,11 @@ public:
         NOT_ASSIGNABLE,
     };
 
+    struct vector_test_result {
+        test_result result;
+        std::optional<size_t> dimension_opt;
+    };
+
     static bool is_assignable(test_result tr) {
         return tr != test_result::NOT_ASSIGNABLE;
     }
@@ -43,6 +48,8 @@ public:
      * testing "strong" equality to decide the most precise overload to pick when multiple could match.
      */
     virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) const = 0;
+
+    virtual vector_test_result test_assignment_any_size_float_vector() const = 0;
 
     virtual std::optional<data_type> assignment_testable_type_opt() const = 0;
 
