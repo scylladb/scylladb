@@ -113,9 +113,33 @@ class group0_state_machine : public raft_state_machine {
     gms::feature_service& _feature_service;
     gms::feature::listener_registration _topology_on_raft_support_listener;
 
+    // This boolean controls whether the in-memory data structures should be updated
+    // after snapshot transfer / command application.
+    //
+    // The reason for the flag is to protect from reading a partially applied state.
+    // A group0 command may consist of multiple mutations that are not applied
+    // in a single, atomic operation, but rather separately. A node can crash
+    // in the middle of applying such a command, leaving the group0 in an inconsistent
+    // state. Thanks to the idempotency of mutations, applying the group0 command
+    // again, fully, will make the state consistent again. Therefore, we use this
+    // flag to control when the in memory state machine should be updated from the
+    // on-disk state - we can only do that if we know that the group0 table state
+    // is consistent.
+    //
+    // The only exception to the above rule is the schema - the schema state is
+    // loaded into memory before group0 is initialized, and the in-memory state
+    // is reloaded even if _in_memory_state_machine_enabled is set to false.
+    // Resolving this exception should be possible, but would require considerable
+    // effort in refactoring the migration manager code. In the meantime, we are
+    // fine with this exception because the migration manager applies all schema
+    // mutations of a single command atomically, in a single commitlog entry -
+    // therefore, we should not observe broken invariants in the schema module.
+    bool _in_memory_state_machine_enabled;
+
     modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
+    future<> reload_state();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
@@ -125,6 +149,7 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override;
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
+    future<> enable_in_memory_state_machine();
 };
 
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);

@@ -92,8 +92,6 @@ static logging::logger logger("group0_client");
  *
  * Furthermore, obtaining the guard ensures that we don't read partial state, since it holds a lock that is also taken
  * during command application (`_read_apply_mutex_holder`). The lock is released just before sending the command to Raft.
- * TODO: we may still read partial state if we crash in the middle of command application.
- * See `group0_state_machine::apply` for a proposed fix.
  *
  * Obtaining the guard also ensures that there is no concurrent group 0 operation running on this node using another lock
  * (`_operation_mutex_holder`); if we allowed multiple concurrent operations to run, some of them could fail
