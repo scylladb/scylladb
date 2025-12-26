@@ -193,6 +193,7 @@ class ScyllaLogFile:
                         next_line = await self._run_in_executor(log_file.readline, loop=loop)
                         if not next_line:
                             # End of file
+                            line = ""
                             break
                         if next_line.startswith("  ") and not next_line.startswith("   "):
                             # Line starts with exactly 2 spaces (backtrace entry)

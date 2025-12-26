@@ -339,6 +339,7 @@ class ManagerClient:
     async def server_start(self,
                            server_id: ServerNum,
                            expected_error: str | None = None,
+                           expected_crash: bool = False,
                            wait_others: int = 0,
                            wait_interval: float = 45,
                            seeds: list[IPAddress] | None = None,
@@ -352,9 +353,13 @@ class ManagerClient:
 
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
         if provided.
+
+        If `expected_crash` is True, ignore cores and backtraces related to `expected_error`.
         """
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
+            if expected_crash:
+                self.ignore_cores_log_patterns.append(re.escape(expected_error))
 
         logger.debug("ManagerClient starting %s", server_id)
         data = {
