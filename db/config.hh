@@ -485,12 +485,14 @@ public:
     named_value<uint16_t> alternator_https_port;
     named_value<sstring> alternator_address;
     named_value<bool> alternator_enforce_authorization;
+    named_value<bool> alternator_warn_authorization;
     named_value<sstring> alternator_write_isolation;
     named_value<uint32_t> alternator_streams_time_window_s;
     named_value<uint32_t> alternator_timeout_in_ms;
     named_value<double> alternator_ttl_period_in_seconds;
     named_value<sstring> alternator_describe_endpoints;
     named_value<uint32_t> alternator_max_items_in_batch_write;
+    named_value<bool> alternator_allow_system_table_write;
 
     named_value<bool> abort_on_ebadf;
 
