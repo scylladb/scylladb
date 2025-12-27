@@ -14,7 +14,9 @@ Port    Description                                   Protocol
 ------  --------------------------------------------  --------
 7001    SSL inter-node communication (RPC)            TCP
 ------  --------------------------------------------  --------
-10000   ScyllaDB REST API                               TCP
+10000   ScyllaDB REST API                             TCP
+------  --------------------------------------------  --------
+10001   ScyllaDB Manager Agent REST API               TCP
 ------  --------------------------------------------  --------
 9180    Prometheus API                                TCP
 ------  --------------------------------------------  --------
@@ -25,4 +27,4 @@ Port    Description                                   Protocol
 19142   Native shard-aware transport port  (ssl)         TCP
 ======  ============================================  ========
 
-.. note:: For ScyllaDB Manager ports, see the `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ documentation.
+.. note:: For more details about ScyllaDB Manager ports, see the `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ documentation.
