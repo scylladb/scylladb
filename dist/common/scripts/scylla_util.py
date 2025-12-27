@@ -3,9 +3,12 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import configparser
+import glob
 import io
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import yaml
 import sys
@@ -16,6 +19,7 @@ from datetime import datetime, timedelta
 
 import distro
 from scylla_sysconfdir import SYSCONFDIR
+from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
 
@@ -334,7 +338,7 @@ def apt_install(pkg, offline_exit=True):
         if apt_is_updated():
             break
         try:
-            run('apt-get update', shell=True, check=True, stderr=PIPE, encoding='utf-8')
+            res = run('apt-get update', shell=True, check=True, stderr=PIPE, encoding='utf-8')
             break
         except CalledProcessError as e:
             print(e.stderr, end='')

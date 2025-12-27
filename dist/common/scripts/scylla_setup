@@ -12,7 +12,9 @@ import sys
 import argparse
 import glob
 import shutil
+import io
 import stat
+import distro
 from scylla_util import *
 from subprocess import run, DEVNULL
 
@@ -292,9 +294,11 @@ if __name__ == '__main__':
                     sys.exit(1)
 
     disks = args.disks
+    nic = args.nic
     set_nic_and_disks = args.setup_nic_and_disks
     swap_directory = args.swap_directory
     swap_size = args.swap_size
+    ec2_check = not args.no_ec2_check
     kernel_check = not args.no_kernel_check
     verify_package = not args.no_verify_package
     enable_service = not args.no_enable_service

@@ -8,6 +8,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import os
+import subprocess
+import shutil
 from scylla_util import *
 
 if __name__ == '__main__':

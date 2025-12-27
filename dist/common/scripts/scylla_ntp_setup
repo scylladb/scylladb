@@ -11,6 +11,7 @@ import os
 import sys
 import argparse
 import re
+import distro
 import shutil
 
 from scylla_util import *

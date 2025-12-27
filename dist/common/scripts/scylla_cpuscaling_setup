@@ -10,6 +10,8 @@
 import os
 import sys
 import argparse
+import shlex
+import distro
 from scylla_util import *
 
 UNIT_DATA= '''
