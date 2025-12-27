@@ -691,7 +691,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
 
 static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& semaphore, bool expected_can_admit, const char* description,
         std::source_location sl = std::source_location::current()) {
-    testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
+    testlog.trace("Running admission scenario {}, with expected_can_admit={}, available resources on the semaphore: {}", description,
+            expected_can_admit, semaphore.available_resources());
     const auto stats_before = semaphore.get_stats();
 
     auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now(), {});
@@ -2371,6 +2372,46 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) 
     auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), *permit2));
 
     BOOST_REQUIRE_THROW(requested_memory2_fut.get(), named_semaphore_timed_out);
+}
+
+/// Test that if no count resources are currently used, a single permit is always admitted regardless of available memory.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_always_admit_one_permit) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(2),
+            2048,
+            test_name + " semaphore",
+            std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t>(200),
+            utils::updateable_value<uint32_t>(400),
+            utils::updateable_value<uint32_t>(1),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    // Scenario1: all memory use used by tracking permit (not consuming count resources)
+    {
+        auto permit = semaphore.make_tracking_only_permit(schema, test_name, db::no_timeout, {});
+        auto res = permit.consume_memory(4096);
+
+        require_can_admit(schema, semaphore, true, "all memory used, but one permit should always be admitted");
+    }
+
+    // Scenario2: all memory use used by evicted permit (recouped count resource)
+    {
+        auto permit = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
+        auto res = permit.consume_memory(4096);
+
+        require_can_admit(schema, semaphore, false, "all memory used, cannot admit");
+
+        auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
+        BOOST_REQUIRE(!irh);
+
+        require_can_admit(schema, semaphore, true, "all memory used, but one permit should always be admitted");
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
