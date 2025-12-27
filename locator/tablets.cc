@@ -927,6 +927,56 @@ std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_ba
     return std::nullopt;
 }
 
+std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const {
+    std::optional<uint64_t> tablet_size_opt;
+    tablet_size_opt = get_tablet_size(host, rb_tid);
+    if (tablet_size_opt) {
+        return tablet_size_opt;
+    }
+
+    // If the tablet is in transition,
+    // try to find it on the leaving replica, in case of tablet migration,
+    // or get the avg tablet size of all the replicas, in case we have a rebuild
+    if (trinfo) {
+        switch (trinfo->transition) {
+            case tablet_transition_kind::migration:
+                // Search for the tablet size on leaving replica
+                if (trinfo->pending_replica && trinfo->pending_replica->host == host) {
+                    if (auto leaving_replica = get_leaving_replica(ti, *trinfo)) {
+                        tablet_size_opt = get_tablet_size(leaving_replica->host, rb_tid);
+                    } else {
+                        on_internal_error_noexcept(tablet_logger, ::format("No leaving replica for tablet migration in table {}. ti.replicas: {} trinfo->next: {}",
+                                                rb_tid.table, ti.replicas, trinfo->next));
+                    }
+                }
+                break;
+            case tablet_transition_kind::rebuild:
+                [[fallthrough]];
+            case tablet_transition_kind::rebuild_v2: {
+                // Get the avg tablet size from the available replicas
+                size_t replica_count = 0;
+                uint64_t tablet_size_sum = 0;
+                for (auto& replica : ti.replicas) {
+                    auto new_tablet_size_opt = get_tablet_size(replica.host, rb_tid);
+                    if (new_tablet_size_opt) {
+                        tablet_size_sum += *new_tablet_size_opt;
+                        replica_count++;
+                    }
+                }
+                if (replica_count) {
+                    tablet_size_opt = tablet_size_sum / replica_count;
+                }
+                break;
+            }
+            case tablet_transition_kind::intranode_migration:
+                [[fallthrough]];
+            case tablet_transition_kind::repair:
+                break;
+        }
+    }
+    return tablet_size_opt;
+}
+
 lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
     lw_shared_ptr<load_stats> reconciled_stats { make_lw_shared<load_stats>(*this) };
     load_stats& new_stats = *reconciled_stats;

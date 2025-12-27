@@ -234,13 +234,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         std::vector<unsigned> node3_shards(node3_shard_count, 0);
 
         for (unsigned i = 0; i < node1_shard_count * 3; ++i) {
-            node1_shards[load.next_shard(host1)] += 1;
+            node1_shards[load.next_shard(host1, 1, service::default_target_tablet_size)] += 1;
         }
         for (unsigned i = 0; i < node2_shard_count * 3; ++i) {
-            node2_shards[load.next_shard(host2)] += 1;
+            node2_shards[load.next_shard(host2, 1, service::default_target_tablet_size)] += 1;
         }
         for (unsigned i = 0; i < node3_shard_count * 3; ++i) {
-            node3_shards[load.next_shard(host3)] += 1;
+            node3_shards[load.next_shard(host3, 1, service::default_target_tablet_size)] += 1;
         }
 
         for (unsigned i = 1; i < node1_shard_count; ++i) {
@@ -300,7 +300,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         // host3 has max shard load of 3 and 3 shards, and 4 tablets allocated.
         // So to achieve even load we need to allocate 3 * 3 - 4 = 5 more tablets.
         for (int i = 0; i < 5; ++i) {
-            auto s = load.next_shard(host3);
+            auto s = load.next_shard(host3, 1, service::default_target_tablet_size);
             node3_shards[s] += 1;
         }
 
