@@ -10,7 +10,7 @@ Multiple ``INSERT``, ``UPDATE`` and ``DELETE`` can be executed in a single state
 
 .. code-block::
 
-   batch_statement: BEGIN [ UNLOGGED | COUNTER ] BATCH
+   batch_statement: BEGIN [ UNLOGGED | COUNTER | GROUP0 ] BATCH
                   : [ USING `update_parameter` ( AND `update_parameter` )* ]
                   : `modification_statement` ( ';' `modification_statement` )*
                   : APPLY BATCH
@@ -66,6 +66,29 @@ used, a failed batch might leave the batch only partly applied.
 
 Use the ``COUNTER`` option for batched counter updates. Unlike other
 updates in ScyllaDB, counter updates are not idempotent.
+
+``GROUP0`` batches
+~~~~~~~~~~~~~~~~~~
+
+Use the ``GROUP0`` option for batched modifications to system tables that are managed by group0 
+(e.g., ``system.topology``). GROUP0 batches execute mutations as a group0 command, ensuring they 
+are replicated through the Raft consensus protocol.
+
+GROUP0 batches have the following restrictions:
+
+- Can only modify tables in the ``system`` keyspace
+- Cannot use custom timestamps (``USING TIMESTAMP`` is not allowed)
+- Cannot use conditional statements (``IF EXISTS``, ``IF NOT EXISTS``, etc.)
+- Requires a group0 guard to be taken before execution
+
+Example:
+
+.. code-block:: cql
+
+    BEGIN GROUP0 BATCH
+       INSERT INTO system.topology (key, value) VALUES ('node1', 'data1');
+       UPDATE system.topology SET value = 'data2' WHERE key = 'node2';
+    APPLY BATCH;
 
 
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
