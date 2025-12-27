@@ -210,9 +210,9 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     auto sgs = storage_groups_for_token_range(token_range);
     reserve_fn(std::ranges::fold_left(sgs | std::views::transform(std::mem_fn(&storage_group::memtable_count)), uint64_t(0), std::plus{}));
     for (auto& sg : sgs) {
-        for (auto& cg : sg->compaction_groups()) {
+        sg->for_each_compaction_group([&] (const compaction_group_ptr &cg) {
             add_memtables_from_cg(*cg);
-        }
+        });
     }
 }
 
@@ -423,15 +423,27 @@ bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
 }
 
 api::timestamp_type storage_group::min_memtable_timestamp() const {
-    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type storage_group::min_memtable_live_timestamp() const {
-    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_live_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type storage_group::min_memtable_live_row_marker_timestamp() const {
-    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_row_marker_timestamp)));
+    api::timestamp_type min_timestamp = api::max_timestamp;
+    for_each_compaction_group([&min_timestamp] (const compaction_group_ptr& cg) {
+        min_timestamp = std::min(min_timestamp, cg->min_memtable_live_row_marker_timestamp());
+    });
+    return min_timestamp;
 }
 
 api::timestamp_type table::min_memtable_timestamp() const {
@@ -933,7 +945,7 @@ void storage_group::for_each_compaction_group(std::function<void(const compactio
     }
 }
 
-utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() {
+utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups_immediate() {
     utils::small_vector<compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);
@@ -941,7 +953,7 @@ utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() 
     return cgs;
 }
 
-utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups() const {
+utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_groups_immediate() const {
     utils::small_vector<const_compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
         cgs.push_back(cg);
@@ -1257,7 +1269,7 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
             tlogger.info("foreach_compaction_group_wait: released");
         });
 
-        co_await coroutine::parallel_for_each(sg.compaction_groups(), [&] (compaction_group_ptr cg) -> future<> {
+        co_await coroutine::parallel_for_each(sg.compaction_groups_immediate(), [&] (compaction_group_ptr cg) -> future<> {
             if (auto holder = try_hold_gate(cg->async_gate())) {
                 co_await action(*cg);
             }
@@ -1971,7 +1983,7 @@ sstables::file_size_stats compaction_group::live_disk_space_used_full_stats() co
 }
 
 uint64_t storage_group::live_disk_space_used() const {
-    auto cgs = const_cast<storage_group&>(*this).compaction_groups();
+    auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
 }
 
@@ -2098,10 +2110,9 @@ future<std::vector<compaction::compaction_group_view*>> table::get_compaction_gr
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
         co_await coroutine::maybe_yield();
-        auto cgs = sg->compaction_groups();
-        for (auto& cg : cgs) {
+        sg->for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
             ret.push_back(&cg->view_for_unrepaired_data());
-        }
+        });
     }
     co_return ret;
 }
@@ -2128,7 +2139,7 @@ future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_
 future<> table::clear_being_repaired_for_range(dht::token_range range) {
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
-        auto cgs = sg->compaction_groups();
+        auto cgs = sg->compaction_groups_immediate();
         for (auto& cg : cgs) {
             auto sstables = cg->all_sstables();
             co_await coroutine::maybe_yield();
@@ -2570,9 +2581,11 @@ future<> table::drop_quarantined_sstables() {
 }
 
 bool storage_group::no_compacted_sstable_undeleted() const {
-    return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
-        return cg->compacted_undeleted_sstables().empty();
+    auto ret = true;
+    for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
+        ret &= cg->compacted_undeleted_sstables().empty();
     });
+    return ret;
 }
 
 // Gets the list of all sstables in the column family, including ones that are
@@ -2837,9 +2850,9 @@ void compaction_group::clear_sstables() {
 }
 
 void storage_group::clear_sstables() {
-    for (auto cg : compaction_groups()) {
+    for_each_compaction_group([] (const compaction_group_ptr& cg) {
         cg->clear_sstables();
-    }
+    });
 }
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
@@ -3166,7 +3179,7 @@ future<> table::update_repaired_at_for_merge() {
     for (auto& x : sgs) {
         auto sg = x.second;
         if (sg) {
-            auto cgs = sg->compaction_groups();
+            auto cgs = sg->compaction_groups_immediate();
             for (auto& cg : cgs) {
                 auto cre = co_await cg->get_compaction_manager().stop_and_disable_compaction("update_repaired_at_for_merge", cg->view_for_unrepaired_data());
                 co_await cg->update_repaired_at_for_merge();
@@ -3574,7 +3587,7 @@ future<> compaction_group::flush() noexcept {
 }
 
 future<> storage_group::flush() noexcept {
-    for (auto& cg : compaction_groups()) {
+    for (auto& cg : compaction_groups_immediate()) {
         co_await cg->flush();
     }
 }
@@ -3592,7 +3605,11 @@ size_t compaction_group::memtable_count() const noexcept {
 }
 
 size_t storage_group::memtable_count() const {
-    return std::ranges::fold_left(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
+    size_t count = 0;
+    for_each_compaction_group([&count] (const compaction_group_ptr& cg) {
+        count += cg->memtable_count();
+    });
+    return count;
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
@@ -3610,7 +3627,7 @@ future<> table::flush(std::optional<db::replay_position> pos) {
 }
 
 bool storage_group::can_flush() const {
-    return std::ranges::any_of(compaction_groups(), std::mem_fn(&compaction_group::can_flush));
+    return std::ranges::any_of(compaction_groups_immediate(), std::mem_fn(&compaction_group::can_flush));
 }
 
 bool table::can_flush() const {
@@ -3641,9 +3658,11 @@ bool storage_group::compaction_disabled() const {
     // Compaction group that has been stopped will be excluded, since the group will not be available for a caller
     // to disable compaction explicitly on it, e.g. on truncate, and the caller might want to perform a check
     // that compaction was disabled on all groups. Stopping a group is equivalent to disabling compaction on it.
-    return std::ranges::all_of(compaction_groups()
-            | std::views::filter(std::not_fn(&compaction_group::stopped)), [] (const_compaction_group_ptr& cg) {
-        return cg->compaction_disabled(); });
+    bool all_disabled = true;
+    for_each_compaction_group([&all_disabled] (const compaction_group_ptr& cg) {
+        all_disabled &= cg->stopped() || cg->compaction_disabled();
+    });
+    return all_disabled;
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -4428,11 +4447,11 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
     auto& sg = storage_group_for_token(token);
     std::vector<mutation_source> mss;
     mss.reserve(sg.memtable_count());
-    for (auto& cg : sg.compaction_groups()) {
+    sg.for_each_compaction_group([&mss] (const compaction_group_ptr &cg) {
         for (auto& mt : *cg->memtables()) {
             mss.emplace_back(mt->as_data_source());
         }
-    }
+    });
     return mss;
 }
 
@@ -4592,7 +4611,7 @@ future<> compaction_group::cleanup() {
 }
 
 future<> table::clear_inactive_reads_for_tablet(database& db, storage_group& sg) {
-    for (auto& cg_ptr : sg.compaction_groups()) {
+    for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await db.clear_inactive_reads_for_tablet(_schema->id(), cg_ptr->token_range());
     }
 }
@@ -4633,13 +4652,13 @@ future<> table::stop_compaction_groups(storage_group& sg) {
 }
 
 future<> table::flush_compaction_groups(storage_group& sg) {
-    for (auto& cg_ptr : sg.compaction_groups()) {
+    for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->flush();
     }
 }
 
 future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
-    for (auto& cg_ptr : sg.compaction_groups()) {
+    for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
         // and can cover some mutations which weren't cleaned, causing them to be lost during replay.
