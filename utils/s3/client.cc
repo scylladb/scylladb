@@ -218,7 +218,7 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+client::group_client::group_client(std::unique_ptr<utils::http::dns_connection_factory> f, unsigned max_conn) : dns_factory(*f), http(std::move(f), max_conn) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -317,7 +317,9 @@ client::group_client& client::find_or_create_client() {
 http::experimental::client::reply_handler client::wrap_handler(http::request& request,
                                                                http::experimental::client::reply_handler handler,
                                                                std::optional<http::reply::status_type> expected) {
-    return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+    return [this, &request, expected, err_count = 0ul, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
+        // Here we are running the counter one attempt ahead of those counted by the retry strategy
+        ++err_count;
         auto _in = std::move(in);
         auto status_class = seastar::http::reply::classify_status(rep._status);
         std::optional<aws_error> possible_error;
@@ -362,7 +364,15 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             eptr = std::current_exception();
         }
         if (eptr) {
-            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
+            auto err = aws_error::from_exception_ptr(eptr);
+            // Here we are explicitly checking that the error is retryable, it must be a network error and the retry strategy going to exhaust retries as
+            // the `err_count` is incremented BEFORE each attempt. In that case, as the last resort, we reset DNS resolution to mitigate possible DNS issues.
+            if (err.is_retryable() && err.get_error_type() == aws_error_type::NETWORK_CONNECTION && !co_await _retry_strategy->should_retry(eptr, err_count)) {
+                auto& gc = find_or_create_client();
+                gc.dns_factory.reset_dns_resolution();
+                s3l.debug("Resetting DNS resolution for host {} as the last resort before retries are exhausted.", _host);
+            }
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(err)));
         }
     };
 }

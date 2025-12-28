@@ -21,6 +21,9 @@
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
 
+namespace utils::http {
+class dns_connection_factory;
+}
 using namespace seastar;
 class memory_data_sink_buffers;
 
@@ -122,13 +125,14 @@ class client : public enable_shared_from_this<client> {
         }
     };
     struct group_client {
+        utils::http::dns_connection_factory& dns_factory;
         seastar::http::experimental::client http;
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
         uint64_t downloads_blocked_on_memory = 0;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
+        group_client(std::unique_ptr<utils::http::dns_connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
