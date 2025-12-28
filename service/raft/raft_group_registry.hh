@@ -27,6 +27,7 @@ namespace service {
 
 class raft_rpc;
 class raft_sys_table_storage;
+class raft_state_machine;
 using raft_ticker_type = seastar::timer<lowres_clock>;
 
 struct raft_group_not_found: public raft::error {
@@ -51,6 +52,7 @@ struct raft_server_for_group {
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
+    raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
 };
