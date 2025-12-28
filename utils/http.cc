@@ -68,6 +68,11 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
     }())
 {}
 
+void utils::http::dns_connection_factory::reset_dns_resolution() {
+    _state = make_lw_shared<state>(std::move(_state->creds));
+    _done = initialize(_state, _host, _use_https, _logger);
+}
+
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
     if (!_state->initialized) {
         _logger.debug("Waiting for factory to initialize");

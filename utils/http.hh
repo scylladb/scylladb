@@ -43,6 +43,7 @@ public:
     dns_connection_factory(dns_connection_factory&&);
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
     dns_connection_factory(std::string endpoint_url, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
+    void reset_dns_resolution();
 
     virtual future<connected_socket> make(abort_source*) override;
 };
