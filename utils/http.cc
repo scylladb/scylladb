@@ -8,6 +8,7 @@
 
 #include "http.hh"
 #include "rest/client.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/regex.hpp>
 #include <seastar/coroutine/all.hh>
@@ -69,6 +70,12 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
 {}
 
 void utils::http::dns_connection_factory::reset_dns_resolution() {
+    // Tests related injection to indicate that a DNS reset has occurred and disable network
+    // related that was injected by the test to trigger the DNS reset.
+    get_local_injector().enable("dns_reset_occurred");
+    get_local_injector().disable("s3_client_network_error");
+
+    _logger.debug("Invalidating DNS resolution for {}", _host);
     _state = make_lw_shared<state>(std::move(_state->creds));
     _done = initialize(_state, _host, _use_https, _logger);
 }

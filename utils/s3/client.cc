@@ -359,6 +359,9 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 throw aws::aws_exception(
                     aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
             }
+            utils::get_local_injector().inject("s3_client_network_error", [] {
+                throw std::system_error(ECONNRESET, std::system_category());
+            });
             co_return co_await handler(rep, std::move(_in));
         } catch (...) {
             eptr = std::current_exception();
