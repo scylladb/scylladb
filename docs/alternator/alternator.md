@@ -54,6 +54,14 @@ these default locations can overridden by specifying
 `--alternator-encryption-options keyfile="..."` and
 `--alternator-encryption-options certificate="..."`.
 
+In addition to **alternator_port** and **alternator_https_port**, the two
+options **alternator_port_proxy_protocol** (for HTTP) and
+**alternator_https_port_proxy_protocol** (for HTTPS) allow running Alternator
+behind a reverse proxy, such as HAProxy or AWS PrivateLink, and still report
+the correct client address. The reverse proxy must be configured to use
+[Proxy Protocol v2](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
+(the binary header format).
+
 By default, ScyllaDB saves a snapshot of deleted tables. But Alternator does
 not offer an API to restore these snapshots, so these snapshots are not useful
 and waste disk space - deleting a table does not recover any disk space.
