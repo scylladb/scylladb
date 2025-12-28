@@ -1447,6 +1447,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "SELECT statements with aggregation or GROUP BYs or a secondary index may use this page size for their internal reading data, not the page size specified in the query options.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
+    , alternator_port_proxy_protocol(this, "alternator_port_proxy_protocol", value_status::Used, 0,
+        "Port on which the Alternator API listens for clients using proxy protocol v2. Disabled (0) by default.")
+    , alternator_https_port_proxy_protocol(this, "alternator_https_port_proxy_protocol", value_status::Used, 0,
+        "Port on which the Alternator HTTPS API listens for clients using proxy protocol v2. Disabled (0) by default.")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")
     , alternator_enforce_authorization(this, "alternator_enforce_authorization", liveness::LiveUpdate, value_status::Used, false, "Enforce checking the authorization header for every request in Alternator.")
     , alternator_warn_authorization(this, "alternator_warn_authorization", liveness::LiveUpdate, value_status::Used, false, "Count and log warnings about failed authentication or authorization")

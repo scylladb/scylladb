@@ -105,11 +105,23 @@ future<> controller::start_server() {
             alternator_port = _config.alternator_port();
             _listen_addresses.push_back({addr, *alternator_port});
         }
+        std::optional<uint16_t> alternator_port_proxy_protocol;
+        if (_config.alternator_port_proxy_protocol()) {
+            alternator_port_proxy_protocol = _config.alternator_port_proxy_protocol();
+            _listen_addresses.push_back({addr, *alternator_port_proxy_protocol});
+        }
         std::optional<uint16_t> alternator_https_port;
+        std::optional<uint16_t> alternator_https_port_proxy_protocol;
         std::optional<tls::credentials_builder> creds;
-        if (_config.alternator_https_port()) {
-            alternator_https_port = _config.alternator_https_port();
-            _listen_addresses.push_back({addr, *alternator_https_port});
+        if (_config.alternator_https_port() || _config.alternator_https_port_proxy_protocol()) {
+            if (_config.alternator_https_port()) {
+                alternator_https_port = _config.alternator_https_port();
+                _listen_addresses.push_back({addr, *alternator_https_port});
+            }
+            if (_config.alternator_https_port_proxy_protocol()) {
+                alternator_https_port_proxy_protocol = _config.alternator_https_port_proxy_protocol();
+                _listen_addresses.push_back({addr, *alternator_https_port_proxy_protocol});
+            }
             creds.emplace();
             auto opts = _config.alternator_encryption_options();
             if (opts.empty()) {
@@ -135,20 +147,29 @@ future<> controller::start_server() {
             }
         }
         _server.invoke_on_all(
-                [this, addr, alternator_port, alternator_https_port, creds = std::move(creds)] (server& server) mutable {
-            return server.init(addr, alternator_port, alternator_https_port, creds,
+                [this, addr, alternator_port, alternator_https_port, alternator_port_proxy_protocol, alternator_https_port_proxy_protocol, creds = std::move(creds)] (server& server) mutable {
+            return server.init(addr, alternator_port, alternator_https_port, alternator_port_proxy_protocol, alternator_https_port_proxy_protocol, creds,
                     _config.alternator_enforce_authorization,
                     _config.alternator_warn_authorization,
                     _config.alternator_max_users_query_size_in_trace_output,
                     &_memory_limiter.local().get_semaphore(),
                     _config.max_concurrent_requests_per_shard);
-        }).handle_exception([this, addr, alternator_port, alternator_https_port] (std::exception_ptr ep) {
-            logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
-                    addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF", ep);
+        }).handle_exception([this, addr, alternator_port, alternator_https_port, alternator_port_proxy_protocol, alternator_https_port_proxy_protocol] (std::exception_ptr ep) {
+            logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}, proxy-protocol port {}, TLS proxy-protocol port {}: {}",
+                    addr,
+                    alternator_port ? std::to_string(*alternator_port) : "OFF",
+                    alternator_https_port ? std::to_string(*alternator_https_port) : "OFF",
+                    alternator_port_proxy_protocol ? std::to_string(*alternator_port_proxy_protocol) : "OFF",
+                    alternator_https_port_proxy_protocol ? std::to_string(*alternator_https_port_proxy_protocol) : "OFF",
+                    ep);
             return stop_server().then([ep = std::move(ep)] { return make_exception_future<>(ep); });
-        }).then([addr, alternator_port, alternator_https_port] {
-            logger.info("Alternator server listening on {}, HTTP port {}, HTTPS port {}",
-                    addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF");
+        }).then([addr, alternator_port, alternator_https_port, alternator_port_proxy_protocol, alternator_https_port_proxy_protocol] {
+            logger.info("Alternator server listening on {}, HTTP port {}, HTTPS port {}, proxy-protocol port {}, TLS proxy-protocol port {}",
+                    addr,
+                    alternator_port ? std::to_string(*alternator_port) : "OFF",
+                    alternator_https_port ? std::to_string(*alternator_https_port) : "OFF",
+                    alternator_port_proxy_protocol ? std::to_string(*alternator_port_proxy_protocol) : "OFF",
+                    alternator_https_port_proxy_protocol ? std::to_string(*alternator_https_port_proxy_protocol) : "OFF");
         }).get();
     });
 }
