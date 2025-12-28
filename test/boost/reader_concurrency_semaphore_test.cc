@@ -384,6 +384,10 @@ class dummy_file_impl : public file_impl {
         return make_ready_future<struct stat>();
     }
 
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override {
+        return make_ready_future<struct stat>();
+    }
+
     virtual future<> truncate(uint64_t length) override {
         return make_ready_future<>();
     }

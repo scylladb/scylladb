@@ -1735,6 +1735,10 @@ public:
         return get_file_impl(_tracked_file)->stat();
     }
 
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override {
+        return get_file_impl(_tracked_file)->statat(name, flags);
+    }
+
     virtual future<> truncate(uint64_t length) override {
         return get_file_impl(_tracked_file)->truncate(length);
     }

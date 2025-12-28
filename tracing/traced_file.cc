@@ -29,6 +29,7 @@ public:
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override;
     virtual future<> flush(void) override;
     virtual future<struct stat> stat(void) override;
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override;
     virtual future<> truncate(uint64_t length) override;
     virtual future<> discard(uint64_t offset, uint64_t length) override;
     virtual future<> allocate(uint64_t position, uint64_t length) override;
@@ -127,6 +128,21 @@ traced_file_impl::stat(void) {
             return s;
         } catch (...) {
             tracing::trace(_trace_state, "{} failed to retrieve file status: {}", _trace_prefix, std::current_exception());
+            throw;
+        }
+    });
+}
+
+future<struct stat>
+traced_file_impl::statat(std::string_view name, int flags) {
+    tracing::trace(_trace_state, "{} scheduling file status retrieval", _trace_prefix);
+    return get_file_impl(_f)->statat(name, flags).then_wrapped([this, name] (future<struct stat> f) {
+        try {
+            auto s = f.get();
+            tracing::trace(_trace_state, "{} finished file status retrieval of {}", _trace_prefix, name);
+            return s;
+        } catch (...) {
+            tracing::trace(_trace_state, "{} failed to retrieve file status of {}: {}", _trace_prefix, name, std::current_exception());
             throw;
         }
     });

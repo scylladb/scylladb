@@ -57,6 +57,12 @@ public:
         });
     }
 
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override {
+        return do_io_check(_error_handler, [&] {
+            return get_file_impl(_file)->statat(name, flags);
+        });
+    }
+
     virtual future<> truncate(uint64_t length) override {
         return do_io_check(_error_handler, [&] {
             return get_file_impl(_file)->truncate(length);

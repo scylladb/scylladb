@@ -35,6 +35,9 @@ public:
     future<struct stat> stat(void) override {
         not_implemented();
     }
+    future<struct stat> statat(std::string_view name, int flags = 0) override {
+        not_implemented();
+    }
     future<> truncate(uint64_t length) override {
         not_implemented();
     }
@@ -286,6 +289,9 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
             res.st_mtime = std::chrono::system_clock::to_time_t(co_await _source.timestamp());
             res.st_ctime = res.st_mtime;
             co_return res;
+        }
+        future<struct stat> statat(std::string_view name, int flags = 0) override {
+            not_implemented();
         }
         future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
             temporary_buffer<uint8_t> res(range_size);

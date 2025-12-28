@@ -607,6 +607,7 @@ public:
 
     // delegating
     virtual future<struct stat> stat(void) override { return _cf.get_file().stat(); }
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override { return _cf.get_file().statat(name, flags); }
     virtual future<uint64_t> size(void) override { return _cf.get_file().size(); }
     virtual future<> close() override { return _cf.get_file().close(); }
     virtual std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_cf.get_file())->dup(); }

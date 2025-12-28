@@ -296,6 +296,7 @@ public:
     virtual future<> allocate(uint64_t position, uint64_t length) override { unsupported(); }
     virtual subscription<directory_entry> list_directory(std::function<future<>(directory_entry)>) override { unsupported(); }
     virtual future<struct stat> stat(void) override { unsupported(); }
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override { unsupported(); };
     virtual future<uint64_t> size(void) override { unsupported(); }
     virtual std::unique_ptr<seastar::file_handle_impl> dup() override { unsupported(); }
 

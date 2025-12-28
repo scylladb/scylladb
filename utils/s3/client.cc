@@ -1771,6 +1771,10 @@ public:
         co_return ret;
     }
 
+    virtual future<struct stat> statat(std::string_view name, int flags = 0) override {
+        throw std::runtime_error("statat is not supported on s3 readable file");
+    }
+
     virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
         co_await maybe_update_stats();
         if (pos >= _stats->size) {

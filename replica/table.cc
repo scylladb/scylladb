@@ -3461,6 +3461,7 @@ future<bool> table::snapshot_exists(sstring tag) {
     sstring jsondir = (so->dir / sstables::snapshots_dir / tag).native();
     bool exists = false;
     try {
+        future<stat_data> (&file_stat)(std::string_view, follow_symlink) noexcept = seastar::file_stat;
         auto sd = co_await io_check(file_stat, jsondir, follow_symlink::no);
         if (sd.type != directory_entry_type::directory) {
             throw std::error_code(ENOTDIR, std::system_category());
@@ -3516,6 +3517,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
         const auto& name = de->name;
         // FIXME: optimize stat calls by keeping the base directory open and use statat instead, here and below.
         // See https://github.com/scylladb/seastar/pull/3163
+        future<stat_data> (&file_stat)(std::string_view, follow_symlink) noexcept = seastar::file_stat;
         auto sd = co_await io_check(file_stat, (snapshot_dir / name).native(), follow_symlink::no);
         auto size = sd.allocated_size;
 

@@ -1377,6 +1377,10 @@ static future<> exceptions_in_flush_on_sstable_write_helper(std::function<void()
                         fail();
                         return get_file_impl(_file)->stat();
                     }
+                    future<struct stat> statat(std::string_view name, int flags = 0) override {
+                        fail();
+                        return get_file_impl(_file)->statat(name, flags);
+                    }
                     future<> truncate(uint64_t length) override {
                         fail();
                         return get_file_impl(_file)->truncate(length);
