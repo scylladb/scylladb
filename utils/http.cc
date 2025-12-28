@@ -27,11 +27,11 @@ utils::http::dns_connection_factory::state::state(shared_ptr<tls::certificate_cr
     : creds(std::move(cin))
 {}
 
-future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
+future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger) {
     co_await coroutine::all(
-        [state, host, port] () -> future<> {
+        [state, host] () -> future<> {
             auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-            state->addr = socket_address(hent.addr_list.front(), port);
+            state->addr_list = std::move(hent.addr_list);
         },
         [state, use_https] () -> future<> {
             if (use_https && !state->creds) {
@@ -44,7 +44,7 @@ future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> st
     );
 
     state->initialized = true;
-    logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+    logger.debug("Initialized factory, addresses={} tls={}", state->addr_list, state->creds == nullptr ? "no" : "yes");
 }
 
 utils::http::dns_connection_factory::dns_connection_factory(dns_connection_factory&&) = default;
@@ -52,9 +52,10 @@ utils::http::dns_connection_factory::dns_connection_factory(dns_connection_facto
 utils::http::dns_connection_factory::dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs)
     : _host(std::move(host))
     , _port(port)
+    , _use_https(use_https)
     , _logger(logger)
     , _state(make_lw_shared<state>(std::move(certs)))
-    , _done(initialize(_state, _host, _port, use_https, _logger))
+    , _done(initialize(_state, _host, _use_https, _logger))
 {}
 
 utils::http::dns_connection_factory::dns_connection_factory(std::string uri, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs) 
@@ -73,12 +74,13 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
         co_await _done.get_future();
     }
 
+    auto socket_addr = socket_address(_state->addr_list[_addr_pos++ % _state->addr_list.size()], _port);
     if (_state->creds) {
-        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-        co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
+        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr_list, _host);
+        co_return co_await tls::connect(_state->creds, socket_addr, tls::tls_options{.server_name = _host});
     } else {
-        _logger.debug("Making new HTTP connection addr={} host={}", _state->addr, _host);
-        co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
+        _logger.debug("Making new HTTP connection addr={} host={}", _state->addr_list, _host);
+        co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
     }
 }
 
