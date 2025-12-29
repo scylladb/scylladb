@@ -1946,7 +1946,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 updates.emplace_back(
                     topology_mutation_builder(guard.write_timestamp())
                         .set_transition_state(
-                            _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization 
+                            _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization
                                                          : topology::transition_state::tablet_split_finalization)
                         .set_version(_topo_sm._topology.version + 1)
                         .build());
@@ -2086,7 +2086,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         tbuilder.set_version(_topo_sm._topology.version + 1);
         updates.emplace_back(tbuilder.build());
-        
+
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
 
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
