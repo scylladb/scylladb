@@ -161,7 +161,9 @@ async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.Fixtur
     columns = [Column("name", TextType), Column("value", TextType)]
 
     # Create two DCs with one node each
-    servers = await manager.servers_add(2, config=CONFIG)
+    servers = await manager.servers_add(2, config=CONFIG, 
+                                        property_file=[{"dc": "dc1", "rack": "myrack"}, 
+                                                      {"dc": "dc2", "rack": "myrack"}])
 
     dc1_connection = cluster_con([servers[0].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
