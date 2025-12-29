@@ -250,12 +250,14 @@ static const rjson::value::Member& get_single_member(const rjson::value& v, cons
 
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
+         service::storage_service& ss,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
          cdc::metadata& cdc_metadata,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _ss(ss),
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
