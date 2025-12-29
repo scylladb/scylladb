@@ -192,7 +192,7 @@ void assure_sufficient_live_nodes(
         return pending <= live ? live - pending : 0;
     };
 
-    auto make_rf_zero_error_msg = [&] (const sstring& local_dc) {
+    auto make_rf_zero_error_msg = [cl, &erm] (const sstring& local_dc) {
         return format("Cannot achieve consistency level {} for keyspace '{}' in datacenter '{}' with replication factor 0. "
                       "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
                       cl, erm.get_keyspace_name(), local_dc);
@@ -207,19 +207,24 @@ void assure_sufficient_live_nodes(
     case consistency_level::LOCAL_ONE: {
         const auto& local_dc = topo.get_datacenter();
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
+        constexpr int32_t local_one_required = 1;
+        constexpr int32_t rf_zero_alive = 0;
         if (local_rf == 0) {
-            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, 1, 0);
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, local_one_required, rf_zero_alive);
         }
-        if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
-            throw exceptions::unavailable_exception(cl, 1, 0);
+        size_t local_live = topo.count_local_endpoints(live_endpoints);
+        size_t local_pending = topo.count_local_endpoints(pending_endpoints);
+        if (local_live < local_pending + 1) {
+            throw exceptions::unavailable_exception(cl, local_one_required, adjust_live_for_error(local_live, local_pending));
         }
         break;
     }
     case consistency_level::LOCAL_QUORUM: {
         const auto& local_dc = topo.get_datacenter();
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
+        constexpr int32_t rf_zero_alive = 0;
         if (local_rf == 0) {
-            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, 0);
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, rf_zero_alive);
         }
         size_t local_live = topo.count_local_endpoints(live_endpoints);
         size_t pending = topo.count_local_endpoints(pending_endpoints);
