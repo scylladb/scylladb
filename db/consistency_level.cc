@@ -31,16 +31,15 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-// Helper function to get the replication factor for a given datacenter
 static size_t get_replication_factor_for_dc(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
     const auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        const network_topology_strategy* nrs =
+        const network_topology_strategy* nts =
             static_cast<const network_topology_strategy*>(&rs);
-        return nrs->get_replication_factor(dc);
+        return nts->get_replication_factor(dc);
     }
 
     return erm.get_replication_factor();

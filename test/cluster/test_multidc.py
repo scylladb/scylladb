@@ -154,19 +154,17 @@ async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.Fixtur
     """Test that INSERTing with CL=LOCAL_QUORUM into a DC with RF=0 gives a clear error message.
     The error should inform the user that the keyspace is not replicated to their DC and suggest
     using a non-local consistency level or replicating to more DCs."""
-    servers = []
-    ks = "test_ks"
-    table_name = "test_table_name"
+    ks = unique_name()
+    table_name = unique_name()
     # Replicate only to dc1, not to dc2
     dc_replication = {'dc1': 3, 'dc2': 0}
     columns = [Column("name", TextType), Column("value", TextType)]
 
     # Create two DCs with one node each
-    for i in [1, 2]:
-        servers.append(await manager.server_add(
-            config=CONFIG,
-            property_file={"dc": f"dc{i}", "rack": "myrack"},
-        ))
+    servers = [await manager.server_add(
+        config=CONFIG,
+        property_file={"dc": f"dc{i}", "rack": "myrack"},
+    ) for i in [1, 2]]
 
     dc1_connection = cluster_con([servers[0].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
