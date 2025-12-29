@@ -65,13 +65,6 @@ size_t block_for_local_serial(const locator::effective_replication_map& erm) {
     return local_quorum_for(erm, topo.get_datacenter());
 }
 
-// Helper function to get the replication factor for the local datacenter
-static size_t get_local_dc_replication_factor(const locator::effective_replication_map& erm) {
-    using namespace locator;
-    const auto& topo = erm.get_topology();
-    return get_replication_factor_for_dc(erm, topo.get_datacenter());
-}
-
 size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
     using namespace locator;
 
@@ -207,9 +200,9 @@ void assure_sufficient_live_nodes(
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE: {
-        size_t local_rf = get_local_dc_replication_factor(erm);
+        const auto& local_dc = topo.get_datacenter();
+        size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
         if (local_rf == 0) {
-            const auto& local_dc = topo.get_datacenter();
             throw exceptions::unavailable_exception(
                 format("Cannot achieve consistency level LOCAL_ONE for keyspace '{}' in datacenter '{}' with replication factor 0. "
                        "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
@@ -222,9 +215,9 @@ void assure_sufficient_live_nodes(
         break;
     }
     case consistency_level::LOCAL_QUORUM: {
-        size_t local_rf = get_local_dc_replication_factor(erm);
+        const auto& local_dc = topo.get_datacenter();
+        size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
         if (local_rf == 0) {
-            const auto& local_dc = topo.get_datacenter();
             throw exceptions::unavailable_exception(
                 format("Cannot achieve consistency level LOCAL_QUORUM for keyspace '{}' in datacenter '{}' with replication factor 0. "
                        "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
