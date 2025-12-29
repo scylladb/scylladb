@@ -1392,58 +1392,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
 
-        // When draining nodes, finalize merges inline to avoid delaying them until decommission completes
-        if (plan.has_nodes_to_drain() && !plan.resize_plan().finalize_resize.empty()) {
-            auto tm = get_token_metadata_ptr();
-            for (auto& table_id : plan.resize_plan().finalize_resize) {
-                co_await coroutine::maybe_yield();
-                auto s = _db.find_schema(table_id);
-                auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
-                co_await replica::tablet_map_to_mutations(
-                    new_tablet_map,
-                    table_id,
-                    s->ks_name(),
-                    s->cf_name(),
-                    guard.write_timestamp(),
-                    _feature_service,
-                    [&] (mutation m) -> future<> {
-                        out.emplace_back(co_await make_canonical_mutation_gently(m));
-                    });
-
-                // Clears the resize decision for a table.
-                generate_resize_update(out, guard, table_id, locator::resize_decision{});
-                _vb_coordinator->generate_tablet_resize_updates(out, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
-
-                for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
-                    co_await _cdc_gens.generate_tablet_resize_update(out, table_id, new_tablet_map, guard.write_timestamp());
-                }
-
-                const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                auto old_cnt = tmap.tablet_count();
-                auto new_cnt = new_tablet_map.tablet_count();
-                if (old_cnt > new_cnt) {
-                    std::unordered_set<locator::host_id> replicas;
-                    for (auto& tinfo : tmap.tablets()) {
-                        for (auto& r : tinfo.replicas) {
-                            if (!is_excluded(raft::server_id(r.host.uuid()))) {
-                                replicas.insert(r.host);
-                            }
-                        }
-                    }
-                    if (_feature_service.tablet_incremental_repair) {
-                        rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
-                        if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
-                            rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
-                            co_await sleep_abortable(std::chrono::minutes(1), _as);
-                        }
-                        co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
-                            co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
-                        });
-                    }
-                }
-            }
-        }
-
         auto sched_time = db_clock::now();
         for (const auto& gid : plan.repair_plan().repairs()) {
             co_await coroutine::maybe_yield();
@@ -1931,9 +1879,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         bool has_nodes_to_drain = false;
+        bool has_pending_finalizations = false;
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
             has_nodes_to_drain = plan.has_nodes_to_drain();
+            has_pending_finalizations = !plan.resize_plan().finalize_resize.empty();
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
             }
@@ -1990,12 +1940,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await sleep(3s); // Throttle retries
                 co_return;
             }
-            updates.emplace_back(
-                topology_mutation_builder(guard.write_timestamp())
-                    .set_transition_state(topology::transition_state::write_both_read_old)
-                    .set_session(session_id(guard.new_group0_state_id()))
-                    .set_version(_topo_sm._topology.version + 1)
-                    .build());
+            // If there are pending merge finalizations, transition to tablet_resize_finalization
+            // to handle them before continuing with decommission
+            if (has_pending_finalizations) {
+                updates.emplace_back(
+                    topology_mutation_builder(guard.write_timestamp())
+                        .set_transition_state(
+                            _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization 
+                                                         : topology::transition_state::tablet_split_finalization)
+                        .set_version(_topo_sm._topology.version + 1)
+                        .build());
+            } else {
+                updates.emplace_back(
+                    topology_mutation_builder(guard.write_timestamp())
+                        .set_transition_state(topology::transition_state::write_both_read_old)
+                        .set_session(session_id(guard.new_group0_state_id()))
+                        .set_version(_topo_sm._topology.version + 1)
+                        .build());
+            }
         } else {
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
@@ -2107,11 +2069,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
 
-        updates.emplace_back(
-            topology_mutation_builder(guard.write_timestamp())
-                .del_transition_state()
-                .set_version(_topo_sm._topology.version + 1)
-                .build());
+        // Check if there are nodes being decommissioned or removed that still need further processing
+        bool has_draining_nodes = false;
+        for (const auto& [id, rs] : _topo_sm._topology.transition_nodes) {
+            if (rs.state == node_state::decommissioning || rs.state == node_state::removing) {
+                has_draining_nodes = true;
+                break;
+            }
+        }
+
+        topology_mutation_builder tbuilder(guard.write_timestamp());
+        if (has_draining_nodes) {
+            tbuilder.set_transition_state(topology::transition_state::tablet_draining);
+        } else {
+            tbuilder.del_transition_state();
+        }
+        tbuilder.set_version(_topo_sm._topology.version + 1);
+        updates.emplace_back(tbuilder.build());
+        
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
 
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
