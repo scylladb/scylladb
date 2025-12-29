@@ -187,7 +187,7 @@ async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.Fixtur
     # Verify the error message contains both key phrases
     error_msg = str(exc_info.value)
     assert "replication factor 0" in error_msg.lower() and "datacenter" in error_msg.lower(), \
-        f"Expected error message mentioning both 'replication factor 0' and 'datacenter', got: {error_msg}"
+        f"Expected an explicit error indicating RF=0 and a missing datacenter, but received: {error_msg}"
 
     # Test LOCAL_ONE as well
     with pytest.raises(Unavailable) as exc_info:
@@ -198,7 +198,7 @@ async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.Fixtur
     # Verify the error message contains both key phrases
     error_msg = str(exc_info.value)
     assert "replication factor 0" in error_msg.lower() and "datacenter" in error_msg.lower(), \
-        f"Expected error message mentioning both 'replication factor 0' and 'datacenter', got: {error_msg}"
+        f"Expected an explicit error indicating RF=0 and a missing datacenter, but received: {error_msg}"
 
 @pytest.mark.asyncio
 async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ManagerClient):
