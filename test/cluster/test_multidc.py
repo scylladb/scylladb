@@ -173,7 +173,7 @@ async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.Fixtur
     dc2_connection = cluster_con([servers[1].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
 
-    random_tables = RandomTables(request.node.name, manager, ks, 3, dc_replication)
+    random_tables = RandomTables(request.node.name, manager, ks, 1, dc_replication)
     await random_tables.add_table(ncolumns=2, columns=columns, pks=1, name=table_name)
 
     # INSERT from dc1 should work fine
