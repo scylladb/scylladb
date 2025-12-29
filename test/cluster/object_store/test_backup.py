@@ -775,7 +775,7 @@ def create_schema(ks, cf, min_tablet_count=None):
         (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
     ])
 
-async def test_restore_with_streaming_scopes(manager: ManagerClient, object_storage, topology_rf_validity):
+async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology_rf_validity):
     '''Check that restoring of a cluster with stream scopes works'''
 
     topology, rf_rack_valid_keyspaces = topology_rf_validity
@@ -788,7 +788,11 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
     ks = 'ks'
     cf = 'cf'
 
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=10000, min_tablet_count=512)
+    num_keys = 1000 if build_mode == 'debug' else 10000
+    scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
+    restored_min_tablet_counts = [512] if build_mode == 'debug' else [256, 512, 1024]
+    
+    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=512)
 
     # validate replicas assertions hold on fresh dataset
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
@@ -798,7 +802,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
 
     await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
-    for scope in ['all', 'dc', 'rack', 'node']:
+    for scope in scopes:
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
         # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
         # is initially created and an arbitrary subset or the rack at restore time.
@@ -807,7 +811,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, object_stor
             continue
         pros = [False] if scope == 'node' else [False, True]
         for pro in pros:
-            for restored_min_tablet_count in [256, 512, 1024]:
+            for restored_min_tablet_count in restored_min_tablet_counts:
                 logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=512')
                 cql.execute(f'DROP KEYSPACE {ks}')
                 cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
