@@ -1380,8 +1380,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
-        if (plan.resize_plan().finalize_resize.empty()) {
-            // schedule tablet migration only if there are no pending resize finalisations.
+        if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
+            // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
             for (const tablet_migration_info& mig : plan.migrations()) {
                 co_await coroutine::maybe_yield();
                 generate_migration_update(out, guard, mig);
@@ -1389,6 +1389,58 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
+            }
+        }
+
+        // When draining nodes, finalize merges inline to avoid delaying them until decommission completes
+        if (plan.has_nodes_to_drain() && !plan.resize_plan().finalize_resize.empty()) {
+            auto tm = get_token_metadata_ptr();
+            for (auto& table_id : plan.resize_plan().finalize_resize) {
+                co_await coroutine::maybe_yield();
+                auto s = _db.find_schema(table_id);
+                auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+                co_await replica::tablet_map_to_mutations(
+                    new_tablet_map,
+                    table_id,
+                    s->ks_name(),
+                    s->cf_name(),
+                    guard.write_timestamp(),
+                    _feature_service,
+                    [&] (mutation m) -> future<> {
+                        out.emplace_back(co_await make_canonical_mutation_gently(m));
+                    });
+
+                // Clears the resize decision for a table.
+                generate_resize_update(out, guard, table_id, locator::resize_decision{});
+                _vb_coordinator->generate_tablet_resize_updates(out, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
+
+                for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+                    co_await _cdc_gens.generate_tablet_resize_update(out, table_id, new_tablet_map, guard.write_timestamp());
+                }
+
+                const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+                auto old_cnt = tmap.tablet_count();
+                auto new_cnt = new_tablet_map.tablet_count();
+                if (old_cnt > new_cnt) {
+                    std::unordered_set<locator::host_id> replicas;
+                    for (auto& tinfo : tmap.tablets()) {
+                        for (auto& r : tinfo.replicas) {
+                            if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                                replicas.insert(r.host);
+                            }
+                        }
+                    }
+                    if (_feature_service.tablet_incremental_repair) {
+                        rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
+                        if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
+                            rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
+                            co_await sleep_abortable(std::chrono::minutes(1), _as);
+                        }
+                        co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
+                            co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
+                        });
+                    }
+                }
             }
         }
 
