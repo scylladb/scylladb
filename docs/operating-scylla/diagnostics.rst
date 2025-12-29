@@ -11,7 +11,7 @@ Logs
 
 The most obvious source of information to find out more about why ScyllaDB is misbehaving.
 On production systems, ScyllaDB logs to syslog; thus logs can usually be viewed via ``journalctl``.
-See `Logging </getting-started/logging/>`_ on more information on how to access the logs.
+See :doc:`Logging </getting-started/logging/>` on more information on how to access the logs.
 
 
 ScyllaDB has the following log levels: ``trace``, ``debug``, ``info``, ``warn``, ``error``.
@@ -64,21 +64,21 @@ Tracing
 Tracing allows you to retrieve the internal log of events happening in the context of a single query.
 Therefore, tracing is only useful to diagnose problems related to a certain query and cannot be used to diagnose generic problems.
 That said, when it comes to diagnosing problems with a certain query, tracing is an excellent tool, allowing you to have a peek at what happens when that query is processed, including the timestamp of each event.
-For more details, see `Tracing </using-scylla/tracing>`_.
+For more details, see :doc:`Tracing </using-scylla/tracing>`.
 
 Nodetool
 --------
 
 Although ``nodetool`` is primarily an administration tool, it has various commands that retrieve and display useful information about the state of a certain ScyllaDB node.
 Look for commands with "stats", "info", "describe", "get", "histogram" in their names.
-For a comprehensive list of all available nodetool commands, see the `Nodetool Reference </operating-scylla/nodetool>`_.
+For a comprehensive list of all available nodetool commands, see the :doc:`Nodetool Reference </operating-scylla/nodetool>`.
 
 REST API
 --------
 
 ScyllaDB has a REST API which is a superset of all ``nodetool`` commands, in the sense that it is the backend serving all of them.
 It has many more endpoints, many of which can supply valuable information about the internal state of ScyllaDB.
-For more information, see `REST API </operating-scylla/rest>`_.
+For more information, see :doc:`REST API </operating-scylla/rest>`.
 
 System Tables
 -------------
@@ -102,9 +102,9 @@ Other Tools
 ScyllaDB has various other tools, mainly to work with sstables.
 If you are diagnosing a problem that is related to sstables misbehaving or being corrupt, you may find these useful:
 
-* `sstabledump </operating-scylla/admin-tools/sstabledump/>`_
-* `ScyllaDB SStable </operating-scylla/admin-tools/scylla-sstable/>`_
-* `ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>`_
+* :doc:`sstabledump </operating-scylla/admin-tools/sstabledump/>`
+* :doc:`ScyllaDB SStable </operating-scylla/admin-tools/scylla-sstable/>`
+* :doc:`ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>`
 
 GDB
 ---
