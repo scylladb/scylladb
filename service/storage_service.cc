@@ -5111,11 +5111,21 @@ semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
 
-future<uint64_t> storage_service::estimate_total_sstable_volume(table_id t) {
+future<uint64_t> storage_service::estimate_total_sstable_volume(table_id t, ignore_errors errors) {
     co_return co_await seastar::map_reduce(
         _db.local().get_token_metadata().get_host_ids(),
         [&] (auto h) -> future<uint64_t> {
-            return ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&_messaging.local(), h, t);
+            try {
+                co_return co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&_messaging.local(), h, t);
+            }
+            catch(...) {
+                if (errors == ignore_errors::yes) {
+                    // If the call failed we just return 0 for this one
+                    slogger.info("call to estimate_total_sstable_volume failed for table {} and host {}, returning 0", t, h);
+                    co_return 0;
+                }
+                throw;
+            }
         },
         uint64_t(0),
         std::plus<uint64_t>()

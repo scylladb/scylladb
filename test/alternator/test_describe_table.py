@@ -18,7 +18,9 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from test.alternator.util import multiset, new_test_table
+from test.alternator.util import multiset, new_test_table, random_string, scylla_config_temporary
+
+import requests
 
 # Test that DescribeTable correctly returns the table's name and state
 def test_describe_table_basic(test_table):
@@ -75,7 +77,7 @@ def test_describe_table_creation_time(dynamodb):
 
     with new_test_table(dynamodb, **schema) as table1:
         # let's sleep few ms, so table2 creation time was always bigger, as we now return CreationDateTime in ms precision
-        time.sleep(0.002)    
+        time.sleep(0.002)
         with new_test_table(dynamodb, **schema) as table2:
             got1 = table1.meta.client.describe_table(TableName=table1.name)['Table']
             got2 = table2.meta.client.describe_table(TableName=table2.name)['Table']
@@ -114,10 +116,54 @@ def test_describe_table_item_count(test_table):
 
 # Similar test for estimated size in bytes - TableSizeBytes - which again,
 # may reflect the size as long as six hours ago.
-@pytest.mark.xfail(reason="DescribeTable does not return table size")
 def test_describe_table_size(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'TableSizeBytes' in got
+    assert got['TableSizeBytes'] >= 0
+
+# this is scylla-only test - it uses scylla's configuration option to stabilize test
+# we also don't have any guarantees about sizes returned by dynamodb
+@pytest.mark.parametrize("cache_validity_in_seconds", [0, 3600])
+def test_describe_table_size_with_N_timeout(scylla_only, dynamodb, rest_api, cache_validity_in_seconds):
+    '''
+    This tests side effect of how describe table works in ScyllaDB - it caches calculated
+    values. The cache validity is set to 1 hour (long enough to cover whole test duration).
+    We call DescribeTable twice, expecting second value to be the same as first one due to the cache.
+    '''
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+    }
+
+    with scylla_config_temporary(dynamodb, 'alternator_describe_table_info_cache_validity_in_seconds', str(cache_validity_in_seconds)):
+        with new_test_table(dynamodb, **schema) as test_table:
+            got1 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got1
+            assert got1['TableSizeBytes'] >= 0
+
+            p = random_string()
+            c = random_string()
+            v = random_string()
+            test_table.put_item(Item={'p': p, 'c': c, 'v': v})
+
+            ks = 'alternator_' + test_table.name
+            cf = test_table.name
+            # We need to flush memtables to make sure size is updated, as current implementation
+            # calculates size based on sstables only
+            response = requests.post(rest_api+f'/storage_service/keyspace_flush/{ks}', params={'cf' : cf})
+            assert response.ok
+
+            got2 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got2
+            if cache_validity_in_seconds == 0:
+                assert got2['TableSizeBytes'] > got1['TableSizeBytes']
+            else:
+                assert got2['TableSizeBytes'] == got1['TableSizeBytes']
 
 # Test the ProvisionedThroughput attribute returned by DescribeTable.
 # This is a very partial test: Our test table is configured without
