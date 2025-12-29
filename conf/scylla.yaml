@@ -571,10 +571,10 @@ commitlog_total_space_in_mb: -1
 #   - "none": auditing is disabled (default)
 #   - "table": save audited events in audit.audit_log column family
 #   - "syslog": send audited events via syslog (depends on OS, but usually to /dev/log)
-# audit: "none"
+audit: "table"
 #
 # List of statement categories that should be audited.
-# audit_categories: "DCL,DDL,AUTH"
+audit_categories: "DCL,DDL,AUTH,ADMIN"
 #
 # List of tables that should be audited.
 # audit_tables: "<keyspace_name>.<table_name>,<keyspace_name>.<table_name>"
