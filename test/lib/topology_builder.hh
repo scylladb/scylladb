@@ -40,6 +40,25 @@ struct shared_load_stats {
 
     void set_capacity(locator::host_id host, size_t capacity) {
         stats.capacity[host] = capacity;
+        stats.tablet_stats[host].effective_capacity = capacity;
+    }
+
+    void set_tablet_size(locator::host_id host, const locator::range_based_tablet_id& rb_tid, uint64_t tablet_size) {
+        stats.tablet_stats[host].tablet_sizes[rb_tid.table][rb_tid.range] = tablet_size;
+    }
+
+    void set_default_tablet_sizes(locator::token_metadata_ptr tmptr) {
+        for (auto&& [table, tmap_ptr] : tmptr->tablets().all_tables_ungrouped()) {
+            tmap_ptr->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
+                locator::range_based_tablet_id rb_tid {table, tmap_ptr->get_token_range(tid)};
+                for (auto& replica : tinfo.replicas) {
+                    if (!stats.get_tablet_size(replica.host, rb_tid)) {
+                        stats.tablet_stats[replica.host].tablet_sizes[table][rb_tid.range] = service::default_target_tablet_size;
+                    }
+                }
+                return make_ready_future<>();
+            }).get();
+        }
     }
 };
 

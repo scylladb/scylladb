@@ -1963,26 +1963,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto leaving = locator::get_leaving_replica(tinfo, trinfo);
             auto pending = trinfo.pending_replica;
             const dht::token_range trange {tmap.get_token_range(gid.tablet)};
-            if (leaving && pending) {
+            switch (trinfo.transition) {
+            case locator::tablet_transition_kind::migration:
                 // Handle tablet migration
                 new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
-            } else if (!leaving && pending) {
-                // Handle rebuild: compute the average tablet size of existing replicas
-                new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
-                uint64_t tablet_size_sum = 0;
-                size_t replica_count = 0;
-                const locator::range_based_tablet_id rb_tid {gid.table, trange};
-                for (auto r : tinfo.replicas) {
-                    auto tablet_size_opt = new_load_stats->get_tablet_size(r.host, rb_tid);
-                    if (tablet_size_opt) {
-                        tablet_size_sum += *tablet_size_opt;
-                        replica_count++;
+                break;
+            case locator::tablet_transition_kind::rebuild:
+                [[fallthrough]];
+            case locator::tablet_transition_kind::rebuild_v2:
+                // Handle rebuild
+                if (pending && old_load_stats->tablet_stats.contains(pending->host)) {
+                    // Compute the average tablet size of existing replicas
+                    uint64_t tablet_size_sum = 0;
+                    size_t replica_count = 0;
+                    const locator::range_based_tablet_id rb_tid {gid.table, trange};
+                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tinfo, trinfo);
+                    for (auto& r : tsi.read_from) {
+                        auto tablet_size_opt = old_load_stats->get_tablet_size(r.host, rb_tid);
+                        if (tablet_size_opt) {
+                            tablet_size_sum += *tablet_size_opt;
+                            replica_count++;
+                        }
+                    }
+
+                    if (replica_count) {
+                        new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
+                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
                     }
                 }
-
-                if (replica_count && new_load_stats->tablet_stats.contains(pending->host)) {
-                    new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
-                }
+                break;
+            case locator::tablet_transition_kind::repair:
+                [[fallthrough]];
+            case locator::tablet_transition_kind::intranode_migration:
+                break;
             }
             if (new_load_stats) {
                 _tablet_allocator.set_load_stats(std::move(new_load_stats));
