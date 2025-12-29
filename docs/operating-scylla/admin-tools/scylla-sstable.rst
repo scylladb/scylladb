@@ -860,7 +860,7 @@ Alternatively, you can provide each key-value pair via a separate ``--script-arg
 
 Command line arguments will be received by the :ref:`consume_stream_start() <scylla-consume-stream-start-method>` API method.
 
-See the `scripting API </operating-scylla/admin-tools/scylla-sstable-script-api/>`_ for more details.
+See the :doc:`scripting API </operating-scylla/admin-tools/scylla-sstable-script-api/>` for more details.
 
 Examples
 ~~~~~~~~
@@ -870,7 +870,7 @@ You can find example scripts at https://github.com/scylladb/scylladb/tree/master
 upgrade
 ^^^^^^^
 
-Offline, scylla-sstable variant of `nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables/>`_.
+Offline, scylla-sstable variant of :doc:`nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables/>`.
 Rewrites the input SSTable(s) to the latest supported version and latest schema version.
 The SSTable version to be used can be overridden with the ``--version`` flag, allowing for switching sstables between all versions supported for writing (some SSTable versions are supported for reading only).
 

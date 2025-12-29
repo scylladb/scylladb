@@ -38,7 +38,7 @@ Steps:
 
 4. Run compaction (this will remove big partitions with tombstones from specified table)
 
-.. note:: By default, major compaction runs on all the keyspaces and tables, so if we want to specyfy e.g. only one table, we should point at it using arguments: ``<keyspace>.<mytable>``. For more information, please refer to `this article <https://docs.scylladb.com/operating-scylla/nodetool-commands/compact/>`_.
+.. note:: By default, major compaction runs on all the keyspaces and tables, so if we want to specyfy e.g. only one table, we should point at it using arguments: ``<keyspace>.<mytable>``. For more information, please see :doc:`Nodetool compact </operating-scylla/nodetool-commands/compact/>`.
 
 .. code-block:: sh
    
