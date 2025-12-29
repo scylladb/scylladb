@@ -1381,7 +1381,7 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
-        // Reseting sstable ptr to inform the caller the sstable has been loaded successfully.
+        // Resetting sstable ptr to inform the caller the sstable has been loaded successfully.
         sst = nullptr;
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
         return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
@@ -1425,7 +1425,7 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
         auto sstable_add_holder = cg.sstable_add_gate().hold();
 
         ret = ssts = co_await maybe_split_new_sstable(new_sst);
-        // on sucessful split, input sstable is unlinked.
+        // on successful split, input sstable is unlinked.
         new_sst = nullptr;
         for (auto& sst : ssts) {
             auto& cg = compaction_group_for_sstable(sst);
@@ -1448,7 +1448,7 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
             tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
             co_await new_sst->unlink();
         }
-        // on failure after sucessful split, sstables not attached yet will be unlinked
+        // on failure after successful split, sstables not attached yet will be unlinked
         co_await coroutine::parallel_for_each(ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
                 tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
@@ -1466,7 +1466,7 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
     std::exception_ptr ex;
     std::vector<sstables::shared_sstable> ret;
 
-    // We rely on add_new_sstable_and_update_cache() to unlink the sstable feeded into it,
+    // We rely on add_new_sstable_and_update_cache() to unlink the sstable fed into it,
     // so the exception handling below will only have to unlink sstables not processed yet.
     try {
         for (auto& sst: new_ssts) {
@@ -3543,7 +3543,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
                 details.live += size;
                 continue;
             }
-            // If the number of linkes is greater than 1, it is still possible that the file is linked to another snapshot
+            // If the number of links is greater than 1, it is still possible that the file is linked to another snapshot
             // So check the datadir for the file too.
         } else {
             continue;
