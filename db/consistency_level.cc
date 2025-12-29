@@ -200,7 +200,6 @@ void assure_sufficient_live_nodes(
 
     const auto& topo = erm.get_topology();
     constexpr int32_t rf_zero_alive = 0;  // When RF=0, no replicas are alive
-    
     // Get local datacenter info for LOCAL_* consistency levels
     decltype(auto) local_dc = topo.get_datacenter();
     size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
