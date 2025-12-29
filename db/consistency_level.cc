@@ -31,7 +31,8 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+// Helper function to get the replication factor for a given datacenter
+static size_t get_replication_factor_for_dc(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
     const auto& rs = erm.get_replication_strategy();
@@ -39,11 +40,15 @@ size_t local_quorum_for(const locator::effective_replication_map& erm, const sst
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nrs =
             static_cast<const network_topology_strategy*>(&rs);
-        size_t replication_factor = nrs->get_replication_factor(dc);
-        return replication_factor ? (replication_factor / 2) + 1 : 0;
+        return nrs->get_replication_factor(dc);
     }
 
-    return quorum_for(erm);
+    return erm.get_replication_factor();
+}
+
+size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+    size_t replication_factor = get_replication_factor_for_dc(erm, dc);
+    return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
 size_t block_for_local_serial(const locator::effective_replication_map& erm) {
@@ -63,17 +68,8 @@ size_t block_for_local_serial(const locator::effective_replication_map& erm) {
 // Helper function to get the replication factor for the local datacenter
 static size_t get_local_dc_replication_factor(const locator::effective_replication_map& erm) {
     using namespace locator;
-
-    const auto& rs = erm.get_replication_strategy();
     const auto& topo = erm.get_topology();
-
-    if (rs.get_type() == replication_strategy_type::network_topology) {
-        const network_topology_strategy* nrs =
-            static_cast<const network_topology_strategy*>(&rs);
-        return nrs->get_replication_factor(topo.get_datacenter());
-    }
-
-    return erm.get_replication_factor();
+    return get_replication_factor_for_dc(erm, topo.get_datacenter());
 }
 
 size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
