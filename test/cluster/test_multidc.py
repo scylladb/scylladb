@@ -13,7 +13,7 @@ import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.cqlpy import nodetool
-from cassandra import ConsistencyLevel
+from cassandra import ConsistencyLevel, Unavailable
 from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement
 from test.pylib.async_cql import _wrap_future
@@ -148,6 +148,59 @@ async def test_query_dc_with_rf_0_does_not_crash_db(request: pytest.FixtureReque
         f"Expected {expected} from {select_query.query_string}, but got {first_node_results}"
     assert second_node_result is None, \
         f"Expected no results from {select_query.query_string}, but got {second_node_result}"
+
+@pytest.mark.asyncio
+async def test_insert_with_local_quorum_into_dc_with_rf_0(request: pytest.FixtureRequest, manager: ManagerClient):
+    """Test that INSERTing with CL=LOCAL_QUORUM into a DC with RF=0 gives a clear error message.
+    The error should inform the user that the keyspace is not replicated to their DC and suggest
+    using a non-local consistency level or replicating to more DCs."""
+    servers = []
+    ks = "test_ks"
+    table_name = "test_table_name"
+    # Replicate only to dc1, not to dc2
+    dc_replication = {'dc1': 3, 'dc2': 0}
+    columns = [Column("name", TextType), Column("value", TextType)]
+
+    # Create two DCs with one node each
+    for i in [1, 2]:
+        servers.append(await manager.server_add(
+            config=CONFIG,
+            property_file={"dc": f"dc{i}", "rack": "myrack"},
+        ))
+
+    dc1_connection = cluster_con([servers[0].ip_addr],
+                                 load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
+    dc2_connection = cluster_con([servers[1].ip_addr],
+                                 load_balancing_policy=WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
+
+    random_tables = RandomTables(request.node.name, manager, ks, 3, dc_replication)
+    await random_tables.add_table(ncolumns=2, columns=columns, pks=1, name=table_name)
+
+    # INSERT from dc1 should work fine
+    dc1_connection.execute(
+        SimpleStatement(f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k1', 'value1');",
+                       consistency_level=ConsistencyLevel.LOCAL_QUORUM))
+
+    # INSERT from dc2 (with RF=0) should fail with a clear error message
+    with pytest.raises(Unavailable) as exc_info:
+        dc2_connection.execute(
+            SimpleStatement(f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k2', 'value2');",
+                           consistency_level=ConsistencyLevel.LOCAL_QUORUM))
+    
+    # Verify the error message is clear and helpful
+    error_msg = str(exc_info.value)
+    assert "replication factor 0" in error_msg.lower() or "datacenter" in error_msg.lower(), \
+        f"Expected clear error message mentioning RF=0 or datacenter, got: {error_msg}"
+
+    # Test LOCAL_ONE as well
+    with pytest.raises(Unavailable) as exc_info:
+        dc2_connection.execute(
+            SimpleStatement(f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k3', 'value3');",
+                           consistency_level=ConsistencyLevel.LOCAL_ONE))
+    
+    error_msg = str(exc_info.value)
+    assert "replication factor 0" in error_msg.lower() or "datacenter" in error_msg.lower(), \
+        f"Expected clear error message mentioning RF=0 or datacenter, got: {error_msg}"
 
 @pytest.mark.asyncio
 async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ManagerClient):
