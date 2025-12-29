@@ -1346,7 +1346,7 @@ You can find example scripts at https://github.com/scylladb/scylladb/tree/master
 upgrade
 ^^^^^^^
 
-Offline, scylla-sstable variant of `nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables/>`_.
+Offline, scylla-sstable variant of :doc:`nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables/>`.
 Rewrites the input SSTable(s) to the latest supported version and latest schema version.
 The SSTable version to be used can be overridden with the ``--version`` flag, allowing for switching sstables between all versions supported for writing (some SSTable versions are supported for reading only).
 
