@@ -46,8 +46,8 @@ static size_t get_replication_factor_for_dc(const locator::effective_replication
 }
 
 size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
-    size_t replication_factor = get_replication_factor_for_dc(erm, dc);
-    return replication_factor ? (replication_factor / 2) + 1 : 0;
+    auto rf = get_replication_factor_for_dc(erm, dc);
+    return rf ? (rf / 2) + 1 : 0;
 }
 
 size_t block_for_local_serial(const locator::effective_replication_map& erm) {
@@ -199,7 +199,9 @@ void assure_sufficient_live_nodes(
     };
 
     const auto& topo = erm.get_topology();
-    constexpr int32_t rf_zero_alive = 0;  // When RF=0, no replicas are alive
+    // Constants for unavailable_exception parameters
+    constexpr unsigned int rf_zero_alive = 0;  // When RF=0, no replicas are alive
+    constexpr unsigned int local_one_required = 1;  // LOCAL_ONE requires 1 replica
     // Get local datacenter info for LOCAL_* consistency levels
     decltype(auto) local_dc = topo.get_datacenter();
     size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
@@ -209,7 +211,6 @@ void assure_sufficient_live_nodes(
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE: {
-        constexpr int32_t local_one_required = 1;
         if (local_rf == 0) {
             throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, local_one_required, rf_zero_alive);
         }
