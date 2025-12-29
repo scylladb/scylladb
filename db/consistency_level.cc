@@ -204,9 +204,9 @@ void assure_sufficient_live_nodes(
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
         if (local_rf == 0) {
             throw exceptions::unavailable_exception(
-                format("Cannot achieve consistency level LOCAL_ONE for keyspace '{}' in datacenter '{}' with replication factor 0. "
+                format("Cannot achieve consistency level {} for keyspace '{}' in datacenter '{}' with replication factor 0. "
                        "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
-                       erm.get_keyspace_name(), local_dc),
+                       cl, erm.get_keyspace_name(), local_dc),
                 cl, 1, 0);
         }
         if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
@@ -219,9 +219,9 @@ void assure_sufficient_live_nodes(
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
         if (local_rf == 0) {
             throw exceptions::unavailable_exception(
-                format("Cannot achieve consistency level LOCAL_QUORUM for keyspace '{}' in datacenter '{}' with replication factor 0. "
+                format("Cannot achieve consistency level {} for keyspace '{}' in datacenter '{}' with replication factor 0. "
                        "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
-                       erm.get_keyspace_name(), local_dc),
+                       cl, erm.get_keyspace_name(), local_dc),
                 cl, need, 0);
         }
         size_t local_live = topo.count_local_endpoints(live_endpoints);
