@@ -199,6 +199,7 @@ void assure_sufficient_live_nodes(
     };
 
     const auto& topo = erm.get_topology();
+    constexpr int32_t rf_zero_alive = 0;  // When RF=0, no replicas are alive
 
     switch (cl) {
     case consistency_level::ANY:
@@ -208,7 +209,6 @@ void assure_sufficient_live_nodes(
         const auto& local_dc = topo.get_datacenter();
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
         constexpr int32_t local_one_required = 1;
-        constexpr int32_t rf_zero_alive = 0;
         if (local_rf == 0) {
             throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, local_one_required, rf_zero_alive);
         }
@@ -222,7 +222,6 @@ void assure_sufficient_live_nodes(
     case consistency_level::LOCAL_QUORUM: {
         const auto& local_dc = topo.get_datacenter();
         size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
-        constexpr int32_t rf_zero_alive = 0;
         if (local_rf == 0) {
             throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, rf_zero_alive);
         }
