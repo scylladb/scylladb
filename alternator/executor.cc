@@ -1890,7 +1890,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         }
         // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
         // GSI and LSI indexes are based on materialized views which require this option to avoid consistency issues.
-        if (!view_builders.empty() && ksm->uses_tablets() && !sp.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+        if (!view_builders.empty() && ksm->uses_tablets() && !_proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
             co_return api_error::validation("GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled.");
         }
         try {
