@@ -2175,7 +2175,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                 co_await sleep_approx_50ms();
                 continue;
             }
-            SCYLLA_ASSERT(true); // no fall through
+            SCYLLA_ASSERT(false); // Should not be reached
         }
 
         // To be able to propose our value on a new round, we need a quorum of replica to have learn
