@@ -385,6 +385,12 @@ private:
 
     void update_stats() const;
 
+    // Execute scoring queries for ANN candidates and return reordered primary keys
+    future<vector_search::vector_store_client::primary_keys> rescore(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            vector_search::vector_store_client::primary_keys pkeys,
+            uint64_t limit, db::timeout_clock::time_point timeout) const;
+
     lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options) const;
 
     std::vector<float> get_ann_ordering_vector(const query_options& options) const;

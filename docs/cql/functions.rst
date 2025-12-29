@@ -227,6 +227,32 @@ A number of functions are provided to “convert” the native types into binary
 takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For example, ``bigintAsBlob(3)`` is
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
+
+Vector similarity functions :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
+``````````````````````````````````````````````````````````````````````````````````````
+
+To obtain the similarity distances of the given vectors, use a ``SELECT`` query::
+
+    SELECT comment, similarity_cosine(comment_vector, [0.1, 0.15, 0.3, 0.12, 0.05])
+        FROM cycling.comments_vs
+        ORDER BY comment_vector ANN OF [0.1, 0.15, 0.3, 0.12, 0.05]
+        LIMIT 1;
+
+The supported functions for this type of query are:
+
+- ``similarity_cosine``
+- ``similarity_euclidean``
+- ``similarity_dot_product``
+
+with the parameters of (``<vector>``, ``<vector>``).
+
+The ``vector`` is either the name of the float vector column or the float :ref:`vector literal <vectors>`.
+Both arguments must be of the same dimension.
+
+These functions return a ``float`` value representing the similarity distance between the given vectors for each row.
+The lower the distance value, the more similar the vectors are.
+The distance values are computed using the selected similarity metric by invoking its corresponding function.
+
 .. _udfs:
 
 User-defined functions :label-caution:`Experimental`
