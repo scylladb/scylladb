@@ -50,10 +50,12 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   "--schema-commitlog-segment-size-in-mb", "4",
                   ]
 
+# All tests use the same topology: 1 DC with 3 racks each and 300M volume per node.
+topology_sizes = {"dc1": {"r1": ["300M"], "r2": ["300M"], "r3": ["300M"]}}
 
 @pytest.mark.asyncio
 async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline) as servers:
         cql, hosts = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -114,7 +116,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmdline = [*global_cmdline,
                "--logger-log-level", "compaction=debug"]
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -154,7 +156,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -181,7 +183,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
 
 @pytest.mark.asyncio
 async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -215,7 +217,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline, config=cfg) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -280,7 +282,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline, config=cfg) as servers:
         await asyncio.gather(*[manager.api.disable_tablet_balancing(server.ip_addr) for server in servers])
 
         cql, _ = await manager.get_ready_cql(servers)
@@ -341,7 +343,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, topology_sizes, cmdline=global_cmdline, config=cfg) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
