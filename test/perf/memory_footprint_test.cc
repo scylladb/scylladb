@@ -194,6 +194,8 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
     auto s = make_schema(settings);
     auto mt = make_lw_shared<replica::memtable>(s);
 
+    // Evict cache so that we have an empty region and object stats include only new objects
+    tracker.clear();
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
 
     row_cache cache(s, make_empty_snapshot_source(), tracker);
