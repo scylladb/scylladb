@@ -193,9 +193,10 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
     sizes result;
     auto s = make_schema(settings);
     auto mt = make_lw_shared<replica::memtable>(s);
-    row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
+
+    row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     SCYLLA_ASSERT(mt->occupancy().used_space() == 0);
 
