@@ -4,20 +4,13 @@ ScyllaDB SStable
 Introduction
 -------------
 
+ScyllaDB SStable is a ScyllaDB-native tool for examining and manipulating SStables, written in C++ and built on top of the ScyllaDB codebase.
+The tool is built-into the ScyllaDB executable and can be invoked via ``scylla sstable``.
+
 This tool allows you to examine the content of SStables by performing operations such as dumping the content of SStables,
 validating the content of SStables, and more. See `Supported Operations`_ for the list of available operations.
 
 Run ``scylla sstable --help`` for additional information about the tool and the operations.
-
-This tool is similar to SStableDump_, with notable differences:
-
-* Built on the ScyllaDB C++ codebase, it supports all SStable formats and components that ScyllaDB supports.
-* Expanded scope: this tool supports much more than dumping SStable data components (see `Supported Operations`_).
-* More flexible on how schema is obtained and where SStables are located: SStableDump_ only supports dumping SStables located in their native data directory. To dump an SStable, one has to clone the entire ScyllaDB data directory tree, including system table directories and even config files. ``scylla sstable`` can dump sstables from any path with multiple choices on how to obtain the schema, see Schema_.
-
-``scylla sstable`` was developed to supplant SStableDump_ as ScyllaDB-native tool, better tailored for the needs of ScyllaDB.
-
-.. _SStableDump: /operating-scylla/admin-tools/sstabledump
 
 Usage
 ------

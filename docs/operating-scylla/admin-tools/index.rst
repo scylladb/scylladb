@@ -14,8 +14,6 @@ Admin Tools
    ScyllaDB Types </operating-scylla/admin-tools/scylla-types/>
    sstableloader
    cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>
-   sstabledump
-   sstablemetadata
    ScyllaDB Logs </getting-started/logging/>
    perftune
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>
