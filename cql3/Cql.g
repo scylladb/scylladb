@@ -716,7 +716,7 @@ batchStatement returns [std::unique_ptr<cql3::statements::raw::batch_statement> 
         auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_BEGIN
-      ( K_UNLOGGED { type = btype::UNLOGGED; } | K_COUNTER { type = btype::COUNTER; } )?
+      ( K_UNLOGGED { type = btype::UNLOGGED; } | K_COUNTER { type = btype::COUNTER; } | K_GROUP0 { type = btype::GROUP0; } )?
       K_BATCH ( usingClause[attrs] )?
           ( s=batchStatementObjective ';'?
               {
@@ -2374,6 +2374,7 @@ K_SCYLLA_CLUSTERING_BOUND: S C Y L L A '_' C L U S T E R I N G '_' B O U N D;
 
 
 K_GROUP:       G R O U P;
+K_GROUP0:      G R O U P '0';
 
 K_LIKE:        L I K E;
 
