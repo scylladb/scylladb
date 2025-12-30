@@ -155,11 +155,11 @@ def test_delete_item_returnvalues(test_table_s):
     # Other ReturnValue options - UPDATED_OLD, ALL_NEW, UPDATED_NEW,
     # are supported by other operations but not by PutItem:
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.delete_item(Key={'p': p}, ReturnValues='UPDATE_OLD')
+        test_table_s.delete_item(Key={'p': p}, ReturnValues='UPDATED_OLD')
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.delete_item(Key={'p': p}, ReturnValues='ALL_NEW')
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.delete_item(Key={'p': p}, ReturnValues='UPDATE_NEW')
+        test_table_s.delete_item(Key={'p': p}, ReturnValues='UPDATED_NEW')
     # Also, obviously, a non-supported setting "DOG" also returns in error:
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.delete_item(Key={'p': p}, ReturnValues='DOG')
