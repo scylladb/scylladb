@@ -563,11 +563,11 @@ read_entire_stream(input_stream<char>& inp, size_t length_limit) {
 class safe_gzip_zstream {
     z_stream _zs;
 public:
-    safe_gzip_zstream() {
+    // If gzip is true, decode a gzip header (for "Content-Encoding: gzip").
+    // Otherwise, a zlib header (for "Content-Encoding: deflate").
+    safe_gzip_zstream(bool gzip = true) {
         memset(&_zs, 0, sizeof(_zs));
-        // The strange 16 + WMAX_BITS tells zlib to expect and decode
-        // a gzip header, not a zlib header.
-        if (inflateInit2(&_zs, 16 + MAX_WBITS) != Z_OK) {
+        if (inflateInit2(&_zs, gzip ? 16 + MAX_WBITS : MAX_WBITS) != Z_OK) {
             // Should only happen if memory allocation fails
             throw std::bad_alloc();
         }
@@ -586,19 +586,21 @@ public:
     }
 };
 
-// ungzip() takes a chunked_content with a gzip-compressed request body,
-// uncompresses it, and returns the uncompressed content as a chunked_content.
+// ungzip() takes a chunked_content of a compressed request body, and returns
+// the uncompressed content as a chunked_content. If gzip is true, we expect
+// gzip header (for "Content-Encoding: gzip"), if gzip is false, we expect a
+// zlib header (for "Content-Encoding: deflate").
 // If the uncompressed content exceeds length_limit, an error is thrown.
 static future<chunked_content>
-ungzip(chunked_content&& compressed_body, size_t length_limit) {
+ungzip(chunked_content&& compressed_body, size_t length_limit, bool gzip = true) {
     chunked_content ret;
     // output_buf can be any size - when uncompressing input_buf, it doesn't
     // need to fit in a single output_buf, we'll use multiple output_buf for
     // a single input_buf if needed.
     constexpr size_t OUTPUT_BUF_SIZE = 4096;
     temporary_buffer<char> output_buf;
-    safe_gzip_zstream strm;
-    bool complete_stream = false; // empty input is not a valid gzip
+    safe_gzip_zstream strm(gzip);
+    bool complete_stream = false; // empty input is not a valid gzip/deflate
     size_t total_out_bytes = 0;
     for (const temporary_buffer<char>& input_buf : compressed_body) {
         if (input_buf.empty()) {
@@ -701,6 +703,8 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     sstring content_encoding = req->get_header("Content-Encoding");
     if (content_encoding == "gzip") {
         content = co_await ungzip(std::move(content), request_content_length_limit);
+    } else if (content_encoding == "deflate") {
+        content = co_await ungzip(std::move(content), request_content_length_limit, false);
     } else if (!content_encoding.empty()) {
         // DynamoDB returns a 500 error for unsupported Content-Encoding.
         // I'm not sure if this is the best error code, but let's do it too.
