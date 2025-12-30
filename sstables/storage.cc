@@ -95,6 +95,7 @@ public:
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
@@ -132,8 +133,12 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     }
 }
 
-future<data_source> filesystem_storage::make_data_or_index_source(sstable&, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
+future<data_source> filesystem_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
+    co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(opt));
+}
+
+future<data_source> filesystem_storage::make_source(sstable&, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
     co_return make_file_data_source(std::move(f), offset, len, std::move(opt));
 }
 
@@ -615,6 +620,7 @@ public:
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len, file_input_stream_options) const override;
 
     future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     future<> destroy(const sstable& sst) override {
@@ -657,6 +663,7 @@ public:
     {}
 
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
 };
 
 object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
@@ -742,13 +749,23 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
 
 future<data_source>
 object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    co_return co_await make_source(sst, type, f, offset, len, options);
+}
+
+future<data_source>
+object_storage_base::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options) const {
     co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
 }
 
 future<data_source>
 s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(options));
+}
+
+future<data_source>
+s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
     if (offset == 0) {
-        co_return co_await object_storage_base::make_data_or_index_source(sst, type, std::move(f), offset, len, std::move(options));
+        co_return co_await object_storage_base::make_source(sst, type, std::move(f), offset, len, std::move(options));
     }
     co_return make_file_data_source(
         co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_object_name(sst, type), abort_source())), offset, len, std::move(options));
