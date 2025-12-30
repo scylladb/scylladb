@@ -373,8 +373,8 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
 
         e.execute_cql("create table cf (p blob, c int, v int, primary key (p, c))").get();
 
-        auto make_key = [&] (auto) { return to_hex(random_bytes(128, gen));  };
-        for (auto&& k : std::views::iota(0, 1000) | std::views::transform(make_key)) {
+        auto make_key = [&gen] (auto) { return to_hex(random_bytes(128, gen));  };
+        for (const auto& k : std::views::iota(0, 1000) | std::views::transform(make_key)) {
             for (auto i = 0; i < 5; ++i) {
                 e.execute_cql(format("insert into cf (p, c, v) values (0x{}, {:d}, 0)", k, i)).get();
             }
@@ -383,10 +383,18 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
+                         
+        //we want to wait and see that the view build has started              
+        eventually([&e] {
+            auto msg = e.execute_cql(fmt::format(
+                "select * from system.{} where view_name = 'vcf' and status = 'STARTED' or status = 'SUCCESS' ALLOW FILTERING", 
+                db::system_keyspace::VIEW_BUILD_STATUS_V2)).get();
+                assert_that(msg).is_rows().is_not_empty();
+            });
 
         e.execute_cql("drop materialized view vcf").get();
 
-        eventually([&] {
+        eventually([&e] {
             auto msg = e.execute_cql("select * from system.scylla_views_builds_in_progress").get();
             assert_that(msg).is_rows().is_empty();
             msg = e.execute_cql("select * from system.built_views").get();
@@ -395,7 +403,7 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
             assert_that(msg).is_rows().is_empty();
             msg = e.execute_cql("select * from system_distributed.view_build_status").get();
             assert_that(msg).is_rows().is_empty();
-        }, 30);
+        });
     });
 }
 
