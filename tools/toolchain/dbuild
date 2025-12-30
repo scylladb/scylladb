@@ -76,7 +76,7 @@ ENVIRONMENT
 
     SCYLLADB_DBUILD this variable, which can be a string or a bash
                     array, is prepended to the parmeters passed to
-                    docker. This can be used to mount the ccache
+                    docker. This can be used to mount old-style ccache
                     directory (~/.ccache) and set up environment
                     variables (e.g. CCACHE_PREFIX)
 
@@ -144,7 +144,9 @@ if [[ -z "$CARGO_HOME" ]]; then
 fi
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-mkdir -p "$XDG_CACHE_HOME/scylladb"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$XDG_CACHE_HOME"
+mkdir -p "$XDG_CONFIG_HOME"
 
 is_podman="$($tool --help | grep -o podman)"
 
@@ -252,7 +254,9 @@ docker_common_args+=(
        --env CARGO_HOME \
        -v "${CARGO_HOME}:${CARGO_HOME}" \
        --env XDG_CACHE_HOME \
-       -v "${XDG_CACHE_HOME}/scylladb:${XDG_CACHE_HOME}/scylladb" \
+       -v "${XDG_CACHE_HOME}:${XDG_CACHE_HOME}" \
+       --env XDG_CONFIG_HOME \
+       -v "${XDG_CONFIG_HOME}:${XDG_CONFIG_HOME}" \
        -w "$PWD" \
        -e HOME="$HOME" \
        --env DBUILD_TOOLCHAIN=1 \
