@@ -414,8 +414,8 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                                     conn->_ssl_cipher_suite = cipher_suite;
                                 });
                         }).handle_exception([this, conn](std::exception_ptr ep) {
-                            return make_exception_future<>(std::make_exception_ptr(
-                                std::runtime_error(format("Inspecting TLS connection failed: {}", ep))));
+                            _logger.warn("Inspecting TLS connection failed: {}", ep);
+                            return make_exception_future<>(ep);
                         })
                     : make_ready_future<>()
                 ).then([conn] {
