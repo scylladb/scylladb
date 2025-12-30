@@ -14,6 +14,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/try_future.hh>
 
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -993,7 +994,7 @@ query_processor::execute_with_params(
     auto opts = make_internal_options(p, values, cl);
     auto statement = p->statement;
 
-    auto msg = co_await execute_maybe_with_guard(query_state, std::move(statement), opts, &query_processor::do_execute_with_params);
+    auto msg = co_await coroutine::try_future(execute_maybe_with_guard(query_state, std::move(statement), opts, &query_processor::do_execute_with_params));
     co_return ::make_shared<untyped_result_set>(msg);
 }
 
@@ -1003,7 +1004,7 @@ query_processor::do_execute_with_params(
         shared_ptr<cql_statement> statement,
         const query_options& options, std::optional<service::group0_guard> guard) {
     statement->validate(*this, service::client_state::for_internal_calls());
-    co_return co_await statement->execute(*this, query_state, options, std::move(guard));
+    co_return co_await coroutine::try_future(statement->execute(*this, query_state, options, std::move(guard)));
 }
 
 
