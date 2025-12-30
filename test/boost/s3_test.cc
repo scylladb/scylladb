@@ -778,6 +778,58 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
     test_chunked_download_data_source(make_proxy_client, 20_MiB);
 }
 
+enum class s3_client_facility : uint8_t { dwnld_source, chunked_dwnld_source };
+void test_dns_reset(s3_client_facility what) {
+    const sstring base_name(fmt::format("test_object-{}", ::getpid()));
+
+    tmpdir tmp;
+    const auto file_path = tmp.path() / base_name;
+
+    create_file(file_path, 128_KiB).get();
+
+    testlog.info("Make client\n");
+    semaphore mem(16 << 20);
+    auto cln = make_minio_client(mem);
+    auto close_client = deferred_close(*cln);
+    const auto object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), base_name);
+    auto delete_object = deferred_delete_object(cln, object_name);
+    cln->upload_file(file_path, object_name).get();
+
+    utils::get_local_injector().enable("s3_client_network_error");
+    auto source = [what, &cln, &object_name]() {
+        switch (what) {
+        case s3_client_facility::dwnld_source:
+            return cln->make_download_source(object_name);
+        case s3_client_facility::chunked_dwnld_source:
+            return cln->make_chunked_download_source(object_name);
+        }
+    }();
+    auto close = seastar::deferred_close(source);
+    try {
+        source.get().get();
+    } catch (...) {
+        // carry on
+    }
+    utils::get_local_injector().disable("s3_client_network_error");
+    BOOST_REQUIRE_EQUAL(utils::get_local_injector().enter("dns_reset_occurred"), true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dns_reset_occurred_download_source) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    test_dns_reset(s3_client_facility::dwnld_source);
+#endif
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dns_reset_occurred_chunked_dwnld_source) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    test_dns_reset(s3_client_facility::chunked_dwnld_source);
+#endif
+}
+
 void do_test_chunked_download_data_source_memory(const client_maker_function& client_maker, size_t object_size) {
     const sstring base_name(fmt::format("test_object-{}", ::getpid()));
 

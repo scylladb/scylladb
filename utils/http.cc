@@ -8,6 +8,7 @@
 
 #include "http.hh"
 #include "rest/client.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/regex.hpp>
 #include <seastar/coroutine/all.hh>
@@ -23,28 +24,51 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_crede
     co_return system_trust_credentials;
 }
 
-utils::http::dns_connection_factory::state::state(shared_ptr<tls::certificate_credentials> cin) 
-    : creds(std::move(cin))
-{}
+utils::http::dns_connection_factory::address_provider::address_provider(const std::string& host, bool use_https, shared_ptr<tls::certificate_credentials> creds)
+    : _creds(std::move(creds)), _host(host), _use_https(use_https) {
+    _ready = [this] -> future<> {
+        co_await coroutine::all([this] -> future<> { co_await init_addresses(); }, [this] -> future<> { co_await init_credentials(); });
+        _initialized = true;
+    }();
+}
 
-future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
-    co_await coroutine::all(
-        [state, host, port] () -> future<> {
-            auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-            state->addr = socket_address(hent.addr_list.front(), port);
-        },
-        [state, use_https] () -> future<> {
-            if (use_https && !state->creds) {
-                state->creds = co_await system_trust_credentials();
-            }
-            if (!use_https) {
-                state->creds = {};
-            }
-        }
-    );
+future<> utils::http::dns_connection_factory::address_provider::init_addresses() {
+    auto hent = co_await net::dns::get_host_by_name(_host, net::inet_address::family::INET);
+    addr_list = std::move(hent.addr_list);
+}
 
-    state->initialized = true;
-    logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+future<> utils::http::dns_connection_factory::address_provider::init_credentials() {
+    if (_use_https && !_creds) {
+        _creds = co_await system_trust_credentials();
+    }
+    if (!_use_https) {
+        _creds = {};
+    }
+}
+
+future<net::inet_address> utils::http::dns_connection_factory::address_provider::get_address() {
+    if (!_initialized) {
+        co_await _ready.get_future();
+    }
+    co_return addr_list[_addr_pos++ % addr_list.size()];
+}
+
+shared_ptr<tls::certificate_credentials> utils::http::dns_connection_factory::address_provider::get_creds() const {
+    return _creds;
+}
+
+future<> utils::http::dns_connection_factory::address_provider::reset() {
+    co_await init_addresses();
+}
+
+future<connected_socket> utils::http::dns_connection_factory::connect() {
+    auto socket_addr = socket_address(co_await _addr_provider.get_address(), _port);
+    if (auto creds = _addr_provider.get_creds()) {
+        _logger.debug("Making new HTTPS connection addr={} host={}", socket_addr, _host);
+        co_return co_await tls::connect(creds, socket_addr, tls::tls_options{.server_name = _host});
+    }
+    _logger.debug("Making new HTTP connection addr={} host={}", socket_addr, _host);
+    co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
 }
 
 utils::http::dns_connection_factory::dns_connection_factory(dns_connection_factory&&) = default;
@@ -53,8 +77,7 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string host, in
     : _host(std::move(host))
     , _port(port)
     , _logger(logger)
-    , _state(make_lw_shared<state>(std::move(certs)))
-    , _done(initialize(_state, _host, _port, use_https, _logger))
+    , _addr_provider(_host, use_https, std::move(certs))
 {}
 
 utils::http::dns_connection_factory::dns_connection_factory(std::string uri, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs) 
@@ -65,21 +88,27 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
         }
         return dns_connection_factory(url.host, url.port, url.is_https(), logger, std::move(certs));
     }())
-{}
+{
+}
+
+future<> utils::http::dns_connection_factory::reset_dns_resolution() {
+    // Tests related injection to indicate that a DNS reset has occurred and disable network
+    // related that was injected by the test to trigger the DNS reset.
+    get_local_injector().enable("dns_reset_occurred");
+    get_local_injector().disable("s3_client_network_error");
+
+    _logger.debug("Invalidating DNS resolution for {}", _host);
+    co_await _addr_provider.reset();
+}
 
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
-    if (!_state->initialized) {
-        _logger.debug("Waiting for factory to initialize");
-        co_await _done.get_future();
+    try {
+        co_return co_await connect();
+    } catch (...) {
+        _logger.debug("Failed to connect to {}, resetting DNS resolution. Reason: {}", _host, std::current_exception());
     }
-
-    if (_state->creds) {
-        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-        co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
-    } else {
-        _logger.debug("Making new HTTP connection addr={} host={}", _state->addr, _host);
-        co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
-    }
+    co_await reset_dns_resolution();
+    co_return co_await connect();
 }
 
 static const char HTTPS[] = "https";
