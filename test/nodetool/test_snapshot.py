@@ -302,7 +302,7 @@ def test_snapshot_keyspace_with_ktlist(nodetool):
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace column family list for a snapshot,"
+            ["error: When specifying the Keyspace column family list for a snapshot,",
              " you should not specify column family",
              "error processing arguments: when specifying the keyspace-table list for a snapshot,"
              " you should not specify keyspace(s)"])
