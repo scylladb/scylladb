@@ -53,6 +53,10 @@ future<net::inet_address> utils::http::dns_connection_factory::address_provider:
     co_return addr_list[_addr_pos++ % addr_list.size()];
 }
 
+shared_ptr<tls::certificate_credentials> utils::http::dns_connection_factory::address_provider::get_creds() const {
+    return _creds;
+}
+
 future<> utils::http::dns_connection_factory::address_provider::reset() {
     co_await init_addresses();
 }

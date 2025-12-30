@@ -1238,6 +1238,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
         seastar::http::experimental::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
+            std::exception_ptr ex;
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
@@ -1347,17 +1348,21 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (...) {
-                auto ex = std::current_exception();
+                ex = std::current_exception();
                 auto aws_ex = aws::aws_error::from_exception_ptr(ex);
                 if (!aws_ex.is_retryable()) {
                     s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, ex);
                     _get_cv.broken(ex);
                     co_return;
                 }
+            }
+            if (ex) {
+                auto aws_ex = aws::aws_error::from_exception_ptr(std::move(ex));
                 if (aws_ex.get_error_type() == aws_error_type::NETWORK_CONNECTION) {
                     auto& gc = _client->find_or_create_client();
                     co_await gc.dns_factory.reset_dns_resolution();
                 }
+                ex = {};
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
