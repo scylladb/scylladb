@@ -145,8 +145,11 @@ struct mutation_settings {
 
 static schema_ptr make_schema(const mutation_settings& settings) {
     auto builder = schema_builder("ks", "cf")
-        .with_column("pk", bytes_type, column_kind::partition_key)
-        .with_column("ck", bytes_type, column_kind::clustering_key);
+        .with_column("pk", bytes_type, column_kind::partition_key);
+
+    if (settings.clustering_key_size) {
+        builder.with_column("ck", bytes_type, column_kind::clustering_key);
+    }
 
     for (size_t i = 0; i < settings.column_count; ++i) {
         builder.with_column(to_bytes(random_name(settings.column_name_size)), bytes_type);
@@ -158,8 +161,16 @@ static schema_ptr make_schema(const mutation_settings& settings) {
 static mutation make_mutation(schema_ptr s, mutation_settings settings) {
     mutation m(s, partition_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.partition_key_size)))));
 
+    if (!settings.clustering_key_size) {
+        if (settings.row_count > 1) {
+            throw std::invalid_argument("Schema with no clustering key can have at most 1 row");
+        }
+    }
+
     for (size_t i = 0; i < settings.row_count; ++i) {
-        auto ck = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.clustering_key_size))));
+        auto ck = !settings.clustering_key_size
+                ? clustering_key::make_empty()
+                : clustering_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.clustering_key_size))));
         for (auto&& col : s->regular_columns()) {
             m.set_clustered_cell(ck, col,
                 atomic_cell::make_live(*bytes_type, 1,
