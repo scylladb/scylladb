@@ -206,6 +206,12 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
         cache.populate(muts.back());
     }
 
+    auto cache_stats = tracker.region().collect_stats();
+    std::cout << "Cache LSA stats (" << fmt::to_string(tracker.region().occupancy()) << "):" << "\n";
+    for (auto [ name, size ] : cache_stats) {
+        std::cout << "  " << name << ": " << size << "\n";
+    }
+
     mutation& m = muts[0];
     result.memtable = mt->occupancy().used_space();
     result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;
@@ -276,12 +282,6 @@ int main(int argc, char** argv) {
 
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
-
-            auto cache_st = tracker.region().collect_stats();
-            std::cout << "LSA stats:" << "\n";
-            for (auto [ name, size ] : cache_st) {
-                std::cout << "  " << name << ": " << size << "\n";
-            }
         });
     });
 }
