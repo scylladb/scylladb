@@ -273,6 +273,12 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
                                 return value_set(value_list{*val});
+                            } else if (oper.op == oper_t::IS || oper.op == oper_t::IS_NOT) {
+                                // IS NULL and IS NOT NULL are special - they don't restrict to specific values
+                                // IS NULL matches when column is unset, IS NOT NULL matches when column is set
+                                // For value_set purposes, we return unbounded since these operators filter
+                                // based on presence/absence rather than value comparison
+                                return unbounded_value_set;
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
