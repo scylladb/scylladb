@@ -4096,10 +4096,17 @@ future<> topology_coordinator::run() {
     auto group0_voter_refresher = group0_voter_refresher_fiber();
     auto vb_coordinator_fiber = run_view_building_coordinator();
 
+    std::optional<future<>> event_wait;
+
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
             co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog", utils::wait_for_message(5min));
+
+            if (!event_wait) {
+                event_wait = _topo_sm.event.wait();
+            }
+
             auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
             if (_rollback) {
@@ -4113,7 +4120,9 @@ future<> topology_coordinator::run() {
             if (!had_work) {
                 // Nothing to work on. Wait for topology change event.
                 rtlogger.debug("topology coordinator fiber has nothing to do. Sleeping.");
-                co_await await_event();
+                _as.check();
+                co_await std::move(*event_wait);
+                event_wait.reset();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
             co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", utils::wait_for_message(30s));
