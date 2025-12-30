@@ -196,7 +196,7 @@ public:
         return _storage->is_known_endpoint(std::move(endpoint));
     }
 
-    virtual sstable_writer_config configure_writer(sstring origin) const;
+    virtual sstable_writer_config configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash = std::nullopt) const;
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }

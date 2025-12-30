@@ -14,6 +14,8 @@
 #include <memory>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "seastarx.hh"
 
 //
@@ -141,14 +143,23 @@ struct appending_hash<char[N]>  {
     }
 };
 
-template<typename T>
-struct appending_hash<std::vector<T>> {
+template<std::ranges::range Range>
+struct appending_hash<Range> {
     template<typename H>
     requires Hasher<H>
-    void operator()(H& h, const std::vector<T>& value) const noexcept {
+    void operator()(H& h, const Range& value) const noexcept {
         feed_hash(h, value.size());
         for (auto&& v : value) {
-            appending_hash<T>()(h, v);
+            appending_hash<typename Range::value_type>()(h, v);
+        }
+    }
+    template<typename H>
+    requires Hasher<H>
+    future<> hash_gently(H& h, const Range& value) const noexcept {
+        feed_hash(h, value.size());
+        for (auto&& v : value) {
+            appending_hash<typename Range::value_type>()(h, v);
+            co_await coroutine::maybe_yield();
         }
     }
 };

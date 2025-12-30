@@ -787,8 +787,8 @@ private:
         auto local = data_dictionary::make_local_options(_output_dir);
         return _sst_man.make_sstable(_schema, local, generation, sstables::sstable_state::normal, version, format);
     }
-    sstables::sstable_writer_config do_configure_writer(sstring origin) const {
-        return _sst_man.configure_writer(std::move(origin));
+    sstables::sstable_writer_config do_configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash) const {
+        return _sst_man.configure_writer(std::move(origin), std::move(owned_ranges_hash));
     }
 
 public:
@@ -820,7 +820,7 @@ public:
     virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return do_make_sstable(); }
-    virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
+    virtual sstables::sstable_writer_config configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash = std::nullopt) const override { return do_configure_writer(std::move(origin), std::move(owned_ranges_hash)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const override { return api::min_timestamp; }
@@ -1356,6 +1356,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
         case sstables::scylla_metadata_type::Schema: return "schema";
+        case sstables::scylla_metadata_type::OwnedRangesHash: return "owned_ranges_hash";
     }
     std::abort();
 }
@@ -1473,6 +1474,11 @@ public:
     template <typename Size>
     void operator()(const sstables::disk_string<Size>& val) const {
         _writer.String(disk_string_to_string(val));
+    }
+    void operator()(const sstables::scylla_metadata::owned_ranges_hash& val) const {
+        _writer.StartObject();
+        _writer.Uint64(val.value);
+        _writer.EndObject();
     }
 
     template <sstables::scylla_metadata_type E, typename T>

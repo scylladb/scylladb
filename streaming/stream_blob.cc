@@ -56,7 +56,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         co_await sst->load(erm->get_sharder(*t.schema()), cfg);
         auto on_add = [sst, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
-                auto cfg = sstm.configure_writer(sst->get_origin());
+                auto cfg = sstm.configure_writer(sst->get_origin(), std::nullopt);
                 co_await loading_sst->seal_sstable(cfg.backup);
             }
             co_return;

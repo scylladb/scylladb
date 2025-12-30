@@ -9,6 +9,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <unordered_map>
+#include "sstables/types.hh"
 #include "utils/log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
@@ -251,7 +252,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
     return make_lw_shared<sstable>(std::move(schema), storage, generation, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
-sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
+sstable_writer_config sstables_manager::configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash) const {
     sstable_writer_config cfg;
 
     cfg.promoted_index_block_size = _config.column_index_size;
@@ -265,6 +266,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.summary_byte_cost = summary_byte_cost(_config.sstable_summary_ratio);
 
     cfg.origin = std::move(origin);
+    cfg.owned_ranges_hash = std::move(owned_ranges_hash);
 
     return cfg;
 }

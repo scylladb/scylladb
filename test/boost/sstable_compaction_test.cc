@@ -16,6 +16,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 
+#include "compaction/owned_ranges.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
@@ -2237,7 +2238,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             cf->start();
 
             const auto& erm = db.find_keyspace(ks_name).get_static_effective_replication_map();
-            auto local_ranges = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(erm).get());
+            auto local_ranges = compaction::make_owned_ranges_gently(db.get_keyspace_local_ranges(erm).get()).get();
             auto descriptor = compaction::compaction_descriptor({sst}, compaction::compaction_descriptor::default_level,
                 compaction::compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction::compaction_type_options::make_cleanup(), std::move(local_ranges));
             auto ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get();
@@ -2252,7 +2253,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             ranges.push_back(dht::token_range::make_singular(local_keys.at(10).token()));
             ranges.push_back(dht::token_range::make_singular(local_keys.at(100).token()));
             ranges.push_back(dht::token_range::make_singular(local_keys.at(900).token()));
-            local_ranges = compaction::make_owned_ranges_ptr(std::move(ranges));
+            local_ranges = compaction::make_owned_ranges_gently(std::move(ranges)).get();
             descriptor = compaction::compaction_descriptor({sst}, compaction::compaction_descriptor::default_level,
                                             compaction::compaction_descriptor::default_max_sstable_bytes, run_identifier,
                                             compaction::compaction_type_options::make_cleanup(), std::move(local_ranges));
@@ -4273,13 +4274,13 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
     };
 
     {
-        auto local_ranges = { token_range(0, 9) };
+        auto local_ranges = compaction::make_owned_ranges({ token_range(0, 9) });
         auto sst = sst_gen(keys[0], keys[9]);
         BOOST_REQUIRE(!compaction::needs_cleanup(sst, local_ranges));
     }
 
     {
-        auto local_ranges = { token_range(0, 1), token_range(3, 4), token_range(5, 6) };
+        auto local_ranges = compaction::make_owned_ranges({ token_range(0, 1), token_range(3, 4), token_range(5, 6) });
 
         auto sst = sst_gen(keys[0], keys[1]);
         BOOST_REQUIRE(!compaction::needs_cleanup(sst, local_ranges));
@@ -5884,7 +5885,7 @@ SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks) {
     });
 }
 
-static future<> run_incremental_compaction_test(sstables::offstrategy offstrategy, std::function<future<>(table_for_tests&, compaction::owned_ranges_ptr)> run_compaction) {
+static future<> run_incremental_compaction_test(sstables::offstrategy offstrategy, std::function<future<>(table_for_tests&, compaction::owned_ranges)> run_compaction) {
     return test_env::do_with_async([run_compaction = std::move(run_compaction), offstrategy] (test_env& env) {
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -5964,8 +5965,8 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
                 }));
             }
             ssts = {}; // releases references
-            auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
-            run_compaction(t, std::move(owned_ranges_ptr)).get();
+            auto owned_ranges = compaction::make_owned_ranges_gently(std::move(owned_token_ranges)).get();
+            run_compaction(t, std::move(owned_ranges)).get();
             BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }
@@ -5982,13 +5983,13 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
 }
 
 SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
-    return run_incremental_compaction_test(sstables::offstrategy::no, [] (table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
+    return run_incremental_compaction_test(sstables::offstrategy::no, [] (table_for_tests& t, compaction::owned_ranges owned_ranges) -> future<> {
         return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{});
     });
 }
 
 SEASTAR_TEST_CASE(offstrategy_incremental_compaction_test) {
-    return run_incremental_compaction_test(sstables::offstrategy::yes, [] (table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
+    return run_incremental_compaction_test(sstables::offstrategy::yes, [] (table_for_tests& t, compaction::owned_ranges owned_ranges) -> future<> {
         bool performed = co_await t->perform_offstrategy_compaction(tasks::task_info{});
         BOOST_REQUIRE(performed);
     });
@@ -6072,8 +6073,8 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
                 }));
             }
             ssts = {}; // releases references
-            auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
-            t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::task_info{}).get();
+            auto owned_ranges = compaction::make_owned_ranges_gently(std::move(owned_token_ranges)).get();
+            t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{}).get();
             BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }

@@ -6576,7 +6576,7 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
         }
         auto on_add = [&ssts, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
             if (ssts.contains(loading_sst)) {
-                auto cfg = sstm.configure_writer(loading_sst->get_origin());
+                auto cfg = sstm.configure_writer(loading_sst->get_origin(), std::nullopt);
                 co_await loading_sst->seal_sstable(cfg.backup);
             }
             co_return;
