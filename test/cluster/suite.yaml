@@ -50,5 +50,6 @@ run_in_dev:
   - dtest/audit_test
   - dtest/commitlog_test
   - dtest/cfid_test
+  - dtest/rebuild_test
 run_in_debug:
   - random_failures/test_random_failures
