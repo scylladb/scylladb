@@ -2972,6 +2972,33 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
 
+    // Reject a concurrent cleanup before touching the compaction state:
+    // calculate_sstables_cleanup_state() rewrites sstables_requiring_cleanup
+    // and the cleanup owned ranges, which the ongoing cleanup is still using.
+    auto check_for_cleanup = [this, &t] {
+        return std::ranges::any_of(_tasks, [&t] (auto& task) {
+            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
+        });
+    };
+    if (check_for_cleanup()) {
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
+    }
+
+    // Sample the sstables requiring cleanup only once. Sstables added to the
+    // table after this point (e.g. flushed while waiting for staging sstables
+    // below) are not cleaned up by this invocation; the caller flushes the
+    // table before calling us, so they contain only data written since then.
+    //
+    // This relies on every sampled sstable leaving the table only through a
+    // compaction that applies the cleanup owned ranges to its data, as all
+    // compactions do when any of their input sstables requires cleanup.
+    // A component rewrite (rewrite_sstables_component()) is the exception:
+    // it replaces an sstable with a new one holding the same data, which
+    // the sample does not know about.  It is used only with tablets, by
+    // incremental repair and tablet merge, while this function is used only
+    // with vnodes.  If that ever changes, the replacement sstable must
+    // inherit the cleanup state of the sstable it replaces.
+    co_await calculate_sstables_cleanup_state(sorted_owned_ranges, t);
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
@@ -3007,16 +3034,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     }
 }
 
-future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
-    auto check_for_cleanup = [this, &t] {
-        return std::ranges::any_of(_tasks, [&t] (auto& task) {
-            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
-        });
-    };
-    if (check_for_cleanup()) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
-    }
-
+future<> compaction_manager::calculate_sstables_cleanup_state(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t) {
     auto& cs = get_compaction_state(&t);
     co_await run_with_compaction_disabled(t, [&] () -> future<> {
         auto update_sstables_cleanup_state = [&] (lw_shared_ptr<const sstables::sstable_set> set) -> future<> {
@@ -3037,7 +3055,10 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
             cs.set_cleanup_owned_ranges(std::move(sorted_owned_ranges));
         }
     }, "cleanup");
+}
 
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
+    auto& cs = get_compaction_state(&t);
     if (!cs.has_sstables_requiring_cleanup()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
         co_return;
