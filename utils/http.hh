@@ -39,6 +39,7 @@ protected:
 
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
     static future<> initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger);
+    future<connected_socket> connect();
 public:
     dns_connection_factory(dns_connection_factory&&);
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});

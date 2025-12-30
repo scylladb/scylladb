@@ -47,6 +47,15 @@ future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> st
     state->initialized = true;
     logger.debug("Initialized factory, addresses={} tls={}", state->addr_list, state->creds == nullptr ? "no" : "yes");
 }
+future<connected_socket> utils::http::dns_connection_factory::connect() {
+    auto socket_addr = socket_address(_state->addr_list[_addr_pos++ % _state->addr_list.size()], _port);
+    if (_state->creds) {
+        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr_list, _host);
+        co_return co_await tls::connect(_state->creds, socket_addr, tls::tls_options{.server_name = _host});
+    }
+    _logger.debug("Making new HTTP connection addr={} host={}", _state->addr_list, _host);
+    co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
+}
 
 utils::http::dns_connection_factory::dns_connection_factory(dns_connection_factory&&) = default;
 
@@ -86,13 +95,7 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
         co_await _done.get_future();
     }
 
-    auto socket_addr = socket_address(_state->addr_list[_addr_pos++ % _state->addr_list.size()], _port);
-    if (_state->creds) {
-        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr_list, _host);
-        co_return co_await tls::connect(_state->creds, socket_addr, tls::tls_options{.server_name = _host});
-    }
-    _logger.debug("Making new HTTP connection addr={} host={}", _state->addr_list, _host);
-    co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
+    co_return co_await connect();
 }
 
 static const char HTTPS[] = "https";
