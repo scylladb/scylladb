@@ -100,25 +100,22 @@ async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
        in all nodes but one, then downgrading the upgraded nodes.
     """
     servers = await manager.running_servers()
+    cql, hosts = await manager.get_ready_cql(servers)
     upgrading_servers = servers[1:] if len(servers) > 0 else []
-
-    cql = manager.cql
+    upgrading_hosts = hosts[1:] if len(hosts) > 0 else []
 
     # Upgrade
-    for srv in upgrading_servers:
+    for srv, host in zip(upgrading_servers, upgrading_hosts):
         await change_support_for_test_feature_and_restart(manager, [srv], enable=True)
-        host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
         assert TEST_FEATURE_NAME in await get_supported_features(cql, host)
 
     # There is one node that is not upgraded. The feature should not be enabled.
-    for srv in servers:
-        srv_host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
-        assert TEST_FEATURE_NAME not in await get_enabled_features(cql, srv_host)
+    for srv, host in zip(servers, hosts):
+        assert TEST_FEATURE_NAME not in await get_enabled_features(cql, host)
 
     # Downgrade, in reverse order
-    for srv in upgrading_servers[::-1]:
+    for srv, host in zip(reversed(upgrading_servers), reversed(upgrading_hosts)):
         await change_support_for_test_feature_and_restart(manager, [srv], enable=False)
-        host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
         assert TEST_FEATURE_NAME not in await get_supported_features(cql, host)
 
 
