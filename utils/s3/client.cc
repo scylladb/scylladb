@@ -372,7 +372,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             // the `err_count` is incremented BEFORE each attempt. In that case, as the last resort, we reset DNS resolution to mitigate possible DNS issues.
             if (err.is_retryable() && err.get_error_type() == aws_error_type::NETWORK_CONNECTION && !co_await _retry_strategy->should_retry(eptr, err_count)) {
                 auto& gc = find_or_create_client();
-                gc.dns_factory.reset_dns_resolution();
+                co_await gc.dns_factory.reset_dns_resolution();
                 s3l.debug("Resetting DNS resolution for host {} as the last resort before retries are exhausted.", _host);
             }
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(err)));
@@ -1356,7 +1356,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 if (aws_ex.get_error_type() == aws_error_type::NETWORK_CONNECTION) {
                     auto& gc = _client->find_or_create_client();
-                    gc.dns_factory.reset_dns_resolution();
+                    co_await gc.dns_factory.reset_dns_resolution();
                 }
             }
         }
