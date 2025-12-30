@@ -2158,6 +2158,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
 
+    co_await calculate_sstables_cleanup_state(sorted_owned_ranges, t);
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
@@ -2193,16 +2194,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     }
 }
 
-future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
-    auto check_for_cleanup = [this, &t] {
-        return std::ranges::any_of(_tasks, [&t] (auto& task) {
-            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
-        });
-    };
-    if (check_for_cleanup()) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
-    }
-
+future<> compaction_manager::calculate_sstables_cleanup_state(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t) {
     auto& cs = get_compaction_state(&t);
     co_await run_with_compaction_disabled(t, [&] () -> future<> {
         auto update_sstables_cleanup_state = [&] (lw_shared_ptr<const sstables::sstable_set> set) -> future<> {
@@ -2223,7 +2215,20 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
             cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
         }
     }, "cleanup");
+}
 
+
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
+    auto check_for_cleanup = [this, &t] {
+        return std::ranges::any_of(_tasks, [&t] (auto& task) {
+            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
+        });
+    };
+    if (check_for_cleanup()) {
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
+    }
+
+    auto& cs = get_compaction_state(&t);
     if (cs.sstables_requiring_cleanup.empty()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
         co_return;
