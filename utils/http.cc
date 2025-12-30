@@ -95,6 +95,13 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
         co_await _done.get_future();
     }
 
+    try {
+        co_return co_await connect();
+    } catch (...) {
+        _logger.debug("Failed to connect to {}, resetting DNS resolution. Reason: {}", _host, std::current_exception());
+    }
+    reset_dns_resolution();
+    co_await _done.get_future();
     co_return co_await connect();
 }
 
