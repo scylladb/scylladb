@@ -59,6 +59,8 @@ public:
 
         std::cout << prefix() << "sizeof(rows_entry) = " << sizeof(rows_entry) << "\n";
         std::cout << prefix() << "sizeof(evictable) = " << sizeof(evictable) << "\n";
+        std::cout << prefix() << "sizeof(partition_entry) = " << sizeof(partition_entry) << "\n";
+        std::cout << prefix() << "sizeof(single_row_partition) = " << sizeof(single_row_partition) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
         std::cout << prefix() << "radix_tree::inner_node::node_sizes = ";

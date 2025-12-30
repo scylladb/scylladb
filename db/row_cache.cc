@@ -29,6 +29,8 @@
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "readers/from_mutations.hh"
+#include "readers/from_fragments.hh"
 
 namespace cache {
 
@@ -220,8 +222,13 @@ void cache_tracker::touch(rows_entry& e) {
     _lru.add(e);
 }
 
+void cache_tracker::touch(single_row_partition& p) {
+    _lru.remove(p);
+    _lru.add(p);
+}
+
 void cache_tracker::insert(cache_entry& entry) {
-    insert(entry.partition());
+    entry.accept([&] (auto& p) { insert(p); });
     ++_stats.partition_insertions;
     ++_stats.partitions;
     // partition_range_cursor depends on this to detect invalidation of _end
@@ -422,7 +429,8 @@ private:
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
         co_await _read_context->create_underlying();
-        auto mfopt = co_await _read_context->underlying().underlying()();
+        mutation_reader& underlying = _read_context->underlying().underlying();
+        auto mfopt = co_await underlying();
         if (!mfopt) {
             if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                 _cache._read_section(_cache._tracker.region(), [this] {
@@ -432,7 +440,28 @@ private:
                 _cache._tracker.on_mispopulate();
             }
             _end_of_stream = true;
-        } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
+            co_return;
+        }
+
+        if (get_partition_format(*_cache.schema()) == partition_format::single_row) {
+            auto partition_reader = read_directly_from_underlying(*_read_context, std::move(*mfopt));
+            auto mut_opt = co_await read_mutation_from_mutation_reader(partition_reader);
+            co_await partition_reader.close();
+            if (!mut_opt) {
+                on_internal_error(clogger, "partition on found");
+            }
+            if (phase == _cache.phase_of(_read_context->range().start()->value())) {
+                _cache.try_populate(*mut_opt);
+            } else {
+                _cache._tracker.on_mispopulate();
+            }
+            _reader = make_mutation_reader_from_mutations(mut_opt->schema(), _read_context->permit(), std::move(*mut_opt));
+            _reader->upgrade_schema(_cache.schema());
+            _reader->upgrade_schema(_read_context->schema());
+            co_return;
+        }
+
+        if (phase == _cache.phase_of(_read_context->range().start()->value())) {
             _reader = _cache._read_section(_cache._tracker.region(), [&] {
                 cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
                 return e.read(_cache, *_read_context, phase);
@@ -572,6 +601,32 @@ public:
                     });
                 }
                 _cache.on_partition_miss();
+
+                if (get_partition_format(*_cache.schema()) == partition_format::single_row) {
+                    auto partition_reader = std::make_unique<mutation_reader>(
+                            read_directly_from_underlying(_read_context, std::move(*mfopt)));
+                    auto& underlying = *partition_reader;
+                    return read_mutation_from_mutation_reader(underlying)
+                            .then([&, this] (mutation_opt&& mut_opt) {
+                        if (!mut_opt) {
+                            on_internal_error(clogger, "partition on found");
+                        }
+                        if (_reader.creation_phase() == _cache.phase_of(mut_opt->decorated_key())) {
+                            _cache.try_populate(*mut_opt, this->can_set_continuity() ? &*_last_key : nullptr);
+                        } else {
+                            _cache._tracker.on_mispopulate();
+                        }
+                        _last_key = row_cache::previous_entry_pointer(mut_opt->decorated_key());
+                        auto reader = make_mutation_reader_from_mutations(mut_opt->schema(), _read_context.permit(),
+                                                                      std::move(*mut_opt));
+                        reader.upgrade_schema(_cache.schema());
+                        reader.upgrade_schema(_read_context.schema());
+                        return mutation_reader_opt(std::move(reader));
+                    }).finally([reader = std::move(partition_reader)] () mutable {
+                        return reader->close();
+                    });
+                }
+
                 const partition_start& ps = mfopt->as_partition_start();
                 const dht::decorated_key& key = ps.key();
                 if (_reader.creation_phase() == _cache.phase_of(key)) {
@@ -843,17 +898,23 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
             cache_entry& e = *i;
             upgrade_entry(e);
             tracing::trace(ts, "Reading partition {} from cache", pos);
-            return make_partition_snapshot_flat_reader<false, dummy_accounter>(
-                    schema,
-                    std::move(permit),
-                    e.key(),
-                    query::clustering_key_filter_ranges(slice.row_ranges(*schema, e.key().key())),
-                    e.partition().read(_tracker.region(), _tracker.memtable_cleaner(), nullptr, phase_of(pos)),
-                    false,
-                    _tracker.region(),
-                    _read_section,
-                    {},
-                    streamed_mutation::forwarding::no);
+            return e.accept(make_visitor([&] (partition_entry& pe) {
+                return make_partition_snapshot_flat_reader<false, dummy_accounter>(
+                        schema,
+                        std::move(permit),
+                        e.key(),
+                        query::clustering_key_filter_ranges(slice.row_ranges(*schema, e.key().key())),
+                        pe.read(_tracker.region(), _tracker.memtable_cleaner(), nullptr, phase_of(pos)),
+                        false,
+                        _tracker.region(),
+                        _read_section,
+                        {},
+                        streamed_mutation::forwarding::no);
+            }, [&] (single_row_partition& srp) {
+                auto r = make_mutation_reader_from_fragments(srp.get_schema(), permit, srp.as_fragments(e.key(), permit));
+                r.upgrade_schema(schema);
+                return r;
+            }));
         } else {
             tracing::trace(ts, "Partition {} is not found in cache", pos);
             return make_empty_mutation_reader(std::move(schema), std::move(permit));
@@ -921,6 +982,9 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
 }
 
 cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous) {
+    if (get_partition_format() != partition_format::generic) {
+        on_internal_error(clogger, "Must be called only with partition_format::generic");
+    }
     return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
         // Create an fully discontinuous, except for the partition tombstone, entry
         mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
@@ -931,7 +995,7 @@ cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row
     }, [&] (auto i) { // visit
         _tracker.on_miss_already_populated();
         cache_entry& e = *i;
-        e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(ps.partition_tombstone());
+        e.get_partition_entry().open_version(*e.schema(), &_tracker, phase).partition().apply(ps.partition_tombstone());
         upgrade_entry(e);
     });
 }
@@ -963,6 +1027,19 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
         throw std::runtime_error(format("cache already contains entry for {}", m.key()));
     });
   });
+}
+
+void row_cache::try_populate(const mutation& m, const previous_entry_pointer* previous) {
+    _populate_section(_tracker.region(), [&] {
+        do_find_or_create_entry(m.decorated_key(), previous, [&](auto i, const partitions_type::bound_hint& hint) {
+            partitions_type::iterator entry = _partitions.emplace_before(i, m.decorated_key().token().raw(), hint,
+                                                                         m.schema(), m.decorated_key(), m.partition());
+            _tracker.insert(*entry);
+            entry->set_continuous(i->continuous());
+            upgrade_entry(*entry);
+            return entry;
+        }, [&] (auto i) {});
+    });
 }
 
 cache_entry& row_cache::lookup(const dht::decorated_key& key) {
@@ -1122,20 +1199,36 @@ future<> row_cache::update(external_updater eu, replica::memtable& m, preemption
             SCYLLA_ASSERT(entry.schema() == _schema);
             _tracker.on_partition_merge();
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
-            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
-                alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
+            return entry.accept(make_visitor([&] (partition_entry& pe) -> utils::coroutine {
+                return pe.apply_to_incomplete(*_schema, std::move(mem_e.get_partition_entry()), _tracker.memtable_cleaner(),
+                    alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
+            }, [&] (single_row_partition& srp) -> utils::coroutine {
+                assert(mem_e.format() == entry.format());
+                // FIXME: handle stats and dirty memory manager.
+                srp.apply_monotonically(std::move(mem_e.get_single_row_partition()));
+                return utils::make_empty_coroutine();
+            }));
         } else if (cache_i->continuous()
                    || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
                       == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
-            partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
-                cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
-                partition_entry::make_evictable(*_schema, mutation_partition(*_schema)));
-            entry->set_continuous(cache_i->continuous());
-            _tracker.insert(*entry);
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
-            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
-                alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
+            return mem_e.accept(make_visitor([&] (partition_entry& pe) -> utils::coroutine {
+                partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
+                     cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
+                     partition_entry::make_evictable(*_schema, mutation_partition(*_schema)));
+                entry->set_continuous(cache_i->continuous());
+                _tracker.insert(*entry);
+                return entry->get_partition_entry().apply_to_incomplete(*_schema, std::move(pe), _tracker.memtable_cleaner(),
+                                                              alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
+            }, [&] (single_row_partition& srp) -> utils::coroutine {
+                // FIXME: handle stats and dirty memory manager.
+                partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
+                     _schema, dht::decorated_key(mem_e.key()), std::move(srp));
+                entry->set_continuous(cache_i->continuous());
+                _tracker.insert(*entry);
+                return utils::make_empty_coroutine();
+            }));
         } else {
             return utils::make_empty_coroutine();
         }
@@ -1169,11 +1262,15 @@ void row_cache::touch(const dht::decorated_key& dk) {
  _read_section(_tracker.region(), [&] {
     auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
     if (i != _partitions.end()) {
-        for (partition_version& pv : i->partition().versions_from_oldest()) {
-            for (rows_entry& row : pv.partition().clustered_rows()) {
-                _tracker.touch(row);
+        i->accept(make_visitor([&] (partition_entry& pe) {
+            for (partition_version& pv : pe.versions_from_oldest()) {
+                for (rows_entry& row : pv.partition().clustered_rows()) {
+                    _tracker.touch(row);
+                }
             }
-        }
+        }, [&] (single_row_partition& srp) {
+            _tracker.touch(srp);
+        }));
     }
  });
 }
@@ -1182,14 +1279,18 @@ void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
     _read_section(_tracker.region(), [&] {
         auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
         if (i != _partitions.end()) {
-            for (partition_version& pv : i->partition().versions_from_oldest()) {
-                for (rows_entry& row : pv.partition().clustered_rows()) {
-                    // Last dummy may already be unlinked.
-                    if (row.is_linked()) {
-                        _tracker.get_lru().remove(row);
+            i->accept(make_visitor([&] (partition_entry& pe) {
+                for (partition_version& pv : pe.versions_from_oldest()) {
+                    for (rows_entry& row : pv.partition().clustered_rows()) {
+                        // Last dummy may already be unlinked.
+                        if (row.is_linked()) {
+                            _tracker.get_lru().remove(row);
+                        }
                     }
                 }
-            }
+            }, [&] (single_row_partition& srp) {
+                _tracker.get_lru().remove(srp);
+            }));
         }
     });
 }
@@ -1313,16 +1414,21 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
 
 cache_entry::cache_entry(cache_entry&& o) noexcept
     : _key(std::move(o._key))
-    , _pe(std::move(o._pe))
+    , storage(o.format(), std::move(o.storage))
     , _flags(o._flags)
 {
 }
 
 cache_entry::~cache_entry() {
+    storage.destroy(format());
 }
 
 void cache_entry::evict(cache_tracker& tracker) noexcept {
-    _pe.evict(tracker.cleaner());
+    accept(make_visitor([&] (partition_entry& pe) {
+        pe.evict(tracker.cleaner());
+    }, [&] (single_row_partition& srp) {
+        tracker.remove(srp);
+    }));
 }
 
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
@@ -1333,21 +1439,44 @@ cache_entry::cache_entry(dummy_entry_tag)
     : _key{dht::token(), partition_key::make_empty()}
 {
     _flags._dummy_entry = true;
+    // FIXME: make schema-dependent.
+    new (&storage.pe) partition_entry();
 }
 
 cache_entry::cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
     : _key(key)
-    , _pe(partition_entry::make_evictable(*s, mutation_partition(*s, p)))
-{ }
+{
+    if (get_partition_format(*s) == partition_format::single_row) {
+        _flags._single_row_partition = true;
+        new (&storage.srp) single_row_partition(s, p);
+    } else {
+        new (&storage.pe) partition_entry(partition_entry::make_evictable(*s, mutation_partition(*s, p)));
+    }
+}
 
 cache_entry::cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p)
-    : cache_entry(evictable_tag(), s, std::move(key), partition_entry::make_evictable(*s, std::move(p)))
-{ }
+    : _key(std::move(key))
+{
+    if (get_partition_format(*s) == partition_format::single_row) {
+        new (&storage.srp) single_row_partition(s, std::move(p));
+        _flags._single_row_partition = true;
+    } else {
+        new (&storage.pe) partition_entry(partition_entry::make_evictable(*s, mutation_partition(*s, p)));
+    }
+}
+
+cache_entry::cache_entry(schema_ptr s, dht::decorated_key&& key, single_row_partition&& p)
+    : _key(std::move(key))
+{
+    new (&storage.srp) single_row_partition(std::move(p));
+    _flags._single_row_partition = true;
+}
 
 cache_entry::cache_entry(evictable_tag, schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
     : _key(std::move(key))
-    , _pe(std::move(pe))
-{ }
+{
+    new (&storage.pe) partition_entry(std::move(pe));
+}
 
 void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
     row_cache::partitions_type::iterator it(this);
@@ -1382,6 +1511,17 @@ mutation_partition_v2::rows_type::iterator on_evicted_shallow(rows_entry& e, cac
         tracker.on_row_eviction();
     }
     return it;
+}
+
+void single_row_partition::on_evicted() noexcept {
+    current_tracker->on_row_eviction();
+    cache_entry& ce = cache_entry::container_of(*this);
+    ce.on_evicted(*current_tracker);
+}
+
+stop_iteration single_row_partition::clear_gently(cache_tracker*) noexcept {
+    _row = {};
+    return stop_iteration::yes;
 }
 
 void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
@@ -1431,15 +1571,91 @@ mutation_reader cache_entry::read(row_cache& rc, std::unique_ptr<read_context> u
     return do_read(rc, std::move(unique_ctx));
 }
 
+single_row_partition::single_row_partition(schema_ptr s)
+    : _s(std::move(s))
+    , _row(make_managed<deletable_row>())
+{ }
+
+single_row_partition::single_row_partition(schema_ptr s, mutation_partition&& mp)
+    : _s(std::move(s))
+    , _row(mp.empty() ? make_managed<deletable_row>()
+        : make_managed<deletable_row>(std::move(mp.clustered_row(*_s, clustering_key::make_empty()))))
+{
+    _row->apply(mp.partition_tombstone());
+}
+
+single_row_partition::single_row_partition(schema_ptr s, const mutation_partition& mp)
+    : single_row_partition(s, mutation_partition(*s, mp))
+{ }
+
+void single_row_partition::apply(const schema& mp_schema, mutation_partition&& mp, mutation_application_stats& app_stats) {
+    if (mp_schema.version() != _s->version()) {
+        mp.upgrade(mp_schema, *_s);
+    }
+    _row->apply(mp.partition_tombstone());
+    if (!mp.clustered_rows().empty()) {
+        _row->apply(*_s, mp.clustered_row(*_s, clustering_key::make_empty()));
+        ++app_stats.row_writes;
+    }
+}
+
+void single_row_partition::apply(const schema& mp_schema, const mutation_partition& mp, mutation_application_stats& app_stats) {
+    // FIXME: Avoid copy
+    apply(mp_schema, mutation_partition(mp_schema, mp), app_stats);
+}
+
+void single_row_partition::apply_monotonically(single_row_partition&& p) {
+    if (_s->version() != p._s->version()) {
+        p.upgrade(_s);
+    }
+    _row->apply(*_s, std::move(*p._row));
+}
+
+void single_row_partition::upgrade(schema_ptr new_schema) {
+    // FIXME: Avoid going through mutation_partition.
+    mutation_partition mp(*_s);
+    auto ck = clustering_key::make_empty();
+    mp.clustered_row(*_s, ck).apply(*_s, row());
+    mp.upgrade(*_s, *new_schema);
+    *_row = std::move(mp.clustered_row(*new_schema, ck));
+    _s = std::move(new_schema);
+}
+
+single_row_partition::fragments_vector
+single_row_partition::as_fragments(const dht::decorated_key& key, reader_permit permit) const {
+    single_row_partition::fragments_vector frags;
+    auto dr = deletable_row(*_s, row());
+
+    // Extract regular tombstone as partition tombstone, leave shadowable tombstone in the row.
+    auto partition_tombstone = dr.deleted_at().regular();
+    auto st = dr.deleted_at().shadowable();
+    dr.remove_tombstone();
+    dr.apply(st);
+
+    frags.emplace_back(mutation_fragment_v2(*_s, permit, partition_start(key, partition_tombstone)));
+    if (!dr.empty()) {
+        frags.emplace_back(mutation_fragment_v2(*_s, permit, clustering_row(clustering_key_prefix::make_empty(), std::move(dr))));
+    }
+    frags.emplace_back(mutation_fragment_v2(*_s, permit, partition_end()));
+    return frags;
+}
+
 // Assumes reader is in the corresponding partition
 mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader, std::unique_ptr<read_context> holder) {
-    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, reader.phase());
-    auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), reader.native_slice(), _key.key());
-    schema_ptr entry_schema = to_query_domain(reader.slice(), schema());
-    auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(holder), std::move(snp));
-    r.upgrade_schema(to_query_domain(reader.slice(), rc.schema()));
-    r.upgrade_schema(reader.schema());
-    return r;
+    return this->accept(make_visitor([&] (partition_entry& pe) {
+        auto snp = pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, reader.phase());
+        auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), reader.native_slice(), _key.key());
+        schema_ptr entry_schema = to_query_domain(reader.slice(), schema());
+        auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(holder),
+                                            std::move(snp));
+        r.upgrade_schema(to_query_domain(reader.slice(), rc.schema()));
+        r.upgrade_schema(reader.schema());
+        return r;
+    }, [&] (single_row_partition& srp) {
+        auto r = make_mutation_reader_from_fragments(srp.get_schema(), reader.permit(), srp.as_fragments(_key, reader.permit()));
+        r.upgrade_schema(reader.schema());
+        return r;
+    }));
 }
 
 mutation_reader cache_entry::do_read(row_cache& rc, std::unique_ptr<read_context> unique_ctx) {
@@ -1451,11 +1667,17 @@ const schema_ptr& row_cache::schema() const {
 }
 
 void row_cache::upgrade_entry(cache_entry& e) {
-    if (e.schema() != _schema && !e.partition().is_locked()) {
-        auto& r = _tracker.region();
-        SCYLLA_ASSERT(!r.reclaiming_enabled());
-        e.partition().upgrade(r, _schema, _tracker.cleaner(), &_tracker);
-    }
+    e.accept(make_visitor([&] (partition_entry& pe){
+        if (pe.get_schema() != _schema && !pe.is_locked()) {
+            auto& r = _tracker.region();
+            SCYLLA_ASSERT(!r.reclaiming_enabled());
+            pe.upgrade(r, _schema, _tracker.cleaner(), &_tracker);
+        }
+    }, [&] (single_row_partition& srp) {
+        if (srp.get_schema() != _schema) {
+            srp.upgrade(_schema);
+        }
+    }));
 }
 
 std::ostream& operator<<(std::ostream& out, row_cache& rc) {
@@ -1496,7 +1718,7 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
 
 auto fmt::formatter<cache_entry>::format(const cache_entry& e, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{{cache_entry: {}, cont={}, dummy={}, {}}}",
-               e.position(), e.continuous(), e.is_dummy_entry(),
-               partition_entry::printer(e.partition()));
+    return fmt::format_to(ctx.out(), "{{cache_entry: {}, cont={}, dummy={}}}",
+               e.position(), e.continuous(), e.is_dummy_entry()
+               /*partition_entry::printer(e.partition())*/); // FIXME
 }

@@ -19,6 +19,7 @@
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
 #include "mutation/mutation_cleaner.hh"
+#include "mutation/single_row_partition.hh"
 #include "utils/double-decker.hh"
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
@@ -32,13 +33,28 @@ namespace replica {
 
 class memtable_entry {
     dht::decorated_key _key;
-    partition_entry _pe;
+
+    // The partition_format doesn't change for a given table inside a given server.
+    // If memtable_entry is using a given format, row_cache must also use it for a matching
+    // partition.
+    partition_storage storage;
+
     struct {
         bool _head : 1;
         bool _tail : 1;
         bool _train : 1;
+
+        // Determines partition_format used for this entry.
+        // Present here for convenience, so that we don't have to pass schema& everywhere.
+        // All entries within a given table must still use the same format.
+        bool _single_row_partition : 1;
     } _flags{};
 public:
+    // Always consistent with get_partition_format(*get_schema()).
+    partition_format format() const noexcept {
+        return _flags._single_row_partition ? partition_format::single_row : partition_format::generic;
+    }
+
     bool is_head() const noexcept { return _flags._head; }
     void set_head(bool v) noexcept { _flags._head = v; }
     bool is_tail() const noexcept { return _flags._tail; }
@@ -48,16 +64,34 @@ public:
 
     friend class memtable;
 
-    memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p);
+    memtable_entry(schema_ptr s, dht::decorated_key key);
     memtable_entry(memtable_entry&& o) noexcept;
+    ~memtable_entry() noexcept;
+
     // Frees elements of the entry in batches.
     // Returns stop_iteration::yes iff there are no more elements to free.
     stop_iteration clear_gently() noexcept;
     const dht::decorated_key& key() const { return _key; }
     dht::decorated_key& key() { return _key; }
-    const partition_entry& partition() const { return _pe; }
-    partition_entry& partition() { return _pe; }
-    const schema_ptr& schema() const { return _pe.get_schema(); }
+
+    template <typename Visitor>
+    auto accept(this auto& self, Visitor&& v) {
+        return self.storage.accept(self.format(), std::forward<Visitor>(v));
+    }
+
+    const schema_ptr& schema() const {
+        return accept([&] (auto& p) {
+            return std::reference_wrapper<const schema_ptr>(p.get_schema());
+        }).get();
+    }
+
+    // Call only when format() == partition_format::single_row_partition.
+    single_row_partition& get_single_row_partition() { return storage.srp; }
+
+    // Call only when format() == partition_format::generic.
+    partition_entry& get_partition_entry() { return storage.pe; }
+
+    // Call only when format() == partition_format::generic.
     partition_snapshot_ptr snapshot(memtable& mtbl);
 
     // Makes the entry conform to given schema.
@@ -76,9 +110,13 @@ public:
 
     size_t size_in_allocator(allocation_strategy& allocator) {
         auto size = size_in_allocator_without_rows(allocator);
-        for (auto&& v : _pe.versions()) {
-            size += v.size_in_allocator(allocator);
-        }
+        accept(make_visitor([&] (partition_entry& pe) {
+            for (auto&& v : pe.versions()) {
+                size += v.size_in_allocator(allocator);
+            }
+        }, [&] (single_row_partition& srp) {
+            size += srp.external_memory_usage();
+        }));
         return size;
     }
 
@@ -208,8 +246,8 @@ private:
     friend class partition_snapshot_read_accounter;
 private:
     std::ranges::subrange<partitions_type::const_iterator> slice(const dht::partition_range& r) const;
-    partition_entry& find_or_create_partition(const dht::decorated_key& key);
-    partition_entry& find_or_create_partition_slow(partition_key_view key);
+    memtable_entry& find_or_create_partition(const dht::decorated_key& key);
+    memtable_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
     void add_flushed_memory(uint64_t);
     void remove_flushed_memory(uint64_t);
