@@ -89,7 +89,7 @@ future<std::optional<directory_entry>> directory_lister::get() {
     std::exception_ptr ex;
     try {
         while (auto de_opt = co_await (*_gen)()) {
-            auto& de = de_opt->get();
+            auto& de = *de_opt;
             if (!de.type) {
                 de.type = co_await file_type((_dir / de.name).native(), follow_symlink::no);
                 if (!de.type) {

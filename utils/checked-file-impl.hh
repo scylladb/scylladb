@@ -105,7 +105,7 @@ public:
         });
     }
 
-    virtual coroutine::experimental::generator<directory_entry> experimental_list_directory() override {
+    virtual list_directory_generator_type experimental_list_directory() override {
         try {
             auto gen = get_file_impl(_file)->experimental_list_directory();
             while (auto de = co_await gen()) {
