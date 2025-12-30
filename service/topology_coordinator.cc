@@ -2029,6 +2029,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // Compute the average tablet size of existing replicas
                     uint64_t tablet_size_sum = 0;
                     size_t replica_count = 0;
+                    bool incomplete = false;
                     const locator::range_based_tablet_id rb_tid {gid.table, trange};
                     auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tinfo, trinfo);
                     for (auto& r : tsi.read_from) {
@@ -2036,12 +2037,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         if (tablet_size_opt) {
                             tablet_size_sum += *tablet_size_opt;
                             replica_count++;
+                        } else {
+                            incomplete = true;
                         }
                     }
 
-                    if (replica_count) {
+                    if (!incomplete) {
                         new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
-                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = tablet_size_sum / replica_count;
+                        auto size = replica_count ? tablet_size_sum / replica_count : 0;
+                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = size;
                     }
                 }
                 break;
