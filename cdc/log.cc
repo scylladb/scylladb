@@ -179,7 +179,7 @@ public:
         });
     }
 
-    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    virtual void on_before_allocate_tablet_map(const locator::shared_tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         if (!is_log_schema(s)) {
             return;
         }
@@ -618,7 +618,7 @@ static void set_default_properties_log_table(schema_builder& b, const schema& s,
     b.set_caching_options(caching_options::get_disabled_caching_options());
 
     auto rs = generate_replication_strategy(ksm, db.get_token_metadata().get_topology());
-    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata(), false));
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
     b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 }
 
