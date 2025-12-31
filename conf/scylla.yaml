@@ -564,6 +564,14 @@ commitlog_total_space_in_mb: -1
 # network, you can override prometheus_address explicitly - e.g., setting
 # it to 0.0.0.0 to listen on all interfaces.
 # prometheus_address: 1.2.3.4
+#
+# prometheus_allow_protobuf
+# Allows Prometheus protobuf format with native histogram support.
+# When enabled, Prometheus can request metrics in protobuf format, which includes
+# native histogram data. The monitoring system decides which format to use.
+# This is enabled by default for new installations. Upgraded nodes will continue
+# to use text format unless explicitly enabled.
+prometheus_allow_protobuf: true
 
 # audit settings
 # By default, Scylla does not audit anything.
