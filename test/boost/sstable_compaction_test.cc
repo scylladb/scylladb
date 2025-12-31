@@ -6090,6 +6090,127 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
     });
 }
 
+SEASTAR_TEST_CASE(repeated_cleanup_incremental_compaction_test) {
+    BOOST_REQUIRE_EQUAL(smp::count, 1); // this test is valid only on a single shard
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(10000);
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::leveled);
+        std::map<sstring, sstring> opts = {
+            { "sstable_size_in_mb", "0" }, // makes sure that every mutation produces one fragment, to trigger incremental compaction
+        };
+        builder.set_compaction_strategy_options(std::move(opts));
+        auto s = builder.build();
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::new_timestamp());
+            return m;
+        };
+
+        auto ssts = make_lw_shared<sstable_list>();
+        static constexpr size_t sstables_nr = 10;
+
+        std::vector<dht::token> tokens;
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        for (unsigned i = 0; i < sstables_nr * 2; i++) {
+            auto key = tests::random::get_int<uint64_t>(0, 10000000);
+            merged.insert(make_insert(partition_key::from_exploded(*s, {to_bytes(to_sstring(key))})));
+        }
+
+        auto merged_it = merged.begin();
+        for (unsigned i = 0; i < sstables_nr; i++) {
+            auto mut1 = std::move(*merged_it);
+            merged_it++;
+            auto mut2 = std::move(*merged_it);
+            merged_it++;
+            auto sst = make_sstable_containing(sst_gen, {
+                std::move(mut1),
+                std::move(mut2)
+            });
+            // Force a new run_id to trigger offstrategy compaction
+            sstables::test(sst).set_run_identifier(run_id::create_random_id());
+            // Set level to 0 to trigger offstrategy compaction
+            sst->set_sstable_level(0);
+
+            // every sstable will be eligible for cleanup, by having both an owned and unowned token.
+            tokens.push_back(sst->get_last_decorated_key().token());
+
+            ssts->insert(std::move(sst));
+        }
+
+        auto make_owned_ranges = [] (std::vector<dht::token> tokens) {
+            std::ranges::sort(tokens);
+            dht::token_range_vector owned_token_ranges;
+            for (const auto& t : tokens) {
+                owned_token_ranges.push_back(dht::token_range::make_singular(t));
+            }
+            return compaction::make_owned_ranges(std::move(owned_token_ranges));
+        };
+        auto owned_ranges = make_owned_ranges(tokens);
+
+        auto t = env.make_table_for_tests(s);
+        auto& cm = t->get_compaction_manager();
+        auto stop = deferred_stop(t);
+        t->disable_auto_compaction().get();
+
+        for (auto&& sst : *ssts) {
+            column_family_test(t).add_sstable(sst, sstables::offstrategy::yes).get();
+        }
+
+        auto perform_cleanup = [&] (compaction::owned_ranges owned_ranges) {
+            t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{}).get();
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
+            testlog.info("Cleanup has finished");
+        };
+
+        auto sstable_gens = [] (const sstable_list& ssts) {
+            std::set<sstables::generation_type> gens;
+            for (auto& sst : ssts) {
+                gens.insert(sst->generation());
+            }
+            return gens;
+        };
+
+        // Expect first cleanup to compact all input sstables
+        perform_cleanup(owned_ranges);
+        sstable_list uncompacted;
+        auto sstables_after_1st_cleanup = t->get_sstables();
+        for (auto& sst : *ssts) {
+            if (sstables_after_1st_cleanup->contains(sst)) {
+                uncompacted.insert(sst);
+            }
+        }
+        BOOST_REQUIRE(uncompacted.empty());
+
+        // With unmodifed owned tokens, expect cleanup to do nothing
+        perform_cleanup(owned_ranges);
+        auto sstables_after_2nd_cleanup = t->get_sstables();
+        BOOST_REQUIRE_EQUAL(sstable_gens(*sstables_after_2nd_cleanup), sstable_gens(*sstables_after_1st_cleanup));
+
+        t->get_compaction_manager().perform_major_compaction(t.as_compaction_group_view(), {}).get();
+        perform_cleanup(owned_ranges);
+        auto sstables_after_major_compaction = t->get_sstables();
+        BOOST_REQUIRE_NE(sstable_gens(*sstables_after_major_compaction), sstable_gens(*sstables_after_2nd_cleanup));
+
+        // Cleanup should still do nothing even after all current sstables were major compacted
+        perform_cleanup(owned_ranges);
+        auto sstables_after_3rd_cleanup = t->get_sstables();
+        BOOST_REQUIRE_EQUAL(sstable_gens(*sstables_after_3rd_cleanup), sstable_gens(*sstables_after_major_compaction));
+
+        // After modifying owned tokens, expect cleanup to do some work
+        tokens.resize(tokens.size() - 1);
+        auto new_owned_ranges = make_owned_ranges(tokens);
+        perform_cleanup(new_owned_ranges);
+        auto sstables_after_4th_cleanup = t->get_sstables();
+        BOOST_REQUIRE_NE(sstable_gens(*sstables_after_4th_cleanup), sstable_gens(*sstables_after_3rd_cleanup));
+    });
+}
+
 future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
