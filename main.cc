@@ -825,6 +825,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // See the comment at the definition of sstables::global_cache_index_pages.
             smp::invoke_on_all([&cfg] {
                 sstables::global_cache_index_pages = cfg->cache_index_pages.operator utils::updateable_value<bool>();
+                sstables::global_partition_index_cache_enabled = cfg->partition_index_cache_enabled.operator utils::updateable_value<bool>();
             }).get();
 
             ::sighup_handler sighup_handler(opts, *cfg);
