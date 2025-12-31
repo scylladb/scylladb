@@ -169,10 +169,13 @@ class view_builder final : public service::migration_listener::only_view_notific
     base_to_build_step_type _base_to_build_step;
     base_to_build_step_type::iterator _current_step = _base_to_build_step.end();
     serialized_action _build_step{std::bind(&view_builder::do_build_step, this)};
+    static constexpr size_t view_builder_semaphore_units = 1;
     // Ensures bookkeeping operations are serialized, meaning that while we execute
     // a build step we don't consider newly added or removed views. This simplifies
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
-    seastar::named_semaphore _sem{1, named_semaphore_exception_factory{"view builder"}};
+    seastar::named_semaphore _sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder"}};
+    // Serializes view create/drop notifications on shard 0 before broadcasting.
+    seastar::named_semaphore _view_notification_sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder notification"}};
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
@@ -266,6 +269,10 @@ private:
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
     future<> mark_as_built(view_ptr);
     void setup_metrics();
+    future<> dispatch_create_view(sstring ks_name, sstring view_name);
+    future<> dispatch_drop_view(sstring ks_name, sstring view_name);
+    future<> handle_create_view_local(sstring ks_name, sstring view_name);
+    future<> handle_drop_view_local(sstring ks_name, sstring view_name);
 
     template <typename Func1, typename Func2>
     future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {
