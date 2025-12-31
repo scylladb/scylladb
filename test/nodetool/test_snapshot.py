@@ -216,7 +216,7 @@ def test_snapshot_ktlist(nodetool, option_name):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
     ])
-    check_snapshot_out(res.stdout, tag, ["ks1","ks2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1", "ks2"], False)
 
 
 @pytest.mark.parametrize("tag", [None, "my_snapshot_tag"])
