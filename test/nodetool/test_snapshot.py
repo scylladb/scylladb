@@ -286,7 +286,7 @@ def test_snapshot_multiple_keyspace_with_table(nodetool):
              " you must specify one and only one keyspace"])
 
 
-def test_snapshot_table_with_ktlist(nodetool):
+def test_snapshot_table_with_ktlist(nodetool, cassandra_only):
     check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
@@ -295,7 +295,7 @@ def test_snapshot_table_with_ktlist(nodetool):
              "error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify table(s)"])
 
 
-def test_snapshot_keyspace_with_ktlist(nodetool):
+def test_snapshot_keyspace_with_ktlist(nodetool, cassandra_only):
     check_nodetool_fails_with(
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
