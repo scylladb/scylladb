@@ -9,7 +9,7 @@
 
 import os
 import re
-from scylla_util import *
+from scylla_util import etcdir, datadir, bindir, scriptsdir, is_nonroot, is_container, is_developer_mode
 import resource
 import subprocess
 import argparse
