@@ -304,6 +304,22 @@ def test_snapshot_keyspace_with_ktlist(nodetool, cassandra_only):
              "error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)"])
 
 
+def test_snapshot_table_with_ktlist_scylla(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
+            {"expected_requests": []},
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify table(s)"])
+
+
+def test_snapshot_keyspace_with_ktlist_scylla(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "-kt", "ks1.tbl1", "ks1"),
+            {"expected_requests": []},
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)"])
+
+
 def test_snapshot_keyspace_with_tables(nodetool, scylla_only):
     check_nodetool_fails_with(
             nodetool,
