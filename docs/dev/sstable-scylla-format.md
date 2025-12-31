@@ -31,6 +31,7 @@ in individual sections
         | scylla_build_id
         | scylla_version
         | ext_timestamp_stats
+        | owned_ranges_hash
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -64,6 +65,12 @@ It is derived from the sstable uuid generation, upon creation (or uniquely gener
 if the sstable has numerical generation).  Yet, unlike the sstable that may
 change if the sstable is migrated to a different shard or node, the sstable
 identifier is stable and copied with the rest of the scylla metadata.
+
+`owned_ranges_hash` (tag 12): an optional uint64 value (encoded as little-endian) representing
+a shash value of a vector of owned token ranges used to cleanup the sstable.
+It is used to prevent cleaning up sstables over and over again if cleanup is retried
+with the same owned ranges.  Compaction carries it over to the output sstable(s) if all input
+sstables have the same owned_ranges_hash.
 
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.
