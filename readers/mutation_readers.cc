@@ -1016,6 +1016,49 @@ make_mutation_reader_from_mutations(schema_ptr s, reader_permit permit, utils::c
     return make_mutation_reader_from_mutations(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd);
 }
 
+/// After creating, call push() to populate with fragments to produce.
+class prepopulated_reader : public mutation_reader::impl {
+public:
+    prepopulated_reader(schema_ptr schema, reader_permit permit)
+        : mutation_reader::impl(std::move(schema), std::move(permit))
+    { }
+
+    void push(mutation_fragment_v2&& mf) {
+        push_mutation_fragment(std::move(mf));
+    }
+
+    virtual future<> fill_buffer() override {
+        _end_of_stream = true;
+        return make_ready_future<>();
+    }
+
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        return make_ready_future<>();
+    }
+
+    virtual future<> fast_forward_to(position_range pr) override {
+        throw std::runtime_error("This reader can't be fast forwarded to another range.");
+    }
+
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        return make_ready_future<>();
+    }
+
+    virtual future<> close() noexcept override {
+            return make_ready_future<>();
+    }
+};
+
+mutation_reader
+make_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, utils::small_vector<mutation_fragment_v2, 3> fragments) {
+    auto impl = std::make_unique<prepopulated_reader>(std::move(schema), std::move(permit));
+    for (auto&& f : fragments) {
+        impl->push(std::move(f));
+    }
+    return mutation_reader(std::move(impl));
+}
+
 static mutation_reader
 make_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment_v2> fragments, const dht::partition_range* pr) {
     class reader : public mutation_reader::impl {

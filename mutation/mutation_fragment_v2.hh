@@ -183,7 +183,7 @@ public:
         }
         _data->_memory.reset_to(o._data->_memory.resources());
     }
-    mutation_fragment_v2(mutation_fragment_v2&& other) = default;
+    mutation_fragment_v2(mutation_fragment_v2&& other) noexcept = default;
     mutation_fragment_v2& operator=(mutation_fragment_v2&& other) noexcept {
         if (this != &other) {
             this->~mutation_fragment_v2();

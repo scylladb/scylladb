@@ -16,6 +16,7 @@
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
+#include "mutation/single_row_partition.hh"
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
 #include "readers/empty.hh"
@@ -44,9 +45,15 @@ class lsa_manager;
 // Intrusive set entry which holds partition data.
 //
 // TODO: Make memtables use this format too.
-class cache_entry {
+class cache_entry final {
     dht::decorated_key _key;
-    partition_entry _pe;
+
+    // FIXME: Make variable-length, so that we pay only for the format which is actively used.
+    // To do that, double_decker's intrusive_array needs to support run-time size of objects.
+    // single_row_partition is 40 bytes: 24 for evictable, 8 for schema_ptr and 8 for managed_ref.
+    // partition_entry is 24 bytes.
+    partition_storage storage;
+
     // True when we know that there is nothing between this entry and the previous one in cache
     struct {
         bool _continuous : 1;
@@ -54,14 +61,19 @@ class cache_entry {
         bool _head : 1;
         bool _tail : 1;
         bool _train : 1;
+        bool _single_row_partition : 1;
     } _flags{};
     friend class size_calculator;
 
-    mutation_reader do_read(row_cache&, cache::read_context& ctx);
+    mutation_reader do_read(row_cache&, cache::read_context& ctx, std::unique_ptr<cache::read_context> ctx_holder);
     mutation_reader do_read(row_cache&, std::unique_ptr<cache::read_context> unique_ctx);
 public:
     friend class row_cache;
     friend class cache_tracker;
+
+    partition_format format() const noexcept {
+        return _flags._single_row_partition ? partition_format::single_row : partition_format::generic;
+    }
 
     bool is_head() const noexcept { return _flags._head; }
     void set_head(bool v) noexcept { _flags._head = v; }
@@ -73,34 +85,24 @@ public:
     struct dummy_entry_tag{};
     struct evictable_tag{};
 
-    cache_entry(dummy_entry_tag)
-        : _key{dht::token(), partition_key::make_empty()}
-    {
-        _flags._dummy_entry = true;
-    }
-
-    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
-        : _key(key)
-        , _pe(partition_entry::make_evictable(*s, mutation_partition(*s, p)))
-    { }
-
-    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p)
-        : cache_entry(evictable_tag(), s, std::move(key),
-            partition_entry::make_evictable(*s, std::move(p)))
-    { }
-
+    cache_entry(dummy_entry_tag);
+    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p);
+    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p);
+    cache_entry(schema_ptr s, dht::decorated_key&& key, single_row_partition&& p);
     // It is assumed that pe is fully continuous
     // pe must be evictable.
-    cache_entry(evictable_tag, schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
-        : _key(std::move(key))
-        , _pe(std::move(pe))
-    { }
-
+    cache_entry(evictable_tag, schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept;
     cache_entry(cache_entry&&) noexcept;
     ~cache_entry();
 
     static cache_entry& container_of(partition_entry& pe) {
-        return *boost::intrusive::get_parent_from_member(&pe, &cache_entry::_pe);
+        return *boost::intrusive::get_parent_from_member(
+                reinterpret_cast<decltype(cache_entry::storage)*>(&pe), &cache_entry::storage);
+    }
+
+    static cache_entry& container_of(single_row_partition& srp) {
+        return *boost::intrusive::get_parent_from_member(
+                reinterpret_cast<decltype(cache_entry::storage)*>(&srp), &cache_entry::storage);
     }
 
     // Called when all contents have been evicted.
@@ -118,11 +120,22 @@ public:
         return _key;
     }
 
+    // Call only when format() == partition_format::generic.
+    partition_entry& get_partition_entry() { return storage.pe; }
+
     friend dht::ring_position_view ring_position_view_to_compare(const cache_entry& ce) noexcept { return ce.position(); }
 
-    const partition_entry& partition() const noexcept { return _pe; }
-    partition_entry& partition() { return _pe; }
-    const schema_ptr& schema() const noexcept { return _pe.get_schema(); }
+    template <typename Visitor>
+    auto accept(this auto& self, Visitor&& v) {
+        return self.storage.accept(self.format(), std::forward<Visitor>(v));
+    }
+
+    const schema_ptr& schema() const noexcept {
+        return accept([&] (auto& p) {
+            return std::reference_wrapper<const schema_ptr>(p.get_schema());
+        }).get();
+    }
+
     mutation_reader read(row_cache&, cache::read_context&);
     mutation_reader read(row_cache&, std::unique_ptr<cache::read_context>);
     mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
@@ -296,6 +309,8 @@ private:
     // The entry which is returned will have the tombstone applied to it.
     //
     // Must be run under reclaim lock
+    //
+    // Can be called only when cache is using partition_format::generic.
     cache_entry& find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
 
     // Creates (or touches) a cache entry for missing partition so that sstables are not
@@ -361,6 +376,10 @@ public:
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
 public:
+    partition_format get_partition_format() const {
+        return ::get_partition_format(*_schema);
+    }
+
     // Implements mutation_source for this cache, see mutation_reader.hh
     // User needs to ensure that the row_cache object stays alive
     // as long as the reader is used.
@@ -414,6 +433,11 @@ public:
     // Intended to be used only in tests.
     // Can only be called prior to any reads.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
+
+    // Populate cache from given mutation, which must be fully continuous.
+    // If previous != nullptr and it is still a predecessor of the inserted key,
+    // the range between previous and the inserted entry is marked as continuous.
+    void try_populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
 
     // Finds the entry in cache for a given key.
     // Intended to be used only in tests.

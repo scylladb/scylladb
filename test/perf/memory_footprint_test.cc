@@ -59,6 +59,8 @@ public:
 
         std::cout << prefix() << "sizeof(rows_entry) = " << sizeof(rows_entry) << "\n";
         std::cout << prefix() << "sizeof(evictable) = " << sizeof(evictable) << "\n";
+        std::cout << prefix() << "sizeof(partition_entry) = " << sizeof(partition_entry) << "\n";
+        std::cout << prefix() << "sizeof(single_row_partition) = " << sizeof(single_row_partition) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
         std::cout << prefix() << "radix_tree::inner_node::node_sizes = ";
@@ -145,8 +147,11 @@ struct mutation_settings {
 
 static schema_ptr make_schema(const mutation_settings& settings) {
     auto builder = schema_builder("ks", "cf")
-        .with_column("pk", bytes_type, column_kind::partition_key)
-        .with_column("ck", bytes_type, column_kind::clustering_key);
+        .with_column("pk", bytes_type, column_kind::partition_key);
+
+    if (settings.clustering_key_size) {
+        builder.with_column("ck", bytes_type, column_kind::clustering_key);
+    }
 
     for (size_t i = 0; i < settings.column_count; ++i) {
         builder.with_column(to_bytes(random_name(settings.column_name_size)), bytes_type);
@@ -158,8 +163,16 @@ static schema_ptr make_schema(const mutation_settings& settings) {
 static mutation make_mutation(schema_ptr s, mutation_settings settings) {
     mutation m(s, partition_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.partition_key_size)))));
 
+    if (!settings.clustering_key_size) {
+        if (settings.row_count > 1) {
+            throw std::invalid_argument("Schema with no clustering key can have at most 1 row");
+        }
+    }
+
     for (size_t i = 0; i < settings.row_count; ++i) {
-        auto ck = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.clustering_key_size))));
+        auto ck = !settings.clustering_key_size
+                ? clustering_key::make_empty()
+                : clustering_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.clustering_key_size))));
         for (auto&& col : s->regular_columns()) {
             m.set_clustered_cell(ck, col,
                 atomic_cell::make_live(*bytes_type, 1,
@@ -182,9 +195,12 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
     sizes result;
     auto s = make_schema(settings);
     auto mt = make_lw_shared<replica::memtable>(s);
-    row_cache cache(s, make_empty_snapshot_source(), tracker);
 
+    // Evict cache so that we have an empty region and object stats include only new objects
+    tracker.clear();
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
+
+    row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     SCYLLA_ASSERT(mt->occupancy().used_space() == 0);
 
@@ -193,6 +209,12 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
         muts.emplace_back(make_mutation(s, settings));
         mt->apply(muts.back());
         cache.populate(muts.back());
+    }
+
+    auto cache_stats = tracker.region().collect_stats();
+    std::cout << "Cache LSA stats (" << fmt::to_string(tracker.region().occupancy()) << "):" << "\n";
+    for (auto [ name, size ] : cache_stats) {
+        std::cout << "  " << name << ": " << size << "\n";
     }
 
     mutation& m = muts[0];
@@ -265,12 +287,6 @@ int main(int argc, char** argv) {
 
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
-
-            auto cache_st = tracker.region().collect_stats();
-            std::cout << "LSA stats:" << "\n";
-            for (auto [ name, size ] : cache_st) {
-                std::cout << "  " << name << ": " << size << "\n";
-            }
         });
     });
 }
