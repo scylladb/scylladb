@@ -1,0 +1,1120 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/storage_proxy",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/storage_proxy/total_hints",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total hints",
+               "type":"long",
+               "nickname":"get_total_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/hinted_handoff_enabled",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Return true if hinted handoff enabled",
+               "type":"boolean",
+               "nickname":"get_hinted_handoff_enabled",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set hinted handoff status",
+               "type":"void",
+               "nickname":"set_hinted_handoff_enabled",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enable",
+                     "description":"Set to true to enable hinted handoff",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/hinted_handoff_enabled_by_dc",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the hinted handoff enabled by dc",
+               "type":"array",
+               "items":{
+                  "type":"array"
+               },
+               "nickname":"get_hinted_handoff_enabled_by_dc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the hinted handoff enabled by dc",
+               "type":"void",
+               "nickname":"set_hinted_handoff_enabled_by_dc_list",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"dcs",
+                     "description":"The dcs to enable in the CSV format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/max_hint_window",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the max hint window",
+               "type": "long",
+               "nickname":"get_max_hint_window",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the max hint window",
+               "type":"void",
+               "nickname":"set_max_hint_window",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ms",
+                     "description":"max hint window in ms",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/max_hints_in_progress",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get max hints in progress",
+               "type": "long",
+               "nickname":"get_max_hints_in_progress",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set max hints in progress",
+               "type":"void",
+               "nickname":"set_max_hints_in_progress",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"qs",
+                     "description":"max hints in progress",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/hints_in_progress",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get hints in progress",
+               "type": "long",
+               "nickname":"get_hints_in_progress",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the RPC timeout in seconds",
+               "type":"double",
+               "nickname":"get_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the RPC timeout",
+               "type":"void",
+               "nickname":"set_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"Timeout in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/read_rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the read RPC timeout in seconds",
+               "type":"double",
+               "nickname":"get_read_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the read RPC timeout",
+               "type":"void",
+               "nickname":"set_read_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"The timeout in second",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/write_rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the write RPC timeout in seconds",
+               "type":"double",
+               "nickname":"get_write_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the write RPC timeout",
+               "type":"void",
+               "nickname":"set_write_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"timeout in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/counter_write_rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get counter write rpc timeout in seconds",
+               "type":"double",
+               "nickname":"get_counter_write_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set counter write rpc timeout",
+               "type":"void",
+               "nickname":"set_counter_write_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"timeout in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/cas_contention_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS contention timeout in seconds",
+               "type":"double",
+               "nickname":"get_cas_contention_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set CAS contention timeout",
+               "type":"void",
+               "nickname":"set_cas_contention_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"timeout in second",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/range_rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range rpc timeout in seconds",
+               "type":"double",
+               "nickname":"get_range_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set range rpc timeout",
+               "type":"void",
+               "nickname":"set_range_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"timeout in second",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/truncate_rpc_timeout",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get truncate rpc timeout in seconds",
+               "type":"double",
+               "nickname":"get_truncate_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set truncate rpc timeout",
+               "type":"void",
+               "nickname":"set_truncate_rpc_timeout",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"timeout",
+                     "description":"timeout in second",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/reload_trigger_classes",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Reload trigger classes",
+               "type":"void",
+               "nickname":"reload_trigger_classes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/read_repair_attempted",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read repair attempted",
+               "type":"long",
+               "nickname":"get_read_repair_attempted",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/read_repair_repaired_blocking",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read repair repaired blocking",
+               "type":"long",
+               "nickname":"get_read_repair_repaired_blocking",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/read_repair_repaired_background",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read repair repaired background",
+               "type":"long",
+               "nickname":"get_read_repair_repaired_background",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/schema_versions",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a map of the schema versions",
+               "type":"array",
+               "items":{
+                  "type":"mapper_list"
+               },
+               "nickname":"get_schema_versions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_read/timeouts",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS read timeout",
+               "type":"long",
+               "nickname":"get_cas_read_timeouts",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_read/unavailables",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS read unavailables",
+               "type":"long",
+               "nickname":"get_cas_read_unavailables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_write/timeouts",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS write timeout",
+               "type":"long",
+               "nickname":"get_cas_write_timeouts",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_write/unavailables",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS write unavailables",
+               "type":"long",
+               "nickname":"get_cas_write_unavailables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/storage_proxy/metrics/cas_write/unfinished_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "long",
+          "nickname": "get_cas_write_metrics_unfinished_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_write/contention",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "array",
+          "nickname": "get_cas_write_metrics_contention",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_write/condition_not_met",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "long",
+          "nickname": "get_cas_write_metrics_condition_not_met",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_write/failed_read_round_optimization",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "long",
+          "nickname": "get_cas_write_metrics_failed_read_round_optimization",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_read/unfinished_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas read metrics",
+          "type": "long",
+          "nickname": "get_cas_read_metrics_unfinished_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_read/contention",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas read metrics",
+          "type": "array",
+          "nickname": "get_cas_read_metrics_contention",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "type": "long",
+          "nickname": "get_read_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "type": "long",
+          "nickname": "get_read_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_read_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_read_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_read_metrics_latency_histogram_depricated",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_range_metrics_latency_histogram_depricated",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_read_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_read/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get CAS read rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_cas_read_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/view_write/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get view write rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_view_write_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rate and histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_range_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "type": "long",
+          "nickname": "get_range_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "type": "long",
+          "nickname": "get_range_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_range_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_range_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "type": "long",
+          "nickname": "get_write_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "type": "long",
+          "nickname": "get_write_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_write_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_write_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_write_metrics_latency_histogram_depricated",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_write_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_write/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get CAS write rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_cas_write_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+         "path":"/storage_proxy/metrics/read/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_read_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/read",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency",
+               "type": "long",
+               "nickname":"get_read_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/write/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_write_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/write",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency",
+               "type": "long",
+               "nickname":"get_write_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/range/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_range_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/range",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range latency",
+               "type": "long",
+               "nickname":"get_range_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "mapper_list":{
+         "id":"mapper_list",
+         "description":"Holds a key value which is a list",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"The value"
+            }
+         }
+      }
+   }
+}
