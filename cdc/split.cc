@@ -15,7 +15,7 @@
 #include "mutation/tombstone.hh"
 #include "schema/schema.hh"
 
-#include "seastar/core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "types/concrete_types.hh"
 #include "types/types.hh"
 #include "types/user.hh"

@@ -12,8 +12,8 @@
 #include "vs_mock_server.hh"
 #include "unavailable_server.hh"
 #include "certificates.hh"
-#include "seastar/core/future.hh"
-#include "seastar/core/when_all.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/when_all.hh>
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"

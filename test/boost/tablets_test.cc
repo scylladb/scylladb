@@ -20,7 +20,7 @@
 #include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
-#include "seastar/testing/on_internal_error.hh"
+#include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"

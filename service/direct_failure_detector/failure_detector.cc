@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "seastar/core/scheduling.hh"
+#include <seastar/core/scheduling.hh>
 #include "utils/assert.hh"
 #include <unordered_set>
 
