@@ -60,28 +60,47 @@ static future<db::system_keyspace::topology_requests_entries> get_entries(db::sy
     return sys_ks.get_node_ops_request_entries(db_clock::now() - ttl);
 }
 
+static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requests_entry& entry,
+                                        const tasks::virtual_task_hint& hint) {
+    return tasks::task_stats{
+        .task_id = tasks::task_id{entry.id},
+        .type = request_type_to_task_type(entry.request_type),
+        .kind = tasks::task_kind::cluster,
+        .scope = "cluster",
+        .state = get_state(entry),
+        .sequence_number = 0,
+        .keyspace = "",
+        .table = "",
+        .entity = hint.node_id ? fmt::to_string(*hint.node_id) : "",
+        .shard = 0,
+        .start_time = entry.start_time,
+        .end_time = entry.end_time,
+    };
+}
+
 future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto entry_opt = co_await _ss._sys_ks.local().get_topology_request_entry_opt(id.uuid());
     if (!entry_opt) {
         co_return std::nullopt;
     }
     auto& entry = *entry_opt;
+    auto stats = get_task_stats(entry, hint);
     co_return tasks::task_status{
-        .task_id = id,
-        .type = request_type_to_task_type(entry.request_type),
-        .kind = tasks::task_kind::cluster,
-        .scope = "cluster",
-        .state = get_state(entry),
+        .task_id = stats.task_id,
+        .type = stats.type,
+        .kind = stats.kind,
+        .scope = stats.scope,
+        .state = stats.state,
         .is_abortable = co_await is_abortable(std::move(hint)),
-        .start_time = entry.start_time,
-        .end_time = entry.end_time,
+        .start_time = stats.start_time,
+        .end_time = stats.end_time,
         .error = entry.error,
         .parent_id = tasks::task_id::create_null_id(),
-        .sequence_number = 0,
-        .shard = 0,
-        .keyspace = "",
-        .table = "",
-        .entity = "",
+        .sequence_number = stats.sequence_number,
+        .shard = stats.shard,
+        .keyspace = stats.keyspace,
+        .table = stats.table,
+        .entity = stats.entity,
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
         .children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()))
@@ -92,26 +111,41 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
     return tasks::task_manager::task_group::topology_change_group;
 }
 
+static std::map<tasks::task_id, locator::host_id> get_requests(const service::topology& topology) {
+    std::map<tasks::task_id, locator::host_id> result;
+    for (auto& request : topology.requests) {
+        auto* rs = topology.find(request.first);
+        if (rs) {
+            result.emplace(tasks::task_id(rs->second.request_id), locator::host_id(request.first.uuid()));
+        }
+    }
+    for (auto& [node, rs] : topology.transition_nodes) {
+        result.emplace(tasks::task_id(rs.request_id), locator::host_id(node.uuid()));
+    }
+    return result;
+}
+
 future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(tasks::task_id task_id) const {
     if (!task_id.uuid().is_timestamp()) {
         // Task id of node ops operation is always a timestamp.
         co_return std::nullopt;
     }
 
-    auto empty_hint = std::make_optional<tasks::virtual_task_hint>({});
+    auto hint = std::make_optional<tasks::virtual_task_hint>({});
     service::topology& topology = _ss._topology_state_machine._topology;
-    for (auto& request : topology.requests) {
-        if (topology.find(request.first)->second.request_id == task_id.uuid()) {
-            co_return empty_hint;
-        }
+    auto reqs = get_requests(topology);
+    if (reqs.contains(task_id)) {
+        hint->node_id = reqs.at(task_id);
+        co_return hint;
     }
 
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
-    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? empty_hint : std::nullopt;
+    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? hint : std::nullopt;
 }
 
-future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint) const {
-    return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
+future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
+    // Currently, only node operations are supported by abort_topology_request().
+    return make_ready_future<tasks::is_abortable>(tasks::is_abortable(hint.node_id.has_value()));
 }
 
 future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
@@ -124,30 +158,21 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::tas
     co_return co_await get_status(id, std::move(hint));
 }
 
-future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
-    return make_ready_future();
+future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
+    co_await _ss.abort_topology_request(id.uuid());
 }
 
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, get_task_manager().get_user_task_ttl())
-            | std::views::transform([] (const auto& e) {
-        auto id = e.first;
+            | std::views::transform([reqs = get_requests(_ss._topology_state_machine._topology)] (const auto& e) {
+        auto id = tasks::task_id{e.first};
         auto& entry = e.second;
-        return tasks::task_stats {
-            .task_id = tasks::task_id{id},
-            .type = node_ops::request_type_to_task_type(entry.request_type),
-            .kind = tasks::task_kind::cluster,
-            .scope = "cluster",
-            .state = get_state(entry),
-            .sequence_number = 0,
-            .keyspace = "",
-            .table = "",
-            .entity = "",
-            .shard = 0,
-            .start_time = entry.start_time,
-            .end_time = entry.end_time
-        };
+        tasks::virtual_task_hint hint;
+        if (reqs.contains(id)) {
+            hint.node_id = reqs.at(id);
+        }
+        return get_task_stats(entry, hint);
     }));
 }
 
