@@ -111,13 +111,16 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
     return tasks::task_manager::task_group::topology_change_group;
 }
 
-static std::map<tasks::task_id, locator::host_id> get_pending_requests(const service::topology& topology) {
+static std::map<tasks::task_id, locator::host_id> get_requests(const service::topology& topology) {
     std::map<tasks::task_id, locator::host_id> result;
     for (auto& request : topology.requests) {
         auto* rs = topology.find(request.first);
         if (rs) {
             result.emplace(tasks::task_id(rs->second.request_id), locator::host_id(request.first.uuid()));
         }
+    }
+    for (auto& [node, rs] : topology.transition_nodes) {
+        result.emplace(tasks::task_id(rs.request_id), locator::host_id(node.uuid()));
     }
     return result;
 }
@@ -130,7 +133,7 @@ future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(
 
     auto hint = std::make_optional<tasks::virtual_task_hint>({});
     service::topology& topology = _ss._topology_state_machine._topology;
-    auto reqs = get_pending_requests(topology);
+    auto reqs = get_requests(topology);
     if (reqs.contains(task_id)) {
         hint->node_id = reqs.at(task_id);
         co_return hint;
@@ -162,7 +165,7 @@ future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hin
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, get_task_manager().get_user_task_ttl())
-            | std::views::transform([reqs = get_pending_requests(_ss._topology_state_machine._topology)] (const auto& e) {
+            | std::views::transform([reqs = get_requests(_ss._topology_state_machine._topology)] (const auto& e) {
         auto id = tasks::task_id{e.first};
         auto& entry = e.second;
         tasks::virtual_task_hint hint;
