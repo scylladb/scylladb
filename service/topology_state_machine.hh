@@ -76,6 +76,11 @@ enum class global_topology_request: uint16_t {
     cleanup,
     keyspace_rf_change,
     truncate_table,
+
+    // High priority no-operation request.
+    // Used to synchronize API calls with topology coordinator.
+    // Ensures that all later requests and tablet scheduler will see prior updates to group0.
+    noop_request,
 };
 
 struct ring_slice {
