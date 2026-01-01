@@ -1020,6 +1020,13 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
+    if (_resources.count > _initial_resources.count || _resources.memory > _initial_resources.memory) [[unlikely]] {
+        on_internal_error_noexcept(rcslog,
+                format("reader_concurrency_semaphore::signal(): semaphore {} detected resource leak, available {} exceeds initial {}", _name,
+                        _resources, _initial_resources));
+        _resources.count = std::max(_resources.count, _initial_resources.count);
+        _resources.memory = std::max(_resources.memory, _initial_resources.memory);
+    }
     maybe_wake_execution_loop();
 }
 
