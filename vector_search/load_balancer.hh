@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "seastar/core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include <vector>
 
 namespace vector_search {

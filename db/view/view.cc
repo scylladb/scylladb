@@ -57,7 +57,7 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
