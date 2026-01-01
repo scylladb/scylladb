@@ -13,12 +13,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include "seastar/core/loop.hh"
+#include <seastar/core/loop.hh>
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
-#include "seastar/coroutine/maybe_yield.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/log.hh"
 
 // A simple LRU cache, mapping strings to values of type Value.

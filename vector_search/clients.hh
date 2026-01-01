@@ -11,7 +11,7 @@
 #include "client.hh"
 #include "dns.hh"
 #include "truststore.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "uri.hh"
 #include "utils/sequential_producer.hh"
 #include "vector_search/error.hh"

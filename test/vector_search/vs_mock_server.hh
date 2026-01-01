@@ -10,7 +10,7 @@
 
 #include "utils.hh"
 #include "utils/rjson.hh"
-#include "seastar/http/request.hh"
+#include <seastar/http/request.hh>
 #include <chrono>
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>

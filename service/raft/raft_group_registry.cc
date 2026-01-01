@@ -16,7 +16,7 @@
 #include "idl/raft.dist.hh"
 #include "utils/composite_abort_source.hh"
 #include "utils/error_injection.hh"
-#include "seastar/core/shared_future.hh"
+#include <seastar/core/shared_future.hh>
 
 #include <chrono>
 #include <seastar/core/coroutine.hh>
