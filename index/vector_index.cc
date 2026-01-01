@@ -133,7 +133,7 @@ void vector_index::check_cdc_options(const schema& schema) {
     }
 }
 
-void vector_index::check_index_options(const cql3::statements::index_prop_defs& properties) const {
+void vector_index::check_index_options(const cql3::statements::index_specific_prop_defs& properties) const {
     for (auto option: properties.get_raw_options()) {
         auto it = vector_index_options.find(option.first);
         if (it == vector_index_options.end()) {
@@ -152,7 +152,7 @@ void vector_index::check_uses_tablets(const schema& schema, const data_dictionar
     }
 }
 
-void vector_index::validate(const schema &schema, const cql3::statements::index_prop_defs &properties,
+void vector_index::validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
         const std::vector<::shared_ptr<cql3::statements::index_target>> &targets,
         const gms::feature_service& fs,
         const data_dictionary::database& db) const
