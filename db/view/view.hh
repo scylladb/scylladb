@@ -9,6 +9,7 @@
 #pragma once
 
 #include "gc_clock.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "readers/mutation_reader.hh"
@@ -318,7 +319,7 @@ endpoints_to_update get_view_natural_endpoint(
 ///
 /// Preconditions:
 /// * The provided `keyspace_name` must correspond to an existing keyspace.
-void validate_view_keyspace(const data_dictionary::database&, std::string_view keyspace_name);
+void validate_view_keyspace(const data_dictionary::database&, std::string_view keyspace_name, locator::token_metadata_ptr tmptr);
 
 }
 
