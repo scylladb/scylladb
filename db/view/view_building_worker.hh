@@ -17,7 +17,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
-#include "seastar/core/gate.hh"
+#include <seastar/core/gate.hh>
 #include "db/view/view_building_state.hh"
 #include "sstables/shared_sstable.hh"
 #include "utils/UUID.hh"

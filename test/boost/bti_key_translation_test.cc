@@ -9,7 +9,7 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
-#include "seastar/util/defer.hh"
+#include <seastar/util/defer.hh>
 #include "schema/schema_builder.hh"
 #include "sstables/trie/bti_key_translation.hh"
 #include "test/lib/key_utils.hh"

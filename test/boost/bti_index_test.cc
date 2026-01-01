@@ -16,10 +16,10 @@
 #include <generator>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
-#include "seastar/core/fstream.hh"
-#include "seastar/core/seastar.hh"
-#include "seastar/util/closeable.hh"
-#include "seastar/util/defer.hh"
+#include <seastar/core/fstream.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include "sstables/mx/types.hh"
 #include "sstables/trie/bti_index.hh"
 #include "sstables/trie/bti_index_internal.hh"

@@ -11,8 +11,8 @@
 #include <chrono>
 #include <fmt/ranges.h>
 #include <seastar/util/closeable.hh>
-#include "seastar/core/future.hh"
-#include "seastar/core/sleep.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"

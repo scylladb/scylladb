@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "seastar/http/common.hh"
+#include <seastar/http/common.hh>
 #include "vector_search/client.hh"
 #include "vector_search/utils.hh"
 #include "vs_mock_server.hh"

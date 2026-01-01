@@ -18,7 +18,7 @@
 #include "locator/host_id.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "service/storage_proxy.hh"
 #include "service/raft/group0_state_machine.hh"
 
