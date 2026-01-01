@@ -5643,11 +5643,39 @@ class scylla_sstable_summary(gdb.Command):
         typ = arg.type.strip_typedefs()
         if typ.code == gdb.TYPE_CODE_PTR:
             sst = arg.dereference()
+            sst_ptr = arg
         elif typ.name.startswith("seastar::lw_shared_ptr"):
             sst = seastar_lw_shared_ptr(arg).get().dereference()
+            sst_ptr = seastar_lw_shared_ptr(arg).get()
         else:
             sst = arg
-        summary = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()['summary']
+            sst_ptr = arg.address
+        
+        try:
+            metadata = f"generation: {sst['_generation']}, version: {sst['_version']}, state: {sst['_state']}, origin: {sst['_origin']}"
+            gdb.write(f"(sstable::sstable*) {sst_ptr} [{metadata}]\n")
+        except gdb.error:
+            gdb.write(f"(sstable::sstable*) {sst_ptr} []\n")
+
+        components = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()
+
+        for comp_name in ['filter', 'statistics', 'compression', 'scylla_metadata']:
+            comp_ptr = components[comp_name].address
+            gdb.write(f"  (sstable::{comp_name}*) {comp_ptr}\n")
+
+        for name, path in [('_schema', ['_schema', '_p']), 
+                       ('_storage', ['_storage', '_M_t', '_M_t', '_M_head_impl']),
+                       ('_data_file', ['_data_file', '_file_impl', '_b']),
+                       ('_index_file', ['_index_file', '_file_impl', '_b'])]:
+            try:
+                value = sst
+                for p in path:
+                    value = value[p]
+                gdb.write(f"    {name}: {value}\n")
+            except:
+                pass
+        gdb.write('\n')
+        summary = components['summary']
 
         gdb.write("header: {}\n".format(summary['header']))
         gdb.write("first_key: {}\n".format(sstring(summary['first_key']['value'])))
