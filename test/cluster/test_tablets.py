@@ -1638,3 +1638,38 @@ async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
 
         # Should preempt balancing
         await manager.disable_tablet_balancing()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_table_creation_wakes_up_balancer(manager: ManagerClient):
+    """
+    Reproduces both https://github.com/scylladb/scylladb/issues/25163 and https://github.com/scylladb/scylladb/issues/27958
+
+    Scenario:
+    1. Start a cluster
+    2. Block the topology coordinator right before it goes to sleep
+    3. Create a table, which should wake up the coordinator
+    4. Verify that the coordinator didn't go to sleep
+    """
+    server = await manager.server_add()
+    log = await manager.server_open_log(server.server_id)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        # Block coordinator right before going to sleep
+        # We use node bootstrap as an operation which is going to be trapped on exit, but it's arbitrary.
+        mark = await log.mark()
+        await manager.api.enable_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep', one_shot=True)
+        await manager.server_add()
+        await log.wait_for('wait-before-topology-coordinator-goes-to-sleep: wait', from_mark=mark)
+
+        # Create a table, which should prevent the coordinator from sleeping
+        await manager.api.enable_injection(server.ip_addr, 'wait-after-topology-coordinator-gets-event', one_shot=True)
+        mark = await log.mark()
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # Verify it didn't go to sleep. If it did, the wait for wakeup would be 30s on average,
+        # up to stats refresh period, which is 60s. So use a small timeout.
+        await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
+        await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)

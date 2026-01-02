@@ -4228,6 +4228,8 @@ future<> topology_coordinator::run() {
             bool had_work = co_await handle_topology_transition(std::move(guard));
 
             if (!had_work) {
+                co_await utils::get_local_injector().inject("wait-before-topology-coordinator-goes-to-sleep", utils::wait_for_message(30s));
+
                 // Nothing to work on. Wait for topology change event.
                 rtlogger.debug("topology coordinator fiber has nothing to do. Sleeping.");
                 _as.check();
