@@ -7,6 +7,7 @@
  */
 
 #include "alternator/server.hh"
+#include "audit/audit.hh"
 #include "gms/application_state.hh"
 #include "utils/log.hh"
 #include <fmt/ranges.h>
@@ -780,12 +781,27 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
-                rjson::value json_request = co_await _json_parser.parse(std::move(content));
-                if (!json_request.IsObject()) {
-                    co_return api_error::validation("Request content must be an object");
-                }
-                co_return co_await callback(_executor, client_state, trace_state,
-                    make_service_permit(std::move(units)), std::move(json_request), std::move(req));
+        rjson::value json_request = co_await _json_parser.parse(std::move(content));
+        if (!json_request.IsObject()) {
+            co_return api_error::validation("Request content must be an object");
+        }
+        std::unique_ptr<audit::audit_info_cl> audit_info;
+        std::exception_ptr ex = {};
+        executor::request_return_type ret;
+        try {
+            ret = co_await callback(_executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (audit_info) {
+            co_await audit::inspect(*audit_info, client_state, ex != nullptr);
+        } else {
+            slogger.warn("Missing audit_info object, request will not be audited");
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        co_return ret;
     };
     co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
@@ -829,77 +845,77 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _pending_requests("alternator::server::pending_requests")
         , _timeout_config(_proxy.data_dictionary().get_config())
       , _callbacks{
-        {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.describe_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"UpdateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"UpdateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.list_tables(client_state, std::move(permit), std::move(json_request));
+        {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.list_tables(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"Scan", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.scan(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"Scan", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.scan(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_endpoints(client_state, std::move(permit), std::move(json_request), req->get_header("Host"));
+        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.describe_endpoints(client_state, std::move(permit), std::move(json_request), req->get_header("Host"), audit_info);
         }},
-        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.batch_write_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.batch_write_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.batch_get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.batch_get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.tag_resource(client_state, std::move(permit), std::move(json_request));
+        {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.tag_resource(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"UntagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.untag_resource(client_state, std::move(permit), std::move(json_request));
+        {"UntagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.untag_resource(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request));
+        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"UpdateTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.update_time_to_live(client_state, std::move(permit), std::move(json_request));
+        {"UpdateTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.update_time_to_live(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DescribeTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_time_to_live(client_state, std::move(permit), std::move(json_request));
+        {"DescribeTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.describe_time_to_live(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.list_streams(client_state, std::move(permit), std::move(json_request));
+        {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.list_streams(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DescribeStream", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_stream(client_state, std::move(permit), std::move(json_request));
+        {"DescribeStream", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.describe_stream(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"GetShardIterator", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.get_shard_iterator(client_state, std::move(permit), std::move(json_request));
+        {"GetShardIterator", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.get_shard_iterator(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
-        {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
-        {"DescribeContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_continuous_backups(client_state, std::move(permit), std::move(json_request));
+        {"DescribeContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_cl>& audit_info) {
+            return e.describe_continuous_backups(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
     } {
 }

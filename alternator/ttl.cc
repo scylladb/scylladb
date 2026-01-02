@@ -66,13 +66,18 @@ namespace alternator {
 // be good enough for CQL as well (there, the ":attrs" column won't exist).
 extern const sstring TTL_TAG_KEY;
 
-future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.update_time_to_live++;
     if (!_proxy.features().alternator_ttl) {
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
     }
 
     schema_ptr schema = get_table(_proxy, request);
+    
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this with group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), db::consistency_level::SERIAL);
+    audit_info->set_query_string(sstring(rjson::print(request)), "UpdateTimeToLive");
+
     rjson::value* spec = rjson::find(request, "TimeToLiveSpecification");
     if (!spec || !spec->IsObject()) {
         co_return api_error::validation("UpdateTimeToLive missing mandatory TimeToLiveSpecification");
@@ -122,9 +127,14 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     co_return rjson::print(std::move(response));
 }
 
-future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
+    
+    // Uses node-local info to respond
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), db::consistency_level::LOCAL_ONE);
+    audit_info->set_query_string(sstring(rjson::print(request)), "DescribeTimeToLive");
+
     std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);
