@@ -32,7 +32,7 @@ bool
 selectable_processes_selection(const expr::expression& selectable) {
     return expr::visit(overloaded_functor{
         [&] (const expr::constant&) -> bool {
-            on_internal_error(slogger, "no way to express SELECT constant in the grammar yet");
+            return true;
         },
         [&] (const expr::conjunction& conj) -> bool {
             on_internal_error(slogger, "no way to express 'SELECT a AND b' in the grammar yet");
