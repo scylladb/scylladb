@@ -258,7 +258,7 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backup_is_abortable(manager: ManagerClient, object_storage):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pause", min_files=0)
@@ -266,7 +266,7 @@ async def test_backup_is_abortable(manager: ManagerClient, object_storage):
 
 @pytest.mark.asyncio
 
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_storage):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)

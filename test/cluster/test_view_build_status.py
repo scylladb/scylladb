@@ -503,7 +503,7 @@ async def test_view_build_status_migration_to_v2_with_cleanup(request, manager: 
 # The error was triggered when the cluster started in raft topology without view build status v2.
 # It wasn't happening in gossip topology -> raft topology upgrade.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
 async def test_migration_on_existing_raft_topology(request, manager: ManagerClient):
     cfg = {
         "error_injections_at_startup": [
@@ -558,7 +558,7 @@ async def test_migration_on_existing_raft_topology(request, manager: ManagerClie
 # New node addition with 'sleep_in_synchronize' injection shoehorns the execution path to
 # hit 'raft_group0_client::start_operation' when upgrade state is synchronize. The test
 # confirms successful execution in such cases.
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_view_build_status_with_synchronize_wait(manager: ManagerClient):
     servers = []
@@ -616,7 +616,7 @@ async def test_view_build_status_extended_on_added_node(manager: ManagerClient):
 
 # Test that when removing the view, its build status is cleaned from the status table
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_build_status_marked_started_on_node_added_during_building(manager: ManagerClient):
     node_count = 4
     servers = await manager.servers_add(node_count, cmdline=[

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_generations_are_published(request, manager: ManagerClient):
     """Test that the CDC generation publisher eventually publishes committed CDC generations in the correct order."""
     query_gen_timestamps = SimpleStatement(

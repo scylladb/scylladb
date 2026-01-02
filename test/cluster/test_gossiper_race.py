@@ -14,7 +14,7 @@ from test.pylib.manager_client import ManagerClient
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gossiper_race_on_decommission(manager: ManagerClient):
     """
     Test for gossiper race scenario (https://github.com/scylladb/scylladb/issues/25621):

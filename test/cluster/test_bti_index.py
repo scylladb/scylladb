@@ -36,7 +36,7 @@ async def get_sstable_files_for_server(data_dir, ks, cf):
     return sstables
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_bti_index_enable(manager: ManagerClient) -> None:
     cassandra_logger = logging.getLogger('cassandra')
     cassandra_logger.setLevel(logging.INFO)

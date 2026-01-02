@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crashed_node_substitution(manager: ManagerClient):
     servers = await manager.servers_add(3, config={
         'error_injections_at_startup': ['fast_orphan_removal_fiber']

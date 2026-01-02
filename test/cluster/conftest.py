@@ -13,6 +13,7 @@ import ssl
 import tempfile
 import platform
 import urllib.parse
+import warnings
 from concurrent.futures.thread import ThreadPoolExecutor
 from multiprocessing import Event
 from pathlib import Path
@@ -360,13 +361,16 @@ skipped_funcs = {}
 # The reason to skip a test should be specified, used as a comment only.
 # Additionally, platform_key can be specified to limit the scope of the attribute
 # to the specified platform. Example platform_key-s: [aarch64, x86_64]
+@warnings.deprecated('Please use pytest.mark.skip_mode instead')
 def skip_mode(mode: str, reason: str, platform_key: str | None = None):
+    """DEPRECATED. Please use pytest.mark.skip_mode instead"""
     def wrap(func):
         skipped_funcs.setdefault((func, mode), []).append((reason, platform_key))
         return func
     return wrap
 
 @pytest.fixture(scope="function", autouse=True)
+@warnings.deprecated('Please use pytest.mark.skip_mode instead')
 def skip_mode_fixture(request, build_mode):
     for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
         if platform_key is None or platform_key in platform.platform():

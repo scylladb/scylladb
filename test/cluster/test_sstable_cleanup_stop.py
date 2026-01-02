@@ -16,7 +16,7 @@ import time
 
 logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_stop(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [

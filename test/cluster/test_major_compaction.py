@@ -24,7 +24,7 @@ async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("consider_only_existing_data", [True, False])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_major_compaction_consider_only_existing_data(manager: ManagerClient, consider_only_existing_data):
     """
     Test compactions drop tombstones when consider_only_existing_data is enabled.
@@ -146,7 +146,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
 
 # Testcase for https://github.com/scylladb/scylladb/issues/20197
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_shutdown_drain_during_compaction(manager: ManagerClient):
     """
     Test drain/shutdown during compaction doesn't throw any unexpected errors
@@ -201,7 +201,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         await reconnect_driver(manager)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_compaction_strategy_during_compaction(manager: ManagerClient):
     """
     Test ALTERing compaction strategy during compaction doesn't crash the server
@@ -246,7 +246,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
 
 # Testcase for https://github.com/scylladb/scylladb/issues/24501
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_disable_autocompaction_during_major_compaction(manager: ManagerClient):
     """
     Test disable autocompaction during a major compaction doesn't stop the major compaction.

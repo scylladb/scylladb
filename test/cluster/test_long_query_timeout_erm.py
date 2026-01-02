@@ -15,7 +15,7 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query_type,should_wait_for_timeout,shutdown_nodes", [
     ("SELECT", True, True),
@@ -135,7 +135,7 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
             with pytest.raises(Exception, match="Operation failed for"):
                 await query_future
 
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enable_tablets", [True, False])
 async def test_long_query_timeout_without_failure_erm(request, manager: ManagerClient, enable_tablets):

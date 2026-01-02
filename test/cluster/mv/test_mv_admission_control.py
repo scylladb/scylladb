@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # second write should fail due to admission control. We check that this
 # is indeed the error thrown.
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
     node_count = 2
     config = {'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -64,7 +64,7 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
 # of succeeding just on the remaining replicas, reaching a quorum, but failing the
 # write on the slow node.
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> None:
     node_count = 4
     cfg = {'error_injections_at_startup': ['update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'}

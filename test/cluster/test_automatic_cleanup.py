@@ -74,8 +74,8 @@ async def test_no_cleanup_when_unnecessary(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'dev is enough')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='debug', reason='dev is enough')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
     """Scenario:
        * Start two nodes, a vnodes-based table with an rf=2

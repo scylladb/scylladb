@@ -37,7 +37,7 @@ async def get_injection_params(manager, node_ip, injection):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_enable_compacting_data_for_streaming_and_repair_live_update(manager):
     """
     Check that enable_compacting_data_for_streaming_and_repair is live_update.
@@ -78,7 +78,7 @@ async def test_enable_compacting_data_for_streaming_and_repair_live_update(manag
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_for_streaming_and_repair(manager):
     """
     Check that:
@@ -154,7 +154,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
     check_nodes_have_data(True, True)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
@@ -217,17 +217,17 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
     logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_flush_in_repair_with_cache(manager):
     await do_batchlog_flush_in_repair(manager, 5000);
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):
     cfg = {
         'tablets_mode_for_new_keyspaces': 'disabled',

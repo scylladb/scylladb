@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
     config = {
         'tablets_mode_for_new_keyspaces': 'enabled'
@@ -70,7 +70,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
         await task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerClient) -> None:
     config = {
         'tablets_mode_for_new_keyspaces': 'enabled'

@@ -268,8 +268,8 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', "test only needs to run once - allowing only the 'dev' mode")
-@skip_mode('debug', "test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.skip_mode(mode='release', reason="test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.skip_mode(mode='debug', reason="test only needs to run once - allowing only the 'dev' mode")
 async def test_group0_state_id_failure(manager: ManagerClient):
     """
     Issue #21117 regression test.

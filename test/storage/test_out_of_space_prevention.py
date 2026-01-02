@@ -152,7 +152,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
@@ -404,7 +404,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 
 # Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
