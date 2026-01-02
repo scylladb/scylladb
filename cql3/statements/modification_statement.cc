@@ -11,7 +11,7 @@
 #include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/statements/broadcast_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -29,6 +29,8 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "cql3/statements/strong_consistency/modification_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -546,7 +548,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
     }
 }
 
-::shared_ptr<strongly_consistent_modification_statement>
+::shared_ptr<broadcast_modification_statement>
 modification_statement::prepare_for_broadcast_tables() const {
     // FIXME: implement for every type of `modification_statement`.
     throw service::broadcast_tables::unsupported_operation_error{};
@@ -554,24 +556,27 @@ modification_statement::prepare_for_broadcast_tables() const {
 
 namespace raw {
 
-::shared_ptr<cql_statement_opt_metadata>
-modification_statement::prepare_statement(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) {
-    ::shared_ptr<cql3::statements::modification_statement> statement = prepare(db, ctx, stats);
-
-    if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
-        return statement->prepare_for_broadcast_tables();
-    } else {
-        return statement;
-    }
-}
-
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
-    auto statement = prepare_statement(db, meta, stats);
+
+    auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
+        auto result = prepare(db, meta, stats);
+
+        if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+            return ::make_shared<strong_consistency::modification_statement>(std::move(result));
+        }
+
+        if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+            return result->prepare_for_broadcast_tables();
+        }
+        return result;
+    });
+
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
+        std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>

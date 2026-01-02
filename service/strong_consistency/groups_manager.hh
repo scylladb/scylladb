@@ -1,0 +1,118 @@
+/*
+ * Copyright (C) 2025-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include "locator/abstract_replication_strategy.hh"
+#include "message/messaging_service.hh"
+#include "service/raft/raft_group_registry.hh"
+#include "cql3/query_processor.hh"
+
+namespace service::strong_consistency {
+
+class raft_server;
+
+class groups_manager: public peering_sharded_service<groups_manager> {
+    class state_machine_impl;
+    class rpc_impl;
+
+    friend class raft_server;
+
+    struct term_info {
+        // The Raft term this structure describes.
+        raft::term_t term;
+
+        // The last timestamp used for mutations in this term.
+        // std::nullopt indicates that the current replica is not the leader in this term.
+        std::optional<api::timestamp_type> last_timestamp;
+    };
+
+    struct raft_group_state {
+        bool has_tablet = false;
+        lw_shared_ptr<gate> gate = nullptr;
+        raft::server* server = nullptr;
+        shared_future<> server_op = make_ready_future<>();
+        std::optional<term_info> term_info = std::nullopt;
+        condition_variable term_info_cond = condition_variable();
+        future<> term_info_updater = make_ready_future<>();
+    };
+
+    netw::messaging_service& _ms;
+    raft_group_registry& _raft_gr;
+    cql3::query_processor& _qp;
+    replica::database& _db;
+    gms::feature_service& _features;
+    std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    locator::token_metadata_ptr _pending_tm = nullptr;
+    bool _started = false;
+    gms::feature::listener_registration _feature_listener{};
+
+    future<> start_raft_group(locator::global_tablet_id tablet,
+        raft::group_id group_id,
+        locator::token_metadata_ptr tm);
+
+    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
+
+    void schedule_raft_groups_deletion(bool all);
+
+    future<> term_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
+
+    future<> wait_for_groups_to_start();
+
+public:
+    groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr, 
+        cql3::query_processor& qp, replica::database& _db,
+        gms::feature_service& features);
+
+    // Called whenever a new token_metadata is published on this shard.
+    // Starts raft::server instances for all strongly consistent tablets now
+    // residing on this shard, and schedules removal of servers for tablets
+    // that have moved away.
+    //
+    // Note that the method is synchronous: it only initiates these operations
+    // and does not wait for their completion.
+    void update(locator::token_metadata_ptr new_tm);
+
+    // Used to submit write commands and perform read_barrier() before reads.
+    future<raft_server> acquire_server(raft::group_id group_id);
+
+    // Called during node boot. Waits for all raft::server instances corresponding
+    // to the latest group0 state to start.
+    future<> start();
+
+    // Called during node shutdown. Waits for all raft::server instances to stop.
+    future<> stop();
+};
+
+class raft_server {
+private:
+    groups_manager::raft_group_state& _state;
+    gate::holder _holder;
+
+public:
+    raft_server(groups_manager::raft_group_state& state, gate::holder holder);
+
+    raft::server& server() {
+        return *_state.server;
+    }
+
+    // Possible results:
+    //   timestamp_with_term - timestamp to use for a new mutation request
+    //   raft::not_a_leader - this node is not a leader
+    //   need_wait_for_leader - the caller needs to call an async wait_for_leader() method
+    struct need_wait_for_leader{};
+    using timestamp_with_term = std::pair<raft::term_t, api::timestamp_type>;
+    using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
+    begin_mutate_result begin_mutate();
+
+    future<> wait_for_leader() {
+        return _state.term_info_cond.wait();
+    }
+};
+
+}
