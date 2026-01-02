@@ -10,8 +10,7 @@
 #include "seastarx.hh"
 #include "utils/log.hh"
 #include "utils/observable.hh"
-#include "db/consistency_level.hh"
-#include "locator/token_metadata_fwd.hh"
+#include "service/client_state.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
@@ -70,10 +69,13 @@ using category_set = enum_set<super_enum<statement_category, statement_category:
                                                              statement_category::AUTH,
                                                              statement_category::ADMIN>>;
 
-class audit_info final {
+// Audit info part that is relevant to the context of the request
+class audit_info {
+protected:
     statement_category _category;
     sstring _keyspace;
     sstring _table;
+    sstring _operation; // for Alternator, where operation is not present in request string (query)
     sstring _query;
 public:
     audit_info(statement_category cat, sstring keyspace, sstring table)
@@ -81,17 +83,36 @@ public:
         , _keyspace(std::move(keyspace))
         , _table(std::move(table))
     { }
-    void set_query_string(const std::string_view& query_string) {
-        _query = sstring(query_string);
+    // 'operation' is for the cases where the query string does not contain it, like with Alternator
+    audit_info& set_query_string(std::string_view query_string, const sstring& operation = "") {
+        return set_query_string(sstring(query_string), operation);
+    }
+    audit_info& set_query_string(const sstring& query_string, const sstring& operation = "") {
+        _query = query_string;
+        _operation = operation;
+        return *this;
     }
     const sstring& keyspace() const { return _keyspace; }
     const sstring& table() const { return _table; }
     const sstring& query() const { return _query; }
+    const sstring& operation() const { return _operation; }
     sstring category_string() const;
     statement_category category() const { return _category; }
 };
 
 using audit_info_ptr = std::unique_ptr<audit_info>;
+
+// Audit info with consistency level, used in Alternator
+class audit_info_cl final : public audit_info {
+    db::consistency_level _cl;
+public:
+    audit_info_cl(statement_category cat, const sstring& keyspace, const sstring& table, db::consistency_level cl)
+        : audit_info(cat, std::move(keyspace), std::move(table))
+        , _cl(cl)
+    { }
+
+    db::consistency_level get_cl() const { return _cl; }
+};
 
 class storage_helper;
 
@@ -140,13 +161,14 @@ public:
     future<> start(const db::config& cfg);
     future<> stop();
     future<> shutdown();
-    bool should_log(const audit_info* audit_info) const;
+    bool should_log(const audit_info& audit_info) const;
     bool should_log_login() const { return _audited_categories.contains(statement_category::AUTH); }
-    future<> log(const audit_info* audit_info, service::query_state& query_state, const cql3::query_options& options, bool error);
+    future<> log(const audit_info& audit_info, const service::client_state& client_state, db::consistency_level cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;
 };
 
-future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error);
+future<> inspect(const audit_info_cl& audit_info, const service::client_state& client_state, bool error);
+future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query_state& query_state, const cql3::query_options& options, bool error);
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error);
 
