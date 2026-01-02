@@ -254,7 +254,7 @@ async def get_two_servers_to_move_tablet(manager: ManagerClient):
     return (servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manager: ManagerClient):
     servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks = await get_two_servers_to_move_tablet(manager)
 
@@ -295,7 +295,7 @@ async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manage
     assert len(list(rows)) == 0
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(manager: ManagerClient):
     servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks = await get_two_servers_to_move_tablet(manager)
 
@@ -320,7 +320,7 @@ async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(man
         logger.info("Migration timeout as expected")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -395,7 +395,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_table_dropped_during_streaming(manager: ManagerClient):
     """
     Verifies that load balancing recovers when table is dropped during streaming phase of tablet migration.
@@ -541,7 +541,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
         assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cleanup_failure(manager: ManagerClient):
     cmdline = ['--smp=1']
 
@@ -619,7 +619,7 @@ async def test_tablet_resharding(manager: ManagerClient):
 
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split(manager: ManagerClient, injection_error: str):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -688,7 +688,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
         await compaction_task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_correctness_of_tablet_split_finalization_after_restart(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -763,7 +763,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
 
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, injection_error):
     logger.info("Bootstrapping cluster")
     cmdline = []
@@ -819,7 +819,7 @@ async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, inj
         await check()
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_table_drop_and_major(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     injection_error = "major_compaction_wait"
@@ -1169,7 +1169,7 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
         assert size_before * 0.33 < size_after < size_before * 0.66
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_schema_change_during_cleanup(manager: ManagerClient):
     logger.info("Start first node")
     servers = [await manager.server_add()]
@@ -1211,7 +1211,7 @@ async def test_schema_change_during_cleanup(manager: ManagerClient):
         await migration_task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -1501,7 +1501,7 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
     cmdline = ['--smp=1']
 
@@ -1542,7 +1542,7 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
 # found in the table (includes data in memtable).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ['DROP TABLE', 'TRUNCATE'])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, operation):
     cmdline = [ '--smp=2' ]
     cfg = { 'auto_snapshot': True }
@@ -1582,7 +1582,7 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
 
 @pytest.mark.asyncio
 @pytest.mark.nightly
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_during_topology_change(manager: ManagerClient):
     """Test truncate operation during topology change."""
 
@@ -1617,7 +1617,7 @@ async def test_truncate_during_topology_change(manager: ManagerClient):
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/22040.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_schema_change_with_compaction_completion(manager: ManagerClient):
     cmdline = ['--smp=2']
     servers = [await manager.server_add(cmdline=cmdline)]
@@ -1655,7 +1655,7 @@ async def test_concurrent_schema_change_with_compaction_completion(manager: Mana
 
 # This is a test and reproducer for https://github.com/scylladb/scylladb/issues/24153
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
@@ -1726,7 +1726,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/26041.
 @pytest.mark.parametrize("primary_replica_only", [False, True])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_load_and_stream_and_split_synchronization(manager: ManagerClient, primary_replica_only):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -1924,7 +1924,7 @@ async def test_update_load_stats_after_migration(manager: ManagerClient):
         assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -1994,7 +1994,7 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
 # This is a test and reproducer for https://github.com/scylladb/scylladb/issues/26041
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repair_before_split", [False, True])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_and_incremental_repair_synchronization(manager: ManagerClient, repair_before_split: bool):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
@@ -2083,7 +2083,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
         await manager.servers_see_each_other(servers)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_and_intranode_synchronization(manager: ManagerClient):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,

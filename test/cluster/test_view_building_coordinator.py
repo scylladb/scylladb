@@ -148,7 +148,7 @@ async def test_build_filtered_view(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_build_two_views(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -178,7 +178,7 @@ async def test_build_two_views(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_view_while_build_in_progress(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -212,7 +212,7 @@ async def test_add_view_while_build_in_progress(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
@@ -241,7 +241,7 @@ async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_abort_building_by_remove_view(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
@@ -269,7 +269,7 @@ async def test_abort_building_by_remove_view(manager: ManagerClient):
 
 @pytest.mark.parametrize("change", ["add", "rename"])
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient, change: str):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
@@ -305,7 +305,7 @@ async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient,
 
 @pytest.mark.parametrize("change", ["increase", "decrease"])
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_change_rf_while_build_in_progress(manager: ManagerClient, change: str):
     if change == "increase":
         node_count = 2
@@ -347,7 +347,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 
 @pytest.mark.parametrize("operation", ["add", "remove", "decommission", "replace"])
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_operation_during_view_building(manager: ManagerClient, operation: str):
     if operation == "remove" or operation == "decommission":
         node_count = 4
@@ -398,7 +398,7 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_leader_change_while_building(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -433,7 +433,7 @@ async def test_leader_change_while_building(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.xfail
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_building(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -465,7 +465,7 @@ async def test_truncate_while_building(manager: ManagerClient):
 
 @pytest.mark.parametrize("view_action", ["finish_build", "drop_while_building"])
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_action):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -512,7 +512,7 @@ async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_acti
         await check_scylla_views_builds_in_progress(expect_zero_rows=True)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient):
     servers = [await manager.server_add(cmdline=cmdline_loggers)]
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -543,7 +543,7 @@ async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_failure(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -675,7 +675,7 @@ async def assert_row_count_on_host(cql, host, ks, table, row_count):
 # Then processing staging sstables is prevented using error injection and the tablet is
 # migrated to a new node, which will receive the staging sstables via file streaming.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_file_streaming(manager: ManagerClient):
     node_count = 2
     smp = 2
@@ -809,7 +809,7 @@ async def test_file_streaming(manager: ManagerClient):
 #   but the map stays the same, so one sstable won't be processed
 #   because last token after tablet merge = last token of tablet2 before merge
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -917,7 +917,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.server_start(servers[1].server_id)
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_during_view_building(manager: ManagerClient):
     node_count = 1
     server = new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
@@ -948,7 +948,7 @@ async def test_tablet_migration_during_view_building(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_during_view_building(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # The test fails if any of the reads times out.
 # Reproduces https://github.com/scylladb/scylladb/issues/8873
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_read_concurrency(manager: ManagerClient) -> None:
     node_count = 1
     # Disable cache to make reads use the read concurrency semaphore.
@@ -92,7 +92,7 @@ async def test_mv_read_concurrency(manager: ManagerClient) -> None:
 # The test fails if Scylla aborts due to using too much memory.
 # Reproduces https://github.com/scylladb/scylladb/issues/15805
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_read_memory(manager: ManagerClient) -> None:
     node_count = 1
     # Disable cache to make reads use the read concurrency semaphore.

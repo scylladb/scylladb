@@ -98,8 +98,8 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
-@skip_mode("debug", "debug mode is too slow for this test")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
 async def test_multi_column_lwt_during_migration(manager: ManagerClient):
     """
     Test scenario:

@@ -39,7 +39,7 @@ async def test_send_data_in_parts(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient):
     # This a regression test for #24401.
 

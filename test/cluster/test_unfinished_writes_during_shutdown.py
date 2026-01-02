@@ -24,7 +24,7 @@ from test.cluster.conftest import skip_mode
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """ Test a simultaneous topology change and write query during shutdown, which may cause the node to get stuck (see https://github.com/scylladb/scylladb/issues/23665).
 

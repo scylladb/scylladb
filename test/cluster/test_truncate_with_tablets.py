@@ -20,7 +20,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_migration(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
@@ -72,7 +72,7 @@ async def get_raft_leader_and_log(manager: ManagerClient, servers):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_with_concurrent_drop(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
@@ -123,7 +123,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_node_restart(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
@@ -171,7 +171,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
@@ -217,7 +217,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
@@ -266,7 +266,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
 
 # Reproduces https://github.com/scylladb/scylladb/issues/23771.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replay_position_check_during_truncate(manager):
     logger.info("Bootstrapping cluster")
     cfg = { 'auto_snapshot': True }
@@ -301,7 +301,7 @@ async def test_replay_position_check_during_truncate(manager):
         await truncate_task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_parallel_truncate(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')

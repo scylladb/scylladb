@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+import pytest
+
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.cluster.conftest import skip_mode
@@ -14,7 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_group0_recovers_after_partial_command_application(manager: ManagerClient):
     """
     Reproducer for scylladb/scylladb#26945.

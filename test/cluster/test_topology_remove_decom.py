@@ -195,7 +195,7 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
             manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
 async def test_decommission_left_token_ring_retry(manager: ManagerClient):
     """
     Tests the execution flow in case of performing decommission node

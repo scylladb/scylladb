@@ -409,7 +409,7 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
         await check_rf(ks=ks, expected_dc1_rf=2, expected_dc2_rf=0)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     async def get_replication_options(ks: str):
         res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
@@ -584,7 +584,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
 #   7) so read on step 5 is not being able to find sstable set for tablet migrating in
 @pytest.mark.parametrize("with_cache", ['false', 'true'])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_of_pending_replica_during_migration(manager: ManagerClient, with_cache):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -649,7 +649,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/20073
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_explicit_tablet_movement_during_decommission(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
@@ -813,7 +813,7 @@ async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerCli
             await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/21564
@@ -876,7 +876,7 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
         assert len(list(rows)) == num_of_rows
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/19149
@@ -1196,7 +1196,7 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
         await asyncio.gather(*[manager.server_start(node.server_id) for node in servers['dc2']])
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_keyspace_while_split(manager: ManagerClient):
 
     # Reproducer for: https://github.com/scylladb/scylladb/issues/22431
@@ -1247,7 +1247,7 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
     await drop_ks_task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
 
     # Reproducer for https://github.com/scylladb/scylladb/issues/25706
@@ -1302,7 +1302,7 @@ async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClient):
     injection = "repair_shard_repair_task_impl_do_repair_ranges"
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
@@ -1330,7 +1330,7 @@ async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClien
     await asyncio.gather(repair_task(), migration_task())
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_finalization_with_migrations(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/21762
@@ -1410,7 +1410,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     await log.wait_for("Tablet load balancer did not make any plan", from_mark=migration_mark)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
     cmdline = [
@@ -1517,12 +1517,12 @@ async def test_tablet_rebuild(manager: ManagerClient):
     await check_tablet_rebuild_with_repair(manager, False)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_rebuild_failure(manager: ManagerClient):
     await check_tablet_rebuild_with_repair(manager, True)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_with_invalid_session_id(manager: ManagerClient):
     injection = "handle_tablet_migration_repair_random_session"
     token = -1

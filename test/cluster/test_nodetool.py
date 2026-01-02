@@ -117,7 +117,7 @@ async def test_zero_token_node_normal(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_zero_token_node_down_leaving(manager: ManagerClient):
     servers = await manager.running_servers()
     [await manager.api.enable_injection(s.ip_addr, 'delay_node_removal', one_shot=True) for s in servers]
@@ -199,7 +199,7 @@ async def test_zero_token_node_down_normal(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_regular_node_joining(manager: ManagerClient):
     servers = await manager.running_servers()
     [await manager.api.enable_injection(s.ip_addr, 'delay_node_bootstrap', one_shot=True) for s in servers]

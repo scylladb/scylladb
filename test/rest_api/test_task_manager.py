@@ -1,4 +1,6 @@
 from enum import Enum
+
+import pytest
 import requests
 import time
 
@@ -12,11 +14,13 @@ def check_sequence_number(rest_api, task_id, expected):
     status = get_task_status(rest_api, task_id)
     check_field_correctness("sequence_number", status, { "sequence_number": expected })
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_modules(rest_api):
     with new_test_module(rest_api):
         modules = list_modules(rest_api)
         assert "test" in modules, "test module was not listed"
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_tasks(rest_api):
     with new_test_module(rest_api):
         args0 = { "shard": 0, "keyspace": "keyspace0", "table": "table0"}
@@ -32,6 +36,7 @@ def test_task_manager_tasks(rest_api):
                     tasks.remove(task_id)
                 assert not tasks, f"list_module_tasks did not return all tasks. remaining={tasks}"
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_status_running(rest_api):
     with new_test_module(rest_api):
         args0 = { "keyspace": "keyspace0", "table": "table0"}
@@ -44,6 +49,7 @@ def test_task_manager_status_running(rest_api):
             tasks = list_tasks(rest_api, "test")
             assert tasks, "task_status unregistered task that did not finish"
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_status_done(rest_api):
     with new_test_module(rest_api):
         args0 = { "keyspace": "keyspace0", "table": "table0"}
@@ -57,6 +63,7 @@ def test_task_manager_status_done(rest_api):
                 status = get_task_status(rest_api, task0)
                 check_status_correctness(status, { "id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_status_failed(rest_api):
     with new_test_module(rest_api):
         args0 = { "keyspace": "keyspace0", "table": "table0"}
@@ -70,6 +77,7 @@ def test_task_manager_status_failed(rest_api):
                 status = get_task_status(rest_api, task0)
                 check_status_correctness(status, { "id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_not_abortable(rest_api):
     with new_test_module(rest_api):
         args0 = { "keyspace": "keyspace0", "table": "table0"}
@@ -83,6 +91,7 @@ def wait_and_check_status(rest_api, id, sequence_number, keyspace, table):
     status = wait_for_task(rest_api, id)
     check_status_correctness(status, { "id": id, "state": "done", "sequence_number": sequence_number, "keyspace": keyspace, "table": table })
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_wait(rest_api):
     with new_test_module(rest_api):
         keyspace = "keyspace0"
@@ -103,6 +112,7 @@ def test_task_manager_wait(rest_api):
 
             x.join()
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_ttl(rest_api):
     with new_test_module(rest_api):
         args0 = {"keyspace": "keyspace0", "table": "table0"}
@@ -122,6 +132,7 @@ def test_task_manager_ttl(rest_api):
                     assert_task_does_not_exist(rest_api, task0)
                     assert_task_does_not_exist(rest_api, task1)
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_user_ttl(rest_api):
     with new_test_module(rest_api):
         args0 = {"keyspace": "keyspace0", "table": "table0", "user_task": True}
@@ -143,6 +154,7 @@ def test_task_manager_user_ttl(rest_api):
                         assert_task_does_not_exist(rest_api, task0)
                         assert_task_does_not_exist(rest_api, task1)
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_sequence_number(rest_api):
     with new_test_module(rest_api):
         args0 = { "shard": 0 }                              # sequence_number == 1
@@ -161,6 +173,7 @@ def test_task_manager_sequence_number(rest_api):
                             check_sequence_number(rest_api, task3, 2)
                             check_sequence_number(rest_api, task4, 1)
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_manager_recursive_status(rest_api):
     with new_test_module(rest_api):
         args0 = {"keyspace": "keyspace0"}
@@ -184,6 +197,7 @@ def test_task_manager_recursive_status(rest_api):
                     check_field_correctness("id", tasks[2], { "id" : f"{task3}" })
                     check_field_correctness("id", tasks[3], { "id" : f"{task2}" })
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_module_not_exists(rest_api):
     module_name = "module_that_does_not_exist"
     resp = rest_api.send("GET", f"task_manager/list_module_tasks/{module_name}", )
@@ -368,6 +382,7 @@ def task_folding6(rest_api):
     task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[1, 5, 12], successes_indexes=[0, 2], nodes_num=task_tree.get_nodes_number()))
 
 # Checks whether finished children fold into parents as expected.
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_task_folding(rest_api):
     with new_test_module(rest_api):
         with set_tmp_task_ttl(rest_api, long_time):
@@ -378,6 +393,7 @@ def test_task_folding(rest_api):
             task_folding5(rest_api)
             task_folding6(rest_api)
 
+@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
 def test_abort_on_unregistered_task(cql, this_dc, rest_api):
     module_name = "compaction"
     drain_module_tasks(rest_api, module_name)

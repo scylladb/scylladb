@@ -131,7 +131,7 @@ async def test_tablet_manual_repair_async(manager: ManagerClient):
     assert len(res) == 1
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
     token = -1
@@ -160,7 +160,7 @@ async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerCli
     assert state.error == 2
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_and_retry(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
@@ -171,7 +171,7 @@ async def test_tablet_repair_error_and_retry(manager: ManagerClient):
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_not_finish(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
@@ -186,7 +186,7 @@ async def test_tablet_repair_error_not_finish(manager: ManagerClient):
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_delete(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
@@ -230,7 +230,7 @@ def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_
             assert val_before == row_num_after[i]
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("included_host_count", [2, 1, 0])
 async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_count):
     injection = "handle_tablet_migration_repair_fail"
@@ -279,7 +279,7 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
     return (servers, cql, hosts, ks, table_id)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("dcs_filter_and_res", [("DC1", [0, 1]), ("DC2", []), ("DC3", [])])
 async def test_tablet_repair_dcs_filter(manager: ManagerClient, dcs_filter_and_res):
     dcs_filter, expected_repairs = dcs_filter_and_res
@@ -309,7 +309,7 @@ async def test_tablet_repair_dcs_filter(manager: ManagerClient, dcs_filter_and_r
     check_repairs(row_num_before, row_num_after, expected_repairs)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
     dcs_filter = "DC1,DC2"
@@ -339,7 +339,7 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
     check_repairs(row_num_before, row_num_after, [0, 2])
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows(manager: ManagerClient):
     cmdline = ["--hinted-handoff-enabled", "0"]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair_multiple_rows(manager, cmdline=cmdline)
@@ -407,11 +407,11 @@ async def run_tablet_repair_multiple_rows_merge(manager: ManagerClient, inject_e
     assert sorted(rows) == sorted(rows_query)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ManagerClient):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_nr", "10")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: ManagerClient):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")

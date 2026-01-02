@@ -15,7 +15,7 @@ from test.cluster.conftest import skip_mode
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("mode", ['vnode', 'tablet'])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_partitioned_sstable_set(manager: ManagerClient, mode):
     cfg = {

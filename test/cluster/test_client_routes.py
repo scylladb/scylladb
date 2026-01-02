@@ -92,7 +92,7 @@ async def test_client_routes_node_restart(request, manager: ManagerClient):
     await wait_for_expected_client_routes_size(cql, 1)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_client_routes_upgrade(request, manager: ManagerClient):
     """
     This test verifies updating the system to a version with the CLIENT_ROUTES feature in the following steps:
@@ -236,7 +236,7 @@ async def test_events(request, manager: ManagerClient, monkeypatch):
     assert received_events[2]["host_ids"] == [generate_host_id(0)]
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, monkeypatch):
     """
     This test verifies that client routes change events are sent when client_routes
