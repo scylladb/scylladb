@@ -397,3 +397,80 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
                 mark, _ = await log.wait_for(f"Detected tablet split for table {cf}, increasing from 1 to 2 tablets", from_mark=mark)
                 await assert_resize_task_info(table_id, lambda response: len(response) == 2 and all(r.resize_task_info is None for r in response))
+
+# Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+    }
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+        cql, _ = await manager.get_ready_cql(servers)
+        workdir = await manager.server_get_workdir(servers[0].server_id)
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+
+        logger.info("Create and populate test table")
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 2}") as ks:
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+                table = cf.split('.')[-1]
+                table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
+
+                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 64)])
+                await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+                coord = await get_topology_coordinator(manager)
+                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_log = await manager.server_open_log(coord_serv.server_id)
+
+                async def run_split():
+                    await manager.api.enable_injection(coord_serv.ip_addr, 'tablet_resize_finalization_postpone', one_shot=False)
+
+                    # force split on the test table
+                    await cql.run_async(f"ALTER TABLE {cf} WITH tablets = {{'min_tablet_count': 4}}")
+
+                    coord_log.wait_for(f"Generating resize decision for table {table_id} of type split")
+
+                async def generate_repair_work():
+                    insert_stmt = cql.prepare(f"INSERT INTO {cf} (pk, t) VALUES (?, ?)")
+                    insert_stmt.consistency_level = ConsistencyLevel.ONE
+
+                    await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False)
+                    pks = range(256, 512)
+                    await asyncio.gather(*[cql.run_async(insert_stmt, (k, f'{k}')) for k in pks])
+                    await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
+
+                await generate_repair_work()
+                await manager.api.enable_injection(servers[0].ip_addr, "maybe_split_new_sstable_wait", one_shot=True)
+
+                token = 'all'
+                repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, table, token))
+
+                # Emit split decision during repair.
+                await run_split()
+
+                await log.wait_for("maybe_split_new_sstable_wait: waiting", from_mark=mark)
+                await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
+
+                logger.info("Create a big file on the target node to reach critical disk utilization level")
+                disk_info = psutil.disk_usage(workdir)
+                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                    for _ in range(2):
+                        mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
+
+                    await manager.api.message_injection(servers[0].ip_addr, "maybe_split_new_sstable_wait")
+
+                    # Expect repair to fail when splitting new sstables
+                    await log.wait_for("Repair for tablet migration of .* failed", from_mark=mark)
+                    await log.wait_for("Cannot split .* because manager has compaction disabled", from_mark=mark)
+
+                    assert await log.grep(f"compaction .* Split {cf}", from_mark=mark) == []
+
+                logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
+                for _ in range(2):
+                    mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
+
+                await repair_task
+
+                mark, _ = await log.wait_for(f"Detected tablet split for table {cf}", from_mark=mark)
