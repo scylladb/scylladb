@@ -3292,22 +3292,100 @@ db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
 
+struct sstable_json : public json::json_base {
+    json::json_element<sstring> id;
+    json::json_element<sstring> toc_name;
+    json::json_element<uint64_t> data_size;
+    json::json_element<uint64_t> index_size;
+    json::json_element<int64_t> first_token;
+    json::json_element<int64_t> last_token;
+
+    sstable_json() {
+        register_params();
+    }
+    sstable_json(const sstables::sstable_snapshot_metadata& e) {
+        register_params();
+        id = fmt::to_string(e.id);
+        toc_name = e.toc_name;
+        data_size = e.data_size;
+        index_size = e.index_size;
+        first_token = e.first_token;
+        last_token = e.last_token;
+    }
+    sstable_json(const sstable_json& e) {
+        register_params();
+        id = e.id;
+        toc_name = e.toc_name;
+        data_size = e.data_size;
+        index_size = e.index_size;
+        first_token = e.first_token;
+        last_token = e.last_token;
+    }
+    sstable_json(sstable_json&& e) {
+        register_params();
+        id = e.id;
+        toc_name = std::move(e.toc_name);
+        data_size = e.data_size;
+        index_size = e.index_size;
+        first_token = e.first_token;
+        last_token = e.last_token;
+    }
+    sstable_json& operator=(sstable_json&& e) {
+        id = e.id;
+        toc_name = std::move(e.toc_name);
+        data_size = e.data_size;
+        index_size = e.index_size;
+        first_token = e.first_token;
+        last_token = e.last_token;
+        return *this;
+    }
+private:
+    void register_params() {
+        add(&id, "id");
+        add(&toc_name, "toc_name");
+        add(&data_size, "data_size");
+        add(&index_size, "index_size");
+        add(&first_token, "first_token");
+        add(&last_token, "last_token");
+    }
+};
+
 struct manifest_json : public json::json_base {
-    json::json_chunked_list<std::string_view> files;
+    json::json_element<sstring> name;
+    json::json_element<time_t> created_at;
+    json::json_element<time_t> expires_at;
+    json::json_element<size_t> tablet_count;
+    json::json_chunked_list<sstable_json> sstables;
+    json::json_chunked_list<std::string_view> files; // additional files, other than sstables
 
     manifest_json() {
         register_params();
     }
     manifest_json(manifest_json&& e) {
         register_params();
+        name = e.name;
+        created_at = e.created_at;
+        expires_at = e.expires_at;
+        tablet_count = e.tablet_count;
+        sstables = std::move(e.sstables);
         files = std::move(e.files);
     }
     manifest_json& operator=(manifest_json&& e) {
+        name = e.name;
+        created_at = e.created_at;
+        expires_at = e.expires_at;
+        tablet_count = e.tablet_count;
+        sstables = std::move(e.sstables);
         files = std::move(e.files);
         return *this;
     }
 private:
     void register_params() {
+        add(&name, "name");
+        add(&created_at, "created_at");
+        add(&expires_at, "expires_at");
+        add(&tablet_count, "tablet_count");
+        add(&sstables, "sstables");
         add(&files, "files");
     }
 };
@@ -3320,13 +3398,21 @@ public:
     virtual ~snapshot_writer() = default;
 };
 
-using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
+using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_file_set> file_sets) {
+static future<> write_manifest(snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, sstring name, db::snapshot_options opts, std::optional<int64_t> tablet_count) {
     manifest_json manifest;
-    for (const auto& fsp : file_sets) {
-        for (auto& rf : *fsp) {
-            manifest.files.push(std::string_view(rf));
+    manifest.name = std::move(name);
+    manifest.created_at = opts.created_at.time_since_epoch().count();
+    if (opts.expires_at) {
+        manifest.expires_at = opts.expires_at->time_since_epoch().count();
+    }
+    if (tablet_count) {
+        manifest.tablet_count = *tablet_count;
+    }
+    for (const auto& fsp : sstable_sets) {
+        for (auto& md : *fsp) {
+            manifest.sstables.push(sstable_json(md));
         }
     }
     auto streamer = json::stream_object(std::move(manifest));
@@ -3384,10 +3470,12 @@ static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description s
 
 class local_snapshot_writer : public snapshot_writer {
     std::filesystem::path _dir;
+    db::snapshot_options _opts;
 
 public:
-    local_snapshot_writer(std::filesystem::path dir, sstring name)
+    local_snapshot_writer(std::filesystem::path dir, sstring name, db::snapshot_options opts)
             : _dir(dir / sstables::snapshots_dir / name)
+            , _opts(std::move(opts))
     {}
     future<> init() override {
         co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
@@ -3403,15 +3491,15 @@ public:
 };
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts) {
     auto writer = std::visit(overloaded_functor{
-        [&name] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
+        [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
                 // virtual tables don't have initialized local storage
                 return nullptr;
             }
 
-            return std::make_unique<local_snapshot_writer>(loc.dir, name);
+            return std::make_unique<local_snapshot_writer>(loc.dir, name, opts);
         },
         [] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
             throw std::runtime_error("Snapshotting non-local tables is not implemented");
@@ -3427,14 +3515,16 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
-        std::vector<snapshot_file_set> file_sets(smp::count);
+        std::vector<snapshot_sstable_set> sstable_sets(smp::count);
+        std::vector<std::optional<int64_t>> tablet_counts(smp::count);
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
-            auto [tables, permit] = co_await t.snapshot_sstables();
-            auto table_names = co_await t.get_sstables_manager().take_snapshot(std::move(tables), name);
-            file_sets[this_shard_id()] = make_foreign(std::make_unique<std::unordered_set<sstring>>(std::move(table_names)));
+            auto data = co_await t.snapshot_sstables();
+            auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(std::move(data.sstables), name);
+            sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
+            tablet_counts[this_shard_id()] = data.tablet_count;
         });
         co_await writer->sync();
 
@@ -3447,7 +3537,17 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
-        co_await write_manifest(*writer, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+        std::optional<int64_t> min_tablet_count;
+        for (auto& tc : tablet_counts) {
+            if (tc) {
+                if (!min_tablet_count) {
+                    min_tablet_count = *tc;
+                    continue;
+                }
+                min_tablet_count = std::min(*min_tablet_count, *tc);
+            }
+        }
+        co_await write_manifest(*writer, std::move(sstable_sets), name, std::move(opts), min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -3459,10 +3559,14 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
     });
 }
 
-future<std::pair<std::vector<sstables::shared_sstable>, table::sstable_list_permit>> table::snapshot_sstables() {
+future<table::snapshot_data> table::snapshot_sstables() {
     auto permit = co_await get_sstable_list_permit();
+    std::optional<int64_t> tablet_count;
+    if (auto raw_tablet_count = calculate_tablet_count()) {
+        tablet_count = raw_tablet_count;
+    }
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
-    co_return std::make_pair(std::move(tables), std::move(permit));
+    co_return snapshot_data{std::move(permit), tablet_count, std::move(tables)};
 }
 
 future<bool> table::snapshot_exists(sstring tag) {
@@ -3598,6 +3702,10 @@ bool compaction_group::can_flush() const {
     return _memtables->can_flush();
 }
 
+bool compaction_group::needs_flush() const {
+    return _memtables->needs_flush();
+}
+
 lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
 }
@@ -3634,6 +3742,14 @@ bool storage_group::can_flush() const {
 
 bool table::can_flush() const {
     return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::can_flush));
+}
+
+bool storage_group::needs_flush() const {
+    return std::ranges::any_of(compaction_groups_immediate(), std::mem_fn(&compaction_group::needs_flush));
+}
+
+bool table::needs_flush() const {
+    return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::needs_flush));
 }
 
 future<> compaction_group::clear_memtables() {

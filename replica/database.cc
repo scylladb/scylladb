@@ -2011,7 +2011,7 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
 }
 
 future<> memtable_list::flush() {
-    if (!may_flush()) {
+    if (!can_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
         promise<> flushed;
@@ -2811,26 +2811,26 @@ future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& shar
     });
 }
 
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, bool skip_flush) {
-    if (!skip_flush) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts) {
+    if (!opts.skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, uuid);
     }
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_await snapshot_table_on_all_shards(sharded_db, table_shards, tag);
+    co_await snapshot_table_on_all_shards(sharded_db, table_shards, tag, opts);
 }
 
-future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), skip_flush] (auto& table_name) {
+future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), opts] (auto& table_name) {
         auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
-        return snapshot_table_on_all_shards(sharded_db, uuid, tag, skip_flush);
+        return snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
 }
 
-future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush) {
+future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, db::snapshot_options opts) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), opts] (const auto& pair) -> future<> {
         auto uuid = pair.second->id();
-        co_await snapshot_table_on_all_shards(sharded_db, uuid, tag, skip_flush);
+        co_await snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
 }
 
@@ -2905,18 +2905,15 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         dblog.info("truncate_compaction_disabled_wait: done");
     }, false);
 
-    const auto should_flush = with_snapshot && cf.can_flush();
+    const auto should_flush = with_snapshot;
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
-    std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
-            [] (replica::table& cf) {
-                // TODO:
-                // this is not really a guarantee at all that we've actually
-                // gotten all things to disk. Again, need queue-ish or something.
+    auto flush_or_clear = [should_flush] (replica::table& cf) {
+            if (should_flush && cf.can_flush()) {
                 return cf.flush();
-            } :
-            [] (replica::table& cf) {
+            } else {
                 return cf.clear();
-            };
+            }
+        };
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
         unsigned shard = this_shard_id();
         auto& cf = *table_shards;
@@ -2952,7 +2949,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        co_await snapshot_table_on_all_shards(sharded_db, table_shards, name);
+        co_await snapshot_table_on_all_shards(sharded_db, table_shards, name, db::snapshot_options{});
     }
 
     co_await sharded_db.invoke_on_all([&] (database& db) {

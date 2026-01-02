@@ -31,6 +31,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/rjson.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -38,6 +39,7 @@
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstable_version.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
@@ -568,15 +570,15 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
-    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs,  db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}, size_t num_keys = 2) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs, num_keys, db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
         lw_shared_ptr<tmpdir> tmpdir_for_data;
         if (!db_cfg_ptr) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
             db_cfg_ptr = make_shared<db::config>();
             db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func), create_mvs] (cql_test_env& e) {
+        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func), create_mvs, num_keys] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
                     return *schema_builder(ks_name, cf_name)
@@ -586,12 +588,22 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
                             .with_column("r1", int32_type)
                             .build();
                 }).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 1, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 2, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key1', 3, 2, 3);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 4, 5, 6);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 5, 5, 6);", cf_name)).get();
-                e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 6, 5, 6);", cf_name)).get();
+                auto stmt = e.prepare(fmt::format("insert into {} (p1, c1, c2, r1) values (?, ?, ?, ?)", cf_name)).get();
+                auto make_key = [] (int64_t k) {
+                    std::string s = fmt::format("key{}", k);
+                    bytes b(bytes::initialized_later(), sizeof(s.size()));
+                    std::ranges::copy(s, b.begin());
+                    return cql3::raw_value::make_value(b);
+                };
+                auto make_val = [] (int64_t x) {
+                    return cql3::raw_value::make_value(int32_type->decompose(int32_t{x}));
+                };
+                for (size_t i = 0; i < num_keys; ++i) {
+                    auto key = tests::random::get_int<int32_t>(1, 1000000);
+                    e.execute_prepared(stmt, {make_key(key), make_val(key), make_val(key + 1), make_val(key + 2)}).get();
+                    e.execute_prepared(stmt, {make_key(key), make_val(key + 1), make_val(key + 1), make_val(key + 2)}).get();
+                    e.execute_prepared(stmt, {make_key(key), make_val(key + 2), make_val(key + 1), make_val(key + 2)}).get();
+                }
 
                 if (create_mvs) {
                     auto f1 = e.local_view_builder().wait_until_built("ks", seastar::format("view_{}", cf_name));
@@ -612,13 +624,13 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
     });
 }
 
-future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
+future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", db::snapshot_options opts = {}) {
     try {
         auto uuid = e.db().local().find_uuid(ks_name, cf_name);
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, opts);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
-                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+                ks_name, cf_name, snapshot_name, opts.skip_flush, std::current_exception());
         throw;
     }
 }
@@ -632,8 +644,109 @@ future<std::set<sstring>> collect_files(fs::path path) {
     co_return ret;
 }
 
-static future<> snapshot_works(const std::string& table_name) {
+static bool is_component(const sstring& fname, const sstring& suffix) {
+    return fname.ends_with(suffix);
+}
+
+static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, const sstring& suffix) {
+    // Verify manifest against the files in the snapshots dir
+    auto pred = [&suffix] (const sstring& fname) {
+        return is_component(fname, suffix);
+    };
+    return std::ranges::filter_view(all_files, pred) | std::ranges::to<std::set<sstring>>();
+}
+
+// Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
+static future<> validate_manifest(const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time, bool tablets_enabled) {
+    sstring suffix = "-TOC.txt";
+    auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
+
+    std::set<sstring> sstables_in_manifest;
+    auto manifest_str = co_await util::read_entire_file_contiguous(snapshot_dir / "manifest.json");
+    auto manifest_json = rjson::parse(manifest_str);
+
+    BOOST_REQUIRE(manifest_json.HasMember("name"));
+    auto& snapshot_name = manifest_json["name"];
+    BOOST_REQUIRE(snapshot_name.IsString());
+    BOOST_REQUIRE_EQUAL(snapshot_dir.filename(), snapshot_name.GetString());
+
+    BOOST_REQUIRE(manifest_json.HasMember("created_at"));
+    auto& created_at = manifest_json["created_at"];
+    BOOST_REQUIRE(created_at.IsNumber());
+    time_t created_at_seconds = created_at.GetInt64();
+    BOOST_REQUIRE_GE(created_at_seconds, min_time.time_since_epoch().count());
+    BOOST_REQUIRE_LT(created_at_seconds, min_time.time_since_epoch().count() + 60);
+
+    if (manifest_json.HasMember("expires_at")) {
+        BOOST_REQUIRE(created_at_seconds > 0);
+        auto& expires_at = manifest_json["expires_at"];
+        BOOST_REQUIRE(expires_at.IsNumber());
+        BOOST_REQUIRE_GE(expires_at.GetInt64(), created_at_seconds);
+    }
+
+    if (manifest_json.HasMember("tablet_count")) {
+        auto& tablet_count = manifest_json["tablet_count"];
+        if (tablets_enabled) {
+            BOOST_REQUIRE(tablet_count.IsNumber());
+            BOOST_REQUIRE_GT(tablet_count.GetInt64(), 0);
+        } else if (!tablet_count.IsNull()) {
+            BOOST_REQUIRE(tablet_count.IsNumber());
+            BOOST_REQUIRE_EQUAL(tablet_count.GetInt64(), 0);
+        }
+    } else {
+        BOOST_REQUIRE(!tablets_enabled);
+    }
+
+    if (manifest_json.HasMember("sstables")) {
+        auto& sstables = manifest_json["sstables"];
+        BOOST_REQUIRE(sstables.IsArray());
+        for (auto& sst_json : sstables.GetArray()) {
+            BOOST_REQUIRE(sst_json.IsObject());
+
+            auto& id = sst_json["id"];
+            BOOST_REQUIRE(id.IsString());
+            auto uuid = utils::UUID(id.GetString());
+            BOOST_REQUIRE(!uuid.is_null());
+
+            auto& toc_name = sst_json["toc_name"];
+            BOOST_REQUIRE(toc_name.IsString());
+            BOOST_REQUIRE(is_component(toc_name.GetString(), suffix));
+            sstables_in_manifest.insert(toc_name.GetString());
+
+            auto& data_size = sst_json["data_size"];
+            BOOST_REQUIRE(data_size.IsNumber());
+            auto& index_size = sst_json["index_size"];
+            BOOST_REQUIRE(index_size.IsNumber());
+
+            if (sst_json.HasMember("first_token")) {
+                auto& first_token = sst_json["first_token"];
+                BOOST_REQUIRE(first_token.IsNumber());
+
+                BOOST_REQUIRE(sst_json.HasMember("last_token"));
+                auto& last_token = sst_json["last_token"];
+                BOOST_REQUIRE(last_token.IsNumber());
+                BOOST_REQUIRE_LE(first_token.GetInt64(), last_token.GetInt64());
+            } else {
+                BOOST_REQUIRE(!sst_json.HasMember("last_token"));
+            }
+        }
+    }
+
+    if (manifest_json.HasMember("files")) {
+        auto& manifest_files = manifest_json["files"];
+        BOOST_REQUIRE(manifest_files.IsArray());
+        BOOST_REQUIRE_EQUAL(manifest_files.Size(), 0);
+    }
+
+    testlog.debug("SSTables in manifest.json: {}", fmt::join(sstables_in_manifest, ", "));
+    BOOST_REQUIRE_EQUAL(sstables_in_snapshot, sstables_in_manifest);
+}
+
+static future<> snapshot_works(const std::string& table_name, bool create_views, bool tablets_enabled) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(tablets_enabled ? db::tablets_mode_t::mode::enabled : db::tablets_mode_t::mode::disabled);
     return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
+        auto min_time = gc_clock::now();
         take_snapshot(e, "ks", table_name).get();
 
         auto& cf = e.local_db().find_column_family("ks", table_name);
@@ -651,25 +764,33 @@ static future<> snapshot_works(const std::string& table_name) {
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
+        validate_manifest(snapshot_dir, in_snapshot_dir, min_time, cf.uses_tablets()).get();
+
         return make_ready_future<>();
-    }, true);
+    }, create_views, db_cfg_ptr, 100);
 }
 
 SEASTAR_TEST_CASE(table_snapshot_works) {
-    return snapshot_works("cf");
+    return snapshot_works("cf", false, false);
+}
+
+SEASTAR_TEST_CASE(table_snapshot_works_with_tablets) {
+    // FIXME: do_with_some_data does not work with views and tablets yet
+    return snapshot_works("cf", false, true);
 }
 
 SEASTAR_TEST_CASE(view_snapshot_works) {
-    return snapshot_works("view_cf");
+    return snapshot_works("view_cf", true, false);
 }
 
 SEASTAR_TEST_CASE(index_snapshot_works) {
-    return snapshot_works(::secondary_index::index_table_name("index_cf"));
+    return snapshot_works(::secondary_index::index_table_name("index_cf"), true, false);
 }
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
+        db::snapshot_options opts = {.skip_flush = true};
+        take_snapshot(e, "ks", "cf", "test", opts).get();
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -1456,7 +1577,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         }
         BOOST_REQUIRE(found);
 
-        co_await take_snapshot(e, "ks", "cf", "test", true /* skip_flush */);
+        co_await take_snapshot(e, "ks", "cf", "test", db::snapshot_options{.skip_flush = true});
 
         testlog.debug("Expected: {}", expected);
 
@@ -1956,6 +2077,29 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
+    return do_with_some_data({"cf"}, [] (cql_test_env& e) -> future<> {
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+
+        BOOST_REQUIRE(cf.needs_flush());
+        auto flushed = cf.flush();
+        if (flushed.available()) {
+            testlog.error("Table flush completed too early");
+            BOOST_REQUIRE(!flushed.available());
+        }
+
+        // Now flush again when the active memtable is empty.
+        // Expect that this waits on the ongoing flush
+        BOOST_REQUIRE(cf.needs_flush());
+        co_await cf.flush();
+        if (cf.needs_flush()) {
+            testlog.error("Table is not expected to need flush after flushing empty active memtable");
+            BOOST_REQUIRE(!cf.needs_flush());
+        }
+        co_await std::move(flushed);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

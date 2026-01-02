@@ -445,8 +445,14 @@ public:
     }
 
     future<> create_keyspace(const cql_test_config& cfg, std::string_view name) {
+        sstring tablets = "";
+        if (cfg.initial_tablets) {
+            tablets = format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets);
+        } else if (cfg.db_config->enable_tablets()) {
+            tablets = " and tablets = {'enabled' : true}";
+        }
         auto query = seastar::format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1}}{};", name,
-                            cfg.initial_tablets ? format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets) : "");
+                            tablets);
         return execute_cql(query).discard_result();
     }
 
@@ -455,7 +461,7 @@ public:
     }
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
-        return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] {
+        return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] () mutable {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
