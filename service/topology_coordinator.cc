@@ -116,7 +116,8 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
 }
 } // namespace
 
-class topology_coordinator : public endpoint_lifecycle_subscriber {
+class topology_coordinator : public endpoint_lifecycle_subscriber
+                           , public migration_listener::empty_listener {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     gms::gossiper& _gossiper;
     netw::messaging_service& _messaging;
@@ -2259,6 +2260,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         });
     }
 
+    virtual void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        // New tablets were allocated, we need per-tablet stats for them for tablet balancer to make progress.
+        trigger_load_stats_refresh();
+    }
+
+    virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {
+        trigger_load_stats_refresh();
+    }
+
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {
+        // Tablet hints may have changed. Wake up so that load balancer re-evaluates tablet distribution.
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        // Tablet distribution has changed. Wake up the load balancer.
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {
+        // Tablet distribution has changed. Wake up the load balancer.
+        _topo_sm.event.broadcast();
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         utils::chunked_vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
@@ -3513,21 +3538,27 @@ public:
         , _tablet_allocator(tablet_allocator)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
         , _cdc_gens(cdc_gens)
-        , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
+        , _tablet_load_stats_refresh([this] {
+            return with_scheduling_group(_db.get_gossip_scheduling_group(), [this] {
+                return refresh_tablet_load_stats();
+            });
+        })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
         , _voter_handler(group0, topo_sm._topology, gossiper, feature_service)
         , _topology_cmd_rpc_tracker(topology_cmd_rpc_tracker)
         , _async_gate("topology_coordinator")
-    {}
+    {
+        _db.get_notifier().register_listener(this);
+    }
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
     future<bool> maybe_run_upgrade();
     future<> run();
     future<> stop();
 
-    virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
-    virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
+    virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) override { _topo_sm.event.broadcast(); };
+    virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) override { _topo_sm.event.broadcast(); };
 };
 
 future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_tables(group0_guard guard) {
@@ -3729,6 +3760,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 
     _tablet_allocator.set_load_stats(make_lw_shared<const locator::load_stats>(std::move(stats)));
+    _topo_sm.event.broadcast(); // wake up load balancer.
 }
 
 future<> topology_coordinator::start_tablet_load_stats_refresher() {
@@ -3737,7 +3769,6 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         bool sleep = true;
         try {
             co_await _tablet_load_stats_refresh.trigger();
-            _topo_sm.event.broadcast(); // wake up load balancer.
         } catch (raft::request_aborted&) {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
             sleep = false;
@@ -4065,10 +4096,17 @@ future<> topology_coordinator::run() {
     auto group0_voter_refresher = group0_voter_refresher_fiber();
     auto vb_coordinator_fiber = run_view_building_coordinator();
 
+    std::optional<future<>> event_wait;
+
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
             co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog", utils::wait_for_message(5min));
+
+            if (!event_wait) {
+                event_wait = _topo_sm.event.wait();
+            }
+
             auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
             if (_rollback) {
@@ -4080,9 +4118,13 @@ future<> topology_coordinator::run() {
             bool had_work = co_await handle_topology_transition(std::move(guard));
 
             if (!had_work) {
+                co_await utils::get_local_injector().inject("wait-before-topology-coordinator-goes-to-sleep", utils::wait_for_message(30s));
+
                 // Nothing to work on. Wait for topology change event.
                 rtlogger.debug("topology coordinator fiber has nothing to do. Sleeping.");
-                co_await await_event();
+                _as.check();
+                co_await std::move(*event_wait);
+                event_wait.reset();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
             co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", utils::wait_for_message(30s));
@@ -4111,6 +4153,8 @@ future<> topology_coordinator::run() {
 }
 
 future<> topology_coordinator::stop() {
+    co_await _db.get_notifier().unregister_listener(this);
+
     // if topology_coordinator::run() is aborted either because we are not a
     // leader anymore, or we are shutting down as a leader, we have to handle
     // futures in _tablets in case any of them failed, before these failures
