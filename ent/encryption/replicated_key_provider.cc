@@ -46,7 +46,6 @@
 
 namespace encryption {
 
-static auto constexpr KSNAME = "system_replicated_keys";
 static auto constexpr TABLENAME = "encrypted_keys";
 
 static logger log("replicated_key_provider");
@@ -181,7 +180,7 @@ future<::shared_ptr<cql3::untyped_result_set>> replicated_key_provider::query(ss
 future<> replicated_key_provider::force_blocking_flush() {
     return _ctxt.get_database().invoke_on_all([](replica::database& db) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
-        replica::column_family& cf = db.find_column_family(KSNAME, TABLENAME);
+        replica::column_family& cf = db.find_column_family(replicated_key_provider_factory::KSNAME, TABLENAME);
         return cf.flush();
     });
 }
@@ -305,7 +304,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     if (id.id) {
         uuid = utils::UUID_gen::get_UUID(*id.id);
         log.debug("Finding key {} ({})", uuid, info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", KSNAME, TABLENAME);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", replicated_key_provider_factory::KSNAME, TABLENAME);
         res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len), uuid);
 
         // if we find nothing, and we actually queried a specific key (by uuid), we've failed.
@@ -315,7 +314,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
         }
     } else {
         log.debug("Finding key ({})", info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", KSNAME, TABLENAME);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", replicated_key_provider_factory::KSNAME, TABLENAME);
         res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len));
     }
 
@@ -332,7 +331,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
         auto ks = base64_encode(b);
         log.trace("Inserting generated key {}", uuid);
         co_await query(fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", 
-            KSNAME, TABLENAME), _system_key->name(), cipher, int32_t(id.info.len), uuid, ks
+            replicated_key_provider_factory::KSNAME, TABLENAME), _system_key->name(), cipher, int32_t(id.info.len), uuid, ks
         );
         log.trace("Flushing key table");
         co_await force_blocking_flush();
@@ -365,8 +364,8 @@ future<> replicated_key_provider::validate() const {
 
 schema_ptr encrypted_keys_table() {
     static thread_local auto schema = [] {
-        auto id = generate_legacy_id(KSNAME, TABLENAME);
-        return schema_builder(KSNAME, TABLENAME, std::make_optional(id))
+        auto id = generate_legacy_id(replicated_key_provider_factory::KSNAME, TABLENAME);
+        return schema_builder(replicated_key_provider_factory::KSNAME, TABLENAME, std::make_optional(id))
                 .with_column("key_file", utf8_type, column_kind::partition_key)
                 .with_column("cipher", utf8_type, column_kind::partition_key)
                 .with_column("strength", int32_type, column_kind::clustering_key)
@@ -386,23 +385,23 @@ future<> replicated_key_provider::maybe_initialize_tables() {
 }
 
 future<> replicated_key_provider::do_initialize_tables(::replica::database& db, service::migration_manager& mm) {
-    if (db.has_schema(KSNAME, TABLENAME)) {
+    if (db.has_schema(replicated_key_provider_factory::KSNAME, TABLENAME)) {
         co_return;
     }
 
     log.debug("Creating keyspace and table");
-    if (!db.has_keyspace(KSNAME)) {
+    if (!db.has_keyspace(replicated_key_provider_factory::KSNAME)) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         try {
             auto ksm = keyspace_metadata::new_keyspace(
-                    KSNAME,
+                    replicated_key_provider_factory::KSNAME,
                     "org.apache.cassandra.locator.EverywhereStrategy",
                     {},
                     std::nullopt,
                     std::nullopt,
                     true);
-            co_await mm.announce(service::prepare_new_keyspace_announcement(db, ksm, ts), std::move(group0_guard), fmt::format("encryption at rest: create keyspace {}", KSNAME));
+            co_await mm.announce(service::prepare_new_keyspace_announcement(db, ksm, ts), std::move(group0_guard), fmt::format("encryption at rest: create keyspace {}", replicated_key_provider_factory::KSNAME));
         } catch (exceptions::already_exists_exception&) {
         }
     }
@@ -410,10 +409,10 @@ future<> replicated_key_provider::do_initialize_tables(::replica::database& db, 
     auto ts = group0_guard.write_timestamp();
     try {
         co_await mm.announce(co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), encrypted_keys_table(), ts), std::move(group0_guard),
-                             fmt::format("encryption at rest: create table {}.{}", KSNAME, TABLENAME));
+                             fmt::format("encryption at rest: create table {}.{}", replicated_key_provider_factory::KSNAME, TABLENAME));
     } catch (exceptions::already_exists_exception&) {
     }
-    auto& ks = db.find_keyspace(KSNAME);
+    auto& ks = db.find_keyspace(replicated_key_provider_factory::KSNAME);
     auto& rs = ks.get_replication_strategy();
     // should perhaps check name also..
     if (rs.get_type() != locator::replication_strategy_type::everywhere_topology) {
