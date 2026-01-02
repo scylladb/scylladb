@@ -27,6 +27,8 @@ namespace encryption {
 
 class replicated_key_provider_factory : public key_provider_factory {
 public:
+    static constexpr const char* KSNAME = "system_replicated_keys";
+
     replicated_key_provider_factory();
     ~replicated_key_provider_factory();
 
