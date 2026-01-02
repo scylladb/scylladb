@@ -251,6 +251,10 @@ bool compaction_manager::eligible_for_compaction(const sstables::shared_sstable&
     return is_eligible_for_compaction(sstable) && !_compacting_sstables.contains(sstable);
 }
 
+bool compaction_manager::eventually_eligible_for_compaction(const sstables::shared_sstable& sstable) const {
+    return is_eventually_eligible_for_compaction(sstable) && !_compacting_sstables.contains(sstable);
+}
+
 bool compaction_manager::eligible_for_compaction(const sstables::frozen_sstable_run& sstable_run) const {
     return std::ranges::all_of(sstable_run->all(), [this] (const sstables::shared_sstable& sstable) {
         return eligible_for_compaction(sstable);
@@ -2088,6 +2092,9 @@ private:
 
 bool needs_cleanup(const sstables::shared_sstable& sst,
                    const dht::token_range_vector& sorted_owned_ranges) {
+    if (utils::get_local_injector().enter("cleanup_sstable_force")) {
+        return true;
+    }
     // Finish early if the keyspace has no owned token ranges (in this data center)
     if (sorted_owned_ranges.empty()) {
         return true;
@@ -2147,20 +2154,44 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     if (!gh) {
         co_return;
     }
+    auto get_duration = [] (auto target_duration) {
+        return utils::get_local_injector().enter("cleanup_idle_duration_1s") ? std::chrono::seconds(1) : target_duration;
+    };
 
-    constexpr auto sleep_duration = std::chrono::seconds(10);
-    constexpr auto max_idle_duration = std::chrono::seconds(300);
+    const auto sleep_duration = get_duration(std::chrono::seconds(10));
+    const auto max_idle_duration = get_duration(std::chrono::seconds(300));
     auto& cs = get_compaction_state(&t);
 
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
+    auto sstables_eventually_eligible_for_compaction = [&] {
+        std::unordered_set<sstables::shared_sstable> ssts;
+        for (auto& sst : cs.sstables_requiring_cleanup) {
+            if (eventually_eligible_for_compaction(sst)) {
+                ssts.insert(sst);
+            }
+        }
+        return ssts;
+    };
+
     while (!cs.sstables_requiring_cleanup.empty()) {
+        auto sstables_eventually_eligible = sstables_eventually_eligible_for_compaction();
         auto idle = seastar::lowres_clock::now() - last_idle;
+        // If we know there are sstables that are being processed externally, e.g. staging, and
+        // will become available eventually, then we don't really consider the system as being
+        // 100% idle on behalf of this cleanup. Staging processing, for view building, can be
+        // very slow in stressed systems, readers can be evicted, causing thrashing.
         if (idle >= max_idle_duration) {
+          // FIXME: indentation.
+          if (sstables_eventually_eligible.empty()) {
             auto msg = ::format("Cleanup timed out after {} seconds of no progress", std::chrono::duration_cast<std::chrono::seconds>(idle).count());
             cmlog.warn("{}", msg);
             co_await coroutine::return_exception(std::runtime_error(msg));
+          } else {
+            cmlog.warn("Cleanup hasn't progressed for {} seconds. Waiting on sstables to become eventually eligible: {}",
+                std::chrono::duration_cast<std::chrono::seconds>(idle).count(), sstables_eventually_eligible);
+          }
         }
 
         auto has_sstables_eligible_for_compaction = [&] {

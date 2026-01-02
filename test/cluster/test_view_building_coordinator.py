@@ -1007,3 +1007,92 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
     warnings = await log.grep(expr="view_building_state_observer failed with")
     assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27957.
+#
+# Previously, cleanup would time out if it wasn't able to process any sstable in 300s.
+# The thing is that cleanup itself might not be processing any sstable, but view update
+# generator might be processing it. If the generator takes more than 300s, then cleanup
+# would fail. It can happen because the system is stressed, or the sstable in staging
+# is big enough to take that time.
+#
+# The reproducer consists of running cleanup while simulating a stuck generator.
+# Nowadays, cleanup shouldn't timeout when there are staging sstables.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_cleanup_during_staging(manager: ManagerClient):
+    node_count = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ], config={
+        'tablets_mode_for_new_keyspaces': 'disabled'
+    })
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
+
+        # Populate the base table
+        rows = 1000
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                            "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
+        await wait_for_view(cql, 'mv', node_count)
+
+        # Flush on node0
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "mv")
+
+        # Delete sstables
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "mv")
+
+        # Restart node0
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+
+        # Assert that node0 has no data for base table and MV
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        # Repair the base table
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+        await s0_log.wait_for(f"Processing {ks} failed for table tab", from_mark=s0_mark, timeout=60)
+        await s0_log.wait_for(f"Finished user-requested repair for vnode keyspace={ks}", from_mark=s0_mark, timeout=60)
+
+        # Assert view backlog on server 0
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        await manager.api.enable_injection(servers[0].ip_addr, "cleanup_idle_duration_1s", one_shot=False)
+        await manager.api.enable_injection(servers[0].ip_addr, "cleanup_sstable_force", one_shot=False)
+        cleanup_task = asyncio.create_task(manager.api.cleanup_keyspace(servers[0].ip_addr, ks))
+
+        async def generate_new_sstables_for(seconds):
+            deadline = time.time() + seconds
+            while True:
+                if time.time() > deadline:
+                    break
+                await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES (1, 1, 1)")
+                await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+
+        await s0_log.wait_for(f"Cleanup hasn\'t progressed for", from_mark=s0_mark, timeout=60)
+
+        new_sstable_generation_task = asyncio.create_task(generate_new_sstables_for(2))
+
+        # Restore staging processing
+        await manager.api.disable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable")
+
+        await cleanup_task
+        await new_sstable_generation_task
