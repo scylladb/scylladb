@@ -1760,7 +1760,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
-            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable", std::nullopt);
             cfg.backup = incremental_backups_enabled();
 
             auto newtab = make_sstable();
@@ -2357,7 +2357,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
+future<> table::perform_cleanup_compaction(compaction::owned_ranges sorted_owned_ranges,
                                            tasks::task_info info,
                                            do_flush do_flush) {
     auto* cg = try_get_compaction_group_with_static_sharding();
@@ -2707,8 +2707,8 @@ public:
     sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
         return _t.make_sstable(state);
     }
-    sstables::sstable_writer_config configure_writer(sstring origin) const override {
-        auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
+    sstables::sstable_writer_config configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash) const override {
+        auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin), std::move(owned_ranges_hash));
         return cfg;
     }
     api::timestamp_type min_memtable_timestamp() const override {
@@ -4040,7 +4040,7 @@ write_memtable_to_sstable(mutation_reader reader,
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
-    auto cfg = sst->manager().configure_writer("memtable");
+    auto cfg = sst->manager().configure_writer("memtable", std::nullopt);
     auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
     auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable",
             reader_concurrency_semaphore::register_metrics::no);

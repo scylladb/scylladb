@@ -18,6 +18,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/shared_sstable.hh"
+#include "sstables/types.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
 #include "utils/serialized_action.hh"
@@ -27,6 +28,7 @@
 #include "compaction_backlog_manager.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/task_manager_module.hh"
+#include "compaction/owned_ranges.hh"
 #include "compaction_state.hh"
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
@@ -58,10 +60,6 @@ class rewrite_sstables_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
-
-inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
-    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
-}
 
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
@@ -250,10 +248,10 @@ private:
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
 
-    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges owned_ranges,
                                                                                get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
+    future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
@@ -349,17 +347,17 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> perform_cleanup(owned_ranges sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> try_perform_cleanup(owned_ranges sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+    bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const owned_ranges& sorted_owned_ranges);
 
     future<> on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy);
 public:
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
+    future<> perform_sstable_upgrade(owned_ranges sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
 
     // Submit a table to be scrubbed and wait for its termination.
     future<compaction_stats_opt> perform_sstable_scrub(compaction::compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info);
@@ -663,7 +661,7 @@ struct fmt::formatter<compaction::compaction_task_executor> {
 
 namespace compaction {
 
-bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
+bool needs_cleanup(const sstables::shared_sstable& sst, const owned_ranges& sorted_owned_ranges);
 
 // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
 future<std::vector<sstables::shared_sstable>> in_strategy_sstables(compaction::compaction_group_view& table_s);

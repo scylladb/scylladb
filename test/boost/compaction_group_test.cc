@@ -111,7 +111,7 @@ public:
     virtual reader_permit make_compaction_reader_permit() const override { return _semaphore.make_permit(); }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return _sstable_factory(); }
-    virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return _sst_man.configure_writer(std::move(origin)); }
+    virtual sstables::sstable_writer_config configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash = std::nullopt) const override { return _sst_man.configure_writer(std::move(origin), std::move(owned_ranges_hash)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const override { return api::min_timestamp; }

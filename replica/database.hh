@@ -1099,7 +1099,7 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction(tasks::task_info info);
-    future<> perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
+    future<> perform_cleanup_compaction(compaction::owned_ranges sorted_owned_ranges,
                                         tasks::task_info info,
                                         do_flush = do_flush::yes);
     future<unsigned> estimate_pending_compactions() const;

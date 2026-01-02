@@ -65,7 +65,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
 
                 // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
                 // left sealed on the table directory.
-                auto cfg = cf->get_sstables_manager().configure_writer(origin);
+                auto cfg = cf->get_sstables_manager().configure_writer(origin, std::nullopt);
                 cfg.leave_unsealed = true;
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
