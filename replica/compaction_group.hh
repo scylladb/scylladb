@@ -162,6 +162,7 @@ public:
 
     future<> flush() noexcept;
     bool can_flush() const;
+    bool needs_flush() const;
 
     const dht::token_range& token_range() const noexcept {
         return _token_range;
@@ -344,6 +345,7 @@ public:
     // Flush all memtables.
     future<> flush() noexcept;
     bool can_flush() const;
+    bool needs_flush() const;
     api::timestamp_type min_memtable_timestamp() const;
     api::timestamp_type min_memtable_live_timestamp() const;
     api::timestamp_type min_memtable_live_row_marker_timestamp() const;
