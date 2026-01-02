@@ -3854,6 +3854,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 
     _tablet_allocator.set_load_stats(make_lw_shared<const locator::load_stats>(std::move(stats)));
+    _topo_sm.event.broadcast(); // wake up load balancer.
 }
 
 future<> topology_coordinator::start_tablet_load_stats_refresher() {
@@ -3862,7 +3863,6 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         bool sleep = true;
         try {
             co_await _tablet_load_stats_refresh.trigger();
-            _topo_sm.event.broadcast(); // wake up load balancer.
         } catch (raft::request_aborted&) {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
             sleep = false;
