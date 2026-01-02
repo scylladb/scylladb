@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_generation_clearing(manager: ManagerClient):
     """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 and TOPOLOGY.committed_cdc_generations
        if their timestamp is old enough according to the topology coordinator's clock."""

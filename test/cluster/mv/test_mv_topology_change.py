@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # The test verifies that no node crashes as a result of the topology change combined
 # with the writes.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_topology_change(manager: ManagerClient):
     cfg = {'force_gossip_topology_changes': True,
            'tablets_mode_for_new_keyspaces': 'disabled',
@@ -99,7 +99,7 @@ async def test_mv_topology_change(manager: ManagerClient):
 # is migrating between two shards on the same node.
 @pytest.mark.parametrize("intranode", [True, False])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     cmd = ['--smp', '2']
@@ -180,7 +180,7 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
 @pytest.mark.asyncio
-@skip_mode('debug', 'the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
+@pytest.mark.skip_mode(mode='debug', reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
 async def test_mv_write_to_dead_node(manager: ManagerClient):
     servers = await manager.servers_add(4, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -261,7 +261,7 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
 # require the configuration option to be used.
 # Hence, we need to rewrite this test.
 @pytest.mark.skip(reason="scylladb/scylladb#26540")
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
     servers = []
     servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
@@ -330,7 +330,7 @@ async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altere
 # The same scenario as in the test above, but the RF change affects the first replica in a DC
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: str):
     servers = []
     # If we run the test with more than 1 shard and the tablet for the view table gets allocated on the same shard as the tablet of the base table,
@@ -394,7 +394,7 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 # Reproduces #24292
 @pytest.mark.asyncio
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug']
 

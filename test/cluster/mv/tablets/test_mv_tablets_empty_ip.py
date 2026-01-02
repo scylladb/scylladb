@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 # RF needs to be smaller than the cluster size in order ensure appearance of
 # remote view updates.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
-@skip_mode('debug', 'node replace needs to wait for tablet rebuild, which takes a lot of time in debug mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='debug', reason='node replace needs to wait for tablet rebuild, which takes a lot of time in debug mode')
 async def test_mv_tablets_empty_ip(manager: ManagerClient):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config = cfg, property_file=[

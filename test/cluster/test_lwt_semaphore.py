@@ -15,7 +15,7 @@ from test.cluster.util import new_test_keyspace
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cas_semaphore(manager):
     """ This is a regression test for scylladb/scylladb#19698 """
     servers = await manager.servers_add(1, cmdline=['--smp', '1', '--write-request-timeout-in-ms', '500'])

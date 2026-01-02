@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_fix_broken_snapshot(manager: ManagerClient):
     """Reproducer for scylladb/scylladb#16683.
 

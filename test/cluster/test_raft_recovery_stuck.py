@@ -17,7 +17,7 @@ from test.cluster.util import (delete_raft_data_and_upgrade_state, enter_recover
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @log_run_time
 async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     """

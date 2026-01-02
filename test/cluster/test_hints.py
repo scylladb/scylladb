@@ -165,7 +165,7 @@ async def test_sync_point(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_hints_consistency_during_decommission(manager: ManagerClient):
     """
     This test reproduces the failure observed in scylladb/scylla-dtest#4582
@@ -312,7 +312,7 @@ async def test_draining_hints(manager: ManagerClient):
         _ = tg.create_task(wait())
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ManagerClient):
     """
     This test verifies that draining hints is canceled as soon as we issue a shutdown,
@@ -357,7 +357,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     await s1_log.wait_for(f"Removed hint directory for {host_id2}")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_to_pending(manager: ManagerClient):
     """
     This test reproduces the scenario where sending a hint to a pending replica is needed

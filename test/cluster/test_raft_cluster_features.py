@@ -87,7 +87,7 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
     await asyncio.gather(*(wait_for_feature('TEST_ONLY_FEATURE', cql, h, time.time() + 60) for h in hosts))
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_simulate_upgrade_legacy_to_raft_listener_registration(manager: ManagerClient):
     """
     We simulate an upgrade from legacy mode to Raft. Our goal is

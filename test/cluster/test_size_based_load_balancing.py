@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_balance_empty_tablets(manager: ManagerClient):
 
     # This test checks that size-based load balancing migrates empty tablets of a newly created

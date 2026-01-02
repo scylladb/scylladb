@@ -17,7 +17,7 @@ from cassandra.query import SimpleStatement  # type: ignore
 # and the view is consistent with the base table.
 # Reproduces the scenario in #19261
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_fail_building(manager: ManagerClient) -> None:
     node_count = 3
     servers = await manager.servers_add(node_count)
@@ -48,7 +48,7 @@ async def test_mv_fail_building(manager: ManagerClient) -> None:
 # Verify the drain order is correct and the view build doesn't fail with
 # database write failures.
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_build_during_shutdown(manager: ManagerClient):
     server = await manager.server_add()
 

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     """Reproducer for #8079"""
     s1 = await manager.server_add(config={

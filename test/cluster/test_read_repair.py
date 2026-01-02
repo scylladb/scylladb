@@ -310,7 +310,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace:debug_error_injection=trace"]

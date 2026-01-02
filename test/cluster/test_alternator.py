@@ -310,7 +310,7 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.nightly
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_localnodes_joining_nodes(manager: ManagerClient):
     """Test that if a cluster is being enlarged and a node is coming up but
        not yet responsive, a "/localnodes" request should NOT return that node.
@@ -1058,7 +1058,7 @@ async def test_alternator_concurrent_rmw_same_partition_different_server(manager
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     """
     Reproducer for issue #27353.
@@ -1096,7 +1096,7 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     table_name = table.name
     ks_name = 'alternator_' + table_name
     last_token = 7 # Any token works since we have only one tablet
-    
+
     (src_host_id, src_shard) = await get_tablet_replica(manager, server, ks_name, table_name, last_token)
     dst_shard = 0 if src_shard == 1 else 1
 

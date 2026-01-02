@@ -121,7 +121,7 @@ async def inject_error_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     """A reproducer for a bug where Alternator LSI was not using synchronous
        view updates when tablets are enabled, which could cause strongly-
@@ -228,7 +228,7 @@ async def test_tablet_lsi_create(manager: ManagerClient):
         await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cql_lsi(manager: ManagerClient):
     """A simple reproducer for issue #16371 where CQL LSI (local secondary
        index) was not using synchronous view updates when tablets are enabled,
@@ -279,7 +279,7 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
         assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk=7 AND c=42"))
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_tablet_split(manager: ManagerClient):
     """A basic test for checking that tablet split works on MV tables.
        We create a table with a materialized view, starting with one tablet
