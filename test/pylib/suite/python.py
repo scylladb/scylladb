@@ -66,6 +66,10 @@ class PythonTestSuite(TestSuite):
                     srv.log_file.close()
                 srv.maintenance_socket_dir.cleanup()
             await cluster.stop()
+            # Close API client to release connector resources
+            if cluster.api is not None:
+                cluster.api.close()
+                cluster.api = None
             await cluster.release_ips()
 
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
@@ -124,6 +128,19 @@ class PythonTestSuite(TestSuite):
             self.artifacts.add_exit_artifact(self, stop)
 
             await cluster.install_and_start()
+            # If cluster failed to start, raise the exception immediately
+            # so the pool doesn't return a broken cluster to tests
+            if cluster.start_exception is not None:
+                # Clean up the broken cluster before raising
+                try:
+                    await cluster.stop()
+                    if cluster.api is not None:
+                        await cluster.api.close()
+                        cluster.api = None
+                    await cluster.release_ips()
+                except:
+                    pass  # Ignore cleanup errors
+                raise cluster.start_exception
             return cluster
 
         return create_cluster
@@ -223,8 +240,9 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        cluster = await self.suite.clusters.get(logger)
+        cluster = None
         try:
+            cluster = await self.suite.clusters.get(logger)
             cluster.before_test(self.uname)
             prepare_cql = self.suite.cfg.get("prepare_cql", None)
             if prepare_cql and not hasattr(cluster, 'prepare_cql_executed'):
@@ -256,9 +274,13 @@ class PythonTest(Test):
                 print(f"Test {self.name} post-check failed: {str(e)}\ncheck server logs: {self.server_log_filename}")
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
             self.success = False
-            cluster.is_dirty = True
-        await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
-        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+            if cluster is not None:
+                cluster.is_dirty = True
+            raise
+        finally:
+            if cluster is not None:
+                await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
+                logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
 
     async def run(self, options: argparse.Namespace) -> Test:
         async with self.run_ctx(options=options):
