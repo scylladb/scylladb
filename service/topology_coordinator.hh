@@ -77,7 +77,7 @@ struct term_changed_error : public std::runtime_error {
 future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, seastar::abort_source& as);
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
-        raft::term_t, uint64_t, const raft_topology_cmd&)>;
+        raft::term_t, uint64_t, raft_topology_cmd)>;
 
 struct topology_coordinator_cmd_rpc_tracker {
     raft_topology_cmd::command current;
