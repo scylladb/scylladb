@@ -639,9 +639,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         locator::host_id host_id{id.uuid()};
         auto ip = _address_map.find(host_id);
         co_await process_left_node(id, host_id, ip, id_to_ip_map.find(host_id) != id_to_ip_map.end());
-        if (ip) {
-            sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, id_to_ip_map, nullptr));
-        }
     }
     for (const auto& [id, rs]: t.normal_nodes) {
         locator::host_id host_id{id.uuid()};
