@@ -220,6 +220,10 @@ public:
         return _result;
     }
 
+    cql3::result& rs() {
+        return _result;
+    }
+
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }

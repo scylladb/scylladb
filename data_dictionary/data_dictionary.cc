@@ -67,6 +67,15 @@ keyspace::uses_tablets() const {
     return metadata()->uses_tablets();
 }
 
+bool
+keyspace::is_strongly_consistent() const {
+    auto consistency = metadata()->consistency_option();
+    if (!consistency) {
+        return false;
+    }
+    return *consistency != data_dictionary::consistency_config_option::eventual;
+}
+
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
     return _ops->get_replication_strategy(*this);

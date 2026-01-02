@@ -89,6 +89,8 @@ private:
 public:
     bool is_internal() const;
     bool uses_tablets() const;
+    bool is_strongly_consistent() const;
+
     lw_shared_ptr<keyspace_metadata> metadata() const;
     const user_types_metadata& user_types() const;
     const locator::abstract_replication_strategy& get_replication_strategy() const;

@@ -151,6 +151,7 @@ public:
 
     result_set(result_set&& other) = default;
     result_set(const result_set& other) = delete;
+    result_set& operator=(result_set&& other) = default;
 
     size_t size() const;
 
@@ -261,6 +262,13 @@ public:
         auto tmp_rs = std::make_unique<cql3::result_set>(std::move(builder).get_result_set());
         _result_set.swap(tmp_rs);
         return *_result_set;
+    }
+
+    // Moves out the result_set, leaving this result in an empty state.
+    // Ensures the result_set is materialized first if it was generator-based.
+    std::unique_ptr<cql3::result_set> release_result_set() {
+        result_set();
+        return std::move(_result_set);
     }
 
     template<typename Visitor>
