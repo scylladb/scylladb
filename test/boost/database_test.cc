@@ -11,6 +11,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/util/file.hh>
 
 #undef SEASTAR_TESTING_MAIN
@@ -568,7 +569,8 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
+// \param func: function to be called back, in a seastar thread.
+future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::function<void (cql_test_env&)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
     return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs,  db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
         lw_shared_ptr<tmpdir> tmpdir_for_data;
         if (!db_cfg_ptr) {
@@ -607,9 +609,15 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
                 }
             }
 
-            func(e).get();
+            func(e);
         }, db_cfg_ptr).get();
     });
+}
+
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env&)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
+    co_await do_with_some_data_in_thread(cf_names, [&] (cql_test_env& e) {
+        func(e).get();
+    }, create_mvs, db_cfg_ptr);
 }
 
 future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
@@ -633,7 +641,7 @@ future<std::set<sstring>> collect_files(fs::path path) {
 }
 
 static future<> snapshot_works(const std::string& table_name) {
-    return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [table_name] (cql_test_env& e) {
         take_snapshot(e, "ks", table_name).get();
 
         auto& cf = e.local_db().find_column_family("ks", table_name);
@@ -650,8 +658,6 @@ static future<> snapshot_works(const std::string& table_name) {
         in_table_dir.insert("schema.cql");
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
-
-        return make_ready_future<>();
     }, true);
 }
 
@@ -668,7 +674,7 @@ SEASTAR_TEST_CASE(index_snapshot_works) {
 }
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -678,12 +684,11 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         BOOST_REQUIRE(in_table_dir.empty());
         auto in_snapshot_dir = collect_files(table_dir(cf) / sstables::snapshots_dir / "test").get();
         BOOST_REQUIRE_EQUAL(in_snapshot_dir, std::set<sstring>({"manifest.json", "schema.cql"}));
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(snapshot_list_okay) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
@@ -703,13 +708,11 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
-
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
-    return do_with_some_data({"cf1", "cf2", "cf3", "cf4"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf1", "cf2", "cf3", "cf4"}, [] (cql_test_env& e) {
         e.execute_cql("DROP TABLE ks.cf1;").get();
 
         auto details = e.local_db().get_snapshot_details().get();
@@ -744,23 +747,20 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
                 BOOST_REQUIRE_EQUAL(sd.total, sd.live);
             }
         }
-
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(snapshot_list_inexistent) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         auto details = cf.get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 0);
-        return make_ready_future<>();
     });
 }
 
 
 SEASTAR_TEST_CASE(clear_snapshot) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         take_snapshot(e).get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -771,7 +771,6 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         count = 0;
 
         BOOST_REQUIRE_EQUAL(fs::exists(table_dir(cf) / sstables::snapshots_dir / "test"), false);
-        return make_ready_future<>();
     });
 }
 
@@ -784,7 +783,7 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         return format("test-snapshot-{}", idx);
     };
 
-    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) {
+    co_await do_with_some_data_in_thread({table_name}, [&] (cql_test_env& e) {
         auto& t = e.local_db().find_column_family(ks_name, table_name);
         auto tdir = table_dir(t);
         auto snapshots_dir = tdir / sstables::snapshots_dir;
@@ -839,21 +838,18 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         // after all snapshots had been cleared,
         // the dropped table directory is expected to be removed.
         BOOST_REQUIRE_EQUAL(fs::exists(tdir), false);
-
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     // no crashes, no exceptions
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         e.local_db().clear_snapshot("test", {"ks"}, "").get();
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
         sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
         auto stop_sc = deferred_stop(sc);
@@ -897,13 +893,11 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.cf, "cf");
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.details.live, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.details.total, sd_post_deletion.total);
-
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
         sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
         auto stop_sc = deferred_stop(sc);
@@ -933,8 +927,6 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
 
         sc_live_size = sc.local().true_snapshots_size().get();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd_post_deletion.live);
-
-        return make_ready_future<>();
     });
 }
 
@@ -1956,6 +1948,60 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+
+        if (!cf.needs_flush()) {
+            testlog.error("Expecting needs_flush before flushing the table");
+            BOOST_REQUIRE(cf.needs_flush());
+        }
+
+        utils::get_local_injector().enable("flush_memtable_to_sstable_wait");
+
+        auto flushed_0 = cf.flush();
+        if (flushed_0.available()) {
+            testlog.error("Table flush completed too early");
+            BOOST_REQUIRE(!flushed_0.available());
+        }
+
+        if (!cf.needs_flush()) {
+            testlog.error("Expecting needs_flush when waiting in flush_memtable_to_sstable_wait");
+            BOOST_REQUIRE(cf.needs_flush());
+        }
+
+        // Now flush again when the active memtable is empty.
+        // Expect that this waits on the ongoing flush
+        auto flushed_1 = cf.flush();
+
+        // While flush_0 is blocked, flush_1 should be blocked behind it
+        if (flushed_0.available()) {
+            testlog.error("First table flush expected to be blocked on injected wait");
+            BOOST_REQUIRE(!flushed_0.available());
+        }
+        if (flushed_1.available()) {
+            testlog.error("Second table flush expected to be blocked behind first flush");
+            BOOST_REQUIRE(!flushed_1.available());
+        }
+        if (!cf.needs_flush()) {
+            testlog.error("Expecting needs_flush when waiting in second flush");
+            BOOST_REQUIRE(cf.needs_flush());
+        }
+
+        utils::get_local_injector().receive_message("flush_memtable_to_sstable_wait");
+        when_all(std::move(flushed_0), std::move(flushed_1)).discard_result().get();
+        
+        if (cf.needs_flush()) {
+            testlog.error("Table is not expected to need flush after flush ompleted");
+            BOOST_REQUIRE(!cf.needs_flush());
+        }
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
