@@ -288,4 +288,7 @@ future<> verify_permission(bool enforce_authorization, bool warn_authorization, 
  */
 executor::body_writer make_streamed(rjson::value&&);
 
+// The format is ks1|ks2|ks3... and table1|table2|table3...
+sstring print_names_for_audit(const std::set<sstring>& names);
+
 }

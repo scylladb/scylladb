@@ -119,6 +119,8 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TimeToLiveSpecification", std::move(*spec));
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this with group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::SERIAL, false);
     co_return rjson::print(std::move(response));
 }
 
@@ -136,6 +138,8 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
     }
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TimeToLiveDescription", std::move(desc));
+    // Uses node-local info to respond
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
     co_return rjson::print(std::move(response));
 }
 

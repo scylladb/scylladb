@@ -187,26 +187,25 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
-
     std::optional<stream_arn> last;
+    std::set<sstring> ks_names, table_names; // for auditing
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
         auto& ks_name = s->ks_name();
         auto& cf_name = s->cf_name();
-
         if (!is_alternator_keyspace(ks_name)) {
             continue;
         }
         if (cdc::is_log_for_some_table(db.real_database(), ks_name, cf_name)) {
             rjson::value new_entry = rjson::empty_object();
-
             last = i->schema()->id();
             rjson::add(new_entry, "StreamArn", *last);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
-
+            ks_names.insert(ks_name);
+            table_names.insert(cf_name);
             --limit;
         }
     }
@@ -216,8 +215,10 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     if (last) {
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
-
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    // Mentions only the CDC log tables, without the base tables
+    // Using only local metadata reads, hence the CL value
+    co_await audit::inspect(audit::statement_category::QUERY, print_names_for_audit(ks_names), print_names_for_audit(table_names), rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
+    co_return rjson::print(std::move(ret));
 }
 
 struct shard_id {
@@ -491,7 +492,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     if (!opts.enabled()) {
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
-        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+        co_return rjson::print(std::move(ret));
     }
 
     // TODO: label
@@ -769,8 +770,9 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
-
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    // Uses only node-local context (the metadata) to generate response, co CL=LOCAL_ONE
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
+    co_return rjson::print(std::move(ret));
 }
 
 struct event_id {
