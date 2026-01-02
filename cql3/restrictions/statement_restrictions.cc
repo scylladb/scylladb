@@ -99,7 +99,8 @@ extern bool index_supports_some_column(
 
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
+           (op == oper_t::NEQ) || (op == oper_t::NOT_IN) ||
+           (op == oper_t::IS) || (op == oper_t::IS_NOT);  // null-checking operators
 }
 
 inline auto find_needs_filtering(const expression& e) {
@@ -272,6 +273,12 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
                                 return value_set(value_list{*val});
+                            } else if (oper.op == oper_t::IS || oper.op == oper_t::IS_NOT) {
+                                // IS NULL and IS NOT NULL are special - they don't restrict to specific values
+                                // IS NULL matches when column is unset, IS NOT NULL matches when column is set
+                                // For value_set purposes, we return unbounded since these operators filter
+                                // based on presence/absence rather than value comparison
+                                return unbounded_value_set;
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
@@ -1080,18 +1087,24 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
         add_restriction(prepared_restriction, schema, allow_filtering, for_view);
 
-        if (prepared_restriction.op != expr::oper_t::IS_NOT) {
+        if (prepared_restriction.op != expr::oper_t::IS_NOT && prepared_restriction.op != expr::oper_t::IS) {
             _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
         }
     }
+    // Extract single-column restrictions from all restriction categories
+    // Note: This must be done even if _where is empty, because IS NULL/IS NOT NULL
+    // restrictions are not added to _where but are still in the category restrictions
+    if (!has_token_restrictions()) {
+        _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
+    }
+    if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
+    }
+    _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
+    
+    // Extract clustering prefix and partition range restrictions from _where
+    // These require _where to have a value
     if (_where.has_value()) {
-        if (!has_token_restrictions()) {
-            _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
-        }
-        if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
-            _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
-        }
-        _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
@@ -1451,9 +1464,9 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
 }
 
 void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
-    if (restr.op == expr::oper_t::IS_NOT) {
-        // Handle IS NOT NULL restrictions separately
-        add_is_not_restriction(restr, schema, for_view);
+    if (restr.op == expr::oper_t::IS || restr.op == expr::oper_t::IS_NOT) {
+        // Handle IS NULL and IS NOT NULL restrictions separately
+        add_is_null_restriction(restr, schema, for_view);
     } else if (is_multi_column(restr)) {
         // Multi column restrictions are only allowed on clustering columns
         add_multi_column_clustering_key_restriction(restr);
@@ -1474,23 +1487,36 @@ void statement_restrictions::add_restriction(const expr::binary_operator& restr,
     }
 }
 
-void statement_restrictions::add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view) {
+void statement_restrictions::add_is_null_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view) {
     const expr::column_value* lhs_col_def = expr::as_if<expr::column_value>(&restr.lhs);
-    // The "IS NOT NULL" restriction is only supported (and
-    // mandatory) for materialized view creation:
     if (lhs_col_def == nullptr) {
-        throw exceptions::invalid_request_exception("IS NOT only supports single column");
+        throw exceptions::invalid_request_exception("IS NULL and IS NOT NULL only support single column");
     }
     // currently, the grammar only allows the NULL argument to be
-    // "IS NOT", so this assertion should not be able to fail
+    // "IS" or "IS NOT", so this assertion should not be able to fail
     if (!expr::is<expr::constant>(restr.rhs) || !expr::as<expr::constant>(restr.rhs).is_null()) {
-        throw exceptions::invalid_request_exception("Only IS NOT NULL is supported");
+        throw exceptions::invalid_request_exception("Only IS NULL and IS NOT NULL are supported");
     }
 
-    _not_null_columns.insert(lhs_col_def->col);
+    // For IS NOT NULL, track the column in _not_null_columns (needed for views)
+    if (restr.op == expr::oper_t::IS_NOT) {
+        _not_null_columns.insert(lhs_col_def->col);
+    }
 
-    if (!for_view) {
-        throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", restr));
+    // For materialized views, IS NOT NULL is mandatory on primary key columns
+    if (for_view && restr.op != expr::oper_t::IS_NOT) {
+        throw exceptions::invalid_request_exception(format("Restriction '{}' is not supported in materialized view creation. Only IS NOT NULL is allowed.", restr));
+    }
+
+    // Add the restriction to the appropriate category based on column type
+    // This ensures proper filtering checks are applied
+    const column_definition* def = lhs_col_def->col;
+    if (def->is_partition_key()) {
+        _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
+    } else if (def->is_clustering_key()) {
+        _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
+    } else {
+        _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
     }
 }
 
