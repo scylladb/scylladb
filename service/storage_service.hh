@@ -937,7 +937,7 @@ public:
     bool topology_global_queue_empty() const {
         return !_topology_state_machine._topology.global_request.has_value();
     }
-    future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
+    future<std::optional<utils::UUID>> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
 private:

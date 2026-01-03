@@ -65,7 +65,9 @@ bool query_processor::topology_global_queue_empty() {
 }
 
 future<bool> query_processor::ongoing_rf_change(const service::group0_guard& guard, sstring ks) {
-    return remote().first.get().ss.ongoing_rf_change(guard, std::move(ks));
+    return remote().first.get().ss.ongoing_rf_change(guard, std::move(ks)).then([](std::optional<utils::UUID> rf_change_id) {
+        return rf_change_id.has_value();
+    });
 }
 
 static service::query_state query_state_for_internal_call() {
