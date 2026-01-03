@@ -2918,7 +2918,7 @@ public:
                                     index_summary_off_heap_mem_size +
                                     compression_metadata_off_heap_mem_size);
         fmt::print("\t\tOff heap memory used (total): {}\n", file_size_printer(total_off_heap_size, human_readable));
-        fmt::print("\t\tSSTable Compression Ratio: {:.1f}\n", compression_ratio());
+        fmt::print("\t\tSSTable Compression Ratio: {:.2f}\n", compression_ratio());
         fmt::print("\t\tNumber of partitions (estimate): {}\n", estimated_partition_count());
         fmt::print("\t\tMemtable cell count: {}\n", memtable_columns_count());
         fmt::print("\t\tMemtable data size: {}\n", memtable_live_data_size());

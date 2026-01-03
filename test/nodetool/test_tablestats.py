@@ -269,7 +269,7 @@ Space used (live): {self.live_disk_space_used}
 Space used (total): {self.total_disk_space_used}
 Space used by snapshots (total): {self.snapshots_size}
 Off heap memory used (total): {self.total_off_heap_memory_used}
-SSTable Compression Ratio: {self.compression_ratio:.1f}
+SSTable Compression Ratio: {self.compression_ratio:.2f}
 Number of partitions (estimate): {self.estimated_row_count}
 Memtable cell count: {self.memtable_columns_count}
 Memtable data size: {self.memtable_live_data_size}
