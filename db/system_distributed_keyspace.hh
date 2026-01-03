@@ -32,6 +32,7 @@ namespace cdc {
 namespace service {
     class storage_proxy;
     class migration_manager;
+    class storage_service;
 }
 
 namespace db {
@@ -132,14 +133,15 @@ private:
 class system_distributed_tablets_keyspace {
 public:
     static constexpr auto NAME = "system_distributed_tablets";
-    static constexpr auto RF_PER_DC = 1;
+    static constexpr auto RF_GOAL_PER_DC = 3;
 
 private:
     service::migration_manager& _mm;
     service::storage_proxy& _sp;
+    service::storage_service& _ss;
 
 public:
-    system_distributed_tablets_keyspace(service::migration_manager&, service::storage_proxy&);
+    system_distributed_tablets_keyspace(service::migration_manager&, service::storage_proxy&, service::storage_service&);
 
     future<> start();
 
@@ -148,6 +150,7 @@ private:
 
     struct status {
         bool keyspace_exists;
+        bool rf_ok;
         bool tables_exist;
     };
     status get_status() const;

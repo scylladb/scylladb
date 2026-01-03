@@ -21,10 +21,13 @@
 #include "types/set.hh"
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 
+#include "service/storage_service.hh"
 #include "service/migration_manager.hh"
+#include "service/topology_mutation.hh"
 #include "locator/host_id.hh"
 
 #include <seastar/core/seastar.hh>
@@ -838,9 +841,10 @@ future<> system_distributed_keyspace::drop_service_level(sstring service_level_n
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
 }
 
-system_distributed_tablets_keyspace::system_distributed_tablets_keyspace(service::migration_manager& mm, service::storage_proxy& sp)
+system_distributed_tablets_keyspace::system_distributed_tablets_keyspace(service::migration_manager& mm, service::storage_proxy& sp, service::storage_service& ss)
     : _mm(mm)
     , _sp(sp)
+    , _ss(ss)
 {}
 
 // This is the set of tables which this node ensures to exist in the cluster.
@@ -854,16 +858,34 @@ std::vector<schema_ptr> system_distributed_tablets_keyspace::ensured_tables() {
 
 system_distributed_tablets_keyspace::status
 system_distributed_tablets_keyspace::get_status() const {
+    auto needs_rf_adjustment = [&] (const data_dictionary::keyspace& ks, const data_dictionary::database& db) {
+        auto ksm = ks.metadata();
+        const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+        const auto& this_dc = topology.get_datacenter();
+        const auto& this_rack = topology.get_rack();
+        const auto& strategy_options = ksm->strategy_options();
+
+        if (strategy_options.contains(this_dc)) {
+            auto rf_data = locator::replication_factor_data(strategy_options.at(this_dc));
+            if (rf_data.count() >= RF_GOAL_PER_DC
+                    || (rf_data.is_rack_based() && std::ranges::contains(rf_data.get_rack_list(), this_rack))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     auto db = _sp.data_dictionary();
     auto ks = db.try_find_keyspace(NAME);
 
     if (!ks) {
-        return {false, false};
+        return {false, false, false};
     }
 
+    bool rf_ok = !needs_rf_adjustment(ks.value(), db);
     bool tables_exist = std::ranges::all_of(ensured_tables(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); });
 
-    return {true, tables_exist};
+    return {true, rf_ok, tables_exist};
 }
 
 future<> system_distributed_tablets_keyspace::create_tables() {
@@ -881,8 +903,8 @@ future<> system_distributed_tablets_keyspace::create_tables() {
     std::optional<service::group0_guard> group0_guard;
 
     while (true) {
-        auto [ks_exists, tables_exist] = get_status();
-        if (ks_exists && tables_exist) {
+        auto [ks_exists, rf_ok, tables_exist] = get_status();
+        if (ks_exists && rf_ok && tables_exist) {
             dlogger.info("{} keyspace and tables are up-to-date. Not creating", NAME);
             co_return;
         }
@@ -900,15 +922,74 @@ future<> system_distributed_tablets_keyspace::create_tables() {
 
         lw_shared_ptr<keyspace_metadata> ksm;
         locator::replication_strategy_config_options config_options;
+        bool needs_alter = ks_exists && !rf_ok;
+        if (needs_alter) {
+            if (auto ongoing_request = co_await _ss.ongoing_rf_change(*group0_guard, NAME)) {
+                dlogger.info("Detected ongoing RF change for {} (request_id={}), waiting for it to complete before retrying", NAME, *ongoing_request);
+                group0_guard.reset();
+                co_await _ss.wait_for_topology_request_completion(*ongoing_request);
+                co_await _ss.wait_for_topology_not_busy();
+                continue;
+            }
+        }
         if (ks_exists) {
-            dlogger.info("{} keyspace is present", NAME);
+            ksm = db.find_keyspace(NAME).metadata();
+            if (needs_alter) {
+                const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+                const auto& this_dc = topology.get_datacenter();
+                const auto& this_rack = topology.get_rack();
+
+                // Add this rack to the replication options.
+                config_options["class"] = "NetworkTopologyStrategy";
+                for (const auto& [dc, rf] : ksm->strategy_options()) {
+                    auto rf_data = locator::replication_factor_data(rf);
+                    if (!rf_data.is_rack_based()) {
+                        on_internal_error(dlogger, fmt::format("{} keyspace has non-rack-based replication factor data for DC {}", NAME, dc));
+                    }
+                    auto rack_list = rf_data.get_rack_list();
+                    if (dc == this_dc && rack_list.size() < RF_GOAL_PER_DC && !std::ranges::contains(rack_list, this_rack)) {
+                        rack_list.push_back(this_rack);
+                    }
+                    config_options.emplace(dc, std::move(rack_list));
+                }
+                if (!ksm->strategy_options().contains(this_dc)) { // new DC
+                    config_options.emplace(this_dc, locator::rack_list{this_rack});
+                }
+                cql3::statements::ks_prop_defs props;
+                props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, config_options);
+                auto flattened = props.flattened();
+
+                // Create a keyspace_rf_change topology request.
+                auto global_request_id = group0_guard->new_group0_state_id();
+                service::topology_mutation_builder builder(ts);
+                service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, _sp.features().topology_requests_type_column};
+                rtbuilder.set("done", false)
+                         .set("start_time", db_clock::now())
+                         .set_new_keyspace_rf_change_data(NAME, flattened);
+                if (_sp.features().topology_global_request_queue) {
+                    builder.queue_global_topology_request_id(global_request_id);
+                    rtbuilder.set("request_type", service::global_topology_request::keyspace_rf_change)
+                             .set_new_keyspace_rf_change_data(NAME, flattened);
+                } else {
+                    builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                    builder.set_global_topology_request_id(global_request_id);
+                    builder.set_new_keyspace_rf_change_data(NAME, flattened);
+                }
+                auto topo_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                mutations.push_back(builder.build().to_mutation(topo_schema));
+                auto topo_req_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+                mutations.push_back(rtbuilder.build().to_mutation(topo_req_schema));
+                actions.push_back("submit keyspace_rf_change topology request");
+            } else {
+                dlogger.info("{} keyspace is present and does not require alteration", NAME);
+            }
         } else {
             // Get mutation for creating the keyspace.
             const auto& topology = _sp.local_db().get_token_metadata().get_topology();
             for (const auto& [dc, racks] : topology.get_datacenter_racks()) {
                 auto rack_list = racks
                         | std::views::keys
-                        | std::views::take(RF_PER_DC)
+                        | std::views::take(RF_GOAL_PER_DC)
                         | std::ranges::to<locator::rack_list>();
                 config_options.emplace(dc, std::move(rack_list));
             }
@@ -937,9 +1018,13 @@ future<> system_distributed_tablets_keyspace::create_tables() {
 
         if (!mutations.empty()) {
             auto description = fmt::format("{}", fmt::join(actions, ","));
-            dlogger.info("Announcing mutations to create {} keyspace and tables: {}", NAME, description);
+            dlogger.info("Announcing mutations to create/update {} keyspace and tables: {}", NAME, description);
             try {
-                co_await _mm.announce<service::schema_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+                if (needs_alter) {
+                    co_await _mm.announce<service::mixed_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+                } else {
+                    co_await _mm.announce<service::schema_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+                }
             } catch (service::group0_concurrent_modification&) {
                 dlogger.info("Concurrent operation is detected while starting, retrying.");
                 continue;
