@@ -132,3 +132,9 @@ You can work it around by disabling SELinux on the host before running `dbuild`:
 ```
 $ sudo setenforce 0
 ```
+
+## The future toolchain
+
+To prevent surprises when new Fedora/libstdc++/clang are made available,
+a spec for a "future" toolchain is available in tools/toolchain/future.dockerfile.
+See that file for details.
