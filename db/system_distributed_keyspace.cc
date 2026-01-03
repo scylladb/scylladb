@@ -894,6 +894,8 @@ future<> system_distributed_tablets_keyspace::create_tables() {
         on_internal_error(dlogger, "DDL for system_distributed_tablets keyspace must be executed on shard 0");
     }
 
+    co_await utils::get_local_injector().inject("block-system-distributed-tablets-create-tables", utils::wait_for_message(std::chrono::seconds(30)));
+
     const auto& tmptr = _sp.local_db().get_token_metadata();
     auto& topology = tmptr.get_topology();
     if (!tmptr.is_normal_token_owner(topology.my_host_id())) {
