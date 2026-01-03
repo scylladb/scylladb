@@ -139,6 +139,8 @@ public:
     static constexpr auto NAME = "system_distributed_tablets";
     static constexpr auto RF_GOAL_PER_DC = 3;
 
+    static constexpr auto SNAPSHOTS = "snapshots";
+
 private:
     service::migration_manager& _mm;
     service::storage_proxy& _sp;
@@ -156,6 +158,7 @@ public:
     future<> wait_until_started();
 
 private:
+    static schema_ptr snapshots();
     static std::vector<schema_ptr> ensured_tables();
 
     struct status {

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 KS = "system_distributed_tablets"
 TABLES = {
+    "snapshots",
 }
 
 
