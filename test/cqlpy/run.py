@@ -321,6 +321,9 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
+        '--auth-superuser-name', 'cassandra',
+        # password is "cassandra"
+        '--auth-superuser-salted-password', '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
         '--strict-allow-filtering=true',
         '--strict-is-not-null-in-views=true',
         '--permissions-update-interval-in-ms', '100',
