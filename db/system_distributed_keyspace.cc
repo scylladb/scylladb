@@ -852,15 +852,110 @@ std::vector<schema_ptr> system_distributed_tablets_keyspace::ensured_tables() {
     };
 }
 
+system_distributed_tablets_keyspace::status
+system_distributed_tablets_keyspace::get_status() const {
+    auto db = _sp.data_dictionary();
+    auto ks = db.try_find_keyspace(NAME);
+
+    if (!ks) {
+        return {false, false};
+    }
+
+    bool tables_exist = std::ranges::all_of(ensured_tables(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); });
+
+    return {true, tables_exist};
+}
+
 future<> system_distributed_tablets_keyspace::create_tables() {
     if (this_shard_id() != 0) {
         on_internal_error(dlogger, "DDL for system_distributed_tablets keyspace must be executed on shard 0");
     }
-    co_return;
+
+    const auto& tmptr = _sp.local_db().get_token_metadata();
+    auto& topology = tmptr.get_topology();
+    if (!tmptr.is_normal_token_owner(topology.my_host_id())) {
+        dlogger.info("This node does not own tokens. Skipping creation of {} keyspace and tables", NAME);
+        co_return;
+    }
+
+    std::optional<service::group0_guard> group0_guard;
+
+    while (true) {
+        auto [ks_exists, tables_exist] = get_status();
+        if (ks_exists && tables_exist) {
+            dlogger.info("{} keyspace and tables are up-to-date. Not creating", NAME);
+            co_return;
+        }
+
+        if (!group0_guard) {
+            group0_guard = co_await _mm.start_group0_operation();
+            continue;
+        }
+
+        auto ts = group0_guard->write_timestamp();
+        utils::chunked_vector<mutation> mutations;
+        std::vector<sstring> actions;
+
+        auto db = _sp.data_dictionary();
+
+        lw_shared_ptr<keyspace_metadata> ksm;
+        locator::replication_strategy_config_options config_options;
+        if (ks_exists) {
+            dlogger.info("{} keyspace is present", NAME);
+        } else {
+            // Get mutation for creating the keyspace.
+            const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+            for (const auto& [dc, racks] : topology.get_datacenter_racks()) {
+                auto rack_list = racks
+                        | std::views::keys
+                        | std::views::take(RF_PER_DC)
+                        | std::ranges::to<locator::rack_list>();
+                config_options.emplace(dc, std::move(rack_list));
+            }
+            ksm = keyspace_metadata::new_keyspace(
+                    NAME,
+                    "org.apache.cassandra.locator.NetworkTopologyStrategy",
+                    config_options,
+                    0, std::nullopt);
+            mutations = service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts);
+            actions.push_back("create keyspace");
+        }
+
+        // Get mutations for creating tables.
+        auto num_keyspace_mutations = mutations.size();
+        co_await coroutine::parallel_for_each(ensured_tables(),
+                [this, &mutations, db, ts, ksm] (auto&& table) -> future<> {
+            if (!db.has_schema(table->ks_name(), table->cf_name())) {
+                co_return co_await service::prepare_new_column_family_announcement(mutations, _sp, *ksm, std::move(table), ts);
+            }
+        });
+        if (mutations.size() > num_keyspace_mutations) {
+            actions.push_back("create tables");
+        } else {
+            dlogger.info("{}: all tables are present and up-to-date", NAME);
+        }
+
+        if (!mutations.empty()) {
+            auto description = fmt::format("{}", fmt::join(actions, ","));
+            dlogger.info("Announcing mutations to create {} keyspace and tables: {}", NAME, description);
+            try {
+                co_await _mm.announce<service::schema_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+            } catch (service::group0_concurrent_modification&) {
+                dlogger.info("Concurrent operation is detected while starting, retrying.");
+                continue;
+            }
+        }
+
+        co_return;
+    }
 }
 
 future<> system_distributed_tablets_keyspace::start() {
     if (this_shard_id() != 0) {
+        co_return;
+    }
+    if (!_sp.features().tablets) {
+        dlogger.info("Skipping creation of {} keyspace: tablets feature is disabled", NAME);
         co_return;
     }
     co_await create_tables();

@@ -132,6 +132,7 @@ private:
 class system_distributed_tablets_keyspace {
 public:
     static constexpr auto NAME = "system_distributed_tablets";
+    static constexpr auto RF_PER_DC = 1;
 
 private:
     service::migration_manager& _mm;
@@ -145,6 +146,11 @@ public:
 private:
     static std::vector<schema_ptr> ensured_tables();
 
+    struct status {
+        bool keyspace_exists;
+        bool tables_exist;
+    };
+    status get_status() const;
     // Must be called only on shard 0.
     future<> create_tables();
 };
