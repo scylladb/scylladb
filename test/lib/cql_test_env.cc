@@ -161,6 +161,7 @@ private:
     sharded<db::system_keyspace> _sys_ks;
     sharded<service::tablet_allocator> _tablet_allocator;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
+    sharded<db::system_distributed_tablets_keyspace> _sys_dist_tablets_ks;
     sharded<locator::snitch_ptr> _snitch;
     sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
@@ -404,6 +405,10 @@ public:
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() override {
         return _sys_ks;
+    }
+
+    virtual sharded<db::system_distributed_tablets_keyspace>& get_system_distributed_tablets_keyspace() override {
+        return _sys_dist_tablets_ks;
     }
 
     virtual sharded<service::tablet_allocator>& get_tablet_allocator() override {
@@ -1193,6 +1198,13 @@ private:
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
+
+            _sys_dist_tablets_ks.start(std::ref(_mm), std::ref(_proxy), std::ref(_ss)).get();
+            auto stop_sys_dist_tablets_ks = defer_verbose_shutdown("system distributed tablets keyspace", [this] {
+                _sys_dist_tablets_ks.stop().get();
+            });
+
+            _sys_dist_tablets_ks.local().start().get();
 
             notify_set.notify_all(configurable::system_state::started).get();
 
