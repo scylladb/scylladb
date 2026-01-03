@@ -23,6 +23,9 @@
 namespace compaction {
 
 bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
+// Return whether sstable will be eventually eligible for compaction. Those can be sstables
+// being processed externally (e.g. view building) and will become available later.
+bool is_eventually_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
 
 // Return the name of the compaction type
 // as used over the REST api, e.g. "COMPACTION" or "CLEANUP".

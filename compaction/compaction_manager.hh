@@ -207,6 +207,7 @@ private:
     future<std::vector<sstables::shared_sstable>> get_candidates(compaction::compaction_group_view& t) const;
 
     bool eligible_for_compaction(const sstables::shared_sstable& sstable) const;
+    bool eventually_eligible_for_compaction(const sstables::shared_sstable& sstable) const;
     bool eligible_for_compaction(const sstables::frozen_sstable_run& sstable_run) const;
 
     template <std::ranges::range Range>
