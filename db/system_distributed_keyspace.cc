@@ -845,6 +845,7 @@ system_distributed_tablets_keyspace::system_distributed_tablets_keyspace(service
     : _mm(mm)
     , _sp(sp)
     , _ss(ss)
+    , _started_future(_started_promise.get_future())
 {}
 
 // This is the set of tables which this node ensures to exist in the cluster.
@@ -1043,7 +1044,57 @@ future<> system_distributed_tablets_keyspace::start() {
         dlogger.info("Skipping creation of {} keyspace: tablets feature is disabled", NAME);
         co_return;
     }
-    co_await create_tables();
+    if (_listener.has_value()) {
+        co_return;
+    }
+    // The system_distributed_tablets keyspace uses rack-list RFs that are
+    // automatically expanded when a new rack appears in the cluster (see create_tables()).
+    // Thus, we must wait for the rack_list_rf feature to be enabled before creating the keyspace.
+    //
+    // Notice that the callback passed to when_enabled() moves the create_tables()
+    // call to a background fiber. This is in contrast to other usages of when_enabled()
+    // in which the registration is wrapped in a seastar::async context and the
+    // futures are awaited with .get(). The reason is to prevent deadlocks:
+    // when the topology coordinator enables a feature (after an upgrade), it
+    // issues a topology change to group0 and waits for the local group0 state
+    // machine to apply it. During that waiting, it continues to hold the
+    // _operation_mutex via a group0 guard. When the group0 state machine
+    // applies the topology change, the storage service (storage_service::topology_state_load)
+    // invokes the below callback and create_tables() attempts to create another
+    // group0 guard. Since the _operation_mutex is already held, this operation
+    // blocks and needs to be executed asynchronously.
+    _listener = _sp.features().rack_list_rf.when_enabled([this] {
+        (void)try_with_gate(_startup_gate, [this] {
+            return create_tables().then([this] {
+                _started_promise.set_value();
+            });
+        }).handle_exception([this](auto&& eptr) {
+            dlogger.error("Failed to create {} keyspace after rack_list_rf feature enable: {}", NAME, eptr);
+            _started_promise.set_exception(std::move(eptr));
+        });
+    });
+    // If the feature is enabled on startup, switch to synchronous behavior,
+    // i.e., wait for the fiber to finish. This ensures that the keyspace and
+    // tables will have been created by the end of the startup phase. For new
+    // racks, it ensures that any needed RF change will have been submitted by
+    // the end of the startup phase (but does not wait for the request to finish).
+    if (_sp.features().rack_list_rf) {
+        co_await wait_until_started();
+    }
+}
+
+future<> system_distributed_tablets_keyspace::wait_until_started() {
+    if (this_shard_id() != 0) {
+        return container().invoke_on(0, [] (system_distributed_tablets_keyspace& sys_dist_tablets_ks) {
+            return sys_dist_tablets_ks.wait_until_started();
+        });
+    }
+    return _started_future.get_future();
+}
+
+future<> system_distributed_tablets_keyspace::stop() {
+    _listener.reset();
+    return _startup_gate.close();
 }
 
 }

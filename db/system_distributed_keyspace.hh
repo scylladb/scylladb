@@ -13,9 +13,13 @@
 #include "utils/UUID.hh"
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
+#include "gms/feature.hh"
 
+#include <seastar/core/gate.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/shared_future.hh>
 
 #include <unordered_map>
 
@@ -130,7 +134,7 @@ private:
  * This keyspace holds system tables that need to be replicated with tablets.
  * It is the successor of the older vnode-based `system_distributed` keyspace.
  */
-class system_distributed_tablets_keyspace {
+class system_distributed_tablets_keyspace : public peering_sharded_service<system_distributed_tablets_keyspace> {
 public:
     static constexpr auto NAME = "system_distributed_tablets";
     static constexpr auto RF_GOAL_PER_DC = 3;
@@ -139,11 +143,17 @@ private:
     service::migration_manager& _mm;
     service::storage_proxy& _sp;
     service::storage_service& _ss;
+    gms::feature::listener_registration _listener;
+    seastar::named_gate _startup_gate;
+    promise<> _started_promise;
+    shared_future<> _started_future = make_ready_future<>();
 
 public:
     system_distributed_tablets_keyspace(service::migration_manager&, service::storage_proxy&, service::storage_service&);
 
     future<> start();
+    future<> stop();
+    future<> wait_until_started();
 
 private:
     static std::vector<schema_ptr> ensured_tables();
