@@ -123,4 +123,30 @@ private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };
 
+/**
+ * Service for bootstrapping the `system_distributed_tablets` keyspace and its tables.
+ *
+ * This keyspace holds system tables that need to be replicated with tablets.
+ * It is the successor of the older vnode-based `system_distributed` keyspace.
+ */
+class system_distributed_tablets_keyspace {
+public:
+    static constexpr auto NAME = "system_distributed_tablets";
+
+private:
+    service::migration_manager& _mm;
+    service::storage_proxy& _sp;
+
+public:
+    system_distributed_tablets_keyspace(service::migration_manager&, service::storage_proxy&);
+
+    future<> start();
+
+private:
+    static std::vector<schema_ptr> ensured_tables();
+
+    // Must be called only on shard 0.
+    future<> create_tables();
+};
+
 }

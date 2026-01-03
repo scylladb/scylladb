@@ -838,4 +838,32 @@ future<> system_distributed_keyspace::drop_service_level(sstring service_level_n
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
 }
 
+system_distributed_tablets_keyspace::system_distributed_tablets_keyspace(service::migration_manager& mm, service::storage_proxy& sp)
+    : _mm(mm)
+    , _sp(sp)
+{}
+
+// This is the set of tables which this node ensures to exist in the cluster.
+// It does that by announcing the creation of these schemas on initialization
+// of the `system_distributed_tablets_keyspace` service (see `create_tables()`), unless it first
+// detects that the table already exists.
+std::vector<schema_ptr> system_distributed_tablets_keyspace::ensured_tables() {
+    return {
+    };
+}
+
+future<> system_distributed_tablets_keyspace::create_tables() {
+    if (this_shard_id() != 0) {
+        on_internal_error(dlogger, "DDL for system_distributed_tablets keyspace must be executed on shard 0");
+    }
+    co_return;
+}
+
+future<> system_distributed_tablets_keyspace::start() {
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+    co_await create_tables();
+}
+
 }
