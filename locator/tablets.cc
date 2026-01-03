@@ -627,7 +627,7 @@ void tablet_map::set_resize_task_info(tablet_task_info task_info) {
     _resize_task_info = std::move(task_info);
 }
 
-void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
+void tablet_map::set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config) {
     _repair_scheduler_config = std::move(config);
 }
 
@@ -845,7 +845,7 @@ const tablet_task_info& tablet_map::resize_task_info() const {
     return _resize_task_info;
 }
 
-const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
+const std::optional<locator::repair_scheduler_config> tablet_map::get_repair_scheduler_config() const {
     return _repair_scheduler_config;
 }
 
@@ -1680,6 +1680,10 @@ bool locator::tablet_task_info::is_valid() const {
 
 bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
+}
+
+bool locator::tablet_task_info::is_auto_repair_request() const {
+    return request_type == locator::tablet_task_type::auto_repair;
 }
 
 bool locator::tablet_task_info::selected_by_filters(const tablet_replica& replica, const topology& topo) const {
