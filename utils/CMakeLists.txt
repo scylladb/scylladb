@@ -55,6 +55,7 @@ target_sources(utils
     aws_sigv4.cc
     stream_compressor.cc
     rest/client.cc
+    s3/aws_dns_connection_factory.cc
     s3/aws_error.cc
     s3/client.cc
     s3/retryable_http_client.cc
