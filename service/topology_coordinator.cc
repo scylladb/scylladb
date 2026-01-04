@@ -1020,6 +1020,50 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     _db.validate_keyspace_update(*ks_md);
+
+                    bool is_auto_rf_keyspace = std::ranges::any_of(get_auto_rf_keyspaces(), [&] (const auto& p) { return p.first == ks_name; });
+                    if (_feature_service.rack_list_rf && is_auto_rf_keyspace) {
+                        const auto& old_opts = ks.metadata()->strategy_options();
+                        const auto& new_opts = ks_md->strategy_options();
+
+                        auto blacklist = _topo_sm._topology.auto_rf_blacklisted_racks;
+                        bool updated_blacklist = false;
+
+                        for (const auto& [dc, old_rf] : old_opts) {
+                            auto old_rf_data = locator::replication_factor_data(old_rf);
+                            if (!old_rf_data.is_rack_based()) {
+                                continue;
+                            }
+
+                            auto it_new = new_opts.find(dc);
+                            if (it_new == new_opts.end()) {
+                                continue;
+                            }
+                            auto new_rf_data = locator::replication_factor_data(it_new->second);
+                            if (!new_rf_data.is_rack_based()) {
+                                continue;
+                            }
+
+                            auto diff = locator::diff_racks(old_rf_data.get_rack_list(), new_rf_data.get_rack_list());
+                            for (const auto& rack : diff.removed) {
+                                if (blacklist[dc].insert(rack).second) {
+                                    updated_blacklist = true;
+                                }
+                            }
+                            for (const auto& rack : diff.added) {
+                                if (blacklist[dc].erase(rack)) {
+                                    updated_blacklist = true;
+                                }
+                            }
+                        }
+
+                        if (updated_blacklist) {
+                            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                    .set_auto_rf_blacklisted_racks(blacklist)
+                                    .build());
+                        }
+                    }
+
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
@@ -1274,8 +1318,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         return std::nullopt;
                     }
                     const auto& all_racks = racks_with_tokens_by_dc.at(dc);
+                    const auto& blacklisted_racks = _topo_sm._topology.auto_rf_blacklisted_racks.contains(dc)
+                            ? _topo_sm._topology.auto_rf_blacklisted_racks.at(dc)
+                            : std::unordered_set<sstring>{};
                     for (const auto& rack : all_racks) {
-                        if (!std::ranges::contains(used, rack)) {
+                        if (!std::ranges::contains(used, rack) && !blacklisted_racks.contains(rack)) {
                             return rack;
                         }
                     }
