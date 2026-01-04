@@ -710,11 +710,12 @@ std::vector<lw_shared_ptr<column_specification>> listing_describe_statement::get
 
 future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
-    auto raw_ks = client_state.get_raw_keyspace();
-
     std::vector<sstring> keyspaces;
-    if (!raw_ks.empty()) {
-        keyspaces.push_back(raw_ks);
+    // For most describe statements we should limit the results to the USEd
+    // keyspace (client_state.get_raw_keyspace()), if any. However for DESC
+    // KEYSPACES we must list all keyspaces, not just the USEd one.
+    if (_element != element_type::keyspace && !client_state.get_raw_keyspace().empty()) {
+        keyspaces.push_back(client_state.get_raw_keyspace());
     } else {
         keyspaces = db.get_all_keyspaces();
         std::ranges::sort(keyspaces);
