@@ -20,7 +20,9 @@ command line option when launchgin scylla.
 You can define endpoint details in the `scylla.yaml` file. For example:
 ```yaml
 object_storage_endpoints:
-  - name: https://s3.us-east-1.amazonaws.com:443
+  - name: s3.us-east-1.amazonaws.com
+    port: 443
+    https: true
     aws_region: us-east-1
 ```
 
@@ -76,7 +78,9 @@ The examples above are intended for development or local environments. You shoul
 For the EC2 Instance Metadata Service to function correctly, no additional configuration is required. However, STS requires the IAM Role ARN to be defined in the `scylla.yaml` file, as shown below:
 ```yaml
 object_storage_endpoints:
-  - name: https://s3.us-east-1.amazonaws.com:443
+  - name: s3.us-east-1.amazonaws.com
+    port: 443
+    https: true
     aws_region: us-east-1
     iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 ```
@@ -96,7 +100,9 @@ in `scylla.yaml`:
 
 ```yaml
 object_storage_endpoints:
-  - name: https://s3.us-east-2.amazonaws.com:443
+  - name: s3.us-east-2.amazonaws.com
+    port: 443
+    https: true
     aws_region: us-east-2
 ```
 

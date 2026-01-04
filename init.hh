@@ -14,6 +14,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 #include "utils/log.hh"
+#include "utils/s3/creds.hh"
 #include "seastarx.hh"
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>

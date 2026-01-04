@@ -13,6 +13,7 @@
 #include <variant>
 #include <compare>
 #include <fmt/core.h>
+#include "utils/s3/creds.hh"
 
 namespace YAML {
     class Node;
@@ -24,8 +25,7 @@ class object_storage_endpoint_param {
 public:
     struct s3_storage {
         std::string endpoint;
-        std::string region;
-        std::string iam_role_arn;
+        s3::endpoint_config config;
 
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;
@@ -43,6 +43,7 @@ public:
     object_storage_endpoint_param();
     object_storage_endpoint_param(const object_storage_endpoint_param&);
     object_storage_endpoint_param(s3_storage);
+    object_storage_endpoint_param(std::string endpoint, s3::endpoint_config config);
     object_storage_endpoint_param(gs_storage);
 
     std::strong_ordering operator<=>(const object_storage_endpoint_param&) const;
@@ -76,7 +77,3 @@ template <>
 struct fmt::formatter<db::object_storage_endpoint_param> : fmt::formatter<std::string_view> {
     auto format(const db::object_storage_endpoint_param&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-
-inline bool maybe_legacy_endpoint_name(std::string_view ep) noexcept {
-    return !(ep.starts_with("http://") || ep.starts_with("https://"));
-}

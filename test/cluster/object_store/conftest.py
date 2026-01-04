@@ -33,28 +33,27 @@ def format_tuples(tuples=None, **kwargs):
 class S3_Server:
     def __init__(self, tempdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
         self.tempdir = tempdir
-        self.ip = address
+        self.address = address
         self.port = port
-        self.address = f'http://{self.ip}:{self.port}'
         self.acc_key = acc_key
         self.secret_key = secret_key
         self.region = region
         self.bucket_name = bucket_name
 
     def __repr__(self):
-        return f"[unknown] {self.address}/{self.bucket_name}"
+        return f"[unknown] {self.address}:{self.port}/{self.bucket_name}"
 
     @property
     def type(self):
         return 'S3'
 
     def create_endpoint_conf(self):
-        return MinioServer.create_conf(self.address, self.region)
+        return MinioServer.create_conf(self.address, self.port, self.region)
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
         return boto3.resource('s3',
-            endpoint_url=self.address,
+            endpoint_url=f'http://{self.address}:{self.port}',
             aws_access_key_id=self.acc_key,
             aws_secret_access_key=self.secret_key,
             aws_session_token=None,
@@ -74,16 +73,15 @@ class MinioWrapper(S3_Server):
                                   '127.0.0.1',
                                   logging.getLogger('minio'))
         self.tempdir = tempdir
-        self.ip = self.server.address
+        self.address = self.server.address
         self.port = self.server.port
-        self.address = f'http://{self.ip}:{self.port}'
         self.acc_key = self.server.access_key
         self.secret_key = self.server.access_key
         self.region = MinioServer.DEFAULT_REGION
         self.bucket_name = self.server.bucket_name
 
     def create_endpoint_conf(self):
-        return MinioServer.create_conf(self.address, self.region)
+        return MinioServer.create_conf(self.address, self.port, self.region)
 
     async def start(self):
         return self.server.start()
