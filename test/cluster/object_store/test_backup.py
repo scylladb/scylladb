@@ -406,7 +406,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
               'task_ttl_in_seconds': 300,
               }
 
-    servers = await manager.servers_add(servers_num=3, config=config)
+    servers = await manager.servers_add(servers_num=3, config=config, auto_rack_dc='dc1')
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
