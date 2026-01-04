@@ -3520,7 +3520,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 
 future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
     table::snapshot_details details{};
-    std::optional<fs::path> staging_dir = snapshot_dir / sstables::staging_dir;
+    std::optional<fs::path> staging_dir = datadir / sstables::staging_dir;
     if (!co_await file_exists(staging_dir->native())) {
         staging_dir.reset();
     }
