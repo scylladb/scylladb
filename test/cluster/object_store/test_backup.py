@@ -412,7 +412,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     # Create keyspace, table, and fill data
-    print("Creating keyspace and table, then inserting data...")
+    logger.info("Creating keyspace and table, then inserting data...")
 
     def create_keyspace_and_table(cql):
         keyspace = 'test_ks'
@@ -454,13 +454,13 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     keyspace, table = create_keyspace_and_table(cql)
 
     # Flush keyspace on all servers
-    print("Flushing keyspace on all servers...")
+    logger.info("Flushing keyspace on all servers...")
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, keyspace)
 
     # Take snapshot for keyspace
     snapshot_name = unique_name('backup_')
-    print(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
+    logger.info(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
     for server in servers:
         await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
 
@@ -486,7 +486,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
 
     # Backup the keyspace on each server to S3
     prefix = f"{table}/{snapshot_name}"
-    print(f"Backing up keyspace using prefix '{prefix}' on all servers...")
+    logger.info(f"Backing up keyspace using prefix '{prefix}' on all servers...")
     for server in servers:
         backup_tid = await manager.api.backup(
             server.ip_addr,
@@ -502,9 +502,9 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
             f"Backup task failed on server {server.server_id}"
 
     # Truncate data and start restore
-    print("Dropping table data...")
+    logger.info("Dropping table data...")
     cql.execute(f"TRUNCATE TABLE {keyspace}.{table};")
-    print("Initiating restore operations...")
+    logger.info("Initiating restore operations...")
 
     restore_task_ids = {}
     for server in servers:
@@ -521,14 +521,14 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
 
     await asyncio.sleep(0.1)
 
-    print("Aborting restore tasks...")
+    logger.info("Aborting restore tasks...")
     for server in servers:
         await manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id])
 
     # Check final status of restore tasks
     for server in servers:
         final_status = await manager.api.wait_task(server.ip_addr, restore_task_ids[server.server_id])
-        print(f"Restore task status on server {server.server_id}: {final_status}")
+        logger.info(f"Restore task status on server {server.server_id}: {final_status}")
         assert (final_status is not None) and (final_status['state'] == 'failed')
     logs = [await manager.server_open_log(server.server_id) for server in servers]
     await wait_for_first_completed([l.wait_for(r"Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
