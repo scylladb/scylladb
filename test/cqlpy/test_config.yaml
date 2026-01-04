@@ -1,7 +1,6 @@
 type: Python
 dirties_cluster:
   - test_native_transport
-  - test_describe # Broke CQL connections for next tests
 extra_scylla_cmdline_options:
   - '--rf-rack-valid-keyspaces=1'
   - '--experimental-features=udf'
