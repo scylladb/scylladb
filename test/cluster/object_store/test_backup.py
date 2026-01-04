@@ -16,7 +16,7 @@ from test.cluster.object_store.conftest import format_tuples
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import unique_name, wait_for_first_completed
+from test.pylib.util import unique_name, wait_all
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
@@ -478,6 +478,11 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         await cql.run_async(f"TRUNCATE TABLE {keyspace}.{table};")
         logger.info("Initiating restore operations...")
 
+        logs = [await manager.server_open_log(server.server_id) for server in servers]
+
+        injection = "stream_mutation_fragments" # "block_load_and_stream"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, injection, True) for s in servers))
+
         restore_task_ids = {}
         for server in servers:
             restore_tid = await manager.api.restore(
@@ -491,22 +496,25 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
             )
             restore_task_ids[server.server_id] = restore_tid
 
-        await asyncio.sleep(0.1)
+        await wait_all([l.wait_for(f"{injection}: waiting", timeout=10) for l in logs])
 
         logger.info("Aborting restore tasks...")
-        for server in servers:
-            await manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id])
+        await asyncio.gather(*(manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id]) for server in servers))
+
+        await asyncio.gather(*(manager.api.message_injection(s.ip_addr, injection) for s in servers))
 
         # Check final status of restore tasks
+        failed = False
         for server in servers:
             final_status = await manager.api.wait_task(server.ip_addr, restore_task_ids[server.server_id])
             logger.info(f"Restore task status on server {server.server_id}: {final_status}")
-            assert (final_status is not None) and (final_status['state'] == 'failed')
-        logs = [await manager.server_open_log(server.server_id) for server in servers]
-        await wait_for_first_completed([l.wait_for(r"Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
+            assert (final_status is not None)
+            failed |= final_status['state'] == 'failed'
+        assert failed, "Expected at least one restore task to fail after aborting"
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="a very slow test (20+ seconds), skipping it")
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
 

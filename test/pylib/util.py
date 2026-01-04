@@ -289,6 +289,31 @@ async def wait_for_first_completed(coros: list[Coroutine], timeout: int|None = N
     return result
 
 
+async def wait_all(coros: list[Coroutine], timeout: int|None = None):
+    tasks = [asyncio.create_task(c) for c in coros]
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED, timeout=timeout)
+    if not done:
+        # Timeout occurred, cancel all
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise asyncio.TimeoutError("No task completed within timeout")
+
+    assert not pending
+
+    # Get first result
+    list_done = list(done)
+    first_task = list_done.pop(0)
+    result = await first_task
+
+    # Clean up
+    cleanup = list_done
+    if cleanup:
+        await asyncio.gather(*cleanup, return_exceptions=True)
+
+    return result
+
+
 def ninja(target: str) -> str:
     """Build specified target using ninja."""
 
