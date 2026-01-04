@@ -42,7 +42,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
-#include "utils/http.hh"
+#include "utils/s3/aws_dns_connection_factory.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
@@ -243,7 +243,7 @@ client::group_client& client::find_or_create_client() {
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
-        auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
+        auto factory = std::make_unique<utils::http::aws_dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
         // Limit the maximum number of connections this group's http client
         // may have proportional to its shares. Shares are typically in the
         // range of 100...1000, thus resulting in 1..10 connections
