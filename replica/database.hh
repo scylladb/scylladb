@@ -95,6 +95,7 @@ class reconcilable_result;
 namespace bi = boost::intrusive;
 
 namespace tracing { class trace_state_ptr; }
+namespace s3 { struct endpoint_config; }
 
 namespace lang { class manager; }
 

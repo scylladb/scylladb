@@ -187,11 +187,11 @@ std::vector<db::object_storage_endpoint_param> make_storage_options_config(const
         },
         [&endpoints] (const data_dictionary::storage_options::object_storage& os) mutable -> void {
             if (os.type == data_dictionary::storage_options::S3_NAME) {
-                auto reg = ::getenv("AWS_DEFAULT_REGION");
-                auto endpoint = fmt::format("{}://{}:{}", reg != nullptr ? "https" : "http", os.endpoint, tests::getenv_safe("S3_SERVER_PORT_FOR_TEST"));
-                endpoints.emplace_back(db::object_storage_endpoint_param::s3_storage{
-                    .endpoint = std::move(endpoint),
-                    .region = std::string(reg != nullptr ? reg : "local"),
+                endpoints.emplace_back(os.endpoint, 
+                    s3::endpoint_config {
+                    .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+                    .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+                    .region = tests::getenv_or_default("AWS_DEFAULT_REGION", "local"),
                 });
             }
             if (os.type == data_dictionary::storage_options::GS_NAME) {

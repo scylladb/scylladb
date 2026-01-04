@@ -21,7 +21,6 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
-#include "utils/http.hh"
 #include "exceptions/exceptions.hh"
 
 namespace sstables {
@@ -139,16 +138,6 @@ future<> storage_manager::update_config(const db::config& cfg) {
 
 auto storage_manager::get_endpoint(const sstring& endpoint) -> object_storage_endpoint& {
     auto found = _object_storage_endpoints.find(endpoint);
-    if (found == _object_storage_endpoints.end() && maybe_legacy_endpoint_name(endpoint)) {
-        found = _object_storage_endpoints.begin();
-        while (found != _object_storage_endpoints.end()) {
-            auto uri = utils::http::parse_simple_url(found->first);
-            if (uri.host == endpoint) {
-                break;
-            }
-            found++;
-        }
-    }
     if (found == _object_storage_endpoints.end()) {
         smlogger.error("unable to find {} in configured object-storage endpoints", endpoint);
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
@@ -171,20 +160,7 @@ sstring storage_manager::get_endpoint_type(sstring endpoint) {
 }
 
 bool storage_manager::is_known_endpoint(sstring endpoint) const {
-    if (_object_storage_endpoints.contains(endpoint)) {
-        return true;
-    }
-
-    if (maybe_legacy_endpoint_name(endpoint)) {
-        for (auto ep : _object_storage_endpoints) {
-            auto uri = utils::http::parse_simple_url(ep.first);
-            if (uri.host == endpoint) {
-                return true;
-            }
-        }
-    }
-
-    return false;
+    return _object_storage_endpoints.contains(endpoint);
 }
 
 std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
