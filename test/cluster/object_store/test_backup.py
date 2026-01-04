@@ -422,8 +422,8 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         insert_stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (name, value) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ALL
 
-        num_keys = 100000
-        await asyncio.gather(*(cql.run_async(insert_stmt, (os.urandom(64).hex(), os.urandom(1024).hex())) for i in range(num_keys)))
+        num_keys = 10000
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), str(i))) for i in range(num_keys)))
 
         # Flush keyspace on all servers
         logger.info("Flushing keyspace on all servers...")
@@ -513,7 +513,6 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         assert failed, "Expected at least one restore task to fail after aborting"
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="a very slow test (20+ seconds), skipping it")
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
