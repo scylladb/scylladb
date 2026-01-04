@@ -15,10 +15,9 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
-from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_first_completed
-from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
 
@@ -418,31 +417,13 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as keyspace:
         create_table_query = f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text);"
-        cql.execute(create_table_query)
+        await cql.run_async(create_table_query)
 
-        def insert_rows(cql, keyspace, table, inserts):
-            for _ in range(inserts):
-                key = os.urandom(64).hex()
-                value = os.urandom(1024).hex()
-                insert_query = f"INSERT INTO {keyspace}.{table} (name, value) VALUES ('{key}', '{value}');"
-                cql.execute(insert_query)
+        insert_stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (name, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
 
-        thread_count = 128
-        rows_per_thread = 100000 // thread_count
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            # Submit tasks for each thread
-            futures = [
-                executor.submit(
-                    insert_rows,
-                    cql, keyspace, table,
-                    rows_per_thread
-                )
-                for _ in range(thread_count)
-            ]
-
-        # Ensure all tasks are completed
-        for future in futures:
-            future.result()
+        num_keys = 100000
+        await asyncio.gather(*(cql.run_async(insert_stmt, (os.urandom(64).hex(), os.urandom(1024).hex())) for i in range(num_keys)))
 
         # Flush keyspace on all servers
         logger.info("Flushing keyspace on all servers...")
@@ -494,7 +475,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
 
         # Truncate data and start restore
         logger.info("Dropping table data...")
-        cql.execute(f"TRUNCATE TABLE {keyspace}.{table};")
+        await cql.run_async(f"TRUNCATE TABLE {keyspace}.{table};")
         logger.info("Initiating restore operations...")
 
         restore_task_ids = {}
