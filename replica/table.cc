@@ -3558,7 +3558,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
             // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
             if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
                 dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
-                        (datadir / name).native(), psd.device_id, psd.inode_number, psd.size,
+                        path.native(), psd.device_id, psd.inode_number, psd.size,
                         (snapshot_dir / name).native(), sd.device_id, sd.inode_number, sd.size);
                 co_return false;
             }
