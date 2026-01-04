@@ -122,7 +122,7 @@ future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_a
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
             for (const auto& addr : it->second) {
-                _clients.push_back(co_await make_client(uri, addr));
+                _clients.push_back(co_await make_client(uri, addr.addr));
             }
         }
     }

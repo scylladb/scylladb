@@ -31,7 +31,7 @@ future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> st
     co_await coroutine::all(
         [state, host, port] () -> future<> {
             auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-            state->addr = socket_address(hent.addr_list.front(), port);
+            state->addr = socket_address(hent.addr_list.front().addr, port);
         },
         [state, use_https] () -> future<> {
             if (use_https && !state->creds) {

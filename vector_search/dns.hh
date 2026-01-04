@@ -14,6 +14,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/net/dns.hh>
 #include "utils/log.hh"
 #include <chrono>
 #include <map>
@@ -25,7 +26,7 @@ namespace vector_search {
 
 class dns {
 public:
-    using address_type = std::vector<seastar::net::inet_address>;
+    using address_type = std::vector<seastar::net::hostent::addr_entry>;
     using resolver_type = std::function<seastar::future<address_type>(seastar::sstring const&)>;
     using host_address_map = std::unordered_map<seastar::sstring, address_type>;
     using listener_type = std::function<seastar::future<>(host_address_map const&)>;

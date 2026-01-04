@@ -7,7 +7,6 @@
  */
 
 #include "vector_store_client.hh"
-#include "dns.hh"
 #include "clients.hh"
 #include "uri.hh"
 #include "utils.hh"
@@ -391,7 +390,7 @@ void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client
     vsc._impl->_secondary_clients.timeout(timeout);
 }
 
-void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
+void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, dns::resolver_type resolver) {
     vsc._impl->dns.resolver(std::move(resolver));
 }
 

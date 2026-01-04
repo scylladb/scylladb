@@ -90,21 +90,21 @@ public:
     }
 
     configure& with_dns(std::map<std::string, std::optional<std::string>> dns_) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::vector<inet_address>> {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<vector_search::dns::address_type> {
             auto value = dns.at(host);
             if (value) {
-                co_return std::vector<inet_address>{inet_address(*value)};
+                co_return vector_search::dns::address_type{{inet_address(*value)}};
             }
-            co_return std::vector<inet_address>{};
+            co_return vector_search::dns::address_type{};
         });
         return *this;
     }
 
     configure& with_dns(std::map<std::string, std::vector<std::string>> dns) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<std::vector<inet_address>> {
-            std::vector<inet_address> ret;
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<vector_search::dns::address_type> {
+            vector_search::dns::address_type ret;
             for (auto const& ip : dns.at(host)) {
-                ret.push_back(inet_address(ip));
+                ret.push_back({inet_address(ip)});
             }
             co_return ret;
         });
@@ -112,12 +112,12 @@ public:
     }
 
     configure& with_dns_resolver(std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<std::vector<inet_address>> {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<vector_search::dns::address_type> {
             auto addr = co_await r(host);
             if (addr) {
-                co_return std::vector<inet_address>{*addr};
+                co_return vector_search::dns::address_type{{*addr}};
             }
-            co_return std::vector<inet_address>{};
+            co_return vector_search::dns::address_type{};
         });
         return *this;
     }
