@@ -152,7 +152,8 @@ future<> backup_task_impl::do_backup() {
 }
 
 future<> backup_task_impl::process_snapshot_dir() {
-    auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    auto directory = co_await io_check(open_directory, _snapshot_dir.native());
+    auto snapshot_dir_lister = directory_lister(directory, _snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
     size_t num_sstable_comps = 0;
 
     try {
@@ -161,7 +162,7 @@ future<> backup_task_impl::process_snapshot_dir() {
         while (auto component_ent = co_await snapshot_dir_lister.get()) {
             const auto& name = component_ent->name;
             auto file_path = _snapshot_dir / name;
-            auto st = co_await file_stat(file_path.native());
+            auto st = co_await file_stat(directory, name);
             total += st.size;
             try {
                 auto desc = sstables::parse_path(file_path, "", "");
