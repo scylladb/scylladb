@@ -102,13 +102,13 @@ view_update_generator::view_update_generator(replica::database& db, sharded<serv
         , _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
 {
     setup_metrics();
-    discover_staging_sstables();
     _db.plug_view_update_generator(*this);
 }
 
 view_update_generator::~view_update_generator() {}
 
 future<> view_update_generator::start() {
+    discover_staging_sstables();
     _started = seastar::async([this]() mutable {
         auto drop_sstable_references = defer([&] () noexcept {
             // Clear sstable references so sstables_manager::stop() doesn't hang.
