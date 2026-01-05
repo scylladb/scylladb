@@ -48,7 +48,7 @@ def disable_stream(dynamodbstreams, table):
 # So we have to create and delete a table per test. And not run this 
 # test to often against aws.  
 @contextmanager
-def create_stream_test_table(dynamodb, StreamViewType=None):
+def create_stream_test_table(dynamodb, StreamViewType=None, name=None):
     spec = { 'StreamEnabled': False }
     if StreamViewType != None:
         spec = {'StreamEnabled': True, 'StreamViewType': StreamViewType}
@@ -60,7 +60,7 @@ def create_stream_test_table(dynamodb, StreamViewType=None):
         AttributeDefinitions=[
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
                     { 'AttributeName': 'c', 'AttributeType': 'S' },
-        ])
+        ], name=name)
     try:
         yield table
     finally:
