@@ -12,6 +12,6 @@ To get started, visit the `GitHub project <https://github.com/scylladb/scylla-an
 
 Additional Topics
 -----------------
-* `Deploying a ScyllaDB Cluster from Scratch <https://github.com/scylladb/scylla-ansible-roles/wiki/ansible-scylla-node:-Deploying-a-ScyllaDB-cluster>`_ - This guide will follow the steps required to deploy a ScyllaDB cluster using the ansible-scylla-node role
-* `ScyllaDB Manager and Ansible Integration <https://github.com/scylladb/scylla-ansible-roles/wiki/ansible-scylla-manager:-Deploying-ScyllaDB-Manager-and-connecting-it-to-a-cluster>`_
-* `ScyllaDB Monitoring Stack Integration <https://github.com/scylladb/scylla-ansible-roles/wiki/Deploying-ScyllaDB-Monitoring-and-connecting-it-to-a-ScyllaDB-Cluster>`_
+* `Deploying a ScyllaDB Cluster from Scratch <https://github.com/scylladb/scylla-ansible-roles/wiki/ansible-scylla-node:-Deploying-a-Scylla-cluster>`_ - This guide will follow the steps required to deploy a ScyllaDB cluster using the ansible-scylla-node role
+* `ScyllaDB Manager and Ansible Integration <https://github.com/scylladb/scylla-ansible-roles/wiki/ansible-scylla-manager:-Deploying-Scylla-Manager-and-connecting-it-to-a-cluster>`_
+* `ScyllaDB Monitoring Stack Integration <https://github.com/scylladb/scylla-ansible-roles/wiki/Deploying-Scylla-Monitoring-and-connecting-it-to-a-Scylla-Cluster>`_
