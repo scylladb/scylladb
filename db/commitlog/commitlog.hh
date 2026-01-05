@@ -385,6 +385,9 @@ public:
     // (Re-)set data mix lifetime.
     void update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds);
 
+    // Whitebox testing. Do not use for production
+    void set_oversized_pre_wait_memory_func(std::function<future<>()>);
+
     using commit_load_reader_func = std::function<future<>(buffer_and_replay_position)>;
 
     class segment_error : public std::exception {};
