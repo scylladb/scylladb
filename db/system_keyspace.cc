@@ -2219,7 +2219,7 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
-future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_generation_timestamp(const sstring &ks_name, const sstring &table_name) {
+future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name) {
     static const sstring query = format("SELECT timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ? limit 1", NAME, CDC_TIMESTAMPS);
     auto timestamp_cql = co_await _qp.execute_internal(
             query,
@@ -2230,7 +2230,7 @@ future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_gener
     co_return timestamp_cql->one().get_as<db_clock::time_point>("timestamp");
 }
 
-future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::read_cdc_for_tablets_versioned_streams(const sstring &ks_name, const sstring &table_name, db_clock::time_point not_older_than) {
+future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::read_cdc_for_tablets_versioned_streams(std::string_view ks_name, std::string_view table_name, db_clock::time_point not_older_than) {
     static const sstring stream_id_query = format("SELECT stream_id, stream_state, timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ?", NAME, CDC_STREAMS);
 
     std::map<db_clock::time_point, utils::chunked_vector<cdc::stream_id>> temp_result;
@@ -2244,14 +2244,13 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
         if (stream_state != cdc::stream_state::current) {
             co_return stop_iteration::no;
         }
-        auto stream_id = cdc::stream_id{ row.get_as<bytes>("stream_id") };
         auto ts = row.get_as<db_clock::time_point>("timestamp");
         
         if (ts < not_older_than) {
             co_return stop_iteration::no;
         }
         
-        temp_result[ts].push_back(stream_id);
+        temp_result[ts].push_back(cdc::stream_id{ row.get_as<bytes>("stream_id") });
         co_return stop_iteration::no;
     });
 
@@ -2259,7 +2258,7 @@ future<std::map<db_clock::time_point, cdc::streams_version>> system_keyspace::re
     for (auto& [ts, streams] : temp_result) {
         result.insert_or_assign(ts, cdc::streams_version{ std::move(streams), ts });
     }
-    co_return result;
+    co_return std::move(result);
 }
 
 future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,

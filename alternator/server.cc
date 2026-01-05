@@ -654,9 +654,6 @@ ungzip(chunked_content&& compressed_body, size_t length_limit) {
 }
 
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
-    thread_local unsigned int tl_request_identifier = 0;
-    unsigned int request_identifier, request_shard_id;
-
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
@@ -720,6 +717,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         username, current_scheduling_group(),
         req->get_protocol_name() == "https");
 
+    thread_local unsigned int tl_request_identifier = 0;
+    unsigned int request_identifier, request_shard_id;
+
     if (slogger.is_enabled(log_level::trace)) {
         request_identifier = ++tl_request_identifier;
         request_shard_id = seastar::this_shard_id();
@@ -749,7 +749,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto user = client_state.user();
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
-            units = std::move(units), req = std::move(req), op = std::move(op), request_identifier, request_shard_id] () mutable -> future<executor::request_return_type> {
+            units = std::move(units), req = std::move(req), op, request_identifier, request_shard_id] () mutable -> future<executor::request_return_type> {
                 rjson::value json_request = co_await _json_parser.parse(std::move(content));
                 if (!json_request.IsObject()) {
                     co_return api_error::validation("Request content must be an object");
@@ -786,6 +786,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                 }
                 co_return std::move(res);
     };
+    // NOTE: `f` has a `op`, which references `target`, as a result `f` must complete before this `co_await` returns.
     co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
 

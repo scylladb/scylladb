@@ -7,6 +7,7 @@
  */
 
 #include <type_traits>
+#include <ranges>
 #include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 #include <boost/io/ios_state.hpp>
@@ -34,6 +35,8 @@
 #include "executor.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
+
+extern logging::logger elogger;
 
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
@@ -137,8 +140,8 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
 
 namespace alternator {
 
-static sstring get_table_name_from_stream_arn(std::string_view arn);
-static table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view arn);
+static sstring get_table_name_from_dynamodb_stream_arn(std::string_view text_stream_arn);
+static table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view text_stream_arn);
 static std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(service::storage_proxy& proxy, std::string_view arn);
 static std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(service::storage_proxy& proxy, const rjson::value &request);
 
@@ -605,7 +608,9 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             // then find a parent - we need it because we know parent's last token, but not first one
             // then we will find first and last child based on first and last token
             // then we will sort found children range back into proper order and return it
-            assert(prev != e);
+            if (prev == e) {
+                on_internal_error(elogger, fmt::format("Could not find parent generation for shard id {}, got generations [{}]", shard_filter->id, fmt::join(topologies | std::ranges::views::keys, "; ")));
+            }
 
             auto parent_shard_id_it = std::lower_bound(prev->second.streams.begin(), prev->second.streams.end(), shard_filter->id.token(), [](const cdc::stream_id& id, const dht::token& t) {
                 return id.token() < t;
@@ -615,32 +620,42 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             auto last_child_it = std::lower_bound(lo, end, higher_parent_token, [](const cdc::stream_id& id, const dht::token& t) {
                 return id.token() < t;
             });
+            if (last_child_it == i->second.streams.end()) {
+                // highest possible token from token space must be present as a last token for some shard,
+                // as a result this condition will never be true
+                on_internal_error(elogger, fmt::format("last token from token space not present in tokens, for shard id {}, got shards [{}]", shard_filter->id, fmt::join(sv.streams, "; ")));
+            }
             if (parent_shard_id_it == prev->second.streams.begin()) {
                 lo = i->second.streams.begin();
             }
             else {
-                auto lower_parent_token = [&]() {
-                    if (parent_shard_id_it == prev->second.streams.begin()) {
-                        return dht::token::first();
-                    }
-                    return std::prev(parent_shard_id_it)->token();
-                }();
+                auto lower_parent_token = (parent_shard_id_it == prev->second.streams.begin()) ? dht::token::first() : std::prev(parent_shard_id_it)->token();
 
-                assert(lower_parent_token < higher_parent_token);
+                if (lower_parent_token >= higher_parent_token) {
+                    on_internal_error(elogger, fmt::format("lower_parent_token ({}) is not less than higher_parent_token ({}), could not find parent shard for shard id {}, got shards [{}]", 
+                        lower_parent_token, higher_parent_token, shard_filter->id, fmt::join(prev->second.streams, "; ")));
+                }
 
                 auto first_child_it = std::lower_bound(lo, end, lower_parent_token, [](const cdc::stream_id& id, const dht::token& t) {
                     return id.token() < t;
                 });
 
-                assert(first_child_it != i->second.streams.end());
+                if (first_child_it == i->second.streams.end()) {
+                    on_internal_error(elogger, fmt::format("Could not find first child shard for shard id {}, got shards [{}]", shard_filter->id, fmt::join(i->second.streams, "; ")));
+                }
                 if (first_child_it->token() == lower_parent_token) {
-                    assert(first_child_it != last_child_it);
+                    if (first_child_it == last_child_it) {
+                        on_internal_error(elogger, fmt::format("first_child_it ({}) is equal to last_child_it, for shard id {}, lo {}, end {}, got shards [{}]", 
+                            *first_child_it, shard_filter->id, *lo, *end, fmt::join(sv.streams, "; ")));
+                    }
                     ++first_child_it;
                 }
                 lo = first_child_it;
             }
             end = ++last_child_it;
-            assert(lo != end);
+            if (lo == end) {
+                on_internal_error(elogger, fmt::format("lo == end, for shard id {}, got shards [{}]", shard_filter->id, fmt::join(sv.streams, " ")));
+            }
 
             std::sort(lo, end, id_cmp);
         }
@@ -654,8 +669,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 auto pid = std::lower_bound(pids.begin(), pids.end(), id.token(), [](const cdc::stream_id& id, const dht::token& t) {
                     return id.token() < t;
                 });
-                assert(pid != pids.end());
-                    rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
+                if (pid == pids.end()) {
+                    on_internal_error(elogger, fmt::format("Could not find parent shard for shard id {}, got shards [{}]", id, fmt::join(pids, " ")));
+                }
+                rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
             }
 
             last.emplace(ts, id);
@@ -1197,27 +1214,34 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
     }
 }
 
+// this will parse Amazon's ARN format for DynamoDB streams
+// for example `arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952`
+// we only care about table name - dynamodb_streams_verification_table_rc
 static boost::regex arn_regex(R"(arn:aws:dynamodb:[^:]+:\d{12}:[^\/]+\/([^\/]+)\/[^\/]+\/.+)");
 
-sstring get_table_name_from_stream_arn(std::string_view arn)
+sstring get_table_name_from_dynamodb_stream_arn(std::string_view text_stream_arn)
 {
     boost::cmatch re_match;
-    if (!boost::regex_match(arn.data(), arn.data() + arn.size(), re_match, arn_regex)) {
-        throw api_error::validation(std::format("`{}` is not a valid StreamArn", arn));
+    if (!boost::regex_match(text_stream_arn.data(), text_stream_arn.data() + text_stream_arn.size(), re_match, arn_regex)) {
+        throw api_error::validation(std::format("`{}` is not a valid StreamArn", text_stream_arn));
     }
-    return re_match[1].str();
+    return sstring{ re_match[1].str() };
 }
 
-table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view arn)
+table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view text_stream_arn)
 {
+    // first try if it's our own format
     try {
-        return table_id(stream_arn{ arn });
+        return table_id(stream_arn{ text_stream_arn });
     }
     catch(...) {
         // we except here either std::invalid_format or marshal_exception - both mean not our format
     }
-    auto table_name = get_table_name_from_stream_arn(arn);
+    sstring table_name = get_table_name_from_dynamodb_stream_arn(text_stream_arn);
     auto ks_name = sstring{ executor::KEYSPACE_NAME_PREFIX } + table_name;
+    // TODO: code later on expects XXX_cdc_log table (not the user's table,
+    // but scylla's cdc log table for it), fix it - return user's table (less confusing),
+    // and make cdc table where is needed.
     if (!cdc::is_log_name(table_name)) {
         table_name = cdc::log_name(table_name);
     }
@@ -1247,10 +1271,12 @@ std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(ser
     return { std::move(schema), std::move(bs) };
 }
 
+// parse the StreamArn from the request and return the stream schema, the base table schema and the StreamArn itself.
+// If possible it's better to return to the user the same StreamArn they provided.
 std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(service::storage_proxy& proxy, const rjson::value &request) {
-    auto stream_arn = rjson::get<std::string>(request, "StreamArn");
-    auto [ schema, bs ] = get_stream_schema_and_base_schema_from_arn(proxy, stream_arn);
-    return { std::move(schema), std::move(bs), std::move(stream_arn) };
+    auto text_stream_arn = rjson::get<std::string>(request, "StreamArn");
+    auto [ schema, bs ] = get_stream_schema_and_base_schema_from_arn(proxy, text_stream_arn);
+    return { std::move(schema), std::move(bs), std::move(text_stream_arn) };
 }
 
 } // namespace alternator

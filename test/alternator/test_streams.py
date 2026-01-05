@@ -7,6 +7,7 @@
 
 import time
 import urllib.request
+import random
 import requests
 from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
@@ -18,7 +19,7 @@ from botocore.exceptions import ClientError
 from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
 
 # all tests in this will are parametrized to run twice (with vnodes and tablets respectively).
-pytestmark = pytest.mark.parametrize('TAGS', [ [] ], scope='module')
+pytestmark = pytest.mark.parametrize('TAGS', [ [], [{'Key': 'system:initial_tablets', 'Value': 'none'}] ], scope='module')
 
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
@@ -364,37 +365,32 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams, TAG
 # get table_id from keyspace and table name
 def get_table_or_view_id(cql, keyspace: str, table: str):
     rows = cql.execute(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
-    for r in rows:
-        return r.id
+    try:
+        return rows.one().id
+    except Exception:
+        pass
     rows = cql.execute(f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{table}'")
-    for r in rows:
-        return r.id
-    assert False, f'Table or view {keyspace}.{table} not found'
+    return rows.one().id
 
 # get user table id from cdc_log table id
 def get_base_table(cql, table_id):
+    # copied from tablets.py:get_base_table
+    # this might return more than one row, but we don't care as all rows
+    # will have the same base_table value
     rows = cql.execute(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
-    for r in rows:
-        if r.base_table:
-            return r.base_table
-        break
-    return table_id
+    return rows.one().base_table
 
 # validate that streams tables are synchronized with tablets count - all new cdc shards have been created
-def assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, cdc_log_table_name):
+def assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name):
+    # we'll try twice here, as in my tests occasionally i've got into a situation, where this function
+    # failed, it seems streams were not yet fully updated (debug build).
     for x in range(0, 2):
         tablet_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
         rows = cql.execute(f"SELECT toUnixTimestamp(timestamp) AS ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='{table_name}' ORDER BY timestamp DESC LIMIT 1")
-        for r in rows:
-            ts = r.ts
-            break
-        else:
-            assert False
+        ts = rows.one().ts
         CdcStreamState_CURRENT = 0 # from test.cluster.test_cdc_with_tablets.CdcStreamState.CURRENT
-        rows = cql.execute(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table_name}' AND timestamp = {ts} AND stream_state = {CdcStreamState_CURRENT}")
-        count = 0
-        for r in rows:
-            count += 1
+        rows = cql.execute(f"SELECT count(*) FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table_name}' AND timestamp = {ts} AND stream_state = {CdcStreamState_CURRENT}")
+        count = rows.one().count
         if count == tablet_count:
             break
         # on debug occasionally we need more time
@@ -403,39 +399,27 @@ def assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, 
 
 # return tablet count for given cdc_log table (table that holds cdc data for given user table)
 def get_tablet_count(rest_api, cql, keyspace_name: str, table_name: str):
-    # read_barrier is needed to ensure that local tablet metadata on the queried node
-    # reflects the finalized tablet movement.
-    # await read_barrier(rest_api)
-
     table_id = get_table_or_view_id(cql, keyspace_name, table_name)
     table_id = get_base_table(cql, table_id)
+    # this might return more than one row, but we don't care as all rows
+    # will have the same tablet_count value
     rows = cql.execute(f"SELECT tablet_count FROM system.tablets where table_id = {table_id}")
-    for r in rows:
-        return r.tablet_count
-    assert False, f'Tablet count for table {table_name} not found'
+    return rows.one().tablet_count
 
 # modify tablet count for given cdc_log table and wait until the change is applied
 # this calls alter table with new `min_tablet_count`, which requires additional scylla options to work reliably
 # (--tablet-load-stats-refresh-interval-in-seconds=1 and --tablets-initial-scale-factor=1)
 def modify_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, expected_tablet_count):
-    assert_streams_are_synchronized_with_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
+    assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
     cql.execute(f"ALTER TABLE {ks}.{cdc_log_table_name} WITH tablets = {{'min_tablet_count': {expected_tablet_count}}};")
-    def tablet_count_is():
-        new_tablet_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
-        if new_tablet_count == expected_tablet_count:
-            return True
-        return False
     start = time.time()
     while time.time() < start + 10:
-        if tablet_count_is():
+        if get_tablet_count(rest_api, cql, ks, cdc_log_table_name) == expected_tablet_count:
             break
-        time.sleep(1)
+        time.sleep(0.1)
     else:
         pytest.fail(f'Tablet count did not reach expected value {expected_tablet_count} within timeout')
 
-async def read_barrier(rest_api) -> None:
-    resp = requests.get(f'{rest_api}/raft/read_barrier')
-    resp.raise_for_status()
 
 def iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=None):
     params = {
@@ -446,14 +430,17 @@ def iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=N
             'Type': 'CHILD_SHARDS',
             'ShardId': filter_shard_id
         }
-    if time.time() >= end_ts:
-        assert False, "Timed out waiting for shards"
     desc = dynamodbstreams.describe_stream(**params)
 
     while True:
+        if time.time() >= end_ts:
+            assert False, "Timed out waiting for shards"
+
         shards = desc['StreamDescription']['Shards']
 
         for shard in shards:
+            if time.time() >= end_ts:
+                assert False, "Timed out waiting for shards"
             yield shard
 
         last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
@@ -469,6 +456,24 @@ def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
         return
     tablet_multipliers = [1, 2, 4, 8, 16, 8, 4, 2, 1]
 
+    # the test will:
+    #   - create a table with streams enabled
+    #   - get initial tablet count
+    #   - for each multiplier in tablet_multipliers:
+    #       - modify tablet count to initial * multiplier - this will trigger
+    #         creation of new shards in the stream as currently we have 1 to 1
+    #         mapping between tablets and shards
+    #   - after all modifications, use DescribeStream to get all shards
+    #   - build a map of shard -> parent shard (shard_parents_map) and
+    #     a map of shard -> child shards (shard_children_map)
+    #   - verify that:
+    #       - number of root shards (shards without parent) is correct -
+    #         should be equal to initial tablet count
+    #       - starting from root shards and following children, each path
+    #         down the tree has length equal to len(tablet_multipliers) -
+    #         this is because every change in tablet count causes new generation
+    #         of shards to be created. Each shard from previous generation will point
+    #         to at least one shard in the next generation and never to some other generation.
     with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES', name=unique_table_name('alternator_test_')) as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
 
@@ -491,7 +496,6 @@ def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
             for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts):
                 shard_id = shard['ShardId']
                 parent_shard_id = shard.get('ParentShardId', None)
-                end = 'closed' if shard['SequenceNumberRange'].get('EndingSequenceNumber', '') else 'opened'
                 if parent_shard_id is None:
                     root_shard_ids.append(shard_id)
                     shard_parents_map[shard_id] = parent_shard_id
@@ -521,7 +525,8 @@ def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
             assert parent_check or len(children) == 1
             shard_children_map[shard_id] = children
 
-        assert all_shards - in_children == set(root_shard_ids)
+        shards_without_parrents = all_shards - in_children
+        assert shards_without_parrents == set(root_shard_ids)
 
         def run_and_verify(shard_id, history):
             history.append(shard_id)
@@ -539,8 +544,30 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
     if TAGS:
         # this test tests tablet count changes, no need to run it on vnode variation.
         return
+    
+    # this test will:
+    #  - create a table with streams enabled
+    #  - get initial tablet count
+    #  - for each multiplier in tablet_multipliers:
+    #      - modify tablet count to initial * multiplier - this will trigger
+    #        creation of new shards in the stream as currently we have 1 to 1
+    #        mapping between tablets and shards
+    #      - perform writes_per_tablet_multiplier writes to the table
+    #  - after all modifications, use DescribeStream to build shard_parents_map (parent -> child) shards map
+    #  - use GetRecords to read all stream records
+    #  - verify that:
+    #      - all written items are present in the stream (check count and then sorted content)
+    #      - within each partition key, the records are in order of writes (check that `e` is monotonically increasing for each record)
+    #      - the shard parent-child relationships are correct - shards create "generations" (all shards are split or merge at the same moment,
+    #        when tablet count is changed). Every shard has a parent, but not every shard is being point to as a parent - when shard merge
+    #        (let's say A & B merge int C), then next generation shard (C) has two parents (A & B), but api allows to appoint only one - let's say A
+    #        (the other one - B - will never be pointed to as a parent by anything else).
+    #        NOTE: it's not the same as having no children - the shard (B) will have a child (C), but that child (C) will have it's sibling as parent (A).
+    #        Then we try to walk the tree starting from every shard that is not pointed to as a parent. Depending on which generation that shard is in,
+    #        the path will have different length.
     tablet_multipliers = [1, 2, 4, 8, 16, 8, 4, 2, 1]
     writes_per_tablet_multiplier = 100
+    partition_count = 32
 
     with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES', name=unique_table_name('alternator_test_')) as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
@@ -551,17 +578,17 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
         init_table_count = get_tablet_count(rest_api, cql, ks, cdc_log_table_name)
 
         index = 0
-        index2 = 0
+        pk_seed = random.randint(0, 2_000_000_000)
         expected_items = []
         retrieved_items = []
         for tablet_mult in tablet_multipliers:
             modify_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, init_table_count * tablet_mult)
             for i in range(0, writes_per_tablet_multiplier):
-                index2 = (index2 + 1 * 17) % 2000000000
+                pk_seed = (pk_seed + 1 * 17) % 2_000_000_011
                 index += 1
                 # we want to partition keys by small set of partitions to force key collisions
                 # to detect any ordering issues within a partition
-                p = str(index2 % 32)
+                p = str(pk_seed % partition_count)
                 c = '1'
                 e = str(index)
                 table.put_item(Item={'p': p, 'c': c, 'e': e})
@@ -576,14 +603,11 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
             for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts):
                 shard_id = shard['ShardId']
                 parent_shard_id = shard.get('ParentShardId', None)
-                end = shard['SequenceNumberRange'].get('EndingSequenceNumber', '')
                 if parent_shard_id is None:
                     root_shard_ids.append(shard_id)
                 elif shard_id in shard_parents_map:
-                    print(f'QWERTY {parent_shard_id} -> {shard_id}')
                     assert shard_parents_map[shard_id] == parent_shard_id
                 else:
-                    print(f'QWERTY {parent_shard_id} -> {shard_id}')
                     shard_parents_map[shard_id] = parent_shard_id
                 if shard_id not in iterators:
                     start = shard['SequenceNumberRange']['StartingSequenceNumber']
@@ -600,7 +624,6 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
 
                 records = response.get('Records')
                 for record in records:
-                    type = record['eventName']
                     dynamodb = record['dynamodb']
                     keys = dynamodb['NewImage']
                     
@@ -634,15 +657,6 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
             gen = get_generation_from_shard(r)
             count = count_map.get(gen, 0)
             count_map[gen] = count + 1
-        log_map = {
-            1: 0,
-            2: 1,
-            4: 2,
-            8: 3,
-            16: 4,
-            32: 5,
-            64: 6,
-        }
         def get_path(shard_id):
             path = [ shard_id ]
             current_shard_id = shard_id
@@ -656,8 +670,7 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
             if r not in have_parents:
                 path = get_path(r)
                 siblings_count = count_map[get_generation_from_shard(r)]
-                siblings_count_log = log_map[siblings_count]
-                assert len(path) + siblings_count_log - 1 == len(tablet_multipliers)
+                assert siblings_count == 1 << (len(tablet_multipliers) + 1 - len(path))
 
 def test_get_records(dynamodb, dynamodbstreams, TAGS):
     # TODO: add tests for storage/transactionable variations and global/local index
