@@ -15,6 +15,8 @@ extra_scylla_cmdline_options:
   - '--logger-log-level=alternator_controller=trace'
   - '--logger-log-level=alternator_ttl=trace'
   - '--logger-log-level=paxos=trace'
+  - '--tablet-load-stats-refresh-interval-in-seconds=1'
+  - '--tablets-initial-scale-factor=1'
 extra_scylla_config_options:
   {
     experimental_features: [
