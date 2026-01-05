@@ -365,9 +365,9 @@ class vector_indexed_table_select_statement : public select_statement {
     prepared_ann_ordering_type _prepared_ann_ordering;
     mutable gc_clock::time_point _query_start_time_point;
 
-    /// Index of the similarity function in the selection that matches the ANN ordering.
-    /// If set, this function's result will be substituted with the pre-computed distance.
-    std::optional<size_t> _similarity_column_idx;
+    /// Indices of similarity functions in the selection that match the ANN ordering.
+    /// These functions' results will be substituted with the pre-computed distance.
+    std::vector<size_t> _similarity_column_indices;
 
 public:
     static constexpr size_t max_ann_query_limit = 1000;
@@ -377,16 +377,33 @@ public:
             ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
             ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
             std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs,
-            const std::vector<selection::prepared_selector>& prepared_selectors);
+            std::vector<size_t> similarity_column_indices);
 
     vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
             prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
             cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs,
-            std::optional<size_t> similarity_column_idx);
+            std::vector<size_t> similarity_column_indices);
+
+    /// Optimizes similarity function calls in prepared_selectors for ANN queries.
+    /// Finds the vector index, checks for matching similarity functions, and replaces them with null constants.
+    /// Returns the indices of the substituted selectors (empty if no optimization was performed).
+    static std::vector<size_t> optimize_similarity_function(
+            data_dictionary::database db,
+            schema_ptr schema,
+            const prepared_ann_ordering_type& ann_ordering,
+            std::vector<selection::prepared_selector>& prepared_selectors);
 
 private:
+    /// Find all similarity functions in prepared_selectors that match the ANN ordering
+    /// and the index's similarity function.
+    /// Returns the indices of all matching selectors.
+    static std::vector<size_t> find_matching_similarity_functions(
+            const std::vector<selection::prepared_selector>& prepared_selectors,
+            const prepared_ann_ordering_type& ann_ordering,
+            const sstring& index_similarity_function);
+
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
 
@@ -411,14 +428,6 @@ private:
     ::shared_ptr<cql_transport::messages::result_message> add_similarity_column(
             ::shared_ptr<cql_transport::messages::result_message> result,
             const vector_search::vector_store_client::ann_results& ann_results) const;
-
-    /// Find a similarity function in prepared_selectors that matches the ANN ordering
-    /// and the index's similarity function.
-    /// Returns the index of the matching selector, or std::nullopt if none matches.
-    static std::optional<size_t> find_matching_similarity_function(
-            const std::vector<selection::prepared_selector>& prepared_selectors,
-            const prepared_ann_ordering_type& ann_ordering,
-            const sstring& index_similarity_function);
 };
 
 }

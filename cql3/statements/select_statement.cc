@@ -1961,7 +1961,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
-std::optional<size_t> vector_indexed_table_select_statement::find_matching_similarity_function(
+std::vector<size_t> vector_indexed_table_select_statement::find_matching_similarity_functions(
         const std::vector<selection::prepared_selector>& prepared_selectors,
         const prepared_ann_ordering_type& ann_ordering,
         const sstring& index_similarity_function) {
@@ -1969,6 +1969,8 @@ std::optional<size_t> vector_indexed_table_select_statement::find_matching_simil
     // Index options use: "cosine", "euclidean", "dot_product"
     // Function names are: "similarity_cosine", "similarity_euclidean", "similarity_dot_product"
     auto expected_func_name = functions::function_name::native_function("similarity_" + index_similarity_function);
+
+    std::vector<size_t> matching_indices;
 
     for (size_t i = 0; i < prepared_selectors.size(); ++i) {
         const auto& selector = prepared_selectors[i];
@@ -2009,10 +2011,56 @@ std::optional<size_t> vector_indexed_table_select_statement::find_matching_simil
 
         // Check if the second argument matches the ANN ordering expression
         if (func_call->args[1] == ann_ordering.second) {
-            return i;
+            matching_indices.push_back(i);
         }
     }
-    return std::nullopt;
+    return matching_indices;
+}
+
+std::vector<size_t> vector_indexed_table_select_statement::optimize_similarity_function(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const prepared_ann_ordering_type& ann_ordering,
+        std::vector<selection::prepared_selector>& prepared_selectors) {
+    // Find the vector index to get the similarity function type
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+    auto indexes = sim.list_indexes();
+    auto it = std::find_if(indexes.begin(), indexes.end(), [&ann_ordering](const auto& ind) {
+        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
+                ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == "vector_index") &&
+               (ind.target_column() == ann_ordering.first->name_as_text());
+    });
+
+    if (it == indexes.end()) {
+        return {};
+    }
+
+    // Get the similarity function from the index options
+    sstring index_similarity_function = "cosine";
+    auto sim_func_it = it->metadata().options().find("similarity_function");
+    if (sim_func_it != it->metadata().options().end()) {
+        index_similarity_function = sim_func_it->second;
+        std::transform(index_similarity_function.begin(), index_similarity_function.end(),
+                       index_similarity_function.begin(), ::tolower);
+    }
+
+    // Find all matching similarity functions
+    auto similarity_column_indices = find_matching_similarity_functions(prepared_selectors, ann_ordering, index_similarity_function);
+
+    // Replace each matching similarity function with a null constant placeholder
+    for (size_t idx : similarity_column_indices) {
+        auto& selector = prepared_selectors[idx];
+        // Preserve the original column name by setting an alias if not already present
+        if (!selector.alias) {
+            selector.alias = ::make_shared<column_identifier>(expr::to_string(selector.expr), true);
+        }
+        // Replace the similarity function call with a null constant placeholder
+        // The actual value will be substituted during result processing
+        selector.expr = expr::constant::make_null(float_type);
+    }
+
+    return similarity_column_indices;
 }
 
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
@@ -2020,7 +2068,7 @@ std::optional<size_t> vector_indexed_table_select_statement::find_matching_simil
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs,
-        const std::vector<selection::prepared_selector>& prepared_selectors) {
+        std::vector<size_t> similarity_column_indices) {
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     auto [index_opt, _] = restrictions->find_idx(sim);
@@ -2042,23 +2090,9 @@ std::optional<size_t> vector_indexed_table_select_statement::find_matching_simil
         throw std::runtime_error("No index found.");
     }
 
-    // Get the similarity function from the index options (defaults to "cosine" if not specified)
-    sstring index_similarity_function = "cosine";
-    auto sim_func_it = index_opt->metadata().options().find("similarity_function");
-    if (sim_func_it != index_opt->metadata().options().end()) {
-        index_similarity_function = sim_func_it->second;
-        // Normalize to lowercase
-        std::transform(index_similarity_function.begin(), index_similarity_function.end(),
-                       index_similarity_function.begin(), ::tolower);
-    }
-
-    // Find if there's a similarity function in the selection that matches the ANN ordering
-    // and the index's similarity function
-    auto similarity_column_idx = find_matching_similarity_function(prepared_selectors, prepared_ann_ordering, index_similarity_function);
-
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
-            std::move(per_partition_limit), stats, *index_opt, std::move(attrs), similarity_column_idx);
+            std::move(per_partition_limit), stats, *index_opt, std::move(attrs), std::move(similarity_column_indices));
 }
 
 vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
@@ -2066,12 +2100,12 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs,
-        std::optional<size_t> similarity_column_idx)
+        std::vector<size_t> similarity_column_indices)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}
     , _prepared_ann_ordering(std::move(prepared_ann_ordering))
-    , _similarity_column_idx(similarity_column_idx) {
+    , _similarity_column_indices(std::move(similarity_column_indices)) {
 
     if (!limit.has_value()) {
         throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
@@ -2218,8 +2252,8 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
         ::shared_ptr<cql_transport::messages::result_message> result,
         const vector_search::vector_store_client::ann_results& ann_results) const {
 
-    // Only process if a matching similarity function was found in the selection
-    if (!_similarity_column_idx.has_value()) {
+    // Only process if matching similarity functions were found in the selection
+    if (_similarity_column_indices.empty()) {
         return result;
     }
 
@@ -2236,8 +2270,6 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
         similarity_scores.push_back(ann_result.similarity);
     }
 
-    const size_t sim_col_idx = *_similarity_column_idx;
-
     // Get the result set and create a new one with substituted similarity values
     const auto& original_result = rows_result->rs();
     const auto& original_metadata = original_result.get_metadata();
@@ -2252,7 +2284,11 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
         new_row.reserve(row.size());
 
         for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
-            if (col_idx == sim_col_idx && row_idx < similarity_scores.size()) {
+            // Check if this column is one of the similarity function indices
+            bool is_sim_col = std::find(_similarity_column_indices.begin(), 
+                                         _similarity_column_indices.end(), 
+                                         col_idx) != _similarity_column_indices.end();
+            if (is_sim_col && row_idx < similarity_scores.size()) {
                 // Substitute the similarity function result with the pre-computed distance
                 auto similarity_bytes = float_type->decompose(similarity_scores[row_idx]);
                 new_row.push_back(managed_bytes(similarity_bytes));
@@ -2397,6 +2433,24 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         ps.expr = levellize_aggregation_depth(ps.expr, aggregation_depth);
     }
 
+    // Detect ANN ordering early (before creating selection) so we can optimize similarity function calls
+    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
+    std::vector<size_t> similarity_column_indices;
+    auto orderings = _parameters->orderings();
+
+    if (!orderings.empty()) {
+        const auto* ann_vector = std::get_if<select_statement::ann_vector>(&orderings.front().second);
+        if (ann_vector) {
+            // This is an ANN query - prepare the ordering and check for similarity function optimization
+            prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
+
+            // Optimize similarity function calls by replacing them with null placeholders
+            // The actual values will be substituted during result processing
+            similarity_column_indices = vector_indexed_table_select_statement::optimize_similarity_function(
+                    db, schema, *prepared_ann_ordering, levellized_prepared_selectors);
+        }
+    }
+
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
@@ -2420,16 +2474,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 
-    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
-
-    auto orderings = _parameters->orderings();
-
-    if (!orderings.empty()) {
+    // Handle non-ANN orderings (ANN ordering was already handled above)
+    if (!orderings.empty() && !prepared_ann_ordering.has_value()) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
-            } else {
+            if constexpr (!std::is_same_v<T, select_statement::ann_vector>) {
                 SCYLLA_ASSERT(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2528,7 +2577,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     } else if (prepared_ann_ordering) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs), prepared_selectors);
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs), std::move(similarity_column_indices));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,
