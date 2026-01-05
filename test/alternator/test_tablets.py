@@ -131,26 +131,6 @@ def test_tablets_tag_vs_config(dynamodb):
             with new_test_table(dynamodb, **schema_vnodes) as table:
                 pass
 
-# Before Alternator Streams is supported with tablets (#23838), let's verify
-# that enabling Streams results in an orderly error. This test should be
-# deleted when #23838 is fixed.
-def test_streams_enable_error_with_tablets(dynamodb):
-    # Test attempting to create a table already with streams
-    with pytest.raises(ClientError, match='ValidationException.*tablets'):
-        with new_test_table(dynamodb,
-            Tags=[{'Key': initial_tablets_tag, 'Value': '4'}],
-            StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
-            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-            pass
-    # Test attempting to add a stream to an existing table
-    with new_test_table(dynamodb,
-        Tags=[{'Key': initial_tablets_tag, 'Value': '4'}],
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
-        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-        with pytest.raises(ClientError, match='ValidationException.*tablets'):
-            table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
-
 # For a while (see #18068) it was possible to create an Alternator table with
 # tablets enabled and choose LWT for write isolation (always_use_lwt)
 # but the writes themselves failed. This test verifies that this is no longer

@@ -1881,16 +1881,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
-        // Alternator Streams doesn't yet work when the table uses tablets (#23838)
-        if (stream_specification && stream_specification->IsObject()) {
-            auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
-            if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
-                if (rs->uses_tablets()) {
-                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                    "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
-                }
-            }
-        }
         // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
         // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
         if (!view_builders.empty() || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
@@ -2055,14 +2045,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
-                        if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                            "If you want to enable streams, re-create this table with vnodes (with the tag 'system:initial_tablets' set to 'none').");
-                        }
                         if (tab->cdc_options().enabled()) {
                             co_return api_error::validation("Table already has an enabled stream: TableName: " + tab->cf_name());
                         }
