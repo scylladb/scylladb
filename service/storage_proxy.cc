@@ -6777,6 +6777,9 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
     // i.e. appropriate calls to storage_proxy::query immediately return an
     // empty query::result object without accessing any data.
     if (!cmd) {
+        if (cdc_opts.alternator_streams_increased_compatibility) {
+            on_fatal_internal_error(paxos::paxos_state::logger, "`alternator_streams_increased_compatibility` usage requires provided read_command");
+        }
         cmd = read_nothing_read_command(schema);
     }
 
