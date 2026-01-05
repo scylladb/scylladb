@@ -355,16 +355,6 @@ static double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
-void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    auto creation_time = get_table_creation_time(schema);
-
-    rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
-    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
-
-    executor::supplement_table_stream_info(descr, schema, sp);
-}
-
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
 // But Scylla creates a directory whose name is the table's name plus 33
 // bytes (dash and UUID), and since directory names are limited to 255 bytes,
@@ -1947,8 +1937,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await _mm.wait_for_schema_agreement(_proxy.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
-    executor::supplement_table_info(request, *schema, _proxy);
-    rjson::add(status, "TableDescription", std::move(request));
+    rjson::value table_description = co_await fill_table_description(schema, table_status::creating, client_state, trace_state, empty_service_permit());    
+    rjson::add(status, "TableDescription", std::move(table_description));
     co_return rjson::print(std::move(status));
 }
 
@@ -2227,8 +2217,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
-        supplement_table_info(request, *schema, p.local());
-        rjson::add(status, "TableDescription", std::move(request));
+        auto cs = client_state_other_shard.get();
+        rjson::value table_description = co_await e.local().fill_table_description(schema, table_status::updating, cs, gt, empty_service_permit());
+        rjson::add(status, "TableDescription", std::move(table_description));
         co_return rjson::print(std::move(status));
     });
 }
