@@ -2218,6 +2218,76 @@ def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_
             return [['INSERT', {'p': p, 'c': cc}, None, {'p': p, 'c': cc, 'x': cc}] for cc in cs]
         do_test(stream, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
+# Test the CHILD_SHARDS shard filter. In a simple case where the table
+# hasn't been modified since the stream was created, there is just one
+# generation so asking for child shards of the only shard returns nothing.
+# NOTE: a more complete test that actually creates new stream shard
+# generations will be added in a later patch.
+def test_stream_shard_filtering_simple_no_children(test_table_ss_keys_only, dynamodbstreams):
+    table, _ = test_table_ss_keys_only
+    streams = dynamodbstreams.list_streams(TableName=table.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    desc_filtered = dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+        'ShardId': shard_id,
+        'Type': 'CHILD_SHARDS'
+    })
+    assert desc_filtered
+    assert desc_filtered.get('StreamDescription')
+    assert desc_filtered['StreamDescription']['StreamArn'] == arn
+    assert desc_filtered['StreamDescription']['StreamStatus'] != 'DISABLED'
+    assert desc_filtered['StreamDescription']['StreamViewType'] == 'KEYS_ONLY'
+    assert desc_filtered['StreamDescription']['TableName'] == table.name
+    assert not desc_filtered['StreamDescription']['Shards']
+
+# Test that DescribeStream with an unsupported ShardFilter Type returns
+# an error. Currently only 'CHILD_SHARDS' is supported.
+def test_stream_shard_filtering_wrong_type(test_table_ss_keys_only, dynamodbstreams):
+    table, _ = test_table_ss_keys_only
+    streams = dynamodbstreams.list_streams(TableName=table.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': shard_id,
+            'Type': 'foo'
+        })
+
+# test for correct error handling of DescribeStream when using ShardFilter with shard id (wrong format)
+def test_stream_shard_filtering_wrong_shard_id(test_table_ss_keys_only, dynamodbstreams):
+    table, _ = test_table_ss_keys_only
+    streams = dynamodbstreams.list_streams(TableName=table.name)
+    arn = streams['Streams'][0]['StreamArn']
+    with pytest.raises(ClientError, match='ValidationException.*[sS]hardFilter[.][sS]hardId'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': "qwerty",
+            'Type': 'CHILD_SHARDS'
+        })
+
+# test for correct error handling of DescribeStream when using ShardFilter with missing type
+def test_stream_shard_filtering_missing_type(test_table_ss_keys_only, dynamodbstreams):
+    table, _ = test_table_ss_keys_only
+    streams = dynamodbstreams.list_streams(TableName=table.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': shard_id,
+        })
+
+# test for correct error handling of DescribeStream when using ShardFilter with missing shard id
+def test_stream_shard_filtering_missing_shard_id(test_table_ss_keys_only, dynamodbstreams):
+    table, _ = test_table_ss_keys_only
+    streams = dynamodbstreams.list_streams(TableName=table.name)
+    arn = streams['Streams'][0]['StreamArn']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'Type': 'CHILD_SHARDS'
+        })
+
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
 #   requires the user to wait for the first stream to become DISABLED before

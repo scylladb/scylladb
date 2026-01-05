@@ -67,7 +67,7 @@
 
 using namespace std::chrono_literals;
 
-logging::logger elogger("alternator-executor");
+static logging::logger elogger("alternator-executor");
 
 namespace std {
     template <> struct hash<std::pair<sstring, sstring>> {
