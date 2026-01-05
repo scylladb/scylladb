@@ -34,6 +34,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
 
+static logging::logger elogger("alternator-streams");
+
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
  * for types that are ostreamable/string constructible/castable.
@@ -572,15 +574,19 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
             if (prev != e) {
                 auto& pids = prev->second.streams;
-                auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const cdc::stream_id& id) {
-                    return t < id.token();
+                auto pid = std::lower_bound(pids.begin(), pids.end(), id.token(), [](const cdc::stream_id& id, const dht::token& t) {
+                    return id.token() < t;
                 });
-                if (pid != pids.begin()) {
-                    pid = std::prev(pid);
+                if (pid == pids.end()) {
+                    // wrap around case - take first
+                    pid = pids.begin();
                 }
-                if (pid != pids.end()) {
-                    rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
+                if (pid == pids.end()) {
+                    // something is really wrong - pids is empty
+                    // let's try internal_error in hope it will be notified and fixed
+                    on_internal_error(elogger, fmt::format("pids is empty for generation {}", prev->first));
                 }
+                rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
             }
 
             last.emplace(ts, id);
