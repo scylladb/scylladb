@@ -1877,7 +1877,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
-        // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
@@ -2039,7 +2038,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
