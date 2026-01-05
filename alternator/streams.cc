@@ -572,15 +572,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
             if (prev != e) {
                 auto& pids = prev->second.streams;
-                auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const cdc::stream_id& id) {
-                    return t < id.token();
+                auto pid = std::lower_bound(pids.begin(), pids.end(), id.token(), [](const cdc::stream_id& id, const dht::token& t) {
+                    return id.token() < t;
                 });
-                if (pid != pids.begin()) {
-                    pid = std::prev(pid);
-                }
-                if (pid != pids.end()) {
+                assert(pid != pids.end());
                     rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
-                }
             }
 
             last.emplace(ts, id);
