@@ -29,6 +29,7 @@
 
 namespace db {
     class system_distributed_keyspace;
+    class system_keyspace;
 }
 
 namespace query {
@@ -144,6 +145,7 @@ class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
+    db::system_keyspace &_system_keyspace;
     cdc::metadata& _cdc_metadata;
     utils::updateable_value<bool> _enforce_authorization;
     utils::updateable_value<bool> _warn_authorization;
@@ -186,6 +188,7 @@ public:
              service::storage_service& ss,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
+             db::system_keyspace& system_keyspace,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
              utils::updateable_value<uint32_t> default_timeout_in_ms);

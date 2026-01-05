@@ -22,6 +22,7 @@ class memory_limiter;
 
 namespace db {
 class system_distributed_keyspace;
+class system_keyspace;
 class config;
 }
 
@@ -61,6 +62,7 @@ class controller : public protocol_server {
     sharded<service::storage_service>& _ss;
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::system_keyspace>& _sys_ks;
     sharded<cdc::generation_service>& _cdc_gen_svc;
     sharded<service::memory_limiter>& _memory_limiter;
     sharded<auth::service>& _auth_service;
@@ -79,6 +81,7 @@ public:
         sharded<service::storage_service>& ss,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<db::system_keyspace>& sys_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
         sharded<service::memory_limiter>& memory_limiter,
         sharded<auth::service>& auth_service,
