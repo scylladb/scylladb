@@ -38,6 +38,7 @@
 #include "expressions.hh"
 #include "conditions.hh"
 #include <optional>
+#include <generator>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "mutation/collection_mutation.hh"
@@ -2554,15 +2555,17 @@ db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
 
-static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
+static lw_shared_ptr<query::read_command> previous_items_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
-        const clustering_key& ck,
+        std::generator<const clustering_key&> cks,
         shared_ptr<cql3::selection::selection> selection) {
     std::vector<query::clustering_range> bounds;
     if (schema->clustering_key_size() == 0) {
         bounds.push_back(query::clustering_range::make_open_ended_both_sides());
     } else {
-        bounds.push_back(query::clustering_range::make_singular(ck));
+        for(const auto &ck : cks) {
+            bounds.push_back(query::clustering_range::make_singular(ck));
+        }
     }
     // FIXME: We pretend to take a selection (all callers currently give us a
     // wildcard selection...) but here we read the entire item anyway. We
@@ -2573,6 +2576,13 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(proxy.get_tombstone_limit()));
+}
+
+static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
+        schema_ptr schema,
+        const clustering_key& ck,
+        shared_ptr<cql3::selection::selection> selection) {
+    return previous_items_read_command(proxy, schema, [&]() -> std::generator<const clustering_key&> { co_yield ck; }(), selection);
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -2783,32 +2793,34 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         .alternator = true,
         .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
-    if (needs_read_before_write) {
-        if (_write_isolation == write_isolation::FORBID_RMW) {
-            throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
-        }
-        global_stats.reads_before_write++;
-        per_table_stats.reads_before_write++;
-        if (_write_isolation == write_isolation::UNSAFE_RMW) {
-            // This is the old, unsafe, read before write which does first
-            // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
-                if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
-                }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+    if (!cdc_opts.alternator_streams_increased_compatibility) {
+        if (needs_read_before_write) {
+            if (_write_isolation == write_isolation::FORBID_RMW) {
+                throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
+            }
+            global_stats.reads_before_write++;
+            per_table_stats.reads_before_write++;
+            if (_write_isolation == write_isolation::UNSAFE_RMW) {
+                // This is the old, unsafe, read before write which does first
+                // a read, then a write. TODO: remove this mode entirely.
+                return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
+                        [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
+                    if (!m) {
+                        return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
+                    }
+                    return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
+                        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+                    });
                 });
+            }
+        } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+            std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
+            SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+            return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
+                return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
             });
         }
-    } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
-        std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-        });
     }
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
@@ -2818,7 +2830,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
-    auto read_command = needs_read_before_write ?
+    auto read_command = needs_read_before_write || cdc_opts.alternator_streams_increased_compatibility ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), *this, read_command, to_partition_ranges(*schema(), _pk),
@@ -3178,7 +3190,18 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
         .alternator_streams_increased_compatibility =
                 schema->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
-    return _proxy.cas(schema, std::move(cas_shard), *op_ptr, nullptr, to_partition_ranges(dk),
+
+    lw_shared_ptr<query::read_command> read_command;
+    if (cdc_opts.alternator_streams_increased_compatibility) {
+        auto selection = cql3::selection::selection::wildcard(schema);
+        read_command = previous_items_read_command(_proxy, schema, [&]() -> std::generator<const clustering_key&> { 
+            for(auto& mb : mutation_builders) {
+                co_yield mb.ck();
+            }
+        }(), selection);
+    }
+    
+    return _proxy.cas(schema, std::move(cas_shard), *op_ptr, std::move(read_command), to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout, true, std::move(cdc_opts)).finally([op = std::move(op)]{}).discard_result();
@@ -4551,6 +4574,13 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     }
     if (_attribute_updates) {
         apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
+    }
+
+    if (cdc_opts.alternator_streams_increased_compatibility && !previous_item && !any_updates) {
+        // note: `cdc_opts.alternator_streams_increased_compatibility` set to true forces user to pass
+        // `read_command`, which guarantees that `previous_item` is nullptr only if item does not exist
+        // no previous item and only deletes - nothing to do
+        return mutation{ _schema, _pk };
     }
     if (!modified_attrs.empty()) {
         auto serialized_map = modified_attrs.to_mut().serialize(*attrs_type());
