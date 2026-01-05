@@ -16,13 +16,7 @@ from botocore.exceptions import ClientError
 
 from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
 
-# All tests in this file are expected to fail with tablets due to #23838.
-# To ensure that Alternator Streams is still being tested, instead of
-# xfailing these tests, we temporarily coerce the tests below to avoid
-# using default tablets setting, even if it's available. We do this by
-# using the following tags when creating each table below:
-TAGS = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
-
+TAGS = []
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
 def disable_stream(dynamodbstreams, table):
