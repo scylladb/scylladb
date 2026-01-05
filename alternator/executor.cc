@@ -340,7 +340,7 @@ static void set_table_creation_time(std::map<sstring, sstring>& tags_map, db_clo
     tags_map[TABLE_CREATION_TIME_TAG_KEY] = std::to_string(tm);
 }
 
-static double get_table_creation_time(const schema &schema) {
+double get_table_creation_time(const schema &schema) {
     auto time = db::find_tag(schema, TABLE_CREATION_TIME_TAG_KEY);
     if (time) {
         try {
@@ -1235,9 +1235,75 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
     return {hash_key, range_key};
 }
 
+arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
+    // Expected ARN format arn:partition:service:region:account-id:resource-type/resource-id
+    // So arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME};
+    // or arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952
+    // According to Amazon account-id must be a number, but we don't check for it here.
+    // postfix is part of the string after table name, including the separator, e.g. "/stream/2025-12-18T17:38:48.952" in the second example above
+    // if expected_postfix is empty, then we reject ARN with any postfix
+    // otherwise we require that postfix starts with expected_postfix and we return it
+
+    if (!arn.starts_with("arn:")) {
+        throw api_error::access_denied(fmt::format("{}: Invalid {} ARN `{}`  - missing `arn:` prefix", arn_field_name, type_name, arn));
+    }
+
+    std::string_view keyspace_name;
+    // skip to the resource part
+    auto index = arn.find(':'); // skip arn
+    if (index != std::string_view::npos) {
+        index = arn.find(':', index + 1); // skip partition
+        if (index != std::string_view::npos) {
+            index = arn.find(':', index + 1); // skip service
+            if (index != std::string_view::npos) {
+                auto start = index + 1;
+                index = arn.find(':', start); // skip region
+                if (index != std::string_view::npos) {
+                    keyspace_name = arn.substr(start, index - start);
+                    index = arn.find(':', index + 1); // skip account-id
+                }
+            }
+        }
+    }
+    if (index == std::string_view::npos) {
+        throw api_error::access_denied(fmt::format("{}: Invalid {} ARN `{}` - missing arn:<partition>:<service>:<region>:<account-id> prefix", arn_field_name, type_name, arn));
+    }
+
+    // index is at last `:` before `table/<table-name>`
+    // this looks like a valid ARN up to this point
+    // as a sanity check make sure that what follows is a resource-type "table/"
+    if (arn.substr(index + 1, 6) != "table/") {
+        throw api_error::validation(fmt::format("{}: Invalid {} ARN `{}` - resource-type is not `table/`", arn_field_name, type_name, arn));
+    }
+    index += 7; // move past ":table/"
+
+    // Amazon's spec allows both ':' and '/' as resource separators
+    auto end_index = arn.substr(index).find_first_of("/:");
+    if (end_index == std::string_view::npos) {
+        end_index = arn.length();
+    }
+    else {
+        end_index += index; // adjust end_index to be relative to the start of the string, not to the start of the table name
+    }
+    auto table_name = arn.substr(index, end_index - index);
+    index = end_index;
+
+    // caller might require a specific postfix after the table name
+    // so for example in arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952
+    // specific postfix could be "/stream/" to make sure ARN is for a stream, not for the table itself
+    // postfix will contain leading separator
+    std::string_view postfix = arn.substr(index);
+
+    if (postfix.empty() == expected_postfix.empty() && postfix.starts_with(expected_postfix)) {
+        // we will end here if
+        // - postfix and expected_postfix are both empty (thus `starts_with` will check against empty string and return true)
+        // - both are not empty and postfix starts with expected_postfix
+        return { keyspace_name, table_name, postfix };
+    }
+    throw api_error::validation(fmt::format("{}: Invalid {} ARN `{}` - expected `{}` after table name `{}`", arn_field_name, type_name, arn, expected_postfix, table_name));
+}
+
 static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_view arn) {
-    // Expected format: arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME};
-    constexpr size_t prefix_size = sizeof("arn:scylla:alternator:") - 1;
     // NOTE: This code returns AccessDeniedException if it's problematic to parse or recognize an arn.
     // Technically, a properly formatted, but nonexistent arn *should* return AccessDeniedException,
     // while an incorrectly formatted one should return ValidationException.
@@ -1249,22 +1315,12 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     // concluding that an error is an error and code which uses tagging
     // must be ready for handling AccessDeniedException instances anyway.
     try {
-        size_t keyspace_end = arn.find_first_of(':', prefix_size);
-        std::string_view keyspace_name = arn.substr(prefix_size, keyspace_end - prefix_size);
-        size_t table_start = arn.find_first_of('/');
-        std::string_view table_name = arn.substr(table_start + 1);
-        if (table_name.find('/') != std::string_view::npos) {
-            // A table name cannot contain a '/' - if it does, it's not a
-            // table ARN, it may be an index. DynamoDB returns a
-            // ValidationException in that case - see #10786.
-            throw api_error::validation(fmt::format("ResourceArn '{}' is not a valid table ARN", table_name));
-        }
-        // FIXME: remove sstring creation once find_schema gains a view-based interface
-        return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
+        auto parts = parse_arn(arn, "ResourceArn", "table", "");
+        return proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
     } catch (const data_dictionary::no_such_column_family& e) {
-        throw api_error::resource_not_found(fmt::format("ResourceArn '{}' not found", arn));
+        throw api_error::resource_not_found(fmt::format("ResourceArn: Invalid table ARN `{}` - not found", arn));
     } catch (const std::out_of_range& e) {
-        throw api_error::access_denied("Incorrect resource identifier");
+        throw api_error::access_denied(fmt::format("ResourceArn: Invalid table ARN `{}` - {}", arn, e.what()));
     }
 }
 
