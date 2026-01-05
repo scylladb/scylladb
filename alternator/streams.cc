@@ -28,6 +28,7 @@
 #include "service/storage_proxy.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "replica/database.hh"
 
 #include "executor.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -512,7 +513,6 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
     }
 
-    std::map<db_clock::time_point, cdc::streams_version> topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
     auto e = topologies.end();
     auto prev = e;
     auto shards = rjson::empty_array();
