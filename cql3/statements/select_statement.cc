@@ -2032,14 +2032,15 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
-        auto pkeys = co_await qp.vector_store_client().ann(
+        auto ann_results_opt = co_await qp.vector_store_client().ann(
                 _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
-        if (!pkeys.has_value()) {
+        if (!ann_results_opt.has_value()) {
             co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, ann_results_opt.error())));
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+        auto ann_results = std::move(ann_results_opt).value();
+        co_return co_await query_base_table(qp, state, options, ann_results, timeout);
     });
 
     auto page_size = options.get_page_size();
@@ -2075,7 +2076,7 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
+        service::query_state& state, const query_options& options, const vector_search::vector_store_client::ann_results& ann_results,
         lowres_clock::time_point timeout) const {
     auto command = prepare_command_for_base_query(qp, state, options);
 
@@ -2083,30 +2084,30 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
     // partition ranges instead of individual primary keys, since the
     // partition key alone uniquely identifies each row.
     if (_schema->clustering_key_size() == 0) {
-        auto to_partition_ranges = [](const std::vector<vector_search::primary_key>& pkeys) -> std::vector<dht::partition_range> {
+        auto to_partition_ranges = [](const vector_search::vector_store_client::ann_results& ann_results) -> std::vector<dht::partition_range> {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
-                return dht::partition_range::make_singular(pkey.partition);
+            std::ranges::transform(ann_results, std::back_inserter(partition_ranges), [](const auto& ann_result) {
+                return dht::partition_range::make_singular(ann_result.pk.partition);
             });
 
             return partition_ranges;
         };
-        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(pkeys));
+        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(ann_results));
     }
-    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, pkeys);
+    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, ann_results);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        const std::vector<vector_search::primary_key>& pkeys) const {
+        const vector_search::vector_store_client::ann_results& ann_results) const {
 
     coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> result = co_await utils::result_map_reduce(
-            pkeys.begin(), pkeys.end(),
-            [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+            ann_results.begin(), ann_results.end(),
+            [&](this auto, auto& ann_result) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};
+                cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(ann_result.pk.clustering)};
                 coordinator_result<service::storage_proxy::coordinator_query_result> rqr =
-                        co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(),
+                        co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(ann_result.pk.partition)}, options.get_consistency(),
                                 {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
                 if (!rqr) {
                     co_return std::move(rqr).as_failure();
