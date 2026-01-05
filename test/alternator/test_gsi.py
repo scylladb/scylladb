@@ -1310,6 +1310,29 @@ def test_gsi_projection_include(dynamodb):
         assert_index_scan(table, 'hello', expected_items)
         print(len(expected_items))
 
+# Test that when "ProjectionType" is set to anything but "INCLUDE" (i.e.,
+# "ALL" or "KEYS_ONLY"), "NonKeyAttributes" must not be specified.
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+def test_gsi_projection_nonkeyattributess_forbidden(dynamodb):
+    for projection_type in ['ALL', 'KEYS_ONLY']:
+        with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
+            with new_test_table(dynamodb,
+                KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+                AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+                ],
+                GlobalSecondaryIndexes=[
+                    {   'IndexName': 'hello',
+                        'KeySchema': [
+                            { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                        ],
+                        'Projection': { 'ProjectionType': projection_type,
+                                        'NonKeyAttributes': ['a', 'b'] }
+                    }
+                ]) as table:
+                pass
+
 # Despite the name "NonKeyAttributes", key attributes *may* be listed.
 # But they have no effect - because key attributes are always projected
 # anyway.
