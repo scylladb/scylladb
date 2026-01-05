@@ -72,6 +72,11 @@ def run_alternator_cmd(pid, dir):
         # We only list here Alternator-specific experimental features - CQL
         # ones are listed in test/cqlpy/run.py.
         '--experimental-features=alternator-streams',
+        # this is required by test_streams.py test_parent_filtering and test_get_records_with_alternating_tablets_count
+        # setting the value using scylla_config_temporary won't work, because the value is read
+        # at the start and then periodically with `tablet-load-stats-refresh-interval-in-seconds`
+        # interval, which by default is 60 seconds.
+        '--tablet-load-stats-refresh-interval-in-seconds=1',
     ]
     if '--https' in sys.argv:
         run.setup_ssl_certificate(dir)
