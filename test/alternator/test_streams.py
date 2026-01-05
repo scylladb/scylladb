@@ -849,6 +849,10 @@ def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams, TAGS):
     yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', TAGS)
 
 @pytest.fixture(scope="function")
+def test_table_ss_new_and_old_images_isolation_always(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', TAGS + [{'Key': 'system:write_isolation', 'Value': 'always'}])
+
+@pytest.fixture(scope="function")
 def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams, TAGS):
     yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY', TAGS)
 
@@ -991,75 +995,87 @@ def compare_events(expected_events, output, mode, expected_region):
     # Iterate over the events in output. An event for a certain key needs to
     # be the *first* remaining event for this key in expected_events_map (and
     # then we remove this matched even from expected_events_map)
-    for event in output:
-        # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
-        # a *different* value - 'scylladb:alternator'. Issue #6931.
-        assert 'eventSource' in event
-        # For lack of a direct equivalent of a region, Alternator provides the
-        # DC name instead. Reproduces #6931.
-        assert 'awsRegion' in event
-        assert event['awsRegion'] == expected_region
-        # Reproduces #6931.
-        assert 'eventVersion' in event
-        assert event['eventVersion'] in ['1.0', '1.1']
-        # Check that eventID appears, but can't check much on what it is.
-        assert 'eventID' in event
-        op = event['eventName']
-        record = event['dynamodb']
-        # record['Keys'] is "serialized" JSON, ({'S', 'thestring'}), so we
-        # want to deserialize it to match our expected_events content.
-        deserializer = TypeDeserializer()
-        key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
-        expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
-        assert op == expected_type
-        assert record['StreamViewType'] == mode
-        # We don't know what ApproximateCreationDateTime should be, but we do
-        # know it needs to be a timestamp - there is conflicting documentation
-        # in what format (ISO 8601?). In any case, boto3 parses this timestamp
-        # for us, so we can't check it here, beyond checking it exists.
-        assert 'ApproximateCreationDateTime' in record
-        # We don't know what SequenceNumber is supposed to be, but the DynamoDB
-        # documentation requires that it contains only numeric characters and
-        # some libraries rely on this. This reproduces issue #7158:
-        assert 'SequenceNumber' in record
-        assert record['SequenceNumber'].isdecimal()
-        # Alternator doesn't set the SizeBytes member. Issue #6931.
-        #assert 'SizeBytes' in record
-        if mode == 'KEYS_ONLY':
-            assert not 'NewImage' in record
-            assert not 'OldImage' in record
-        elif mode == 'NEW_IMAGE':
-            assert not 'OldImage' in record
-            if expected_new_image == None:
+
+    compared_event = 0
+    try:
+        for e, event in enumerate(output):
+            compared_event = e
+            # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
+            # a *different* value - 'scylladb:alternator'. Issue #6931.
+            assert 'eventSource' in event
+            # For lack of a direct equivalent of a region, Alternator provides the
+            # DC name instead. Reproduces #6931.
+            assert 'awsRegion' in event
+            assert event['awsRegion'] == expected_region
+            # Reproduces #6931.
+            assert 'eventVersion' in event
+            assert event['eventVersion'] in ['1.0', '1.1']
+            # Check that eventID appears, but can't check much on what it is.
+            assert 'eventID' in event
+            op = event['eventName']
+            record = event['dynamodb']
+            # record['Keys'] is "serialized" JSON, ({'S', 'thestring'}), so we
+            # want to deserialize it to match our expected_events content.
+            deserializer = TypeDeserializer()
+            key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
+            expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
+            assert op == expected_type
+            assert record['StreamViewType'] == mode
+            # We don't know what ApproximateCreationDateTime should be, but we do
+            # know it needs to be a timestamp - there is conflicting documentation
+            # in what format (ISO 8601?). In any case, boto3 parses this timestamp
+            # for us, so we can't check it here, beyond checking it exists.
+            assert 'ApproximateCreationDateTime' in record
+            # We don't know what SequenceNumber is supposed to be, but the DynamoDB
+            # documentation requires that it contains only numeric characters and
+            # some libraries rely on this. This reproduces issue #7158:
+            assert 'SequenceNumber' in record
+            assert record['SequenceNumber'].isdecimal()
+            # Alternator doesn't set the SizeBytes member. Issue #6931.
+            #assert 'SizeBytes' in record
+            if mode == 'KEYS_ONLY':
                 assert not 'NewImage' in record
-            else:
-                new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
-                assert expected_new_image == new_image
-        elif mode == 'OLD_IMAGE':
-            assert not 'NewImage' in record
-            if expected_old_image == None:
                 assert not 'OldImage' in record
-            else:
-                old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
-                assert expected_old_image == old_image
-        elif mode == 'NEW_AND_OLD_IMAGES':
-            if expected_new_image == None:
+            elif mode == 'NEW_IMAGE':
+                assert not 'OldImage' in record
+                if expected_new_image == None:
+                    assert not 'NewImage' in record
+                else:
+                    new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
+                    assert expected_new_image == new_image
+            elif mode == 'OLD_IMAGE':
                 assert not 'NewImage' in record
+                if expected_old_image == None:
+                    assert not 'OldImage' in record
+                else:
+                    old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
+                    assert expected_old_image == old_image
+            elif mode == 'NEW_AND_OLD_IMAGES':
+                if expected_new_image == None:
+                    assert not 'NewImage' in record
+                else:
+                    new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
+                    assert expected_new_image == new_image
+                if expected_old_image == None:
+                    assert not 'OldImage' in record
+                else:
+                    old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
+                    assert expected_old_image == old_image
             else:
-                new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
-                assert expected_new_image == new_image
-            if expected_old_image == None:
-                assert not 'OldImage' in record
-            else:
-                old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
-                assert expected_old_image == old_image
-        else:
-            pytest.fail('cannot happen')
-    # After the above loop, expected_events_map should remain empty arrays.
-    # If it isn't, one of the expected events did not yet happen. Return False.
-    for entry in expected_events_map.values():
-        if len(entry) > 0:
-            return False
+                pytest.fail('cannot happen')
+        # After the above loop, expected_events_map should remain empty arrays.
+        # If it isn't, one of the expected events did not yet happen. Return False.
+        for entry in expected_events_map.values():
+            if len(entry) > 0:
+                return False
+    except:
+        # Let's print received events for easier debugging.
+        print(f"compare_events failed, when comparing event {compared_event}. Received events:")
+        for e, event in enumerate(output):
+            dd = event['dynamodb']
+            print(f"{e}: {event['eventName']} {dd['Keys']} old: {dd.get('OldImage', None)} new: {dd.get('NewImage', None)}")
+        raise
+
     return True
 
 def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode):
@@ -1113,6 +1129,89 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbst
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+# this will pass on --alternator-write-isolation=only_rmw_uses_lwt
+# but fail on --alternator-write-isolation=always
+def test_streams_batchwrite_into_the_same_partition(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams, TAGS):
+    def do_updates(table, p, c):
+        events = []
+        prev_items = [ None ] * 4
+        for att in range(0, 5):
+            a = att & 3
+            with table.batch_writer() as batch:
+                for index in range(0, 4):
+                    a_value = index + att * 4
+                    if index == a and att > 0:
+                        batch.delete_item(Key={'p': p, 'c': c + str(index)})
+                        if prev_items[index] is not None:
+                            events.append(['REMOVE', {'p': p, 'c': c + str(index)}, prev_items[index], None])
+                            prev_items[index] = None
+                    else:
+                        item = {'p': p, 'c': c + str(index), 'a': a_value}
+                        batch.put_item(Item=item)
+
+                        events.append([('INSERT' if prev_items[index] is None else 'MODIFY'), {'p': p, 'c': c + str(index)}, prev_items[index], {'p': p, 'c': c + str(index), 'a': a_value}])
+                        prev_items[index] = {'p': p, 'c': c + str(index), 'a': a_value}
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_delete_on_empty_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+        ]
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g', )
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {}
+
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ["INSERT",{"c":"c0","p":"p0"},null,{"c":"c0","e":166,"g":166,"p":"p0"}]
+        ]
+        
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g', )
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {}
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression="SET e = :e, g = :g", ExpressionAttributeValues={":e": 166, ":g": 166})
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 166, "g": 166}
+        
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_update_with_delete_failed(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ["INSERT", {"p": "p0", "c": "c0"}, null, {"p": "p0", "c": "c0", "e": 0, "g": 0}],
+            ["MODIFY", {"p": "p0", "c": "c0"}, {"p": "p0", "c": "c0", "e": 0, "g": 0}, {"p": "p0", "c": "c0", "e": 0}],
+        ]
+
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression="SET e = :e, g = :g", ExpressionAttributeValues={":e": 0, ":g": 0})
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 0, "g": 0}
+        try:
+            table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression="SET e = :e, g = :g", ExpressionAttributeValues={":e": 0, ":g": 0, ":olde": 0}, ConditionExpression="e = :olde")
+            assert False
+        except:
+            pass
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 0, "g": 0}
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g', )
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 0}
+
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Replacing an item should result in a MODIFY, rather than REMOVE and MODIFY.
 # Moreover, the old item should be visible in OldImage. Reproduces #6930.

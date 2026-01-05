@@ -1471,11 +1471,12 @@ struct process_change_visitor {
             }
         };
 
+        auto row_state = get_row_state(_clustering_row_states, ckey);
         clustering_row_cells_visitor v(
                 log_ck, _touched_parts, _builder,
-                _enable_updating_state, &ckey, get_row_state(_clustering_row_states, ckey),
+                _enable_updating_state, &ckey, row_state,
                 _clustering_row_states, _generate_delta_values);
-        if (_is_update && _request_options.alternator) {
+        if (_is_update && _request_options.alternator && row_state) {
             v._marker_op = operation::update;
         }
         visit_row_cells(v);
@@ -1494,10 +1495,13 @@ struct process_change_visitor {
     void clustered_row_delete(const clustering_key& ckey, const tombstone&) {
         _touched_parts.set<stats::part_type::ROW_DELETE>();
 
-        auto log_ck = _builder.allocate_new_log_row(_row_delete_op);
-        _builder.set_clustering_columns(log_ck, ckey);
+        auto row_state = _enable_updating_state || _request_options.alternator ? get_row_state(_clustering_row_states, ckey) : nullptr;
+        if (!_request_options.alternator || row_state) {
+            auto log_ck = _builder.allocate_new_log_row(_row_delete_op);
+            _builder.set_clustering_columns(log_ck, ckey);
+        }
 
-        if (_enable_updating_state && get_row_state(_clustering_row_states, ckey)) {
+        if (_enable_updating_state && row_state) {
             _clustering_row_states.erase(ckey);
         }
     }
