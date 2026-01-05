@@ -19,7 +19,7 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::dns_connection_fac
     }
     co_return system_trust_credentials;
 }
-future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger) {
+future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<address_provider> state, std::string host, bool use_https, logging::logger& logger) {
     co_await coroutine::all(
         [state, host]() -> future<> {
             auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
@@ -46,7 +46,7 @@ future<connected_socket> utils::http::dns_connection_factory::connect() {
 }
 
 utils::http::dns_connection_factory::dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger)
-    : _host(std::move(host)), _port(port), _logger(logger), _state(make_lw_shared<state>()), _done(initialize(_state, _host, use_https, _logger)) {
+    : _host(std::move(host)), _port(port), _logger(logger), _state(make_lw_shared<address_provider>()), _done(initialize(_state, _host, use_https, _logger)) {
 }
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
     if (!_state->initialized) {
