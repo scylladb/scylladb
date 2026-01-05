@@ -423,16 +423,21 @@ def test_batch_write_item_large(test_table_sn):
 
 # Test if client breaking connection during HTTP response
 # streaming doesn't break the server.
-def test_batch_write_item_large_broken_connection(test_table_sn, new_dynamodb_session):
+# FIXME: this test was written to reproduce #14454, which has NOTHING to do
+# with testing batches (the batch is just a way to insert a bunch of data).
+# This test shouldn't have this name, shouldn't be in this position of this
+# file or even in this file at all... Also, this test was written to assume
+# the reponse uses HTTP chunked encoding, which isn't true for DynamoDB,
+# making this a scylla-only test...
+def test_batch_write_item_large_broken_connection(test_table_sn, new_dynamodb_session,scylla_only):
     fn_name = sys._getframe().f_code.co_name
     ses = new_dynamodb_session()
 
     p = random_string()
     long_content = random_string(100)*500
-    write_reply = test_table_sn.meta.client.batch_write_item(RequestItems = {
-        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)],
-    })
-    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+    with test_table_sn.batch_writer() as batch:
+        for i in range(25):
+            batch.put_item(Item={'p': p, 'c': i, 'content': long_content})
 
     read_fun = urllib3.HTTPResponse.read_chunked
     triggered = False
