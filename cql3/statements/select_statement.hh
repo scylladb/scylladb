@@ -364,6 +364,9 @@ class vector_indexed_table_select_statement : public select_statement {
     prepared_ann_ordering_type _prepared_ann_ordering;
     mutable gc_clock::time_point _query_start_time_point;
 
+    /// Column name for the similarity score in ANN query results.
+    static constexpr std::string_view similarity_column_name = "vector$similarity";
+
 public:
     static constexpr size_t max_ann_query_limit = 1000;
 
@@ -398,7 +401,15 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            std::vector<dht::partition_range> partition_ranges) const;
+            std::vector<dht::partition_range> partition_ranges, const vector_search::vector_store_client::ann_results& ann_results) const;
+
+    /// Add the vector$similarity column to the result set.
+    ::shared_ptr<cql_transport::messages::result_message> add_similarity_column(
+            ::shared_ptr<cql_transport::messages::result_message> result,
+            const vector_search::vector_store_client::ann_results& ann_results) const;
+
+    /// Create a column specification for the vector$similarity column.
+    lw_shared_ptr<column_specification> make_similarity_column_spec() const;
 };
 
 }

@@ -47,6 +47,8 @@
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/result_set.hh"
+#include "cql3/column_identifier.hh"
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -2092,7 +2094,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
 
             return partition_ranges;
         };
-        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(ann_results));
+        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(ann_results), ann_results);
     }
     co_return co_await query_base_table(qp, state, options, std::move(command), timeout, ann_results);
 }
@@ -2116,22 +2118,100 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
             },
             query::result_merger{command->get_row_limit(), query::max_partitions});
 
-    co_return co_await wrap_result_to_error_message([this, &command, &options](auto result) {
-        return process_results(std::move(result), command, options, _query_start_time_point);
+    co_return co_await wrap_result_to_error_message([this, &command, &options, &ann_results](foreign_ptr<lw_shared_ptr<query::result>> result) {
+        return this->process_results(std::move(result), command, options, _query_start_time_point)
+            .then([this, &ann_results](auto msg) {
+                return add_similarity_column(std::move(msg), ann_results);
+            });
     })(std::move(result));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        std::vector<dht::partition_range> partition_ranges) const {
+        std::vector<dht::partition_range> partition_ranges, const vector_search::vector_store_client::ann_results& ann_results) const {
 
     co_return co_await qp.proxy()
             .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
                     {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
                     std::nullopt)
-            .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
-                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
+            .then(wrap_result_to_error_message([this, &options, command, &ann_results](service::storage_proxy::coordinator_query_result qr) {
+                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point)
+                    .then([this, &ann_results](auto msg) {
+                        return add_similarity_column(std::move(msg), ann_results);
+                    });
             }));
+}
+
+lw_shared_ptr<column_specification> vector_indexed_table_select_statement::make_similarity_column_spec() const {
+    return make_lw_shared<column_specification>(
+        keyspace(),
+        column_family(),
+        ::make_shared<column_identifier>(sstring(similarity_column_name), true),
+        float_type);
+}
+
+::shared_ptr<cql_transport::messages::result_message> vector_indexed_table_select_statement::add_similarity_column(
+        ::shared_ptr<cql_transport::messages::result_message> result,
+        const vector_search::vector_store_client::ann_results& ann_results) const {
+
+    auto rows_result = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(result);
+    if (!rows_result) {
+        // Not a rows result, return as-is
+        return result;
+    }
+
+    // Extract distances from ann_results
+    std::vector<float> similarity_scores;
+    similarity_scores.reserve(ann_results.size());
+    for (const auto& ann_result : ann_results) {
+        similarity_scores.push_back(ann_result.similarity);
+    }
+
+    // Get the result set and create a new one with the similarity column
+    const auto& original_result = rows_result->rs();
+    const auto& original_metadata = original_result.get_metadata();
+    const auto& original_rows = original_result.result_set().rows();
+
+    // Create new metadata with the similarity column added
+    auto original_names = original_metadata.get_names();
+    auto similarity_spec = make_similarity_column_spec();
+    original_names.push_back(similarity_spec);
+
+    auto new_metadata = ::make_shared<cql3::metadata>(std::move(original_names));
+
+    // Copy paging state if present
+    if (original_metadata.paging_state()) {
+        new_metadata->set_paging_state(original_metadata.paging_state());
+    }
+
+    // Create new result set with the additional column
+    auto new_result_set = std::make_unique<cql3::result_set>(new_metadata);
+
+    // Add each row with the similarity value appended
+    size_t row_idx = 0;
+    for (const auto& row : original_rows) {
+        std::vector<managed_bytes_opt> new_row;
+        new_row.reserve(row.size() + 1);
+
+        // Copy original columns
+        for (const auto& cell : row) {
+            new_row.push_back(cell);
+        }
+
+        // Add similarity value
+        if (row_idx < similarity_scores.size()) {
+            auto similarity_bytes = float_type->decompose(similarity_scores[row_idx]);
+            new_row.push_back(managed_bytes(similarity_bytes));
+        } else {
+            // Should not happen, but handle gracefully
+            new_row.push_back(std::nullopt);
+        }
+
+        new_result_set->add_row(std::move(new_row));
+        ++row_idx;
+    }
+
+    return ::make_shared<cql_transport::messages::result_message::rows>(cql3::result(std::move(new_result_set)));
 }
 
 namespace raw {
