@@ -608,6 +608,8 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             // then find a parent - we need it because we know parent's last token, but not first one
             // then we will find first and last child based on first and last token
             // then we will sort found children range back into proper order and return it
+            
+            // sanity check - we should never get here as there is if above (`shard_filter && prev == e` => `continue`)
             if (prev == e) {
                 on_internal_error(elogger, fmt::format("Could not find parent generation for shard id {}, got generations [{}]", shard_filter->id, fmt::join(topologies | std::ranges::views::keys, "; ")));
             }
