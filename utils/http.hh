@@ -21,11 +21,24 @@ namespace utils::http {
 
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
-class address_provider {
-public:
-    bool initialized = false;
+class address_provider{
+    bool _addr_init = false;
+    bool _creds_init = false;
     std::vector<net::inet_address> addr_list;
-    ::shared_ptr<tls::certificate_credentials> creds;
+    shared_ptr<tls::certificate_credentials> _creds;
+    const std::string& _host;
+    size_t _addr_pos{0};
+    bool _use_https;
+
+    future<> init_addresses();
+    future<> init_credentials();
+
+public:
+    address_provider(const std::string& host, bool use_https);
+
+    future<net::inet_address> get_address();
+    future<shared_ptr<tls::certificate_credentials>> get_creds();
+    future<> reset();
 };
 
 class dns_connection_factory : public seastar::http::experimental::connection_factory {
@@ -34,11 +47,8 @@ protected:
     int _port;
     size_t _addr_pos = 0;
     logging::logger& _logger;
-    lw_shared_ptr<address_provider> _state;
-    shared_future<> _done;
+    address_provider _addr_provider;
 
-    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<address_provider> state, std::string host, bool use_https, logging::logger& logger);
     future<connected_socket> connect();
 
 public:
