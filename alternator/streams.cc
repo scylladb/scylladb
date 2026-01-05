@@ -8,6 +8,7 @@
 
 #include <type_traits>
 #include <boost/lexical_cast.hpp>
+#include <boost/regex.hpp>
 #include <boost/io/ios_state.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -91,43 +92,100 @@ static sstring stream_label(const schema& log_schema) {
 
 namespace alternator {
 
-// stream arn _has_ to be 37 or more characters long. ugh...
-// see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_streams_DescribeStream.html#API_streams_DescribeStream_RequestSyntax
+// ARN for streams is actually checked by KCL and it cannot be just at least 37 characters long,
+// it's more complicated, see https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html .
+// We will pretend to be DynamoDB here to avoid any issues with other overeager clients.
+
+class stream_arn {
+    std::string arn_;
+
+    std::string_view find_table_name() const {
+        // this will parse Amazon's ARN format for DynamoDB streams
+        // for example `arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952`
+        // we only care about table name - dynamodb_streams_verification_table_rc
+        // we purposely ignore region/account id etc and optional path after table name
+
+        static boost::regex arn_regex(R"(arn:aws:dynamodb:[^:]+:\d{12}:table\/([^\/]+)\/stream\/.*)");
+
+        boost::cmatch re_match;
+        if (!boost::regex_match(arn_.c_str(), arn_.c_str() + arn_.size(), re_match, arn_regex)) {
+            throw api_error::validation(fmt::format("`{}` is not a valid StreamArn", arn_));
+        }
+        return std::string_view{ re_match[1].first, size_t(re_match[1].length()) };
+    }
+
+public:
+    stream_arn(std::string arn) : arn_(std::move(arn)) {}
+    stream_arn(schema_ptr s) {
+        auto table_name = s->cf_name();
+        arn_ = fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}/stream/2025-12-18T17:38:48.952", table_name);
+    }
+
+    table_id get_table_id(service::storage_proxy& proxy)
+    {
+        auto table_name = find_table_name();
+        if (!cdc::is_log_name(table_name)) {
+            throw api_error::resource_not_found(fmt::format("`{}` is not a valid StreamArn - not a CDC log table", arn_));
+        }
+        // we encoded cdc table as stream arn and table_name will contain cdc log table name
+        // to build keyspace name we need base table name
+        auto ks_name = sstring{ executor::KEYSPACE_NAME_PREFIX } + cdc::base_name(table_name);
+        try {
+            return proxy.data_dictionary().find_schema(ks_name, table_name)->id();
+        } catch(data_dictionary::no_such_column_family&) {
+            throw api_error::resource_not_found(fmt::format("`{}` is not a valid StreamArn - table {} not found", arn_, table_name));
+        }
+    }
+    std::string_view to_string() const {
+        return arn_;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const stream_arn& arn) {
+        os << arn.arn_;
+        return os;
+    }
+};
+
+// ARN for stream shards _has_ to be 37 or more characters long. ugh...
+// So far nothing actually checks those so we will leave them as is.
 // UUID is 36 bytes as string (including dashes). 
 // Prepend a version/type marker -> 37
-class stream_arn : public utils::UUID {
+class stream_shard_arn : public utils::UUID {
 public:
     using UUID = utils::UUID;
     static constexpr char marker = 'S';
 
-    stream_arn() = default;
-    stream_arn(const UUID& uuid)
+    stream_shard_arn() = default;
+    stream_shard_arn(const UUID& uuid)
         : UUID(uuid)
     {}
-    stream_arn(const table_id& tid)
+    stream_shard_arn(const table_id& tid)
         : UUID(tid.uuid())
     {}
-    stream_arn(std::string_view v)
+    stream_shard_arn(std::string_view v)
         : UUID(v.substr(1))
     {
         if (v[0] != marker) {
             throw std::invalid_argument(std::string(v));
         }
     }
-    friend std::ostream& operator<<(std::ostream& os, const stream_arn& arn) {
+    friend std::ostream& operator<<(std::ostream& os, const stream_shard_arn& arn) {
         const UUID& uuid = arn;
         return os << marker << uuid;
     }
-    friend std::istream& operator>>(std::istream& is, stream_arn& arn) {
+    friend std::istream& operator>>(std::istream& is, stream_shard_arn& arn) {
         std::string s;
         is >> s;
-        arn = stream_arn(s);
+        arn = stream_shard_arn(s);
         return is;
     }
 };
 
 } // namespace alternator
 
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_shard_arn>
+    : public from_string_helper<ValueType, alternator::stream_shard_arn>
+{};
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
     : public from_string_helper<ValueType, alternator::stream_arn>
@@ -139,7 +197,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     _stats.api_operations.list_streams++;
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
-    auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
+    auto streams_start = rjson::get_opt<stream_shard_arn>(request, "ExclusiveStartStreamArn");
     auto table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
 
@@ -188,7 +246,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
 
-    std::optional<stream_arn> last;
+    std::optional<stream_shard_arn> last;
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
@@ -202,7 +260,8 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
             rjson::value new_entry = rjson::empty_object();
 
             last = i->schema()->id();
-            rjson::add(new_entry, "StreamArn", *last);
+            auto arn = stream_arn(i->schema());
+            rjson::add(new_entry, "StreamArn", arn);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
@@ -440,9 +499,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     schema_ptr schema, bs;
     auto db = _proxy.data_dictionary();
+    const auto tid = stream_arn.get_table_id(_proxy);
 
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
+        auto cf = db.find_column_family(tid);
         schema = cf.schema();
         bs = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
@@ -483,7 +543,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
 
-    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
+    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema));
     rjson::add(stream_desc, "StreamViewType", type);
     rjson::add(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
 
@@ -727,9 +787,9 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     schema_ptr schema = nullptr;
     std::optional<shard_id> sid;
-
+    const auto tid = stream_arn.get_table_id(_proxy);
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
+        auto cf = db.find_column_family(tid);
         schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
@@ -765,7 +825,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             break;
     }
 
-    shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
+    shard_iterator iter(schema->id().uuid(), *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
@@ -1112,7 +1172,7 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
     if (opts.enabled()) {
         auto db = sp.data_dictionary();
         auto cf = db.find_table(schema.ks_name(), cdc::log_name(schema.cf_name()));
-        stream_arn arn(cf.schema()->id());
+        stream_arn arn(cf.schema());
         rjson::add(descr, "LatestStreamArn", arn);
         rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
 
