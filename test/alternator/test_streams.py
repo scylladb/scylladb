@@ -2011,6 +2011,73 @@ def test_stream_table_name_length_192_update(dynamodb, dynamodbstreams):
         # is in the process of being added
         wait_for_active_stream(dynamodbstreams, table)
 
+# NOTE: it's hard to add child stream shards on vnodes,
+# filtering with children will be added in streams for tablets patch
+def test_stream_shard_filtering_simple_no_children(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        arn = streams['Streams'][0]['StreamArn']
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+        desc_filtered = dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': shard_id,
+            'Type': 'CHILD_SHARDS'
+        })
+        assert desc_filtered
+        assert desc_filtered.get('StreamDescription')
+        assert desc_filtered['StreamDescription']['StreamArn'] == arn
+        assert desc_filtered['StreamDescription']['StreamStatus'] != 'DISABLED'
+        assert desc_filtered['StreamDescription']['StreamViewType'] == 'KEYS_ONLY'
+        assert desc_filtered['StreamDescription']['TableName'] == table.name
+        shards = desc_filtered['StreamDescription'].get('Shards')
+        assert not shards # no children
+
+def test_stream_shard_filtering_wrong_type(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        arn = streams['Streams'][0]['StreamArn']
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+        with pytest.raises(ClientError, match='ValidationException'):
+            dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+                'ShardId': shard_id,
+                'Type': 'foo'
+            })
+
+def test_stream_shard_filtering_wrong_shard_id(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        arn = streams['Streams'][0]['StreamArn']
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+        with pytest.raises(ClientError, match='ValidationException'):
+            dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+                'ShardId': "qwerty",
+                'Type': 'CHILD_SHARDS'
+            })
+
+def test_stream_shard_filtering_missing_type(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        arn = streams['Streams'][0]['StreamArn']
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+        with pytest.raises(ClientError, match='ValidationException'):
+            dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+                'ShardId': shard_id,
+            })
+
+def test_stream_shard_filtering_missing_shard_id(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        arn = streams['Streams'][0]['StreamArn']
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+        with pytest.raises(ClientError, match='ValidationException'):
+            dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+                'Type': 'CHILD_SHARDS'
+            })
+
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
 #   requires the user to wait for the first stream to become DISABLED before
