@@ -29,6 +29,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/selection/selector.hh"
 #include "index/secondary_index.hh"
 #include "types/vector.hh"
 #include "validation.hh"
@@ -1960,11 +1961,66 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
+std::optional<size_t> vector_indexed_table_select_statement::find_matching_similarity_function(
+        const std::vector<selection::prepared_selector>& prepared_selectors,
+        const prepared_ann_ordering_type& ann_ordering,
+        const sstring& index_similarity_function) {
+    // Build the expected function name from the index similarity function option
+    // Index options use: "cosine", "euclidean", "dot_product"
+    // Function names are: "similarity_cosine", "similarity_euclidean", "similarity_dot_product"
+    auto expected_func_name = functions::function_name::native_function("similarity_" + index_similarity_function);
+
+    for (size_t i = 0; i < prepared_selectors.size(); ++i) {
+        const auto& selector = prepared_selectors[i];
+        const auto* func_call = expr::as_if<expr::function_call>(&selector.expr);
+        if (!func_call) {
+            continue;
+        }
+
+        // Check if it's a similarity function (after preparation, func is shared_ptr<function>)
+        functions::function_name actual_func_name;
+        const auto* func_ptr = std::get_if<shared_ptr<db::functions::function>>(&func_call->func);
+        if (!func_ptr || !*func_ptr) {
+            // Check if it's still a function_name (before full preparation)
+            const auto* func_name_ptr = std::get_if<functions::function_name>(&func_call->func);
+            if (!func_name_ptr) {
+                continue;
+            }
+            actual_func_name = *func_name_ptr;
+        } else {
+            actual_func_name = (*func_ptr)->name();
+        }
+
+        // Check if the function matches the index's similarity function (not just any similarity function)
+        if (actual_func_name != expected_func_name) {
+            continue;
+        }
+
+        // Check that it has exactly 2 arguments
+        if (func_call->args.size() != 2) {
+            continue;
+        }
+
+        // Check if the first argument is the same column as the ANN ordering column
+        const auto* col_val = expr::as_if<expr::column_value>(&func_call->args[0]);
+        if (!col_val || col_val->col != ann_ordering.first) {
+            continue;
+        }
+
+        // Check if the second argument matches the ANN ordering expression
+        if (func_call->args[1] == ann_ordering.second) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs) {
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs,
+        const std::vector<selection::prepared_selector>& prepared_selectors) {
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     auto [index_opt, _] = restrictions->find_idx(sim);
@@ -1986,20 +2042,36 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
         throw std::runtime_error("No index found.");
     }
 
+    // Get the similarity function from the index options (defaults to "cosine" if not specified)
+    sstring index_similarity_function = "cosine";
+    auto sim_func_it = index_opt->metadata().options().find("similarity_function");
+    if (sim_func_it != index_opt->metadata().options().end()) {
+        index_similarity_function = sim_func_it->second;
+        // Normalize to lowercase
+        std::transform(index_similarity_function.begin(), index_similarity_function.end(),
+                       index_similarity_function.begin(), ::tolower);
+    }
+
+    // Find if there's a similarity function in the selection that matches the ANN ordering
+    // and the index's similarity function
+    auto similarity_column_idx = find_matching_similarity_function(prepared_selectors, prepared_ann_ordering, index_similarity_function);
+
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
-            std::move(per_partition_limit), stats, *index_opt, std::move(attrs));
+            std::move(per_partition_limit), stats, *index_opt, std::move(attrs), similarity_column_idx);
 }
 
 vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs)
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs,
+        std::optional<size_t> similarity_column_idx)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}
-    , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
+    , _prepared_ann_ordering(std::move(prepared_ann_ordering))
+    , _similarity_column_idx(similarity_column_idx) {
 
     if (!limit.has_value()) {
         throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
@@ -2142,17 +2214,14 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
             }));
 }
 
-lw_shared_ptr<column_specification> vector_indexed_table_select_statement::make_similarity_column_spec() const {
-    return make_lw_shared<column_specification>(
-        keyspace(),
-        column_family(),
-        ::make_shared<column_identifier>(sstring(similarity_column_name), true),
-        float_type);
-}
-
 ::shared_ptr<cql_transport::messages::result_message> vector_indexed_table_select_statement::add_similarity_column(
         ::shared_ptr<cql_transport::messages::result_message> result,
         const vector_search::vector_store_client::ann_results& ann_results) const {
+
+    // Only process if a matching similarity function was found in the selection
+    if (!_similarity_column_idx.has_value()) {
+        return result;
+    }
 
     auto rows_result = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(result);
     if (!rows_result) {
@@ -2167,44 +2236,29 @@ lw_shared_ptr<column_specification> vector_indexed_table_select_statement::make_
         similarity_scores.push_back(ann_result.similarity);
     }
 
-    // Get the result set and create a new one with the similarity column
+    const size_t sim_col_idx = *_similarity_column_idx;
+
+    // Get the result set and create a new one with substituted similarity values
     const auto& original_result = rows_result->rs();
     const auto& original_metadata = original_result.get_metadata();
     const auto& original_rows = original_result.result_set().rows();
 
-    // Create new metadata with the similarity column added
-    auto original_names = original_metadata.get_names();
-    auto similarity_spec = make_similarity_column_spec();
-    original_names.push_back(similarity_spec);
+    // Create new result set with substituted similarity values
+    auto new_result_set = std::make_unique<cql3::result_set>(original_metadata.get_names());
 
-    auto new_metadata = ::make_shared<cql3::metadata>(std::move(original_names));
-
-    // Copy paging state if present
-    if (original_metadata.paging_state()) {
-        new_metadata->set_paging_state(original_metadata.paging_state());
-    }
-
-    // Create new result set with the additional column
-    auto new_result_set = std::make_unique<cql3::result_set>(new_metadata);
-
-    // Add each row with the similarity value appended
     size_t row_idx = 0;
     for (const auto& row : original_rows) {
         std::vector<managed_bytes_opt> new_row;
-        new_row.reserve(row.size() + 1);
+        new_row.reserve(row.size());
 
-        // Copy original columns
-        for (const auto& cell : row) {
-            new_row.push_back(cell);
-        }
-
-        // Add similarity value
-        if (row_idx < similarity_scores.size()) {
-            auto similarity_bytes = float_type->decompose(similarity_scores[row_idx]);
-            new_row.push_back(managed_bytes(similarity_bytes));
-        } else {
-            // Should not happen, but handle gracefully
-            new_row.push_back(std::nullopt);
+        for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
+            if (col_idx == sim_col_idx && row_idx < similarity_scores.size()) {
+                // Substitute the similarity function result with the pre-computed distance
+                auto similarity_bytes = float_type->decompose(similarity_scores[row_idx]);
+                new_row.push_back(managed_bytes(similarity_bytes));
+            } else {
+                new_row.push_back(row[col_idx]);
+            }
         }
 
         new_result_set->add_row(std::move(new_row));
@@ -2474,7 +2528,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     } else if (prepared_ann_ordering) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs), prepared_selectors);
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,
