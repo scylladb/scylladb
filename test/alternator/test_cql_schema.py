@@ -114,12 +114,6 @@ def test_alternator_vs_cql(dynamodb, test_table, cql_keyspace, cql_table, option
 @pytest.fixture(scope='module')
 def table1(dynamodb):
     with new_test_table(dynamodb,
-        # Alternator Streams is expected to fail with tablets due to #23838.
-        # To ensure that this test still runs, instead of xfailing it, we
-        # temporarily coerce Alternator to avoid using default tablets
-        # setting, even if it's available. Remove this "Tags=" line when
-        # issue #23838 is solved.
-        Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
         KeySchema=[
             # Must have both hash key and range key to allow LSI creation
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
