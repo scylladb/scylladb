@@ -47,8 +47,7 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
     if (_state->creds) {
         _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr_list, _host);
         co_return co_await tls::connect(_state->creds, socket_addr, tls::tls_options{.server_name = _host});
-    } else {
-        _logger.debug("Making new HTTP connection");
-        co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
     }
+    _logger.debug("Making new HTTP connection");
+    co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
 }
