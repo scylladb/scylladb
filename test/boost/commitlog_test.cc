@@ -47,6 +47,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "checked-file-impl.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_test)
 
@@ -1928,7 +1929,7 @@ SEASTAR_TEST_CASE(test_oversized_entry_large) {
     co_await do_test_oversized_entry(32*3); // bigger segments
 }
 
-static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
+static future<> test_oversized(size_t n_entries, size_t max_size_mb, std::function<future<>(commitlog&)> pre_test = {}, db::extensions* exts = nullptr) {
     commitlog::config cfg;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
@@ -1936,6 +1937,7 @@ static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
     cfg.allow_going_over_size_limit = false;
     cfg.allow_fragmented_entries = true;
     cfg.use_o_dsync = false; 
+    cfg.extensions = exts;
 
     // not using cl_test, because we need to be able to abandon
     // the log.
@@ -1951,6 +1953,10 @@ static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
 
         auto log = co_await commitlog::create_commitlog(cfg);
         auto size = log.max_record_size() * 2 + dist(gen) * 1024 + dist(gen) * 64;
+
+        if (pre_test) {
+            co_await pre_test(log);
+        }
 
         // TODO: we can't create multi-entries using current API.
         for (size_t i = 0; i < n_entries; ++i) {
@@ -1990,6 +1996,10 @@ static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
                 auto&& buf_in = buf_rp.buffer;
                 auto&& rp_in = buf_rp.position;
 
+                if (!rp2buf.count(rp_in)) {
+                    co_return;
+                }
+
                 auto& buf = rp2buf.at(rp_in);
                 BOOST_CHECK_EQUAL(buf.size_bytes(), buf_in.size_bytes());
                 fragmented_temporary_buffer::view v1(buf); 
@@ -2021,12 +2031,112 @@ SEASTAR_TEST_CASE(test_oversized_several_small) {
     co_await test_oversized(8, 1);
 }
 
+SEASTAR_TEST_CASE(test_oversized_many_small) {
+    co_await test_oversized(32, 1);
+}
+
 SEASTAR_TEST_CASE(test_oversized_several_medium) {
     co_await test_oversized(8, 8);
 }
 
+SEASTAR_TEST_CASE(test_oversized_many_medium) {
+    co_await test_oversized(32, 8);
+}
+
 SEASTAR_TEST_CASE(test_oversized_several_large) {
     co_await test_oversized(8, 32);
+}
+
+// Test for #27992.
+// Does whiteboxing to provoke/fake the race condition when
+// the semaphore wait in oversized_alloc has in fact acquired
+// all units, bringing the sem count to zero, but task reordering
+// causes a segment::terminate() call to allocate a new buffer
+// before we do the sanity asserts -> crash
+SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
+    auto exts = std::make_unique<db::extensions>();
+    static auto nada = [](std::exception_ptr) {};
+
+    // use a file wrapper to enable us to block file writing 
+    // and simulate task reordering like above
+    class my_file_impl : public checked_file_impl {
+    public:
+        promise<> **_promise, **_signal;
+        my_file_impl(file f, promise<> **p, promise<> **s)
+            : checked_file_impl(nada, std::move(f))
+            , _promise(p)
+            , _signal(s)
+        {}
+        future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+            if (auto p = std::exchange(*_promise, nullptr)) {
+                if (auto s = std::exchange(*_signal, nullptr)) {
+                    s->set_value();
+                }
+                co_await p->get_future();
+            }
+            co_return co_await checked_file_impl::write_dma(pos, buffer, len, intent);
+        }
+    };
+    // use extensions to wrap all cl files for this
+    class my_cl_ext : public commitlog_file_extension {
+    public:
+        promise<> **_promise, **_signal;
+        my_cl_ext(promise<> **p, promise<> **s)
+            : _promise(p)
+            , _signal(s)
+        {}
+        seastar::future<seastar::file> wrap_file(const seastar::sstring&, seastar::file f, seastar::open_flags) override {
+            co_return make_shared<my_file_impl>(std::move(f), _promise, _signal);
+        }
+        seastar::future<> before_delete(const seastar::sstring& filename) override {
+            return make_ready_future<>();
+        }
+    };
+    // our signals
+    promise<> *waiter = nullptr;
+    promise<> *signal = nullptr;
+    exts->add_commitlog_file_extension("delay_files", std::make_unique<my_cl_ext>(&waiter, &signal));
+
+    co_await test_oversized(1, 32, [&](commitlog& log) -> future<> {
+        // use whitebox callback interface. No other way to do this
+        // in any reliable way
+        log.set_oversized_pre_wait_memory_func([&] -> future<> {
+            //co_await log.sync_all_segments();
+            // set up signals
+            promise<> p, s;
+            waiter = &p;
+            signal = &s;
+            auto f = s.get_future();
+            // this will call segment::terminate(), which 
+            // will find active segment has data but is 
+            // not max size, so will try to write
+            // a terminating buffer to the file.
+            // This causes a buffer allocation, which,
+            // since current count now is zero (no waiters)
+            // will force _request_controller to negative
+            (void)log.force_new_active_segment();
+            // wait for IO block
+            co_await std::move(f);
+            // release IO block. It will not run until next
+            // co_await.
+            p.set_value();
+            waiter = nullptr;
+            signal = nullptr;
+        });
+
+        // ensure we have a small entry in the first segment
+        // so that the sync_all_segments above will actually do
+        // something.
+        static const char buster[] = "womprats";
+        auto h = co_await log.add_mutation(make_table_id(), sizeof(buster), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(buster, sizeof(buster));
+        });
+        h.release();
+
+        // write all data to disk so only terminate
+        // will actually do IO
+        co_await log.sync_all_segments();
+    }, exts.get());
 }
 
 // tests #20862 - buffer usage counter not being updated correctly
