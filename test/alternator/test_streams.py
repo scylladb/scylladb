@@ -524,6 +524,10 @@ def create_table_s_no_ck(dynamodb, dynamodbstreams, type):
     yield table, arn
     table.delete()
 
+@pytest.fixture(scope="module")
+def test_table_ss_module_scope(dynamodb, dynamodbstreams):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+
 @pytest.fixture(scope="function")
 def test_table_sss_new_and_old_images_lsi(dynamodb, dynamodbstreams):
     yield from create_table_sss_lsi(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
@@ -2042,6 +2046,70 @@ def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_
                 table.name: [{'PutRequest': {'Item': {'p': p, 'c': cc, 'x': cc}}} for cc in cs]})
             return [['INSERT', {'p': p, 'c': cc}, None, {'p': p, 'c': cc, 'x': cc}] for cc in cs]
         do_test(stream, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# NOTE: it's hard to add child stream shards on vnodes - we have no easy way to
+# trigger new shard stream generation creation. We will be testing this on
+# tablets in the future.
+# filtering with children will be added in streams for tablets patch
+def test_stream_shard_filtering_simple_no_children(test_table_ss_module_scope, dynamodbstreams):
+    streams = dynamodbstreams.list_streams(TableName=test_table_ss_module_scope.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    desc_filtered = dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+        'ShardId': shard_id,
+        'Type': 'CHILD_SHARDS'
+    })
+    assert desc_filtered
+    assert desc_filtered.get('StreamDescription')
+    assert desc_filtered['StreamDescription']['StreamArn'] == arn
+    assert desc_filtered['StreamDescription']['StreamStatus'] != 'DISABLED'
+    assert desc_filtered['StreamDescription']['StreamViewType'] == 'KEYS_ONLY'
+    assert desc_filtered['StreamDescription']['TableName'] == test_table_ss_module_scope.name
+    shards = desc_filtered['StreamDescription'].get('Shards')
+    assert not shards # no children
+
+def test_stream_shard_filtering_wrong_type(test_table_ss_module_scope, dynamodbstreams):
+    streams = dynamodbstreams.list_streams(TableName=test_table_ss_module_scope.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': shard_id,
+            'Type': 'foo'
+        })
+
+def test_stream_shard_filtering_wrong_shard_id(test_table_ss_module_scope, dynamodbstreams):
+    streams = dynamodbstreams.list_streams(TableName=test_table_ss_module_scope.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': "qwerty",
+            'Type': 'CHILD_SHARDS'
+        })
+
+def test_stream_shard_filtering_missing_type(test_table_ss_module_scope, dynamodbstreams):
+    streams = dynamodbstreams.list_streams(TableName=test_table_ss_module_scope.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'ShardId': shard_id,
+        })
+
+def test_stream_shard_filtering_missing_shard_id(test_table_ss_module_scope, dynamodbstreams):
+    streams = dynamodbstreams.list_streams(TableName=test_table_ss_module_scope.name)
+    arn = streams['Streams'][0]['StreamArn']
+    desc = dynamodbstreams.describe_stream(StreamArn=arn)
+    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.describe_stream(StreamArn=arn, ShardFilter={
+            'Type': 'CHILD_SHARDS'
+        })
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
