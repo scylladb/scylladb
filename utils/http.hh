@@ -19,17 +19,18 @@
 
 namespace utils::http {
 
+struct state {
+    bool initialized = false;
+    std::vector<net::inet_address> addr_list;
+    ::shared_ptr<tls::certificate_credentials> creds;
+};
+
 class dns_connection_factory : public seastar::http::experimental::connection_factory {
 protected:
     std::string _host;
     int _port;
     size_t _addr_pos = 0;
     logging::logger& _logger;
-    struct state {
-        bool initialized = false;
-        std::vector<net::inet_address> addr_list;
-        ::shared_ptr<tls::certificate_credentials> creds;
-    };
     lw_shared_ptr<state> _state;
     shared_future<> _done;
 
@@ -37,6 +38,7 @@ protected:
 
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
     static future<> initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger);
+    future<connected_socket> connect();
 
 public:
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger);
