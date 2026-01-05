@@ -1884,6 +1884,11 @@ async def test_update_load_stats_after_migration(manager: ManagerClient):
     async def get_tablet_sizes(table):
         return await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table}")
 
+    # Disable load balancing to avoid the balancer moving the tablet from a node with less to a node with more
+    # available disk space. Otherwise, the move_tablet API can fail (if the tablet is already in transisiton) or
+    # be a no-op (in case the tablet has already been migrated)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
 
