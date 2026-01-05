@@ -1752,12 +1752,12 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         }
     }
 
-    const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
+    rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     if (gsi) {
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
-        for (const rjson::value& g : gsi->GetArray()) {
+        for (rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
                 co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
@@ -1811,6 +1811,11 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
+
+            // we need to add those two attributes as return value requires them
+            rjson::add(g, "IndexStatus", "CREATING");
+            rjson::add(g, "Backfilling", rjson::value(true));
+
         }
     }
     if (!unused_attribute_definitions.empty()) {
@@ -2013,7 +2018,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container()]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, permit = std::move(permit), &e = this->container()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -2227,8 +2232,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
-        supplement_table_info(request, *schema, p.local());
-        rjson::add(status, "TableDescription", std::move(request));
+        auto cs = client_state_other_shard.get();
+        rjson::value table_description = co_await fill_table_description(schema, table_status::updating, p.local(), cs, gt, permit);
+        rjson::add(status, "TableDescription", std::move(table_description));
         co_return rjson::print(std::move(status));
     });
 }
