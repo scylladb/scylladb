@@ -192,6 +192,8 @@ public:
     static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
+    static constexpr auto CDC_TIMESTAMPS = "cdc_timestamps";
+    static constexpr auto CDC_STREAMS = "cdc_streams";
     static constexpr auto CDC_STREAMS_STATE = "cdc_streams_state";
     static constexpr auto CDC_STREAMS_HISTORY = "cdc_streams_history";
     static constexpr auto TABLETS = "tablets";
@@ -585,6 +587,9 @@ public:
 
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f);
     future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
+
+    future<std::map<db_clock::time_point, cdc::streams_version>> read_cdc_for_tablets_versioned_streams(const sstring &ks_name, const sstring &table_name, db_clock::time_point not_older_than = db_clock::time_point::min());
+    future<db_clock::time_point> read_cdc_for_tablets_current_generation_timestamp(const sstring &ks_name, const sstring &table_name);
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();
