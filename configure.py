@@ -391,9 +391,9 @@ def find_compiler(name):
     return None
 
 
-def resolve_compilers_for_sccache(args, compiler_cache):
+def resolve_compilers_for_compiler_cache(args, compiler_cache):
     """
-    When using sccache, resolve compiler paths to avoid ccache directories.
+    When using a compiler cache, resolve compiler paths to avoid ccache directories.
 
     This prevents double-caching when ccache symlinks are in PATH.
 
@@ -401,7 +401,7 @@ def resolve_compilers_for_sccache(args, compiler_cache):
         args: The argument namespace with cc and cxx attributes.
         compiler_cache: Path to the compiler cache binary, or None.
     """
-    if not compiler_cache or 'sccache' not in compiler_cache:
+    if not compiler_cache:
         return
     if not os.path.isabs(args.cxx):
         real_cxx = find_compiler(args.cxx)
@@ -3026,7 +3026,7 @@ def create_build_system(args):
     os.makedirs(outdir, exist_ok=True)
 
     compiler_cache = find_compiler_cache(args.compiler_cache)
-    resolve_compilers_for_sccache(args, compiler_cache)
+    resolve_compilers_for_compiler_cache(args, compiler_cache)
 
     scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
 
@@ -3113,7 +3113,7 @@ def configure_using_cmake(args):
                                 in selected_modes)
 
     compiler_cache = find_compiler_cache(args.compiler_cache)
-    resolve_compilers_for_sccache(args, compiler_cache)
+    resolve_compilers_for_compiler_cache(args, compiler_cache)
 
     settings = {
         'CMAKE_CONFIGURATION_TYPES': selected_configs,
