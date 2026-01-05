@@ -3147,6 +3147,10 @@ public:
             } else {
                 ret = mutation_builder.build(schema, ts);
             }
+
+            // ensure unique timestamps
+            // timestamp +- 1 has some additional meaning, so we add 2
+            ts += 2;
         }
         return ret;
     }
@@ -3240,6 +3244,10 @@ future<> executor::do_batch_write(
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));
             any_cdc_enabled |= b.first->cdc_options().enabled();
+
+            // ensure unique timestamps
+            // timestamp +- 1 has some additional meaning, so we add 2
+            now += 2;
         }
         return _proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
