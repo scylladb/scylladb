@@ -360,6 +360,31 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams, TAG
                     StreamArn=arn, ShardId='adfasdasdasdasdasdasdasdasdasasdasd', ShardIteratorType='LATEST'
                 )
 
+def iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=None):
+    params = {
+        'StreamArn': arn
+    }
+    if filter_shard_id is not None:
+        params['ShardFilter'] = {
+            'Type': 'CHILD_SHARDS',
+            'ShardId': filter_shard_id
+        }
+    if time.time() >= end_ts:
+        assert False, "Timed out waiting for shards"
+    desc = dynamodbstreams.describe_stream(**params)
+
+    while True:
+        shards = desc['StreamDescription']['Shards']
+
+        for shard in shards:
+            yield shard
+
+        last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
+        if not last_shard:
+            break
+
+        desc = dynamodbstreams.describe_stream(ExclusiveStartShardId=last_shard, **params)
+
 def test_get_records(dynamodb, dynamodbstreams, TAGS):
     # TODO: add tests for storage/transactionable variations and global/local index
     with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES') as table:
@@ -386,23 +411,13 @@ def test_get_records(dynamodb, dynamodbstreams, TAGS):
         # but it is useful to see a working null-iteration as well, so 
         # lets go already.
         while True:
-            desc = dynamodbstreams.describe_stream(StreamArn=arn)
             iterators = []
 
-            while True:
-                shards = desc['StreamDescription']['Shards']
-
-                for shard in shards:
-                    shard_id = shard['ShardId']
-                    start = shard['SequenceNumberRange']['StartingSequenceNumber']
-                    iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
-                    iterators.append(iter)
-
-                last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
-                if not last_shard:
-                    break
-
-                desc = dynamodbstreams.describe_stream(StreamArn=arn, ExclusiveStartShardId=last_shard)
+            for shard in iterate_over_describe_stream(dynamodbstreams, arn, time.time() + 60):
+                shard_id = shard['ShardId']
+                start = shard['SequenceNumberRange']['StartingSequenceNumber']
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
+                iterators.append(iter)
 
             next_iterators = []
             while iterators:
@@ -1401,14 +1416,8 @@ def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstrea
         UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
     # Get for all the stream shards the iterator starting at the shard's
     # StartingSequenceNumber:
-    response = dynamodbstreams.describe_stream(StreamArn=arn)
-    shards = response['StreamDescription']['Shards']
-    while 'LastEvaluatedShardId' in response['StreamDescription']:
-        response = dynamodbstreams.describe_stream(StreamArn=arn,
-            ExclusiveStartShardId=response['StreamDescription']['LastEvaluatedShardId'])
-        shards.extend(response['StreamDescription']['Shards'])
     iterators = []
-    for shard in shards:
+    for shard in iterate_over_describe_stream(dynamodbstreams, arn, time.time() + 60):
         shard_id = shard['ShardId']
         start = shard['SequenceNumberRange']['StartingSequenceNumber']
         assert start.isdecimal()
