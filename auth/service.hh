@@ -132,6 +132,27 @@ public:
             maintenance_socket_enabled,
             cache&);
 
+    /// Factory function types for creating auth module instances on each shard.
+    using authorizer_factory = std::function<std::unique_ptr<authorizer>()>;
+    using authenticator_factory = std::function<std::unique_ptr<authenticator>()>;
+    using role_manager_factory = std::function<std::unique_ptr<role_manager>()>;
+
+    ///
+    /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
+    /// arguments must be copyable, which is why we delay construction with instance-construction factories instead
+    /// of the instances themselves.
+    ///
+    service(
+            utils::loading_cache_config,
+            cql3::query_processor&,
+            ::service::raft_group0_client&,
+            ::service::migration_notifier&,
+            authorizer_factory,
+            authenticator_factory,
+            role_manager_factory,
+            maintenance_socket_enabled,
+            cache&);
+
     future<> start(::service::migration_manager&, db::system_keyspace&);
 
     future<> stop();
