@@ -8,6 +8,7 @@
 
 #include <type_traits>
 #include <boost/lexical_cast.hpp>
+#include <boost/regex.hpp>
 #include <boost/io/ios_state.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -134,6 +135,11 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
 {};
 
 namespace alternator {
+
+static sstring get_table_name_from_stream_arn(std::string_view arn);
+static table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view arn);
+static std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(service::storage_proxy& proxy, std::string_view arn);
+static std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(service::storage_proxy& proxy, const rjson::value &request);
 
 future<alternator::executor::request_return_type> alternator::executor::list_streams(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.list_streams++;
@@ -434,23 +440,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100); // according to spec
     auto ret = rjson::empty_object();
     auto stream_desc = rjson::empty_object();
-    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
-    // I.e. unparsable arn -> error. 
-    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
 
-    schema_ptr schema, bs;
+    auto [ schema, bs, stream_arn ] = get_stream_schema_and_base_schema_from_request(_proxy, request);
+
     auto db = _proxy.data_dictionary();
-
-    try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
-        bs = cdc::get_base_table(db.real_database(), *schema);
-    } catch (...) {        
-    }
- 
-    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found("Invalid StreamArn");
-    }
 
     if (limit < 1) {
         throw api_error::validation("Limit must be 1 or more");
@@ -720,20 +713,14 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
         throw api_error::validation("Iterator of this type should not have sequence number");
     }
 
-    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
     auto db = _proxy.data_dictionary();
 
-    schema_ptr schema = nullptr;
+    auto [ schema, bs, stream_arn ] = get_stream_schema_and_base_schema_from_request(_proxy, request);
     std::optional<shard_id> sid;
 
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
-    }
-    if (!schema || !cdc::get_base_table(db.real_database(), *schema) || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found("Invalid StreamArn");
     }
     if (!sid) {
         throw api_error::resource_not_found("Invalid ShardId");
@@ -763,7 +750,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             break;
     }
 
-    shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
+    shard_iterator iter(alternator::stream_arn(schema->id()), *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
@@ -1125,6 +1112,62 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         rjson::add(stream_desc, "StreamViewType", mode);
         rjson::add(descr, "StreamSpecification", std::move(stream_desc));
     }
+}
+
+static boost::regex arn_regex(R"(arn:aws:dynamodb:[^:]+:\d{12}:[^\/]+\/([^\/]+)\/[^\/]+\/.+)");
+
+sstring get_table_name_from_stream_arn(std::string_view arn)
+{
+    boost::cmatch re_match;
+    if (!boost::regex_match(arn.data(), arn.data() + arn.size(), re_match, arn_regex)) {
+        throw api_error::validation(std::format("`{}` is not a valid StreamArn", arn));
+    }
+    return re_match[1].str();
+}
+
+table_id get_cdc_log_table_id_from_stream_arn(service::storage_proxy& proxy, std::string_view arn)
+{
+    try {
+        return table_id(stream_arn{ arn });
+    }
+    catch(...) {
+        // we except here either std::invalid_format or marshal_exception - both mean not our format
+    }
+    auto table_name = get_table_name_from_stream_arn(arn);
+    auto ks_name = sstring{ executor::KEYSPACE_NAME_PREFIX } + table_name;
+    if (!cdc::is_log_name(table_name)) {
+        table_name = cdc::log_name(table_name);
+    }
+    try {
+        return proxy.data_dictionary().find_schema(ks_name, table_name)->id();
+    } catch(data_dictionary::no_such_column_family&) {
+        throw api_error::resource_not_found(std::format("Invalid StreamArn - table {} not found", table_name));
+    }
+}
+
+std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(service::storage_proxy& proxy, std::string_view arn) {
+    // local java dynamodb server does _not_ validate the arn syntax. But "real" one does. 
+    // I.e. unparsable arn -> error. 
+    auto stream_arn = get_cdc_log_table_id_from_stream_arn(proxy, arn);
+
+    schema_ptr schema, bs;
+    try {
+        auto cf = proxy.data_dictionary().find_column_family(table_id(stream_arn));
+        schema = cf.schema();
+        bs = cdc::get_base_table(proxy.data_dictionary().real_database(), *schema);
+    } catch (...) {
+    }
+ 
+    if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
+        throw api_error::resource_not_found("Invalid StreamArn");
+    }
+    return { std::move(schema), std::move(bs) };
+}
+
+std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(service::storage_proxy& proxy, const rjson::value &request) {
+    auto stream_arn = rjson::get<std::string>(request, "StreamArn");
+    auto [ schema, bs ] = get_stream_schema_and_base_schema_from_arn(proxy, stream_arn);
+    return { std::move(schema), std::move(bs), std::move(stream_arn) };
 }
 
 } // namespace alternator
