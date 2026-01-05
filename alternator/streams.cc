@@ -494,9 +494,31 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
+    auto topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
 
-    std::map<db_clock::time_point, cdc::streams_version> topologies = co_await _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners });
-    auto e = topologies.end();
+    std::optional<shard_id> shard_filter;
+
+    if (const rjson::value *shard_filter_obj = rjson::find(request, "ShardFilter")) {
+        if (!shard_filter_obj->IsObject()) {
+            throw api_error::validation("Invalid ShardFilter value - must be object");
+        }
+        std::string type;
+        try {
+            type = rjson::get<std::string>(*shard_filter_obj, "Type");
+        } catch (...) {
+            throw api_error::validation("Invalid ShardFilter.Type value - must be string `CHILD_SHARDS`");
+        }
+        if (type != "CHILD_SHARDS") {
+            throw api_error::validation("Invalid ShardFilter.Type value - must be string `CHILD_SHARDS`");
+        }
+        try {
+            shard_filter = rjson::get<shard_id>(*shard_filter_obj, "ShardId");
+        } catch (std::exception &e) {
+            throw api_error::validation(std::format("Invalid ShardFilter.ShardId value - not a valid ShardId: {}", e.what()));
+        }
+    }
+
+    const auto e = topologies.end();
     auto prev = e;
     auto shards = rjson::empty_array();
 
@@ -535,6 +557,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     for (; limit > 0 && i != e; prev = i, ++i) {
         auto& [ts, sv] = *i;
 
+        if (shard_filter && (prev == e || prev->first != shard_filter->time)) {
+            shard_start = std::nullopt;
+            continue;
+        }
         last = std::nullopt;
 
         auto lo = sv.streams.begin();
@@ -565,6 +591,50 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             return j->first + confidence_interval(db);
         }();
 
+        if (shard_filter) {
+            // instead of iterating over all potential children and checking we will sort both children and parents
+            // then find a parent - we need it because we know parent's last token, but not first one
+            // then we will find first and last child based on first and last token
+            // then we will sort found children range back into proper order and return it
+            assert(prev != e);
+
+            auto parent_shard_id_it = std::lower_bound(prev->second.streams.begin(), prev->second.streams.end(), shard_filter->id.token(), [](const cdc::stream_id& id, const dht::token& t) {
+                return id.token() < t;
+            });
+            std::stable_sort(i->second.streams.begin(), i->second.streams.end(), token_cmp);
+            auto higher_parent_token = parent_shard_id_it->token();
+            auto last_child_it = std::lower_bound(lo, end, higher_parent_token, [](const cdc::stream_id& id, const dht::token& t) {
+                return id.token() < t;
+            });
+            if (parent_shard_id_it == prev->second.streams.begin()) {
+                lo = i->second.streams.begin();
+            }
+            else {
+                auto lower_parent_token = [&]() {
+                    if (parent_shard_id_it == prev->second.streams.begin()) {
+                        return dht::token::first();
+                    }
+                    return std::prev(parent_shard_id_it)->token();
+                }();
+
+                assert(lower_parent_token < higher_parent_token);
+
+                auto first_child_it = std::lower_bound(lo, end, lower_parent_token, [](const cdc::stream_id& id, const dht::token& t) {
+                    return id.token() < t;
+                });
+
+                assert(first_child_it != i->second.streams.end());
+                if (first_child_it->token() == lower_parent_token) {
+                    assert(first_child_it != last_child_it);
+                    ++first_child_it;
+                }
+                lo = first_child_it;
+            }
+            end = ++last_child_it;
+            assert(lo != end);
+
+            std::sort(lo, end, id_cmp);
+        }
         while (lo != end) {
             auto& id = *lo++;
 
