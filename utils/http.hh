@@ -30,7 +30,8 @@ class address_provider {
     bool _use_https;
     shared_future<> _ready;
 
-    future<> initialize();
+    future<> init_addresses();
+    future<> init_credentials();
 
 public:
     address_provider(const std::string& host, bool use_https);

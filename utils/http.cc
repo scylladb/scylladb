@@ -20,22 +20,22 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_crede
     co_return system_trust_credentials;
 }
 
-utils::http::address_provider::address_provider(const std::string& host, bool use_https) : _host(host), _use_https(use_https), _ready(initialize()) {
+utils::http::address_provider::address_provider(const std::string& host, bool use_https) : _host(host), _use_https(use_https) {
+    _ready = [this] -> future<> {
+        co_await coroutine::all([this] -> future<> { co_await init_addresses(); }, [this] -> future<> { co_await init_credentials(); });
+        _initialized = true;
+    }();
 }
 
-future<> utils::http::address_provider::initialize() {
-    co_await coroutine::all(
-        [this]() -> future<> {
-            auto hent = co_await net::dns::get_host_by_name(_host, net::inet_address::family::INET);
-            addr_list = std::move(hent.addr_list);
-        },
-        [this]() -> future<> {
-            if (_use_https) {
-                _creds = co_await system_trust_credentials();
-            }
-        });
+future<> utils::http::address_provider::init_addresses() {
+    auto hent = co_await net::dns::get_host_by_name(_host, net::inet_address::family::INET);
+    addr_list = std::move(hent.addr_list);
+}
 
-    _initialized = true;
+future<> utils::http::address_provider::init_credentials() {
+    if (_use_https) {
+        _creds = co_await system_trust_credentials();
+    }
 }
 
 future<net::inet_address> utils::http::address_provider::get_address() {
@@ -50,9 +50,7 @@ shared_ptr<tls::certificate_credentials> utils::http::address_provider::get_cred
 }
 
 future<> utils::http::address_provider::reset() {
-    _initialized = false;
-    _ready = initialize();
-    co_return;
+    co_await init_addresses();
 }
 
 future<connected_socket> utils::http::dns_connection_factory::connect() {
