@@ -13,15 +13,71 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
+#include "alternator/error.hh"
 
 #include "alternator/expressions.hh"
 #include "cdc/generation.hh"
+#include "alternator/executor.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
 
 namespace alternator {
     const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id>& prev_streams, const cdc::stream_id& child);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_simple_new_format) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/ks_space@dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    auto parts = alternator::parse_arn(arn, "StreamArn", "stream", "/stream/");
+    BOOST_REQUIRE_EQUAL(parts.table_name, "dynamodb_streams_verification_table_rc");
+    BOOST_REQUIRE_EQUAL(parts.keyspace_name, "ks_space");
+    BOOST_REQUIRE_EQUAL(parts.postfix, "/stream/2025-12-18T17:38:48.952");
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_simple_old_format) {
+    std::string_view arn = "arn:scylla:service:region:account-id:table/resource";
+
+    auto parts = alternator::parse_arn(arn, "ResourceArn", "table", "");
+    BOOST_REQUIRE_EQUAL(parts.table_name, "resource");
+    BOOST_REQUIRE_EQUAL(parts.keyspace_name, "region");
+    BOOST_REQUIRE_EQUAL(parts.postfix, "");
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_no_table) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:foo/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_no_keyspace) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_wrong_postfix) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", "/cakes"), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_not_enough_colons_1) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_not_enough_colons_2) {
+    std::string_view arn = "arn";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_empty) {
+    std::string_view arn = "";
+
+    BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
 }
 
 static std::map<std::string, std::string> strings {
