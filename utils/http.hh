@@ -19,6 +19,8 @@
 
 namespace utils::http {
 
+future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
+
 class address_provider {
 public:
     bool initialized = false;
@@ -34,8 +36,6 @@ protected:
     logging::logger& _logger;
     lw_shared_ptr<address_provider> _state;
     shared_future<> _done;
-
-    static future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
     static future<> initialize(lw_shared_ptr<address_provider> state, std::string host, bool use_https, logging::logger& logger);
