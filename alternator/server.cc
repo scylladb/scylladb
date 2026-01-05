@@ -717,10 +717,11 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         username, current_scheduling_group(),
         req->get_protocol_name() == "https");
 
-    thread_local unsigned int tl_request_identifier = 0;
     unsigned int request_identifier, request_shard_id;
 
     if (slogger.is_enabled(log_level::trace)) {
+        thread_local unsigned int tl_request_identifier = 0;
+
         request_identifier = ++tl_request_identifier;
         request_shard_id = seastar::this_shard_id();
         slogger.trace("Request: {} {}:{} {} {}", op, request_identifier, request_shard_id, truncated_content_view(content, _max_users_query_size_in_trace_output).as_view(), req->_headers);
@@ -786,7 +787,8 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                 }
                 co_return std::move(res);
     };
-    // NOTE: `f` has a `op`, which references `target`, as a result `f` must complete before this `co_await` returns.
+    // NOTE: `f` has a `op`, which references `target`, which lives in main scope of `server::handle_api_request` function.
+    // As a result `f` must complete before `handle_api_request` returns.
     co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
 

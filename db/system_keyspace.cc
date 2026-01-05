@@ -2220,6 +2220,7 @@ future<bool> system_keyspace::cdc_is_rewritten() {
 }
 
 future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name) {
+    // note: we only care about the newest ("current") timestamp, hence limit 1.
     static const sstring query = format("SELECT timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ? limit 1", NAME, CDC_TIMESTAMPS);
     auto timestamp_cql = co_await _qp.execute_internal(
             query,
