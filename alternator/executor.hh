@@ -246,7 +246,7 @@ private:
     future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
         const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit);
-    sstring get_table_name_from_stream_arn(std::string_view arn);
+    sstring get_table_name_from_dynamodb_stream_arn(std::string_view arn);
     table_id get_cdc_log_table_id_from_stream_arn(std::string_view arn);
     std::pair<schema_ptr, schema_ptr> get_stream_schema_and_base_schema_from_arn(std::string_view arn);
     std::tuple<schema_ptr, schema_ptr, std::string> get_stream_schema_and_base_schema_from_request(const rjson::value &request);

@@ -355,16 +355,6 @@ static double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
-void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    auto creation_time = get_table_creation_time(schema);
-
-    rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
-    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
-
-    executor::supplement_table_stream_info(descr, schema, sp);
-}
-
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
 // But Scylla creates a directory whose name is the table's name plus 33
 // bytes (dash and UUID), and since directory names are limited to 255 bytes,
@@ -1752,12 +1742,12 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         }
     }
 
-    rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
+    const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     if (gsi) {
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
-        for (rjson::value& g : gsi->GetArray()) {
+        for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
                 co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
@@ -1811,11 +1801,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
-
-            // we need to add those two attributes as return value requires them
-            rjson::add(g, "IndexStatus", "CREATING");
-            rjson::add(g, "Backfilling", rjson::value(true));
-
         }
     }
     if (!unused_attribute_definitions.empty()) {
@@ -1952,8 +1937,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await _mm.wait_for_schema_agreement(_proxy.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
-    executor::supplement_table_info(request, *schema, _proxy);
-    rjson::add(status, "TableDescription", std::move(request));
+    rjson::value table_description = co_await fill_table_description(schema, table_status::creating, client_state, trace_state, empty_service_permit());    
+    rjson::add(status, "TableDescription", std::move(table_description));
     co_return rjson::print(std::move(status));
 }
 
@@ -2018,7 +2003,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, permit = std::move(permit), &e = this->container()]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -2233,7 +2218,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         rjson::value status = rjson::empty_object();
         auto cs = client_state_other_shard.get();
-        rjson::value table_description = co_await fill_table_description(schema, table_status::updating, p.local(), cs, gt, permit);
+        rjson::value table_description = co_await e.local().fill_table_description(schema, table_status::updating, cs, gt, empty_service_permit());
         rjson::add(status, "TableDescription", std::move(table_description));
         co_return rjson::print(std::move(status));
     });
