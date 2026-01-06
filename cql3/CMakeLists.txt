@@ -72,8 +72,9 @@ target_sources(cql3
     statements/raw/parsed_statement.cc
     statements/property_definitions.cc
     statements/update_statement.cc
-    statements/strongly_consistent_modification_statement.cc
-    statements/strongly_consistent_select_statement.cc
+    statements/broadcast_tables_modification_statement.cc
+    statements/broadcast_tables_select_statement.cc
+    statements/forwarding_statement.cc
     statements/delete_statement.cc
     statements/prune_materialized_view_statement.cc
     statements/batch_statement.cc
