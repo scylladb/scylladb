@@ -1021,7 +1021,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
 
-    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp);
+    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp, utils::UUID old_request_id = utils::UUID{});
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);
