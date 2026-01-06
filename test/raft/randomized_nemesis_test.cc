@@ -2953,9 +2953,11 @@ public:
         check_digest_value(d);
 
         auto y = (d + x) % magic;
-        SCYLLA_ASSERT(digest_remove(y, x) == d);
 
         validate_digest_value(y, d, x);
+
+        SCYLLA_ASSERT(digest_remove(y, x) == d);
+
         return y;
     }
 
@@ -3019,7 +3021,9 @@ public:
 
 private:
     append_seq(lw_shared_ptr<std::vector<elem_t>> seq, size_t end, elem_t d)
-        : _seq(std::move(seq)), _end(end), _digest(d) {}
+        : _seq(std::move(seq)), _end(end), _digest(d) {
+        check_digest_value(d);
+    }
 };
 
 struct AppendReg {
