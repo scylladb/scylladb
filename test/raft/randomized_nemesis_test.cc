@@ -3603,7 +3603,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             tlogger.info("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
-                return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
+                return env.call(id, AppendReg::append{0}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
