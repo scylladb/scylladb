@@ -57,7 +57,7 @@ protected:
 
     future<connected_socket> connect();
 public:
-    dns_connection_factory(dns_connection_factory&&);
+    dns_connection_factory(dns_connection_factory&&) = default;
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
     dns_connection_factory(std::string endpoint_url, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
 
