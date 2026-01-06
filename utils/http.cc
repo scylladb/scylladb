@@ -81,8 +81,6 @@ future<connected_socket> utils::http::dns_connection_factory::connect(net::inet_
     co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
 }
 
-utils::http::dns_connection_factory::dns_connection_factory(dns_connection_factory&&) = default;
-
 utils::http::dns_connection_factory::dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs)
     : _host(std::move(host))
     , _port(port)

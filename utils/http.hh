@@ -40,7 +40,7 @@ protected:
     future<shared_ptr<tls::certificate_credentials>> get_creds();
     future<connected_socket> connect(net::inet_address address);
 public:
-    dns_connection_factory(dns_connection_factory&&);
+    dns_connection_factory(dns_connection_factory&&) = default;
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
 
     virtual future<connected_socket> make(abort_source*) override;
