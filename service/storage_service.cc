@@ -1262,7 +1262,7 @@ std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_par
     return ignored_nodes;
 }
 
-utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp) {
+utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp, utils::UUID old_request_id) {
     topology_mutation_builder builder(write_timestamp);
     auto ignored_nodes = ignored_nodes_from_join_params(params);
 
@@ -1302,7 +1302,21 @@ utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_j
              .set("done", false);
     rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
 
-    return {builder.build(), rtbuilder.build()};
+    utils::chunked_vector<canonical_mutation> muts = {builder.build(), rtbuilder.build()};
+
+    if (old_request_id) {
+        // If this is a replace operation, we need to mark the old request for replaced node as done if exists
+        // It should be safe to do so here since if the request is still pending it means the topology coordinator does not
+        // work on it yet, and if the topology coordinator will pick it up meanwhile the write of this new state will fail
+        topology_mutation_builder builder(write_timestamp);
+        builder.with_node(*params.replaced_id).del("topology_request");
+        topology_request_tracking_mutation_builder rtbuilder(old_request_id, _feature_service.topology_requests_type_column);
+        rtbuilder.done("node was replaced before the request could start");
+        muts.push_back(builder.build());
+        muts.push_back(rtbuilder.build());
+    }
+
+    return muts;
 }
 
 class join_node_rpc_handshaker : public service::group0_handshaker {
@@ -7341,6 +7355,8 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
             co_return result;
         }
 
+        utils::UUID old_request_id;
+
         if (params.replaced_id) {
             auto rhid = locator::host_id{params.replaced_id->uuid()};
             if (is_me(rhid) || _gossiper.is_alive(rhid)) {
@@ -7378,9 +7394,13 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
                 };
                 co_return result;
             }
+
+            if (_topology_state_machine._topology.requests.find(*params.replaced_id) != _topology_state_machine._topology.requests.end()) {
+                old_request_id = replaced_it->second.request_id;
+            }
         }
 
-        auto mutation = build_mutation_from_join_params(params, guard.write_timestamp());
+        auto mutation = build_mutation_from_join_params(params, guard.write_timestamp(), old_request_id);
 
         topology_change change{{std::move(mutation)}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
