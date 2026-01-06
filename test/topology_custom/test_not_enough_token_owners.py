@@ -48,11 +48,11 @@ async def test_not_enough_token_owners(manager: ManagerClient):
     await manager.server_start(server_a.server_id)
 
     logging.info('Adding a normal server')
-    await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
+    server_c = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
 
     cql = manager.get_cql()
 
-    await wait_for_cql_and_get_hosts(cql, [server_a], time.time() + 60)
+    await wait_for_cql_and_get_hosts(cql, [server_a, server_c], time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks_name:
         await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
