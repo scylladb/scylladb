@@ -28,12 +28,17 @@ class address_provider {
     shared_ptr<tls::certificate_credentials> _creds;
     const std::string& _host;
     size_t _addr_pos{0};
+    size_t _address_ttl_seconds{0};
     bool _use_https;
+    semaphore _addr_sem{1};
+    timer<lowres_clock> _addr_update_timer;
 
     future<> init_addresses();
     future<> init_credentials();
 public:
+    address_provider(address_provider&&) = default;
     address_provider(const std::string& host, bool use_https, shared_ptr<tls::certificate_credentials> creds);
+    ~address_provider();
 
     future<net::inet_address> get_address();
     future<shared_ptr<tls::certificate_credentials>> get_creds();
