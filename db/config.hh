@@ -478,6 +478,8 @@ public:
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
     named_value<uint32_t> alternator_describe_table_info_cache_validity_in_seconds;
+    named_value<int> alternator_response_gzip_compression_level;
+    named_value<uint32_t> alternator_response_compression_threshold_in_bytes;
 
     named_value<bool> abort_on_ebadf;
 
