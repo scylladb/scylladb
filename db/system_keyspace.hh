@@ -135,7 +135,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr corrupt_data();
-    static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
     // This function is called when the system.peers table is read,
     // and it fixes some types of inconsistencies that can occur
@@ -271,6 +270,7 @@ public:
     static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
+    static schema_ptr scylla_local();
     static schema_ptr cdc_streams_state();
     static schema_ptr cdc_streams_history();
     static schema_ptr tablets();
