@@ -481,7 +481,6 @@ async def test_tablet_cleanup(manager: ManagerClient):
     cql = manager.get_cql()
     n_tablets = 32
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
@@ -554,7 +553,6 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
     cql = manager.get_cql()
     n_tablets = 1
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
@@ -1133,7 +1131,6 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     servers = [await manager.server_add()]
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Create a table with two tablets and populate it with a moderate amount of data.")
     n_tablets = 2
@@ -1175,7 +1172,6 @@ async def test_schema_change_during_cleanup(manager: ManagerClient):
     servers = [await manager.server_add()]
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -1510,7 +1506,6 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
     cql = manager.get_cql()
     n_tablets = 1
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")

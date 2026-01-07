@@ -27,7 +27,6 @@ async def test_partitioned_sstable_set(manager: ManagerClient, mode):
     await manager.api.disable_tablet_balancing(server.ip_addr)
 
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
 
     if mode == 'tablet':
         ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")

@@ -95,7 +95,6 @@ async def test_multiple_unpublished_cdc_generations(request, manager: ManagerCli
         servers += await manager.servers_add(3)
 
         cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         gen_timestamps = set[datetime]()
 

@@ -47,7 +47,6 @@ async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_ena
     logging.info('Adding the third server')
     server_c = await manager.server_add(config=normal_cfg, property_file=get_pf("r2"))
 
-    await wait_for_cql_and_get_hosts(manager.cql, [server_a, server_c], time.time() + 60)
     finish_writes = await start_writes(manager.cql, 2, ConsistencyLevel.TWO)
 
     logging.info('Adding the fourth server as zero-token')

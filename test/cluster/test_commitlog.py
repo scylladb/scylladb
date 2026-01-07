@@ -36,7 +36,6 @@ async def test_reboot(request, manager: ManagerClient):
         'commitlog_sync': 'batch'
     })
     cql = manager.cql
-    await wait_for_cql_and_get_hosts(cql, [server_info], time.time() + 60)
     logger.info("Node started")
 
     random_tables = RandomTables(request.node.name, manager, "ks", 1)

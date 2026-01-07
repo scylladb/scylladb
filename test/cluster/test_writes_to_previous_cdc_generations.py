@@ -67,7 +67,6 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Manag
     cql = manager.get_cql()
 
     logger.info("Waiting for driver")
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 
@@ -117,7 +116,6 @@ async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerCl
     cql = manager.get_cql()
 
     logger.info("Waiting for driver")
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 

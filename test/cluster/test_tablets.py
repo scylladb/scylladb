@@ -1212,7 +1212,6 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
     s0_log = await manager.server_open_log(servers[0].server_id)
 
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 

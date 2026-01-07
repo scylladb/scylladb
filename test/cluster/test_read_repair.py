@@ -320,7 +320,6 @@ async def test_read_repair_with_trace_logging(request, manager):
 
     cql = manager.get_cql()
     srvs = await manager.running_servers()
-    await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck));")
