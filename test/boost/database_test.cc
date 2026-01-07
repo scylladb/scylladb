@@ -1291,6 +1291,7 @@ SEASTAR_THREAD_TEST_CASE(per_service_level_reader_concurrency_semaphore_test) {
         std::array<sstring, num_service_levels> sl_names;
         qos::service_level_options slo;
         size_t expected_total_weight = 200; // 200 from `sl:driver`
+        expected_total_weight += 100; // 100 from `sl:default_batch`
         auto index_to_weight = [] (size_t i) -> size_t {
             return (i + 1)*100;
         };
@@ -1318,6 +1319,7 @@ SEASTAR_THREAD_TEST_CASE(per_service_level_reader_concurrency_semaphore_test) {
             size_t total_distributed_memory = 0;
             // Include `sl:driver` in computations
             total_distributed_memory += get_reader_concurrency_semaphore_for_sl("driver").available_resources().memory;
+            total_distributed_memory += get_reader_concurrency_semaphore_for_sl("default_batch").available_resources().memory;
             for (unsigned j = 0 ; j <= i ; j++) {
                 reader_concurrency_semaphore& sem = get_reader_concurrency_semaphore_for_sl(sl_names[j]);
                 // Make sure that all semaphores that has been created until now - have the right amount of available memory

@@ -47,12 +47,13 @@ def filter_grant_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[Desc
 def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "grant_permission", desc_result_iter)
 
-def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True) -> Iterable[DescRowType]:
-    # Filter out driver service level, which is created by the system automatically
-    f = lambda result: result.type == "service_level"
-    if filter_driver:
-        f = (lambda result: result.type == "service_level" and result.name != "driver")
-    return filter(f, desc_result_iter)
+def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True, filter_default_batch: bool = True) -> Iterable[DescRowType]:
+    # If needed, filter out driver and default_batch service levels, which are created by the system automatically
+    def filter_func(result):
+        return result.type == "service_level" and \
+               (not filter_driver or result.name != "driver") and \
+               (not filter_default_batch or result.name != "default_batch")
+    return filter(filter_func, desc_result_iter)
 
 def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
@@ -1645,6 +1646,7 @@ class AuthSLContext:
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
         self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
+        self.default_batch_sl = self.cql.execute("LIST SERVICE LEVEL default_batch").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -1664,6 +1666,7 @@ class AuthSLContext:
                 self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
             # Restore driver service level if it was removed by the test
             self.cql.execute(f"CREATE SERVICE LEVEL {self.driver_sl.service_level} WITH WORKLOAD_TYPE = '{self.driver_sl.workload_type}' AND SHARES = {self.driver_sl.shares}")
+            self.cql.execute(f"CREATE SERVICE LEVEL {self.default_batch_sl.service_level} WITH WORKLOAD_TYPE = '{self.default_batch_sl.workload_type}' AND SHARES = {self.default_batch_sl.shares}")
 
 
 class ServiceLevel:

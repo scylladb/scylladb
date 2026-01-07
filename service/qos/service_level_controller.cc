@@ -1225,12 +1225,17 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
     // good enough if someone does attempt to make a backup in that state.
 
     std::optional<service_level_options> driver_service_level_slo;
+    std::optional<service_level_options> default_batch_service_level_slo;
     for (const auto& [sl_name, sl] : _service_levels_db) {
         if (sl.is_static) {
             continue;
         }
         if (sl_name == driver_service_level_name) {
             driver_service_level_slo = sl.slo;
+            continue;
+        }
+        if (sl_name == default_batch_service_level_name) {
+            default_batch_service_level_slo = sl.slo;
             continue;
         }
 
@@ -1249,9 +1254,11 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
 
     std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
     auto driver_sl_description = describe_driver_service_level(driver_service_level_slo);
+    auto default_batch_sl_description = describe_default_batch_service_level(default_batch_service_level_slo);
 
     std::vector<cql3::description> combined;
-    combined.reserve(result.size() + driver_sl_description.size());
+    combined.reserve(result.size() + driver_sl_description.size() + default_batch_sl_description.size());
+    std::move(default_batch_sl_description.begin(), default_batch_sl_description.end(), std::back_inserter(combined));
     std::move(driver_sl_description.begin(), driver_sl_description.end(), std::back_inserter(combined));
     std::move(result.begin(), result.end(), std::back_inserter(combined));
     co_return combined;

@@ -3568,6 +3568,13 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
         }
     }
 
+    if (_sl_controller.is_v2() && _feature_service.default_batch_service_level) {
+        const auto sl_default_batch_created = co_await _sys_ks.get_service_level_default_batch_created();
+        if (!sl_default_batch_created.value_or(false)) {
+            co_return co_await _sl_controller.migrate_to_default_batch_service_level(std::move(guard), _sys_ks);
+        }
+    }
+
     co_return std::move(guard);
 }
 
