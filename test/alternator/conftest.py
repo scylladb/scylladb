@@ -156,8 +156,9 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
         if host.hostname == 'localhost':
             conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
         user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
+        region_name = dynamodb.meta.client.meta.region_name
         return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
-            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
+            region_name=region_name, aws_access_key_id=user, aws_secret_access_key=secret,
             config=conf)
     return _new_dynamodb_session
 
