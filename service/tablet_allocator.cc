@@ -1592,6 +1592,10 @@ public:
             const auto& table_groups = _tm->tablets().all_table_groups();
 
             auto finalize_decision = [&] {
+                if (utils::get_local_injector().enter("tablet_resize_finalization_postpone")) {
+                    return;
+                }
+
                 _stats.for_cluster().resizes_finalized++;
                 resize_plan.finalize_resize.insert(table);
             };
