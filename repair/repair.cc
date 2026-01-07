@@ -1476,13 +1476,14 @@ future<> repair_service::sync_data_using_repair(
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
-        shared_ptr<node_ops_info> ops_info) {
+        shared_ptr<node_ops_info> ops_info,
+        service::frozen_topology_guard frozen_topology_guard) {
     if (ranges.empty()) {
         co_return;
     }
 
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info);
+    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info, std::move(frozen_topology_guard));
     co_await task->done();
 }
 
@@ -1523,7 +1524,7 @@ future<> repair::data_sync_repair_task_impl::run() {
 
     auto start_time = std::chrono::steady_clock::now();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization={}", id.uuid(), keyspace, _reason, small_table_optimization);
-    co_await module->run(id, [this, &rs, id, &db, keyspace, ranges_reduced_factor, small_table_optimization, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as] () mutable {
+    co_await module->run(id, [this, &rs, id, &db, keyspace, ranges_reduced_factor, small_table_optimization, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard] () mutable {
         auto cfs = list_column_families(db, keyspace);
         _cfs_size = cfs.size();
         if (cfs.empty()) {
@@ -1535,7 +1536,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         repair_results.reserve(smp::count);
         task_as.check();
         for (auto shard : std::views::iota(0u, smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<locator::host_id>();
@@ -1545,7 +1546,7 @@ future<> repair::data_sync_repair_task_impl::run() {
                 auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
-                        service::default_session_id, tablet_repair_sched_info{}, ranges_reduced_factor);
+                        frozen_topology_guard, tablet_repair_sched_info{}, ranges_reduced_factor);
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
@@ -1584,10 +1585,10 @@ future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total
     co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * smp::count) : std::nullopt;
 }
 
-future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto reason = streaming::stream_reason::bootstrap;
-    return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens), reason] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens), reason, frozen_topology_guard = std::move(frozen_topology_guard)] () mutable {
         auto& db = get_db().local();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
@@ -1776,7 +1777,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             }
           }
             auto nr_ranges = desired_ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(desired_ranges), std::move(range_sources), reason, nullptr).get();
+            sync_data_using_repair(keyspace_name, erm, std::move(desired_ranges), std::move(range_sources), reason, nullptr, frozen_topology_guard).get();
             rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}, nr_tables={}", keyspace_name, nr_ranges * nr_tables, nr_tables);
         }
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", ks_erms | std::views::keys);
@@ -1804,9 +1805,9 @@ future<> repair_service::reset_node_ops_progress(streaming::stream_reason reason
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node_id, shared_ptr<node_ops_info> ops, streaming::stream_reason reason) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node_id, shared_ptr<node_ops_info> ops, streaming::stream_reason reason, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return seastar::async([this, tmptr = std::move(tmptr), leaving_node_id = std::move(leaving_node_id), ops] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), leaving_node_id = std::move(leaving_node_id), ops, frozen_topology_guard = std::move(frozen_topology_guard)] () mutable {
         auto& db = get_db().local();
         auto& topology = tmptr->get_topology();
         auto myhostid = topology.my_host_id();
@@ -1990,7 +1991,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 ranges.swap(ranges_for_removenode);
             }
             auto nr_ranges_synced = ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, ops).get();
+            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, ops, frozen_topology_guard).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node_id, nr_ranges_total, nr_ranges_synced * nr_tables, nr_ranges_skipped * nr_tables);
         }
@@ -1998,15 +1999,15 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
     }).finally([this, reason] { return reset_node_ops_progress(reason); });
 }
 
-future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
+future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto my_address = tmptr->get_topology().my_host_id();
-    return do_decommission_removenode_with_repair(std::move(tmptr), my_address, {}, streaming::stream_reason::decommission);
+    return do_decommission_removenode_with_repair(std::move(tmptr), my_address, {}, streaming::stream_reason::decommission, std::move(frozen_topology_guard));
 }
 
-future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node, shared_ptr<node_ops_info> ops, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops), streaming::stream_reason::removenode).then([this] {
+    return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops), streaming::stream_reason::removenode, std::move(frozen_topology_guard)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
         seastar::sharded<replica::database>& db = get_db();
         return db.invoke_on_all([](replica::database &db) {
@@ -2017,9 +2018,9 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
+future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, service::frozen_topology_guard frozen_topology_guard, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return seastar::async([this, ks_erms = std::move(ks_erms), tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes), replaced_node] () mutable {
+    return seastar::async([this, ks_erms = std::move(ks_erms), tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes), replaced_node, frozen_topology_guard = std::move(frozen_topology_guard)] () mutable {
         auto& db = get_db().local();
         const auto& topology = tmptr->get_topology();
         auto myid = tmptr->get_my_id();
@@ -2210,14 +2211,14 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                 }).get();
             }
             auto nr_ranges = ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, nullptr).get();
+            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, nullptr, frozen_topology_guard).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc_for_keyspace, nr_ranges * nr_tables);
         }
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, ks_erms | std::views::keys, source_dc);
     });
 }
 
-future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc) {
+future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
     const auto& topology = tmptr->get_topology();
@@ -2226,7 +2227,7 @@ future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator
     }
     auto reason = streaming::stream_reason::rebuild;
     rlogger.info("{}: this-node={} source_dc={}", op, *topology.this_node(), source_dc);
-    co_await do_rebuild_replace_with_repair(std::move(ks_erms), std::move(tmptr), std::move(op), std::move(source_dc), reason).finally([this, reason] { return reset_node_ops_progress(reason);});
+    co_await do_rebuild_replace_with_repair(std::move(ks_erms), std::move(tmptr), std::move(op), std::move(source_dc), reason, frozen_topology_guard).finally([this, reason] { return reset_node_ops_progress(reason);});
     co_await get_db().invoke_on_all([](replica::database& db) {
         for (auto& t : db.get_non_system_column_families()) {
             t->trigger_offstrategy_compaction();
@@ -2234,7 +2235,7 @@ future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator
     });
 }
 
-future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
+future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node, service::frozen_topology_guard frozen_topology_guard) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
@@ -2248,7 +2249,7 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, tmptr->get_my_id());
     auto source_dc = utils::optional_param(myloc.dc);
     rlogger.info("{}: this-node={} ignore_nodes={} source_dc={}", op, *topology.this_node(), ignore_nodes, source_dc);
-    co_await do_rebuild_replace_with_repair(std::move(ks_erms), std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes), replaced_node).finally([this, reason] { return reset_node_ops_progress(reason); });
+    co_await do_rebuild_replace_with_repair(std::move(ks_erms), std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, frozen_topology_guard, std::move(ignore_nodes), replaced_node).finally([this, reason] { return reset_node_ops_progress(reason); });
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
