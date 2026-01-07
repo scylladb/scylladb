@@ -46,6 +46,7 @@ TEST_CONFIG_FILENAME = "test_config.yaml"
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
 RUN_ID = pytest.StashKey[int]()
+EXIT_MAXFAIL_REACHED = 11
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,12 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
             loop.run_until_complete(TestSuite.artifacts.cleanup_before_exit())
         else:
             loop.create_task(TestSuite.artifacts.cleanup_before_exit())
+
+    # Modify exit code to reflect the number of failed tests for easier detection in CI.
+    maxfail = session.config.getoption("maxfail")
+
+    if 0 < maxfail <= session.testsfailed:
+        session.exitstatus = EXIT_MAXFAIL_REACHED
 
 
 def pytest_configure(config: pytest.Config) -> None:
