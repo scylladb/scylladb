@@ -23,6 +23,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 logger = logging.getLogger(__name__)
 DRIVER_SL_NAME = "driver"
+DEFAULT_BATCH_SL_NAME = "default_batch"
 
 async def test_service_levels_snapshot(manager: ScyllaClusterManager):
     """
@@ -205,7 +206,7 @@ async def test_service_level_cache_after_restart(manager: ScyllaClusterManager):
     await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
 
     sls_list_before = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert len(sls_list_before) == 2
+    assert len(sls_list_before) == 3 # default_batch, driver, sl1
 
     await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
@@ -221,7 +222,21 @@ async def test_service_level_cache_after_restart(manager: ScyllaClusterManager):
     await cql.run_async(f"ALTER SERVICE LEVEL sl1 WITH timeout = 400ms")
 
     result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
-    assert len(result) == 2 and result[0].workload_type == 'batch' and result[1].workload_type == 'batch'
+    assert len(result) == 3 # default_batch, driver, sl1
+    for row in result:
+        assert row.workload_type == 'batch'
+
+@pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
+async def test_internal_service_level_gated_by_cluster_feature(manager: ScyllaClusterManager):
+    config = auth_config | {'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'DEFAULT_BATCH_SERVICE_LEVEL'}]}
+    server = await manager.server_add(config=config)
+    cql, [h] = await manager.get_ready_cql([server])
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    sls = [row.service_level for row in await cql.run_async("LIST ALL SERVICE LEVELS", host=h)]
+    logger.info(f"service levels of a cluster formed without the feature: {sls}")
+    assert DRIVER_SL_NAME in sls
+    assert DEFAULT_BATCH_SL_NAME not in sls
 
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
 async def test_shares_check(manager: ScyllaClusterManager):
@@ -354,11 +369,17 @@ async def test_driver_service_level(manager: ScyllaClusterManager) -> None:
 
     logger.info("Verify that sl:driver is created properly on system startup")
     service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert len(service_levels) == 1
-    assert service_levels[0].service_level == "driver"
-    assert service_levels[0].workload_type == "batch"
-    assert service_levels[0].shares == 200
+    assert len(service_levels) == 2  # driver, default_batch
+    sl_names = [sl.service_level for sl in service_levels]
+    assert "driver" in sl_names
+    assert "default_batch" in sl_names
+    driver_sl = next(sl for sl in service_levels if sl.service_level == "driver")
+    assert driver_sl.workload_type == "batch"
+    assert driver_sl.shares == 200
     assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+
+    # Drop default_batch to not obfuscate this test
+    await cql.run_async(f"DROP SERVICE LEVEL default_batch")
 
     logger.info("Verify that sl:driver can be removed")
     await cql.run_async(f"DROP SERVICE LEVEL driver")

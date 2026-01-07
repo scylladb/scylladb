@@ -120,10 +120,11 @@ public:
     struct internal_service_level {
         std::string_view name;
         int32_t shares;
+        std::string_view feature_name;
     };
     static constexpr std::array<internal_service_level, 2> internal_service_levels {{
-        {driver_service_level_name, driver_service_level_shares},
-        {default_batch_service_level_name, default_batch_service_level_shares},
+        {driver_service_level_name, driver_service_level_shares, "DRIVER_SERVICE_LEVEL"},
+        {default_batch_service_level_name, default_batch_service_level_shares, "DEFAULT_BATCH_SERVICE_LEVEL"},
     }};
 
     class service_level_distributed_data_accessor {
