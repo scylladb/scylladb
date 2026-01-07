@@ -32,6 +32,11 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add(config=cfg)]
 
+    # Background migrations concurrent with node shutdown can cause background (after CL is met)
+    # replica-side writes to fail due to barriers fencing out the node which is shutting down.
+    # This trips check_node_log_for_failed_mutations().
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
     logger.info(f"Restarting node {servers[0]}")
     await manager.server_stop_gracefully(servers[0].server_id)
     await manager.server_start(servers[0].server_id)
