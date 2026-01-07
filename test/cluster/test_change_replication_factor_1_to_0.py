@@ -39,7 +39,6 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         srvs = await manager.running_servers()
-        await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
         stmt = cql.prepare(f"SELECT * FROM {ks}.t where pk = ?")
         stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
