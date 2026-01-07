@@ -1,5 +1,5 @@
-Install ScyllaDB
-=================
+Install ScyllaDB |CURRENT_VERSION|
+=====================================
 
 .. toctree::
    :maxdepth: 2
