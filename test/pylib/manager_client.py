@@ -535,6 +535,10 @@ class ManagerClient:
         if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
+                # Wait for the driver to see the new host to avoid race conditions
+                # where CQL operations fail because the driver pool hasn't discovered
+                # the new host yet. Refs: https://github.com/scylladb/scylladb/pull/28040
+                await wait_for_cql_and_get_hosts(self.cql, [s_info], time() + 60)
             elif start:
                 await self.driver_connect()
         return s_info
@@ -585,6 +589,10 @@ class ManagerClient:
         if expected_error is None:
             if self.cql:
                 self._driver_update()
+                # Wait for the driver to see the new hosts to avoid race conditions
+                # where CQL operations fail because the driver pool hasn't discovered
+                # the new hosts yet. Refs: https://github.com/scylladb/scylladb/pull/28040
+                await wait_for_cql_and_get_hosts(self.cql, s_infos, time() + 60)
             elif start:
                 await self.driver_connect(**driver_connect_opts)
         return s_infos
