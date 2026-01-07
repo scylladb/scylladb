@@ -175,6 +175,7 @@ public:
     gms::feature ms_sstable { *this, "MS_SSTABLE_FORMAT"sv };
     gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
+    gms::feature default_batch_service_level { *this, "DEFAULT_BATCH_SERVICE_LEVEL"sv };
     gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
     gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
     gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
