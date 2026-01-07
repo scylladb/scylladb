@@ -2958,7 +2958,8 @@ def test_query_unselected_columns(cql, test_keyspace, scylla_only):
 
 def test_user_based_sla_queries(cql, scylla_only):
     # Service level names are unique, but all start with "sl_" so they sort
-    # after the pre-existing "driver" service level, and sl_1 < sl_2.
+    # after the pre-existing "default_batch" and "driver" service levels, and
+    # sl_1 < sl_2.
     prefix = f"sl_{unique_name()}"
     sl_1 = f"{prefix}_sl_1"
     sl_2 = f"{prefix}_sl_2"
@@ -2971,15 +2972,17 @@ def test_user_based_sla_queries(cql, scylla_only):
             cql.execute(f"CREATE SERVICE_LEVEL {sl_2} WITH SHARES = 200")
             cql.execute(f"ALTER SERVICE_LEVEL {sl_1} WITH SHARES = 111")
             assert list(cql.execute("LIST ALL SERVICE_LEVELS")) == [
-                ("driver", None, "batch", 200, "39.14%"),
-                (sl_1, None, None, 111, "21.72%"),
-                (sl_2, None, None, 200, "39.14%"),
+                ("default_batch", None, "batch", 100, "16.37%"),
+                ("driver", None, "batch", 200, "32.73%"),
+                (sl_1, None, None, 111, "18.17%"),
+                (sl_2, None, None, 200, "32.73%"),
             ]
             # drop service levels
             cql.execute(f"DROP SERVICE_LEVEL {sl_1}")
             assert list(cql.execute("LIST ALL SERVICE_LEVELS")) == [
-                ("driver", None, "batch", 200, "50.00%"),
-                (sl_2, None, None, 200, "50.00%"),
+                ("default_batch", None, "batch", 100, "20.00%"),
+                ("driver", None, "batch", 200, "40.00%"),
+                (sl_2, None, None, 200, "40.00%"),
             ]
 
             # validate exceptions (illegal requests)

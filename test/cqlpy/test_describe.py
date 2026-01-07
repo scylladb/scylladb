@@ -57,12 +57,13 @@ def filter_grant_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[Desc
 def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "grant_permission", desc_result_iter)
 
-def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True) -> Iterable[DescRowType]:
-    # Filter out driver service level, which is created by the system automatically
-    f = lambda result: result.type == "service_level"
-    if filter_driver:
-        f = (lambda result: result.type == "service_level" and result.name != "driver")
-    return filter(f, desc_result_iter)
+def filter_service_levels(desc_result_iter: Iterable[DescRowType], include_driver: bool = False, include_default_batch: bool = False) -> Iterable[DescRowType]:
+    # By default, filter out driver and default_batch service levels, which are created by the system automatically
+    def filter_func(result):
+        return result.type == "service_level" and \
+               (include_driver or result.name != "driver") and \
+               (include_default_batch or result.name != "default_batch")
+    return filter(filter_func, desc_result_iter)
 
 def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
@@ -1831,6 +1832,7 @@ class AuthSLContext:
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
         self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
+        self.default_batch_sl = self.cql.execute("LIST SERVICE LEVEL default_batch").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -1850,6 +1852,7 @@ class AuthSLContext:
                 self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
             # Restore driver service level if it was removed by the test
             self.cql.execute(f"CREATE SERVICE LEVEL {self.driver_sl.service_level} WITH WORKLOAD_TYPE = '{self.driver_sl.workload_type}' AND SHARES = {self.driver_sl.shares}")
+            self.cql.execute(f"CREATE SERVICE LEVEL {self.default_batch_sl.service_level} WITH WORKLOAD_TYPE = '{self.default_batch_sl.workload_type}' AND SHARES = {self.default_batch_sl.shares}")
 
 
 class ServiceLevel:
@@ -3115,7 +3118,7 @@ def test_desc_driver_service_level(cql, scylla_only):
         cql.execute(f"ALTER SERVICE LEVEL driver WITH TIMEOUT=321s")
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
-        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+        desc_iter = filter_service_levels(desc_iter, include_driver=True)
 
         [create, alter] = list(desc_iter)
 
@@ -3141,7 +3144,7 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
     with AuthSLContext(cql):
         cql.execute("DROP SERVICE LEVEL driver")
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
-        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+        desc_iter = filter_service_levels(desc_iter, include_driver=True)
 
         [drop] = list(desc_iter)
 
@@ -3164,13 +3167,16 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
             cql.execute(f"CREATE SERVICE LEVEL a_sl{i}")
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
-        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+        desc_iter = filter_service_levels(desc_iter, include_driver=True)
 
         service_levels_iter = cql.execute("LIST ALL SERVICE LEVELS")
         service_levels = [record.service_level for record in service_levels_iter]
         for sl in service_levels:
             cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
         cql.execute("CREATE SERVICE LEVEL driver WITH shares=200 AND workload_type='batch'")
+        # `sl:default_batch` occupies a slot too, so it has to be restored as well to keep
+        # the replay below exactly at the service level limit.
+        cql.execute("CREATE SERVICE LEVEL default_batch WITH shares=100 AND workload_type='batch'")
         for recreate_statement in desc_iter:
             cql.execute(recreate_statement.create_statement)
 
