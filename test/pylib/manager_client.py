@@ -541,6 +541,9 @@ class ManagerClient:
                 await wait_for_cql_and_get_hosts(self.cql, [s_info], time() + 60)
             elif start:
                 await self.driver_connect()
+                # Wait for the driver to see all hosts after initial connection
+                # Refs: https://github.com/scylladb/scylladb/pull/28040
+                await wait_for_cql_and_get_hosts(self.cql, [s_info], time() + 60)
         return s_info
 
     async def servers_add(self, servers_num: int = 1,
@@ -595,6 +598,9 @@ class ManagerClient:
                 await wait_for_cql_and_get_hosts(self.cql, s_infos, time() + 60)
             elif start:
                 await self.driver_connect(**driver_connect_opts)
+                # Wait for the driver to see all hosts after initial connection
+                # Refs: https://github.com/scylladb/scylladb/pull/28040
+                await wait_for_cql_and_get_hosts(self.cql, s_infos, time() + 60)
         return s_infos
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
