@@ -4009,8 +4009,10 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             try {
                 std::rethrow_exception(std::move(exp));
             } catch (rpc::timeout_error&) {
+                get_stats().write_timeouts.mark();
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (timed_out_error&) {
+                get_stats().write_timeouts.mark();
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (rpc::closed_error&) {
                 throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
