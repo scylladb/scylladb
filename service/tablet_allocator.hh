@@ -168,9 +168,13 @@ private:
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
     bool _has_nodes_to_drain = false;
+    size_t _active_transitions = 0;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
+
+    /// Returns the number of active tablet transitions that were counted when making this plan.
+    size_t active_transitions() const { return _active_transitions; }
 
     const migrations_vector& migrations() const { return _migrations; }
     bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size(); }
@@ -193,6 +197,7 @@ public:
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
+        _active_transitions += other._active_transitions;
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
         _rack_list_colocation_plan.merge(std::move(other._rack_list_colocation_plan));
@@ -200,6 +205,10 @@ public:
 
     void set_has_nodes_to_drain(bool b) {
         _has_nodes_to_drain = b;
+    }
+
+    void set_active_transitions(size_t count) {
+        _active_transitions = count;
     }
 
     const table_resize_plan& resize_plan() const { return _resize_plan; }

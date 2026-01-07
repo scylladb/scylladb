@@ -958,13 +958,15 @@ public:
                     for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
                         auto rack_plan = co_await make_plan(dc, rack);
                         auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-                        lblogger.log(level, "Prepared {} migrations in rack {} in DC {}", rack_plan.size(), rack, dc);
+                        lblogger.log(level, "Prepared {} migrations in rack {} in DC {} (active transitions: {})", 
+                                     rack_plan.size(), rack, dc, rack_plan.active_transitions());
                         plan.merge(std::move(rack_plan));
                     }
                 } else {
                     auto dc_plan = co_await make_plan(dc);
                     auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-                    lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
+                    lblogger.log(level, "Prepared {} migrations in DC {} (active transitions: {})", 
+                                 dc_plan.size(), dc, dc_plan.active_transitions());
                     plan.merge(std::move(dc_plan));
                 }
             }
@@ -3505,6 +3507,7 @@ public:
         _tablet_count_per_table.clear();
         _disk_used_per_table.clear();
 
+        size_t active_transitions = 0;
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             uint64_t total_tablet_count = 0;
@@ -3519,6 +3522,7 @@ public:
             auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
                     apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
+                    active_transitions++;
                 }
             };
 
@@ -3666,10 +3670,12 @@ public:
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
+            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {} (active transitions: {})", 
+                         dc_merge_plan.tablet_migration_count(), dc, active_transitions);
             plan.merge(std::move(dc_merge_plan));
         }
 
+        plan.set_active_transitions(active_transitions);
         co_await utils::clear_gently(nodes);
         co_return std::move(plan);
     }
