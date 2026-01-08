@@ -128,8 +128,8 @@ int64_t compaction_group::get_sstables_repaired_at() const noexcept {
             return 0;
         }
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_t.schema()->id());
-        auto& tinfo = tmap.get_tablet_info(tid);
-        return tinfo.sstables_repaired_at;
+        const auto& tinfo = tmap.get_tablet_info(tid);
+        return tinfo.sstables_repaired_at();
     } catch (locator::no_such_tablet_map) {
         return 0;
     }
@@ -1102,7 +1102,7 @@ future<compaction::compaction_type_options::split> tablet_storage_group_manager:
 
     co_return compaction::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
-        auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
+        auto [_, side] = tablet_map_ptr->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
     });
 }
@@ -2984,7 +2984,7 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
             auto group_id = first_new_id + i;
             auto old_range = old_tmap.get_token_range(locator::tablet_id(id));
             auto new_range = new_tmap.get_token_range(locator::tablet_id(group_id));
-            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
+            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at();
             tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
                     sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
             split_ready_groups[i]->update_id_and_range(group_id, new_range);
@@ -3149,7 +3149,7 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {
         const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
         const locator::tablet_info& tinfo = new_tablet_map->get_tablet_info(tid);
-        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas, this_replica);
+        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas(), this_replica);
 
         sg.for_each_compaction_group([tombstone_gc_enabled] (const compaction_group_ptr& cg_ptr) {
             cg_ptr->set_tombstone_gc_enabled(tombstone_gc_enabled);
