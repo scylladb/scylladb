@@ -76,6 +76,7 @@
 #include "service/topology_utils.hh"
 
 #include "audit/audit_cf_storage_helper.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 #include <boost/range/join.hpp>
 #include <seastar/core/metrics_registration.hh>
@@ -1258,6 +1259,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     static const std::vector<std::pair<sstring, size_t>>& get_auto_rf_keyspaces() {
         static const std::vector<std::pair<sstring, size_t>> auto_keyspaces = {{
             {audit::audit_cf_storage_helper::KEYSPACE_NAME, audit::audit_cf_storage_helper::RF_GOAL_PER_DC},
+            {sstring(tracing::trace_keyspace_helper::KEYSPACE_NAME), tracing::trace_keyspace_helper::RF_GOAL_PER_DC},
         }};
         return auto_keyspaces;
     }

@@ -23,6 +23,7 @@ public:
     static constexpr std::string_view SESSIONS = "sessions";
     static constexpr std::string_view SESSIONS_TIME_IDX = "sessions_time_idx";
     static constexpr std::string_view EVENTS = "events";
+    static const size_t RF_GOAL_PER_DC = 2;
 
     // Performance related tables
     static constexpr std::string_view NODE_SLOW_QUERY_LOG = "node_slow_log";
