@@ -11,6 +11,7 @@
 #include "db/system_keyspace.hh"
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 #include <algorithm>
 
@@ -19,6 +20,7 @@ namespace service {
 const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
     static const std::vector<std::pair<sstring, size_t>> keyspaces = {{
         {audit::audit_cf_storage_helper::KEYSPACE_NAME, audit::audit_cf_storage_helper::RF_GOAL_PER_DC},
+        {sstring(tracing::trace_keyspace_helper::KEYSPACE_NAME), tracing::trace_keyspace_helper::RF_GOAL_PER_DC},
     }};
     return keyspaces;
 }
