@@ -74,6 +74,9 @@ external_index_select_statement::external_index_select_statement(schema_ptr sche
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
               is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
     , _index{index} {
+    // An external index search reads only the primary keys the index node returned, capped by
+    // the LIMIT such a query is required to carry, so it is never an unbounded partition scan.
+    _unbounded_partition_scan = false;
 }
 
 lw_shared_ptr<query::read_command> external_index_select_statement::prepare_command_for_base_query(
