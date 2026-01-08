@@ -44,9 +44,10 @@ you want to install.
 
 **Example**
 
-.. code:: console
+.. code-block:: console
+  :substitutions:
   
-  curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 2025.1.1
+  curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version |CURRENT_VERSION|
 
 
 Versions Earlier than 2025.1
