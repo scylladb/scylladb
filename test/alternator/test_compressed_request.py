@@ -31,6 +31,7 @@
 import boto3
 import botocore
 import gzip
+import zlib
 import requests
 import pytest
 
@@ -110,14 +111,14 @@ def test_long_compressed_request(test_table_s, compressed_req):
 # The tests above configured boto3 to compress its requests so we could
 # test them. We now want to test unusual scenarios - including corrupt
 # compressed requests that should fail, or requests compressed in a non-
-# traditional way but still should work. We can't test these scenarios
-# using boto3, and need to construct the requests on our own using functions
-# from test_manual_requests.py.
+# traditional way but still should work. We also want to test different
+# compression algorithms. We can't test these scenarios using boto3, and
+# need to construct the requests on our own using functions from
+# test_manual_requests.py.
 
-# Test the error when we send a wrong Content-Encoding header. The only
-# Content-Encoding supported by DynamoDB is "gzip" - see test file
-# test_compressed_request.py for tests of successful compression with
-# a valid Content-Encoding.
+# Test the error when we send an unsupported Content-Encoding header.
+# At the time of this writing, the only supported Content-Encoding are
+# "gzip" and "deflate" - the name "garbage" obviously isn't one of them.
 def test_garbage_content_encoding(dynamodb, test_table):
     p = random_string()
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}}}'
@@ -275,3 +276,74 @@ def test_gzip_request_empty(dynamodb):
     headers.update({'Content-Encoding': 'gzip'})
     r = requests.post(req.url, headers=headers, data=req.body, verify=False)
     assert r.status_code == 500
+
+# After testing requests compressed with "Content-Encoding: gzip", let's
+# test support for "deflate" encoding. Deflate is very similar to gzip,
+# with a different header. As RFC 9110 explains:
+#   The "deflate" coding is a "zlib" data format (RFC 1950) containing a
+#   "deflate" compressed data stream (RFC 1951).
+def test_deflate_request_valid(dynamodb, test_table):
+    p = random_string()
+    v = random_string()
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}, "v": {"S": "' + v + '"}}}'
+    payload = zlib.compress(payload.encode('utf-8'))
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    headers = dict(req.headers)
+    headers.update({'Content-Encoding': 'deflate'})
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert r.status_code == 200, f'Request failed: {r.content}'
+    got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
+    assert got == {'p': p, 'c': 'x', 'v': v}
+
+# We tested above (test_gzip_request_empty) that an an empty string is not a
+# valid gzip. It's not a valid deflate either - if we try to pass it off as a
+# a deflated'ed request, the result should be a 500 error like all other
+# invalid deflate content.
+def test_deflate_request_empty(dynamodb):
+    # pass the empty string '' as a (incorrect) compressed payload
+    req = get_signed_request(dynamodb, 'PutItem', '')
+    headers = dict(req.headers)
+    headers.update({'Content-Encoding': 'deflate'})
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert r.status_code == 500
+
+# Like test_broken_gzip_content also when the content is not a valid deflate
+# encoded output, DynamoDB returns InternalServerError. I'm not sure this is
+# the most appropriate error to return (among other things it suggests that
+# the broken request is retryable), but this is what DynamoDB does so
+# Alternator should too.
+def test_deflate_request_not_deflated(dynamodb, test_table):
+    p = random_string()
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}}}'
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    # Add a Content-Encoding header suggesting this is deflate content.
+    # Of course it isn't - it's an uncompressed request.
+    headers = dict(req.headers)
+    headers.update({'Content-Encoding': 'deflate'})
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert r.status_code == 500
+    # Check the PutItem request really wasn't done
+    assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
+
+# In test_gzip_request_two_gzips() above, we checked that gzip'ing the payload
+# in two pieces, concatenating the two gzip outputs, works. This isn't
+# something users will typically do, but is explicitly allowed according to
+# the gzip standard so both Alternator and DynamoDB allow it. Conversely, for
+# "deflate" compression, it is not explicitly specified in RFC 1950 that more
+# than one compressed stream can be concatenated. In Alternator we decided to
+# allow it - and this test verifies this - but DynamoDB doesn't so this
+# test fails there.
+def test_deflate_request_two_deflates(dynamodb, test_table, scylla_only):
+    p = random_string()
+    v = random_string()
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}, "v": {"S": "' + v + '"}}}'
+    # Compress the payload in two halves - first compress the first 10
+    # characters, then the rest, and concatenate the two resulting deflates.
+    payload = zlib.compress(payload[:10].encode('utf-8')) + zlib.compress(payload[10:].encode('utf-8'))
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    headers = dict(req.headers)
+    headers.update({'Content-Encoding': 'deflate'})
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert r.status_code == 200
+    got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
+    assert got == {'p': p, 'c': 'x', 'v': v}
