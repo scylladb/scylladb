@@ -18,4 +18,7 @@ namespace service {
 inline constexpr std::string_view audit_keyspace_name = "audit";
 inline constexpr unsigned audit_rf_goal_per_dc = 3;
 
+inline constexpr std::string_view system_traces_keyspace_name = "system_traces";
+inline constexpr unsigned system_traces_rf_goal_per_dc = 2;
+
 }

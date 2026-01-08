@@ -21,6 +21,7 @@ namespace service {
 const std::vector<auto_rf_keyspace>& auto_rf_keyspaces() {
     static const std::vector<auto_rf_keyspace> keyspaces = {{
         {.name = sstring(audit_keyspace_name), .racks_per_dc = audit_rf_goal_per_dc},
+        {.name = sstring(system_traces_keyspace_name), .racks_per_dc = system_traces_rf_goal_per_dc},
     }};
     return keyspaces;
 }
