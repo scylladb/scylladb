@@ -1734,6 +1734,8 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 
 future<>
 table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+    co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
+
     auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
         // Note that due to our sharded architecture, it is possible that
         // in the face of a value change some shards will backup sstables
@@ -3601,6 +3603,10 @@ bool compaction_group::can_flush() const {
     return _memtables->can_flush();
 }
 
+bool compaction_group::needs_flush() const {
+    return _memtables->needs_flush();
+}
+
 lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
 }
@@ -3637,6 +3643,14 @@ bool storage_group::can_flush() const {
 
 bool table::can_flush() const {
     return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::can_flush));
+}
+
+bool storage_group::needs_flush() const {
+    return std::ranges::any_of(compaction_groups_immediate(), std::mem_fn(&compaction_group::needs_flush));
+}
+
+bool table::needs_flush() const {
+    return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::needs_flush));
 }
 
 future<> compaction_group::clear_memtables() {
