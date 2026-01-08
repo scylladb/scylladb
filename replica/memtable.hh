@@ -202,6 +202,8 @@ private:
         }
     } _stats_collector;
 
+    std::optional<tombstone_gc_state_snapshot> _tombstone_gc_snapshot;
+
     void update(db::rp_handle&&);
     friend class ::row_cache;
     friend class memtable_entry;
@@ -220,7 +222,8 @@ public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&,
             memtable_table_shared_data& shared_data,
             replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
-            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group(),
+            shared_tombstone_gc_state* shared_gc_state = nullptr);
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);
     ~memtable();
@@ -346,6 +349,10 @@ public:
 
     dirty_memory_manager& get_dirty_memory_manager() noexcept {
         return _dirty_mgr;
+    }
+
+    const tombstone_gc_state_snapshot* get_tombstone_gc_state_snapshot() const noexcept {
+        return _tombstone_gc_snapshot ? &_tombstone_gc_snapshot.value() : nullptr;
     }
 
     // Implementation of region_listener.

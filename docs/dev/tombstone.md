@@ -611,3 +611,13 @@ For example, with a `gc_grace_seconds=864000` (10 days), it is assumed that the 
 In this system, the elibility for garbage collection of a tombstone is simply checking that it is at least `gc_grace_seconds` old. If so, it is considered expired.
 
 See [Tombstones GC options](https://opensource.docs.scylladb.com/stable/cql/ddl.html#tombstones-gc-options) for more details on different modes of expiry.
+
+### Overlap Check Elision
+
+This is an optimization designed to allow the row cache to garbage collect some tombstones that overlap with live data in the memtable.
+Some workloads will result in the memtable receiving new writes with timestamps from the past. These past timestamp will overlap with the timestamps of tombstones in the row cache, preventing the cache from garbage collecting these tombstones. As a result, the row cache will accumulate tombstones, increasing the latencies of reads.
+One such workload is Materialized Views, which will re-uses past timestamps to resurrect rows that were previously deleted with a [shadowable tombstone](./tombstone.md#shadowable-tombstone). A single such row, with an old timestamp, can prevent all tombstone garbage collection in the partition it lives in, as all later tombstones will overlap with it.
+Once [expired](./tombstone.md#expiry), a tombstone is known not cover any writes, new or old. If a write is known to originate from a time when a tombstone was already expired, it is safe to assume that the tombstone will not overlap with this write logically, even if the timestamps do overlap.
+Using this knowledge, ScyllaDB can elide the overlap check with a data source, if all writes contained therein are known to originate from a time when the tombstone was already expired.
+To make use of this, memtables now store a logical *expiry treshold*, which is a snapshot of the tombstone expiry state at the time the memtable was created.
+Using this, we can later check if a given tombstone was already expired at the time the memtable was created. If yes, the tombstone's garbage collection can elide the overlap check with this memtable.
