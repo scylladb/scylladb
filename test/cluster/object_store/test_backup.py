@@ -15,10 +15,9 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
-from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import unique_name, wait_for_first_completed
-from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
+from test.pylib.util import unique_name, wait_all
+from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
 
@@ -406,135 +405,115 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
               'task_ttl_in_seconds': 300,
               }
 
-    servers = await manager.servers_add(servers_num=3, config=config)
+    servers = await manager.servers_add(servers_num=3, config=config, auto_rack_dc='dc1')
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
 
     # Create keyspace, table, and fill data
-    print("Creating keyspace and table, then inserting data...")
+    logger.info("Creating keyspace and table, then inserting data...")
 
-    def create_keyspace_and_table(cql):
-        keyspace = 'test_ks'
-        table = 'test_cf'
-        replication_opts = format_tuples({
-            'class': 'NetworkTopologyStrategy',
-            'replication_factor': '3'
-        })
-        create_ks_query = f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {replication_opts};"
+    table = 'test_cf'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as keyspace:
         create_table_query = f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text);"
-        cql.execute(create_ks_query)
-        cql.execute(create_table_query)
+        await cql.run_async(create_table_query)
 
-        def insert_rows(cql, keyspace, table, inserts):
-            for _ in range(inserts):
-                key = os.urandom(64).hex()
-                value = os.urandom(1024).hex()
-                insert_query = f"INSERT INTO {keyspace}.{table} (name, value) VALUES ('{key}', '{value}');"
-                cql.execute(insert_query)
+        insert_stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (name, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
 
-        thread_count = 128
-        rows_per_thread = 100000 // thread_count
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            # Submit tasks for each thread
-            futures = [
-                executor.submit(
-                    insert_rows,
-                    cql, keyspace, table,
-                    rows_per_thread
-                )
-                for _ in range(thread_count)
+        num_keys = 10000
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), str(i))) for i in range(num_keys)))
+
+        # Flush keyspace on all servers
+        logger.info("Flushing keyspace on all servers...")
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, keyspace)
+
+        # Take snapshot for keyspace
+        snapshot_name = unique_name('backup_')
+        logger.info(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
+        for server in servers:
+            await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
+
+        # Collect snapshot files from each server
+        async def get_snapshot_files(server, snapshot_name):
+            workdir = await manager.server_get_workdir(server.server_id)
+            data_path = os.path.join(workdir, 'data', keyspace)
+            cf_dirs = os.listdir(data_path)
+            if not cf_dirs:
+                raise RuntimeError(f"No column family directories found in {data_path}")
+            # Assumes that there is only one column family directory under the keyspace.
+            cf_dir = cf_dirs[0]
+            snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
+            return [
+                f.name for f in os.scandir(snapshot_path)
+                if f.is_file() and f.name.endswith('TOC.txt')
             ]
 
-        # Ensure all tasks are completed
-        for future in futures:
-            future.result()
-        return keyspace, table
+        sstables = {}
+        for server in servers:
+            snapshot_files = await get_snapshot_files(server, snapshot_name)
+            sstables[server.server_id] = snapshot_files
 
-    keyspace, table = create_keyspace_and_table(cql)
+        # Backup the keyspace on each server to S3
+        prefix = f"{table}/{snapshot_name}"
+        logger.info(f"Backing up keyspace using prefix '{prefix}' on all servers...")
+        for server in servers:
+            backup_tid = await manager.api.backup(
+                server.ip_addr,
+                keyspace,
+                table,
+                snapshot_name,
+                object_storage.address,
+                object_storage.bucket_name,
+                prefix
+            )
+            backup_status = await manager.api.wait_task(server.ip_addr, backup_tid)
+            assert backup_status is not None and backup_status.get('state') == 'done', \
+                f"Backup task failed on server {server.server_id}"
 
-    # Flush keyspace on all servers
-    print("Flushing keyspace on all servers...")
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, keyspace)
+        # Truncate data and start restore
+        logger.info("Dropping table data...")
+        await cql.run_async(f"TRUNCATE TABLE {keyspace}.{table};")
+        logger.info("Initiating restore operations...")
 
-    # Take snapshot for keyspace
-    snapshot_name = unique_name('backup_')
-    print(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
-    for server in servers:
-        await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
+        logs = [await manager.server_open_log(server.server_id) for server in servers]
 
-    # Collect snapshot files from each server
-    async def get_snapshot_files(server, snapshot_name):
-        workdir = await manager.server_get_workdir(server.server_id)
-        data_path = os.path.join(workdir, 'data', keyspace)
-        cf_dirs = os.listdir(data_path)
-        if not cf_dirs:
-            raise RuntimeError(f"No column family directories found in {data_path}")
-        # Assumes that there is only one column family directory under the keyspace.
-        cf_dir = cf_dirs[0]
-        snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
-        return [
-            f.name for f in os.scandir(snapshot_path)
-            if f.is_file() and f.name.endswith('TOC.txt')
-        ]
+        injection = "stream_mutation_fragments" # "block_load_and_stream"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, injection, True) for s in servers))
 
-    sstables = {}
-    for server in servers:
-        snapshot_files = await get_snapshot_files(server, snapshot_name)
-        sstables[server.server_id] = snapshot_files
+        restore_task_ids = {}
+        for server in servers:
+            restore_tid = await manager.api.restore(
+                server.ip_addr,
+                keyspace,
+                table,
+                object_storage.address,
+                object_storage.bucket_name,
+                prefix,
+                sstables[server.server_id]
+            )
+            restore_task_ids[server.server_id] = restore_tid
 
-    # Backup the keyspace on each server to S3
-    prefix = f"{table}/{snapshot_name}"
-    print(f"Backing up keyspace using prefix '{prefix}' on all servers...")
-    for server in servers:
-        backup_tid = await manager.api.backup(
-            server.ip_addr,
-            keyspace,
-            table,
-            snapshot_name,
-            object_storage.address,
-            object_storage.bucket_name,
-            prefix
-        )
-        backup_status = await manager.api.wait_task(server.ip_addr, backup_tid)
-        assert backup_status is not None and backup_status.get('state') == 'done', \
-            f"Backup task failed on server {server.server_id}"
+        await wait_all([l.wait_for(f"{injection}: waiting", timeout=10) for l in logs])
 
-    # Truncate data and start restore
-    print("Dropping table data...")
-    cql.execute(f"TRUNCATE TABLE {keyspace}.{table};")
-    print("Initiating restore operations...")
+        logger.info("Aborting restore tasks...")
+        await asyncio.gather(*(manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id]) for server in servers))
 
-    restore_task_ids = {}
-    for server in servers:
-        restore_tid = await manager.api.restore(
-            server.ip_addr,
-            keyspace,
-            table,
-            object_storage.address,
-            object_storage.bucket_name,
-            prefix,
-            sstables[server.server_id]
-        )
-        restore_task_ids[server.server_id] = restore_tid
+        await asyncio.gather(*(manager.api.message_injection(s.ip_addr, injection) for s in servers))
 
-    await asyncio.sleep(0.1)
-
-    print("Aborting restore tasks...")
-    for server in servers:
-        await manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id])
-
-    # Check final status of restore tasks
-    for server in servers:
-        final_status = await manager.api.wait_task(server.ip_addr, restore_task_ids[server.server_id])
-        print(f"Restore task status on server {server.server_id}: {final_status}")
-        assert (final_status is not None) and (final_status['state'] == 'failed')
-    logs = [await manager.server_open_log(server.server_id) for server in servers]
-    await wait_for_first_completed([l.wait_for(r"Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
+        # Check final status of restore tasks
+        failed = False
+        for server in servers:
+            final_status = await manager.api.wait_task(server.ip_addr, restore_task_ids[server.server_id])
+            logger.info(f"Restore task status on server {server.server_id}: {final_status}")
+            assert (final_status is not None)
+            failed |= final_status['state'] == 'failed'
+        assert failed, "Expected at least one restore task to fail after aborting"
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="a very slow test (20+ seconds), skipping it")
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
 
