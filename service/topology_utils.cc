@@ -12,6 +12,7 @@
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
+#include "service/auto_rf_keyspaces.hh"
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 
@@ -20,8 +21,8 @@
 namespace service {
 
 const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
-    // FIXME: Currently an empty list, to be populated in the next patches
     static const std::vector<std::pair<sstring, size_t>> keyspaces = {{
+        {sstring(audit_keyspace_name), audit_rf_goal_per_dc},
     }};
     return keyspaces;
 }
