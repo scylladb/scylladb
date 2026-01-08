@@ -7,6 +7,8 @@
 # Tests for server-side describe
 ###############################################################################
 
+import itertools
+import uuid
 import pytest
 import random
 import re
@@ -1278,6 +1280,184 @@ def test_describe_underlying_mv_of_unnamed_index(scylla_only, cql, test_keyspace
 
         assert result.create_statement.startswith(prefix)
         assert result.create_statement.endswith(suffix)
+
+# Obtains a list of properties for a given DESCRIBE create statement
+# corresponding to a secondary index.
+def split_index_properties(describe_stmt):
+    # First, we need to get rid of the trailing whitespace characters
+    # because they're annoying.
+    describe_stmt = describe_stmt.strip()
+    # Now, if there's a semicolon at the end of the statement,
+    # it's the last character. Get rid of it.
+    describe_stmt = describe_stmt.removesuffix(";")
+
+    # Tokenize most of the properties (except for the first one).
+    tokens = describe_stmt.split("AND")
+    token, tokens = tokens[0], tokens[1:]
+
+    # Add the first property to the list of properties.
+    first_tokens = token.split("WITH")
+    tokens = [first_tokens[-1], *tokens]
+
+    # Remove leading and trailing whitespace characters.
+    # They're also annoying.
+    tokens = [token.strip() for token in tokens]
+    return tokens
+
+def check_index_property(cql, keyspace_name, index_name, property, with_internals=False):
+    extra = "WITH INTERNALS" if with_internals else ""
+    result = cql.execute(f"DESC INDEX {keyspace_name}.{index_name} {extra}").one()
+    assert hasattr(result, "create_statement")
+    props = split_index_properties(result.create_statement)
+    return property in props
+
+def do_index_test(cql, keyspace, property):
+    with new_test_table(cql, keyspace, "p int PRIMARY KEY, v int, u int") as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH {property}")
+        assert check_index_property(cql, keyspace, index_name, property, False)
+        cql.execute(f"DROP INDEX IF EXISTS {keyspace}.{index_name}")
+
+def test_describe_index_id(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int") as table:
+        index_name = unique_name()
+        id = uuid.UUID("018ad550-b25d-09d0-7e90-ea5438411dc7")
+
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH ID = {id}")
+        assert not check_index_property(cql, test_keyspace, index_name, f"ID = {id}", False)
+        assert check_index_property(cql, test_keyspace, index_name, f"ID = {id}", True)
+
+def test_describe_index_bloom_filter_fp_chance(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "bloom_filter_fp_chance = 0.13")
+
+def test_describe_index_caching(cql, test_keyspace, scylla_only):
+    def do_test(enabled, keys, rows_per_partition):
+        caching = "caching = {"
+        caching += "'enabled': 'false', " if not enabled else ""
+        caching += f"'keys': '{keys}', 'rows_per_partition': '{rows_per_partition}'"
+        caching += "}"
+
+        do_index_test(cql, test_keyspace, caching)
+
+    for enabled, keys, rows_per_partition in itertools.product([True, False], ["ALL", "NONE"], ["ALL", "NONE"]):
+        do_test(enabled, keys, rows_per_partition)
+
+def test_describe_index_comment(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "comment = 'are you as creative as me?'")
+
+def test_describe_index_compaction(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "compaction = {'class': 'TimeWindowCompactionStrategy'}")
+    do_index_test(cql, test_keyspace, "compaction = {'class': 'IncrementalCompactionStrategy'}")
+
+def test_describe_index_compression(cql, test_keyspace, scylla_only):
+    def do_test(chunk_opt, compression_opt):
+        compression = "compression = {"
+        compression += f"'chunk_length_in_kb': '{chunk_opt}', " if chunk_opt else ""
+        compression += f"'sstable_compression': '{compression_opt}'"
+        compression += "}"
+
+        do_index_test(cql, test_keyspace, compression)
+
+    chunk_opts = [None, "4", "8"]
+    compression_opts = ["org.apache.cassandra.io.compress.LZ4Compressor", "org.apache.cassandra.io.compress.SnappyCompressor"]
+
+    for chunk_opt, compression_opt in itertools.product(chunk_opts, compression_opts):
+        do_test(chunk_opt, compression_opt)
+
+def test_describe_index_crc_check_chance(cql, test_keyspace, scylla_only):
+    # FIXME: Once scylladb/scylladb#2431 is resolved, change this to a custom value.
+    do_index_test(cql, test_keyspace, "crc_check_chance = 1")
+
+def test_describe_index_default_time_to_live(cql, test_keyspace, scylla_only):
+    # We cannot set the value to a non-zero number, but let's check this anyway.
+    do_index_test(cql, test_keyspace, "default_time_to_live = 0")
+
+def test_describe_index_gc_grace_seconds(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "gc_grace_seconds = 13")
+
+def test_describe_index_max_index_interval(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "max_index_interval = 2013")
+
+def test_describe_index_memtable_flush_period_in_ms(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "memtable_flush_period_in_ms = 60013")
+
+def test_describe_index_min_index_interval(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "min_index_interval = 133")
+
+def test_describe_speculative_retry(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "speculative_retry = '73.0PERCENTILE'")
+
+def test_describe_index_extensions(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "tombstone_gc = {'mode': 'timeout', 'propagation_delay_in_seconds': '2319'}")
+    do_index_test(cql, test_keyspace, "tombstone_gc = {'mode': 'disabled', 'propagation_delay_in_seconds': '1122'}")
+
+def test_describe_synchronous_updates(cql, test_keyspace, scylla_only):
+    do_index_test(cql, test_keyspace, "synchronous_updates = true")
+    do_index_test(cql, test_keyspace, "synchronous_updates = false")
+
+# Verify that the form of the result of DESCRIBE INDEX WITH INTERNALS is as expected,
+# considering all possible options at once.
+def test_describe_secondary_index(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int") as table:
+        index_name = unique_name()
+
+        id = uuid.UUID("018ad550-b25d-09d0-7e90-ea5438411dc7")
+        bloom_filter_fp_chance = 0.13
+        caching_keys = "NONE"
+        caching_rows_per_partition = "NONE"
+        comment = "some not very funny comment, but well..."
+        compaction_class = "TimeWindowCompactionStrategy"
+        sstable_compression = "org.apache.cassandra.io.compress.LZ4Compressor"
+        compression_chunk_length = 64
+
+        # FIXME: Once scylladb/scylladb#2431 is resolved, change this to a custom value.
+        crc_check_chance = 1
+
+        # We cannot set a non-zero default TTL.
+        default_ttl = 0
+
+        gc_grace_seconds = 13
+        max_index_interval = 2013
+        memtable_flush_period = 60013
+        min_index_interval = 133
+        speculative_retry = "73.0PERCENTILE"
+        tombstone_gc_mode = "timeout"
+        tombstone_gc_propagation_delay = "1379"
+        # We skip synchronous updates here because it makes the statement a bit more peculiar.
+        # We still test it separately.
+
+        stmt = f"CREATE INDEX {index_name} ON {table}(v) WITH ID = {id}\n" \
+               f"    AND bloom_filter_fp_chance = {bloom_filter_fp_chance}\n" \
+               f"    AND caching = {{'keys': '{caching_keys}', 'rows_per_partition': '{caching_rows_per_partition}'}}\n" \
+               f"    AND comment = '{comment}'\n" \
+               f"    AND compaction = {{'class': '{compaction_class}'}}\n" \
+               f"    AND compression = {{'chunk_length_in_kb': '{compression_chunk_length}', 'sstable_compression': '{sstable_compression}'}}\n" \
+               f"    AND crc_check_chance = {crc_check_chance}\n" \
+               f"    AND default_time_to_live = {default_ttl}\n" \
+               f"    AND gc_grace_seconds = {gc_grace_seconds}\n" \
+               f"    AND max_index_interval = {max_index_interval}\n" \
+               f"    AND memtable_flush_period_in_ms = {memtable_flush_period}\n" \
+               f"    AND min_index_interval = {min_index_interval}\n" \
+               f"    AND speculative_retry = '{speculative_retry}'\n" \
+               f"    AND tombstone_gc = {{'mode': '{tombstone_gc_mode}', 'propagation_delay_in_seconds': '{tombstone_gc_propagation_delay}'}};\n"
+
+        cql.execute(stmt)
+
+        result = cql.execute(f"DESC INDEX {test_keyspace}.{index_name} WITH INTERNALS").one()
+
+        assert hasattr(result, "keyspace_name")
+        assert result.keyspace_name == test_keyspace
+
+        assert hasattr(result, "type")
+        assert result.type == "index"
+
+        assert hasattr(result, "name")
+        # FIXME: This should be equal to `index_name` instead of the name of the underlying materialized view.
+        underlying_mv_name = f"{index_name}_index"
+        assert result.name == underlying_mv_name
+
+        assert hasattr(result, "create_statement")
+        assert result.create_statement == stmt
 
 ### =========================== UTILITY FUNCTIONS =============================
 
@@ -3011,7 +3191,14 @@ def test_desc_restore(cql):
                             PRIMARY KEY (pk)
                             WITH comment='some other comment'""")
 
-        cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
+        # Scylla supports view properties for secondary indexes, but Cassandra does not.
+        if is_scylla(cql):
+            cql.execute(f"""CREATE INDEX myindex ON {ks}.some_other_table (c1)
+                            WITH bloom_filter_fp_chance = 0.13
+                            AND gc_grace_seconds = 17
+                            AND synchronous_updates = true""")
+        else:
+            cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
 
         # Scylla supports UDFs with Lua. Cassandra supports UDFs with Java.
         if is_scylla(cql):

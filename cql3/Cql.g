@@ -898,6 +898,10 @@ pkDef[cql3::statements::create_table_statement::raw_statement& expr]
     | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr.add_key_aliases(l); }
     ;
 
+cfamProperties[cql3::statements::cf_properties& expr]
+    : cfamProperty[expr] (K_AND cfamProperty[expr])*
+    ;
+
 cfamProperty[cql3::statements::cf_properties& expr]
     : property[*$expr.properties()]
     | K_COMPACT K_STORAGE { $expr.set_compact_storage(); }
@@ -935,16 +939,22 @@ typeColumns[create_type_statement& expr]
  */
 createIndexStatement returns [std::unique_ptr<create_index_statement> expr]
     @init {
-        auto props = make_shared<index_prop_defs>();
+        auto idx_props = make_shared<index_specific_prop_defs>();
+        auto props = index_prop_defs();
         bool if_not_exists = false;
         auto name = ::make_shared<cql3::index_name>();
         std::vector<::shared_ptr<index_target::raw>> targets;
     }
-    : K_CREATE (K_CUSTOM { props->is_custom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+    : K_CREATE (K_CUSTOM { idx_props->is_custom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
         (idxName[*name])? K_ON cf=columnFamilyName '(' (target1=indexIdent { targets.emplace_back(target1); } (',' target2=indexIdent { targets.emplace_back(target2); } )*)? ')'
-        (K_USING cls=STRING_LITERAL { props->custom_class = sstring{$cls.text}; })?
-        (K_WITH properties[*props])?
-      { $expr = std::make_unique<create_index_statement>(cf, name, targets, props, if_not_exists); }
+        (K_USING cls=STRING_LITERAL { idx_props->custom_class = sstring{$cls.text}; })?
+        (K_WITH cfamProperties[props])?
+      {
+        props.extract_index_specific_properties_to(*idx_props);
+        view_prop_defs view_props = std::move(props).into_view_prop_defs();
+
+        $expr = std::make_unique<create_index_statement>(cf, name, targets, std::move(idx_props), std::move(view_props), if_not_exists);
+      }
     ;
 
 indexIdent returns [::shared_ptr<index_target::raw> id]
@@ -1092,9 +1102,9 @@ alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
  */
 alterViewStatement returns [std::unique_ptr<alter_view_statement> expr]
     @init {
-        auto props = cql3::statements::cf_prop_defs();
+        auto props = cql3::statements::view_prop_defs();
     }
-    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[*props.properties()]
     {
         $expr = std::make_unique<alter_view_statement>(std::move(cf), std::move(props));
     }

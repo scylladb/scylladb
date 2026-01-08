@@ -7,9 +7,9 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/cf_properties.hh"
 #include "cql3/cf_name.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/statements/view_prop_defs.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
@@ -35,7 +35,7 @@ private:
     expr::expression _where_clause;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _partition_keys;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _clustering_keys;
-    cf_properties _properties;
+    view_prop_defs _properties;
     bool _if_not_exists;
 
 public:
