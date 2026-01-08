@@ -410,4 +410,35 @@ SEASTAR_TEST_CASE(select_from_vector_search_system_table) {
             db_config_with_auth());
 }
 
+// Test that VECTOR_SEARCH_INDEXING permission allows selecting from CDC log table
+// when the base table has a vector index. CDC log tables inherit permissions from
+// their base table, so if the base table allows queries from users with VECTOR_SEARCH_INDEXING
+// permission, the CDC log table should also allow queries from users with that permission.
+SEASTAR_TEST_CASE(select_from_cdc_log_of_vector_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                // Create a table with a vector column and a vector index (which enables CDC)
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v vector<float, 4>)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'vector_index'");
+
+                create_user_if_not_exists(env, bob);
+
+                // Without permissions, bob cannot select from the CDC log table
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t_scylla_cdc_log").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                });
+
+                // Grant VECTOR_SEARCH_INDEXING permission
+                cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // Now bob can select from the CDC log table
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t_scylla_cdc_log");
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
