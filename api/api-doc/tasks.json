@@ -42,6 +42,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"consider_only_existing_data",
+                     "description":"Set to \"true\" to flush all memtables and force tombstone garbage collection to check only the sstables being compacted (false by default). The memtable, commitlog and other uncompacted sstables will not be checked during tombstone garbage collection.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }
