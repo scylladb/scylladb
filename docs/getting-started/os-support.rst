@@ -15,7 +15,7 @@ All releases are available as a Docker container, EC2 AMI, GCP, and Azure images
 
 By *supported*, it is meant that:
 
-- A binary installation package is available to `download <https://www.scylladb.com/download/>`_.
+- A binary installation package is available.
 - The download and install procedures are tested as part of the ScyllaDB release process for each version.
 - An automated install is included from :doc:`ScyllaDB Web Installer for Linux tool </getting-started/installation-common/scylla-web-installer>` (for the latest versions).
 
