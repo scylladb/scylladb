@@ -15,6 +15,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <ranges>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
@@ -244,11 +245,27 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
+// Batches with at least this many statements are treated as a batch workload and,
+// when applicable, routed to `sl:default_batch` to isolate them from interactive traffic.
+static constexpr size_t default_batch_min_statements = 12;
+
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_without_checking_exception_message(
         query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     cql3::util::validate_timestamp(qp.get_cql_config(), options, _attrs);
+    // The timestamp has to be taken before a possible scheduling group hop, so that
+    // batches are assigned timestamps in the order they arrived.
+    const auto timestamp = options.get_timestamp(state);
+    if (_statements.size() >= default_batch_min_statements) {
+        auto default_batch_sg_opt = state.get_client_state().maybe_get_default_batch_scheduling_group();
+        if (default_batch_sg_opt.has_value()) {
+            return with_scheduling_group(*default_batch_sg_opt, [this, &qp, &state, &options, timestamp] {
+                return batch_stage(this, seastar::ref(qp), seastar::ref(state),
+                                seastar::cref(options), false, timestamp);
+            });
+        }
+    }
     return batch_stage(this, seastar::ref(qp), seastar::ref(state),
-                       seastar::cref(options), false, options.get_timestamp(state));
+                       seastar::cref(options), false, timestamp);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(

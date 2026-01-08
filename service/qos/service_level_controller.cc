@@ -542,6 +542,9 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
             if (name == driver_service_level_name) {
                 _driver_scheduling_group = sl_data.sg;
             }
+            if (name == default_batch_service_level_name) {
+                _default_batch_scheduling_group = sl_data.sg;
+            }
             register_metrics();
         }
     });
@@ -596,6 +599,9 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
         _service_levels_db.erase(sl_it);
         if (name == driver_service_level_name) {
             _driver_scheduling_group = std::nullopt;
+        }
+        if (name == default_batch_service_level_name) {
+            _default_batch_scheduling_group = std::nullopt;
         }
         register_metrics();
         co_return co_await seastar::async( [this, name, sl_info] {

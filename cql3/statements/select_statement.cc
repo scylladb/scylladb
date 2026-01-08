@@ -24,6 +24,7 @@
 
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
 #include "index/fulltext_index.hh"
@@ -221,19 +222,21 @@ select_statement::select_statement(schema_ptr schema,
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
     _opts.set_if<query::partition_slice::option::distinct>(_parameters->is_distinct());
     _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
-    detect_range_scan();
+    detect_scans();
 }
 
-void select_statement::detect_range_scan() {
+void select_statement::detect_scans() {
     if (_ks_sel == ks_selector::NONSYSTEM) {
+        const bool single_token = _restrictions->has_token_restrictions() &&
+                find(_restrictions->get_partition_key_restrictions(), expr::oper_t::EQ);
         if (_restrictions->need_filtering() ||
                 _restrictions->partition_key_restrictions_is_empty() ||
-                (_restrictions->has_token_restrictions() &&
-                 !find(_restrictions->get_partition_key_restrictions(), expr::oper_t::EQ))) {
+                (_restrictions->has_token_restrictions() && !single_token)) {
             _range_scan = true;
             if (!_parameters->bypass_cache())
                 _range_scan_no_bypass_cache = true;
         }
+        _unbounded_partition_scan = _restrictions->is_key_range() && !single_token && !_restrictions->uses_secondary_indexing();
     }
 }
 
@@ -420,6 +423,16 @@ select_statement::execute_without_checking_exception_message(query_processor& qp
                              const query_options& options,
                              std::optional<service::group0_guard> guard) const
 {
+    // USING SERVICE LEVEL is an explicit choice of the user, so such a statement is
+    // never redirected, even though today the clause only selects the timeout.
+    if (_unbounded_partition_scan && !_attrs->is_service_level_set()) {
+        auto default_batch_sg_opt = state.get_client_state().maybe_get_default_batch_scheduling_group();
+        if (default_batch_sg_opt.has_value()) {
+            return with_scheduling_group(*default_batch_sg_opt, [this, &qp, &state, &options] {
+                return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
+            });
+        }
+    }
     return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }
 

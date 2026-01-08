@@ -229,6 +229,7 @@ private:
     service_level _default_service_level;
     seastar::metrics::metric_groups _metrics;
     std::optional<scheduling_group> _driver_scheduling_group = std::nullopt;
+    std::optional<scheduling_group> _default_batch_scheduling_group = std::nullopt;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;
@@ -340,6 +341,9 @@ public:
     scheduling_group get_scheduling_group(sstring service_level_name);
     std::optional<scheduling_group> get_driver_scheduling_group() const noexcept {
         return _driver_scheduling_group;
+    }
+    std::optional<scheduling_group> get_default_batch_scheduling_group() const noexcept {
+        return _default_batch_scheduling_group;
     }
     /**
      * Get the scheduling group of a specific user for the service level cache
