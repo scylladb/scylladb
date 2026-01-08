@@ -12,6 +12,7 @@
 #include "utils/error_injection.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <ranges>
 #include "table_helper.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -19,6 +20,7 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "locator/tablets.hh"
 
 static logging::logger tlogger("table_helper");
 
@@ -188,7 +190,8 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
-                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> initial_tablets,
+                                      std::optional<db::tablet_options> per_table_tablet_options) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -215,14 +218,29 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
         if (!db.has_keyspace(keyspace_name)) {
             locator::replication_strategy_config_options opts;
-            if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+            if (initial_tablets) {
+                // A tablets keyspace lists its racks: `replication_factor` of them in every
+                // DC which can host a replica (a zero-token DC cannot).
+                auto tmptr = qp.proxy().get_token_metadata_ptr();
+                const size_t rf = std::stoul(replication_factor);
+                for (const auto& dc : tmptr->get_datacenter_racks_token_owners() | std::views::keys) {
+                    auto racks = locator::get_allowed_racks(*tmptr, dc);
+                    racks.resize(std::min(racks.size(), rf));
+                    if (!racks.empty()) {
+                        opts[dc] = std::move(racks);
+                    }
+                }
+                if (opts.empty()) {
+                    throw std::runtime_error(seastar::format("Cannot create keyspace {}: no rack can host a tablet replica", keyspace_name));
+                }
+            } else if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
                 for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
                     opts[dc] = replication_factor;
             }
             else {
                 opts["replication_factor"] = replication_factor;
             }
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, std::nullopt, true);
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), initial_tablets, std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));
@@ -241,6 +259,12 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
         co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
             auto schema = parse_new_cf_statement(qp, table->_create_cql);
+            // The keyspace may have been created on vnodes, by a node configured otherwise.
+            if (per_table_tablet_options && db.find_keyspace(keyspace_name).metadata()->uses_tablets()) {
+                schema_builder builder{schema};
+                builder.set_tablet_options(per_table_tablet_options->to_map());
+                schema = builder.build();
+            }
             if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
             }

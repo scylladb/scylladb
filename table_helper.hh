@@ -10,6 +10,7 @@
 #pragma once
 
 #include "cql3/statements/prepared_statement.hh"
+#include "db/tablet_options.hh"
 #include "schema/schema_fwd.hh"
 #include "service/query_state.hh"
 
@@ -101,7 +102,8 @@ public:
     future<> insert(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker);
 
     static future<> setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
-                                   sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables);
+                                   sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> initial_tablets = std::nullopt,
+                                   std::optional<db::tablet_options> per_table_tablet_options = std::nullopt);
 
     /**
      * Makes a monotonically increasing value in 100ns ("nanos") based on the given time
