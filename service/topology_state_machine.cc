@@ -194,6 +194,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::cleanup, "cleanup"},
     {global_topology_request::keyspace_rf_change, "keyspace_rf_change"},
     {global_topology_request::truncate_table, "truncate_table"},
+    {global_topology_request::noop_request, "noop_request"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {

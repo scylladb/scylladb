@@ -1616,3 +1616,22 @@ async def test_moving_replica_within_single_rack(manager: ManagerClient):
         dst_host=host_id2,
         dst_shard=0,
         token=tablet_token)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    coord_srv = servers[0]
+    await manager.api.enable_injection(coord_srv.ip_addr, "tablet_allocator_shuffle", one_shot=False)
+    await manager.api.enable_injection(coord_srv.ip_addr, "tablet_keep_repairing", one_shot=False)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy'}}") as ks:
+        cql = manager.get_cql()
+        log = await manager.server_open_log(coord_srv.server_id)
+        mark = await log.mark()
+
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await log.wait_for('Initiating tablet', from_mark=mark)
+
+        # Should preempt balancing
+        await manager.api.disable_tablet_balancing(coord_srv.ip_addr)

@@ -180,6 +180,7 @@ public:
     gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
     gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
     gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
+    gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

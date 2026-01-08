@@ -1128,6 +1128,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await update_topology_state(std::move(guard), {builder.build()}, "TRUNCATE TABLE requested");
         }
         break;
+        case global_topology_request::noop_request: {
+            utils::chunked_vector<canonical_mutation> updates;
+            updates.push_back(canonical_mutation(
+                    topology_mutation_builder(guard.write_timestamp())
+                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                         .build()));
+            updates.push_back(canonical_mutation(
+                    topology_request_tracking_mutation_builder(req_id)
+                         .set("start_time", db_clock::now())
+                         .done()
+                         .build()));
+            co_await update_topology_state(std::move(guard), std::move(updates), "no-op request completed");
+        }
+        break;
         }
     }
 
