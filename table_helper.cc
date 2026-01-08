@@ -20,6 +20,8 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
+#include "db/config.hh"
 #include "locator/tablets.hh"
 
 static logging::logger tlogger("table_helper");
@@ -281,4 +283,26 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             tlogger.info("Concurrent operation is detected while creating tables for {} keyspace, retrying.", keyspace_name);
         }
     }
+}
+
+future<> table_helper::setup_auto_rf_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name,
+                                              sstring vnode_strategy, unsigned rf_goal, service::query_state& qs, std::vector<table_helper*> tables) {
+    // Tablets only where rack lists are enforced, since auto-RF manages rack lists and
+    // follows the rack lists of the other tablets keyspaces. Otherwise the keyspace is
+    // created on vnodes with a fixed replication factor, as before.
+    const auto& cfg = qp.db().get_config();
+    const auto& feat = qp.db().features();
+    const bool features_enabled = feat.auto_replication_factor && feat.rack_list_rf && feat.tablets;
+    const bool use_tablets = features_enabled && cfg.enable_tablets_by_default() && cfg.enforce_rack_list();
+    if (!use_tablets) {
+        // Once per node: system_traces is set up on every shard.
+        if (this_shard_id() == 0 && !qp.db().has_keyspace(keyspace_name) && cfg.enable_tablets_by_default() && cfg.enforce_rack_list()) {
+            tlogger.warn("Creating keyspace {} on vnodes with a fixed replication factor: the cluster features it needs on tablets "
+                         "are not all enabled yet (upgrade in progress?). The keyspace stays on vnodes once created.", keyspace_name);
+        }
+        return setup_keyspace(qp, mm, keyspace_name, std::move(vnode_strategy), std::to_string(rf_goal), qs, std::move(tables));
+    }
+    db::tablet_options options;
+    options.min_per_shard_tablet_count = 1;
+    return setup_keyspace(qp, mm, keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", "1", qs, std::move(tables), 0, std::move(options));
 }

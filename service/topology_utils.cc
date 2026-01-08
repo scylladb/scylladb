@@ -10,6 +10,7 @@
 #include "db/system_keyspace.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
+#include "service/auto_rf_keyspaces.hh"
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 
@@ -18,8 +19,8 @@
 namespace service {
 
 const std::vector<auto_rf_keyspace>& auto_rf_keyspaces() {
-    // FIXME: Currently an empty list, to be populated in the next patches
     static const std::vector<auto_rf_keyspace> keyspaces = {{
+        {.name = sstring(audit_keyspace_name), .racks_per_dc = audit_rf_goal_per_dc},
     }};
     return keyspaces;
 }
