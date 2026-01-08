@@ -75,6 +75,13 @@ static void validate_quantization(const sstring& value) {
     }
 }
 
+static bool validate_boolean_option(const sstring& value) {
+    if (!(boost::iequals(value, "true") || boost::iequals(value, "false"))) {
+        throw exceptions::invalid_request_exception(format("Unsupported boolean option value: {}", value));
+    }
+    return true;
+}
+
 const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
         {"similarity_function", validate_similarity_function},
         {"maximum_node_connections", validate_positive_option<512>},
@@ -82,7 +89,15 @@ const static std::unordered_map<sstring, std::function<void(const sstring&)>> ve
         {"search_beam_width", validate_positive_option<4096>},
         {"quantization", validate_quantization},
         {"oversampling", validate_factor<1.0f, 100.0f>},
+        {"rescoring", validate_boolean_option},
     };
+
+bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
+    auto q = properties.find("quantization");
+    auto r = properties.find("rescoring");
+    return q != properties.end() && !boost::iequals(q->second, "f32")
+        && r != properties.end() && boost::iequals(r->second, "true");
+}
 
 float vector_index::get_oversampling(const index_options_map& properties) {
     auto it = properties.find("oversampling");
