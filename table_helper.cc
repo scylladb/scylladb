@@ -297,3 +297,17 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         }
     }
 }
+
+future<> table_helper::setup_auto_rf_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name,
+                                              sstring vnode_strategy, size_t rf_goal, service::query_state& qs, std::vector<table_helper*> tables) {
+    // Follow the cluster's default for new keyspaces: with tablets_mode_for_new_keyspaces
+    // disabled (or enable_tablets=false) the operator asked for vnodes.
+    const bool use_tablets = qp.db().features().auto_replication_factor && qp.db().get_config().enable_tablets_by_default()
+            && !utils::get_local_injector().enter("auto_rf_keyspaces_use_vnodes");
+    if (!use_tablets) {
+        return setup_keyspace(qp, mm, keyspace_name, std::move(vnode_strategy), std::to_string(rf_goal), qs, std::move(tables));
+    }
+    db::tablet_options options;
+    options.min_per_shard_tablet_count = 1;
+    return setup_keyspace(qp, mm, keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", "1", qs, std::move(tables), 0, std::move(options));
+}

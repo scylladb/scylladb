@@ -104,6 +104,13 @@ public:
                                    sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> initial_tablets = std::nullopt,
                                    std::optional<db::tablet_options> per_table_tablet_options = std::nullopt);
 
+    // Sets up one of the system keyspaces whose replication the topology coordinator
+    // manages (auto-RF). Where new keyspaces default to tablets, the keyspace is
+    // created on tablets with RF 1 per DC and the coordinator raises it from there;
+    // otherwise it is created on vnodes with `vnode_strategy` and `rf_goal` per DC.
+    static future<> setup_auto_rf_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name,
+                                           sstring vnode_strategy, size_t rf_goal, service::query_state& qs, std::vector<table_helper*> tables);
+
     /**
      * Makes a monotonically increasing value in 100ns ("nanos") based on the given time
      * stamp and the "nanos" value of the previous event.
