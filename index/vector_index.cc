@@ -79,6 +79,10 @@ static const std::vector<sstring> quantization_values = {
     "f32", "f16", "bf16", "i8", "b1"
 };
 
+static const std::vector<sstring> boolean_values = {
+    "false", "true"
+};
+
 const static std::unordered_map<sstring, std::function<void(const sstring&, const sstring&)>> vector_index_options = {
         // `similarity_function` defines method of calculating similarity between vectors
         // Used internally by vector store during both indexing and querying
@@ -90,13 +94,22 @@ const static std::unordered_map<sstring, std::function<void(const sstring&, cons
         {"construction_beam_width", std::bind_front(validate_positive_option, 4096)},
         {"search_beam_width", std::bind_front(validate_positive_option, 4096)},
         // 'quantization' enables compression of vectors in vector store (not in base table!)
-        // Used internally by vector store.
+        // Used internally by vector store. Scylla only checks it to enable rescoring.
         {"quantization", std::bind_front(validate_enumerated_option, quantization_values)},
         // 'oversampling' defines factor by which number of candidates retrieved from vector store is multiplied.
-        // It can improve accuracy of ANN queries.
+        // It can improve accuracy of ANN queries, especially for quantized vectors when combined with rescoring.
         // Used by Scylla during query processing to increase query limit sent to vector store.
         {"oversampling", std::bind_front(validate_factor_option, 1.0f, 100.0f)},
+        // 'rescoring' enables recalculating of similarity scores of candidates retrieved from vector store when quantization is used.
+        {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
     };
+
+bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
+    auto q = properties.find("quantization");
+    auto r = properties.find("rescoring");
+    return q != properties.end() && !boost::iequals(q->second, "f32")
+        && r != properties.end() && boost::iequals(r->second, "true");
+}
 
 float vector_index::get_oversampling(const index_options_map& properties) {
     auto it = properties.find("oversampling");
