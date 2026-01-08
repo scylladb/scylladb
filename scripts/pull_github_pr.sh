@@ -26,7 +26,7 @@ fi
 if [[ -z "$JENKINS_USERNAME" || -z "$JENKINS_API_TOKEN" ]]; then
   echo "
     JENKINS_USERNAME or JENKINS_API_TOKEN is missing from env.
-    To create a TOKEN, browse to https://jenkins.scylladb.com, then click on your username (upper right corner) and configure. Click on Add new token and set the JENKINS_USERNAME and JENKINS_API_TOKEN environment variables accordingly.
+    To create a TOKEN, browse to https://jenkins.scylladb.com, then click on your username (upper right corner) and go to the Security tab. Click on Add new token and set the JENKINS_USERNAME and JENKINS_API_TOKEN environment variables accordingly.
   "
   exit 1
 fi
