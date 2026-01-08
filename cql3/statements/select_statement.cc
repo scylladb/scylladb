@@ -261,7 +261,8 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         auto& cf_name = s->is_view()
             ? s->view_info()->base_name()
             : (cdc ? cdc->cf_name() : column_family());
-        bool is_vector_indexed = secondary_index::vector_index::has_vector_index(*_schema);
+        const schema_ptr& base_schema = cdc ? cdc : _schema;
+        bool is_vector_indexed = secondary_index::vector_index::has_vector_index(*base_schema);
         co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT, auth::command_desc::type::OTHER, is_vector_indexed);
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
