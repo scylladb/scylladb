@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include "audit/audit_cf_storage_helper.hh"
 #include "db/system_keyspace.hh"
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
@@ -16,8 +17,8 @@
 namespace service {
 
 const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
-    // FIXME: Currently an empty list, to be populated in the next patches
     static const std::vector<std::pair<sstring, size_t>> keyspaces = {{
+        {audit::audit_cf_storage_helper::KEYSPACE_NAME, audit::audit_cf_storage_helper::RF_GOAL_PER_DC},
     }};
     return keyspaces;
 }
