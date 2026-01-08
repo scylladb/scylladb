@@ -5986,6 +5986,11 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     _stats.api_operations.list_tables++;
     elogger.trace("Listing tables {}", request);
 
+    co_await utils::get_local_injector().inject("alternator_list_tables", [] (auto& handler) -> future<> {
+        handler.set("waiting", true);
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+    });
+
     rjson::value* exclusive_start_json = rjson::find(request, "ExclusiveStartTableName");
     rjson::value* limit_json = rjson::find(request, "Limit");
     std::string exclusive_start = exclusive_start_json ? rjson::to_string(*exclusive_start_json) : "";

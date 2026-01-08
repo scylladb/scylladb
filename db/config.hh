@@ -464,6 +464,8 @@ public:
 
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;
+    named_value<uint16_t> alternator_port_proxy_protocol;
+    named_value<uint16_t> alternator_https_port_proxy_protocol;
     named_value<sstring> alternator_address;
     named_value<bool> alternator_enforce_authorization;
     named_value<bool> alternator_warn_authorization;
