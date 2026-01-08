@@ -28,8 +28,11 @@ class migration_manager;
 namespace audit {
 
 class audit_cf_storage_helper : public storage_helper {
+public:
     static const sstring KEYSPACE_NAME;
     static const sstring TABLE_NAME;
+    static const size_t RF_GOAL_PER_DC;
+private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
     table_helper _table;
