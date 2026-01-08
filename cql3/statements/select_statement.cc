@@ -398,6 +398,14 @@ select_statement::execute_without_checking_exception_message(query_processor& qp
                              const query_options& options,
                              std::optional<service::group0_guard> guard) const
 {
+    if (_range_scan) {
+        auto default_batch_sg_opt = state.get_client_state().maybe_get_default_batch_scheduling_group();
+        if (default_batch_sg_opt.has_value()) {
+            return with_scheduling_group(*default_batch_sg_opt, [this, &qp, &state, &options] {
+                return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
+            });
+        }
+    }
     return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }
 
