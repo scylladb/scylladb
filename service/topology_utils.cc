@@ -23,6 +23,7 @@ namespace service {
 const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
     static const std::vector<std::pair<sstring, size_t>> keyspaces = {{
         {sstring(audit_keyspace_name), audit_rf_goal_per_dc},
+        {sstring(system_traces_keyspace_name), system_traces_rf_goal_per_dc},
     }};
     return keyspaces;
 }
