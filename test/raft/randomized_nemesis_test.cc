@@ -2925,6 +2925,18 @@ private:
 
     static constexpr elem_t magic = 54313;
 
+    static void check_digest_value(elem_t d) {
+        if (d < 0 || d >= magic) {
+            on_fatal_internal_error(tlogger, fmt::format("Digest value out of range: {}", d));
+        }
+    }
+
+    static void validate_digest_value(elem_t d_new, elem_t d_old, elem_t x) {
+        if (d_new < 0 || d_new >= magic) {
+            on_fatal_internal_error(tlogger, fmt::format("Digest value invalid after appending/removing element: d_new {}, d_old {}, x {}", d_new, d_old, x));
+        }
+    }
+
 public:
     append_seq(std::vector<elem_t> v) : _seq{make_lw_shared<std::vector<elem_t>>(std::move(v))}, _end{_seq->size()}, _digest{0} {
         for (auto x : *_seq) {
@@ -2933,20 +2945,28 @@ public:
     }
 
     static elem_t digest_append(elem_t d, elem_t x) {
-        BOOST_REQUIRE_LE(0, d);
-        BOOST_REQUIRE_LT(d, magic);
+        check_digest_value(d);
 
         auto y = (d + x) % magic;
+
+        validate_digest_value(y, d, x);
+
         SCYLLA_ASSERT(digest_remove(y, x) == d);
+
         return y;
     }
 
     static elem_t digest_remove(elem_t d, elem_t x) {
-        BOOST_REQUIRE_LE(0, d);
-        BOOST_REQUIRE_LT(d, magic);
+        check_digest_value(d);
 
         auto y = (d - x) % magic;
-        return y < 0 ? y + magic : y;
+
+        if (y < 0) {
+            y += magic;
+        }
+
+        validate_digest_value(y, d, x);
+        return y;
     }
 
     elem_t digest() const {
@@ -2996,7 +3016,9 @@ public:
 
 private:
     append_seq(lw_shared_ptr<std::vector<elem_t>> seq, size_t end, elem_t d)
-        : _seq(std::move(seq)), _end(end), _digest(d) {}
+        : _seq(std::move(seq)), _end(end), _digest(d) {
+        check_digest_value(d);
+    }
 };
 
 struct AppendReg {
@@ -3577,7 +3599,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             tlogger.info("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
-                return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
+                return env.call(id, AppendReg::append{0}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
