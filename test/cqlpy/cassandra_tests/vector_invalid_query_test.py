@@ -232,6 +232,8 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
+@pytest.mark.skip(reason="We pass all restricted queries to vector store, once VECTOR-374 is done, this work as expected" \
+                         "However, the test won't work even then as pytest does not support vector store.")
 def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
