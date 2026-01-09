@@ -8,6 +8,7 @@
 
 #include "utils/assert.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/tablet_options.hh"
 
 #include "cql3/untyped_result_set.hh"
 #include "replica/database.hh"
@@ -21,10 +22,13 @@
 #include "types/set.hh"
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 
+#include "service/storage_service.hh"
 #include "service/migration_manager.hh"
+#include "service/topology_mutation.hh"
 #include "locator/host_id.hh"
 
 #include <seastar/core/seastar.hh>
@@ -836,6 +840,286 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
+}
+
+system_distributed_tablets_keyspace::system_distributed_tablets_keyspace(service::migration_manager& mm, service::storage_proxy& sp, service::storage_service& ss)
+    : _mm(mm)
+    , _sp(sp)
+    , _ss(ss)
+    , _started_future(_started_promise.get_future())
+{}
+
+schema_ptr system_distributed_tablets_keyspace::snapshots() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SNAPSHOTS);
+        tablet_options tablet_opts;
+        tablet_opts.min_per_shard_tablet_count = 1;
+        return schema_builder(NAME, SNAPSHOTS, std::make_optional(id))
+                .with_column("name", utf8_type, column_kind::partition_key)
+                .with_column("created_at", timestamp_type, column_kind::static_column)
+                .with_column("expires_at", timestamp_type, column_kind::static_column)
+                .with_column("datacenter", utf8_type, column_kind::clustering_key)
+                .with_column("endpoint", utf8_type, column_kind::regular_column)
+                .with_column("bucket_name", utf8_type, column_kind::regular_column)
+                .with_column("prefix", utf8_type, column_kind::regular_column)
+                .with_column("version", utf8_type, column_kind::regular_column)
+                .with_hash_version()
+                .set_tablet_options(tablet_opts.to_map())
+                .build();
+    }();
+    return schema;
+}
+
+// This is the set of tables which this node ensures to exist in the cluster.
+// It does that by announcing the creation of these schemas on initialization
+// of the `system_distributed_tablets_keyspace` service (see `create_tables()`), unless it first
+// detects that the table already exists.
+std::vector<schema_ptr> system_distributed_tablets_keyspace::ensured_tables() {
+    return {
+        snapshots(),
+    };
+}
+
+system_distributed_tablets_keyspace::status
+system_distributed_tablets_keyspace::get_status() const {
+    auto needs_rf_adjustment = [&] (const data_dictionary::keyspace& ks, const data_dictionary::database& db) {
+        auto ksm = ks.metadata();
+        const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+        const auto& this_dc = topology.get_datacenter();
+        const auto& this_rack = topology.get_rack();
+        const auto& strategy_options = ksm->strategy_options();
+
+        if (strategy_options.contains(this_dc)) {
+            auto rf_data = locator::replication_factor_data(strategy_options.at(this_dc));
+            if (rf_data.count() >= RF_GOAL_PER_DC
+                    || (rf_data.is_rack_based() && std::ranges::contains(rf_data.get_rack_list(), this_rack))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto db = _sp.data_dictionary();
+    auto ks = db.try_find_keyspace(NAME);
+
+    if (!ks) {
+        return {false, false, false};
+    }
+
+    bool rf_ok = !needs_rf_adjustment(ks.value(), db);
+    bool tables_exist = std::ranges::all_of(ensured_tables(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); });
+
+    return {true, rf_ok, tables_exist};
+}
+
+future<> system_distributed_tablets_keyspace::create_tables() {
+    if (this_shard_id() != 0) {
+        on_internal_error(dlogger, "DDL for system_distributed_tablets keyspace must be executed on shard 0");
+    }
+
+    co_await utils::get_local_injector().inject("block-system-distributed-tablets-create-tables", utils::wait_for_message(std::chrono::seconds(30)));
+
+    const auto& tmptr = _sp.local_db().get_token_metadata();
+    auto& topology = tmptr.get_topology();
+    if (!tmptr.is_normal_token_owner(topology.my_host_id())) {
+        dlogger.info("This node does not own tokens. Skipping creation of {} keyspace and tables", NAME);
+        co_return;
+    }
+
+    std::optional<service::group0_guard> group0_guard;
+
+    while (true) {
+        auto [ks_exists, rf_ok, tables_exist] = get_status();
+        if (ks_exists && rf_ok && tables_exist) {
+            dlogger.info("{} keyspace and tables are up-to-date. Not creating", NAME);
+            co_return;
+        }
+
+        if (!group0_guard) {
+            group0_guard = co_await _mm.start_group0_operation();
+            continue;
+        }
+
+        auto ts = group0_guard->write_timestamp();
+        utils::chunked_vector<mutation> mutations;
+        std::vector<sstring> actions;
+
+        auto db = _sp.data_dictionary();
+
+        lw_shared_ptr<keyspace_metadata> ksm;
+        locator::replication_strategy_config_options config_options;
+        bool needs_alter = ks_exists && !rf_ok;
+        if (needs_alter) {
+            if (auto ongoing_request = co_await _ss.ongoing_rf_change(*group0_guard, NAME)) {
+                dlogger.info("Detected ongoing RF change for {} (request_id={}), waiting for it to complete before retrying", NAME, *ongoing_request);
+                group0_guard.reset();
+                co_await _ss.wait_for_topology_request_completion(*ongoing_request);
+                co_await _ss.wait_for_topology_not_busy();
+                continue;
+            }
+        }
+        if (ks_exists) {
+            ksm = db.find_keyspace(NAME).metadata();
+            if (needs_alter) {
+                const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+                const auto& this_dc = topology.get_datacenter();
+                const auto& this_rack = topology.get_rack();
+
+                // Add this rack to the replication options.
+                config_options["class"] = "NetworkTopologyStrategy";
+                for (const auto& [dc, rf] : ksm->strategy_options()) {
+                    auto rf_data = locator::replication_factor_data(rf);
+                    if (!rf_data.is_rack_based()) {
+                        on_internal_error(dlogger, fmt::format("{} keyspace has non-rack-based replication factor data for DC {}", NAME, dc));
+                    }
+                    auto rack_list = rf_data.get_rack_list();
+                    if (dc == this_dc && rack_list.size() < RF_GOAL_PER_DC && !std::ranges::contains(rack_list, this_rack)) {
+                        rack_list.push_back(this_rack);
+                    }
+                    config_options.emplace(dc, std::move(rack_list));
+                }
+                if (!ksm->strategy_options().contains(this_dc)) { // new DC
+                    config_options.emplace(this_dc, locator::rack_list{this_rack});
+                }
+                cql3::statements::ks_prop_defs props;
+                props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, config_options);
+                auto flattened = props.flattened();
+
+                // Create a keyspace_rf_change topology request.
+                auto global_request_id = group0_guard->new_group0_state_id();
+                service::topology_mutation_builder builder(ts);
+                service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, _sp.features().topology_requests_type_column};
+                rtbuilder.set("done", false)
+                         .set("start_time", db_clock::now())
+                         .set_new_keyspace_rf_change_data(NAME, flattened);
+                if (_sp.features().topology_global_request_queue) {
+                    builder.queue_global_topology_request_id(global_request_id);
+                    rtbuilder.set("request_type", service::global_topology_request::keyspace_rf_change)
+                             .set_new_keyspace_rf_change_data(NAME, flattened);
+                } else {
+                    builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                    builder.set_global_topology_request_id(global_request_id);
+                    builder.set_new_keyspace_rf_change_data(NAME, flattened);
+                }
+                auto topo_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                mutations.push_back(builder.build().to_mutation(topo_schema));
+                auto topo_req_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+                mutations.push_back(rtbuilder.build().to_mutation(topo_req_schema));
+                actions.push_back("submit keyspace_rf_change topology request");
+            } else {
+                dlogger.info("{} keyspace is present and does not require alteration", NAME);
+            }
+        } else {
+            // Get mutation for creating the keyspace.
+            const auto& topology = _sp.local_db().get_token_metadata().get_topology();
+            for (const auto& [dc, racks] : topology.get_datacenter_racks()) {
+                auto rack_list = racks
+                        | std::views::keys
+                        | std::views::take(RF_GOAL_PER_DC)
+                        | std::ranges::to<locator::rack_list>();
+                config_options.emplace(dc, std::move(rack_list));
+            }
+            ksm = keyspace_metadata::new_keyspace(
+                    NAME,
+                    "org.apache.cassandra.locator.NetworkTopologyStrategy",
+                    config_options,
+                    0, std::nullopt);
+            mutations = service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts);
+            actions.push_back("create keyspace");
+        }
+
+        // Get mutations for creating tables.
+        auto num_keyspace_mutations = mutations.size();
+        co_await coroutine::parallel_for_each(ensured_tables(),
+                [this, &mutations, db, ts, ksm] (auto&& table) -> future<> {
+            if (!db.has_schema(table->ks_name(), table->cf_name())) {
+                co_return co_await service::prepare_new_column_family_announcement(mutations, _sp, *ksm, std::move(table), ts);
+            }
+        });
+        if (mutations.size() > num_keyspace_mutations) {
+            actions.push_back("create tables");
+        } else {
+            dlogger.info("{}: all tables are present and up-to-date", NAME);
+        }
+
+        if (!mutations.empty()) {
+            auto description = fmt::format("{}", fmt::join(actions, ","));
+            dlogger.info("Announcing mutations to create/update {} keyspace and tables: {}", NAME, description);
+            try {
+                if (needs_alter) {
+                    co_await _mm.announce<service::mixed_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+                } else {
+                    co_await _mm.announce<service::schema_change>(std::move(mutations), *std::exchange(group0_guard, std::nullopt), description);
+                }
+            } catch (service::group0_concurrent_modification&) {
+                dlogger.info("Concurrent operation is detected while starting, retrying.");
+                continue;
+            }
+        }
+
+        co_return;
+    }
+}
+
+future<> system_distributed_tablets_keyspace::start() {
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+    if (!_sp.features().tablets) {
+        dlogger.info("Skipping creation of {} keyspace: tablets feature is disabled", NAME);
+        co_return;
+    }
+    if (_listener.has_value()) {
+        co_return;
+    }
+    // The system_distributed_tablets keyspace uses rack-list RFs that are
+    // automatically expanded when a new rack appears in the cluster (see create_tables()).
+    // Thus, we must wait for the rack_list_rf feature to be enabled before creating the keyspace.
+    //
+    // Notice that the callback passed to when_enabled() moves the create_tables()
+    // call to a background fiber. This is in contrast to other usages of when_enabled()
+    // in which the registration is wrapped in a seastar::async context and the
+    // futures are awaited with .get(). The reason is to prevent deadlocks:
+    // when the topology coordinator enables a feature (after an upgrade), it
+    // issues a topology change to group0 and waits for the local group0 state
+    // machine to apply it. During that waiting, it continues to hold the
+    // _operation_mutex via a group0 guard. When the group0 state machine
+    // applies the topology change, the storage service (storage_service::topology_state_load)
+    // invokes the below callback and create_tables() attempts to create another
+    // group0 guard. Since the _operation_mutex is already held, this operation
+    // blocks and needs to be executed asynchronously.
+    _listener = _sp.features().rack_list_rf.when_enabled([this] {
+        (void)try_with_gate(_startup_gate, [this] {
+            return create_tables().then([this] {
+                _started_promise.set_value();
+            });
+        }).handle_exception([this](auto&& eptr) {
+            dlogger.error("Failed to create {} keyspace after rack_list_rf feature enable: {}", NAME, eptr);
+            _started_promise.set_exception(std::move(eptr));
+        });
+    });
+    // If the feature is enabled on startup, switch to synchronous behavior,
+    // i.e., wait for the fiber to finish. This ensures that the keyspace and
+    // tables will have been created by the end of the startup phase. For new
+    // racks, it ensures that any needed RF change will have been submitted by
+    // the end of the startup phase (but does not wait for the request to finish).
+    if (_sp.features().rack_list_rf) {
+        co_await wait_until_started();
+    }
+}
+
+future<> system_distributed_tablets_keyspace::wait_until_started() {
+    if (this_shard_id() != 0) {
+        return container().invoke_on(0, [] (system_distributed_tablets_keyspace& sys_dist_tablets_ks) {
+            return sys_dist_tablets_ks.wait_until_started();
+        });
+    }
+    return _started_future.get_future();
+}
+
+future<> system_distributed_tablets_keyspace::stop() {
+    _listener.reset();
+    return _startup_gate.close();
 }
 
 }
