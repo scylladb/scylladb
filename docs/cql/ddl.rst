@@ -289,7 +289,7 @@ with tablets enabled. Keyspaces using tablets must also remain :term:`RF-rack-va
 throughout their lifetime. See :ref:`Limitations and Unsupported Features <tablets-limitations>`
 for details.
 
-**The ``initial`` sub-option (deprecated)**
+**The** ``initial`` **sub-option (deprecated)**
 
 A good rule of thumb to calculate initial tablets is to divide the expected total storage used
 by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB
