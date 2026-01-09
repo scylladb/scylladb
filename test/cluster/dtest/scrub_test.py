@@ -1,3 +1,13 @@
+#
+# The original Apache Cassandra license:
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Modifications: Copyright (C) 2021-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
 import glob
 import logging
 import os
