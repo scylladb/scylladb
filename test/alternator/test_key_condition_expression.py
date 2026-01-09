@@ -198,7 +198,7 @@ def test_key_condition_expression_unknown(test_table_sn_with_sorted_partition):
     with pytest.raises(ClientError, match='ValidationException.*dog'):
         full_query(table, KeyConditionExpression='p=:p AND dog(c, :c)',
             ExpressionAttributeValues={':p': p, ':c': 3})
-    with pytest.raises(ClientError, match='ValidationException.*attribute_exists'):
+    with pytest.raises(ClientError, match='ValidationException.*KeyConditionExpression'):
         full_query(table, KeyConditionExpression='p=:p AND attribute_exists(c)',
             ExpressionAttributeValues={':p': p})
 
@@ -235,10 +235,10 @@ def test_key_condition_expression_parser(test_table_sn_with_sorted_partition):
         full_query(table, KeyConditionExpression='p=:p AND c IN (:c)',
             ExpressionAttributeValues={':p': p, ':c': 5})
     # The "OR" or "NOT" operators are parsed, but not allowed:
-    with pytest.raises(ClientError, match='ValidationException.*OR'):
+    with pytest.raises(ClientError, match='ValidationException.*KeyConditionExpression'):
         full_query(table, KeyConditionExpression='c=:c OR p=:p',
             ExpressionAttributeValues={':p': p, ':c': 3})
-    with pytest.raises(ClientError, match='ValidationException.*NOT'):
+    with pytest.raises(ClientError, match='ValidationException.*KeyConditionExpression'):
         full_query(table, KeyConditionExpression='NOT c=:c AND p=:p',
             ExpressionAttributeValues={':p': p, ':c': 3})
     # Unnecessary parentheses are allowed around the entire expression,

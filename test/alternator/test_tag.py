@@ -339,6 +339,11 @@ def table_lsi_gsi(dynamodb):
 # "An error occurred (ValidationException) when calling the ListTagsOfResource
 # operation: Invalid TableArn: Invalid ResourceArn provided as input
 # arn:aws:dynamodb:us-east-1:797456418907:table/alternator_Test_1655117822792/index/gsi"
+# Or
+# "An error occurred (ValidationException) when calling the ListTagsOfResource
+# operation: One or more parameter values were invalid: Invalid resource arn
+# provided, only table or stream is accepted. Provided resource arn:
+# arn:aws:dynamodb:us-east-1:797456418907:table/alternator_Test_1767624344340/index/gsi"
 #
 # See issue #10786 discussing maybe we want in Alternator not to follow
 # DynamoDB here, and to *allow* tagging GSIs and LSIs separately. But until
@@ -349,15 +354,15 @@ def test_tag_lsi_gsi(table_lsi_gsi):
     gsi_arn =  table_desc['GlobalSecondaryIndexes'][0]['IndexArn']
     lsi_arn =  table_desc['LocalSecondaryIndexes'][0]['IndexArn']
     assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=table_arn)['Tags']
-    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+    with pytest.raises(ClientError, match='ValidationException.*[Rr]esource ?[Aa]rn'):
         assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=gsi_arn)['Tags']
-    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+    with pytest.raises(ClientError, match='ValidationException.*[Rr]esource ?[Aa]rn'):
         assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=lsi_arn)['Tags']
     tags = [ { 'Key': 'hi', 'Value': 'hello' } ]
     tag_resource(table_lsi_gsi, table_arn, tags)
-    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+    with pytest.raises(ClientError, match='ValidationException.*[Rr]esource ?[Aa]rn'):
         table_lsi_gsi.meta.client.tag_resource(ResourceArn=gsi_arn, Tags=tags)
-    with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
+    with pytest.raises(ClientError, match='ValidationException.*[Rr]esource ?[Aa]rn'):
         table_lsi_gsi.meta.client.tag_resource(ResourceArn=lsi_arn, Tags=tags)
 
 # Test that if we concurrently add tags A and B to a table, both survive.

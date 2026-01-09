@@ -53,13 +53,14 @@ def compressed_req(dynamodb):
     config = dynamodb.meta.client._client_config
     credentials = dynamodb.meta.client._request_signer._credentials
     verify = not url.startswith('https')
+    region_name = dynamodb.meta.client.meta.region_name
     # By default, the SDK only bothers to compress requests larger than 10KB.
     # Let's drop that limit to 1 byte.
     config = config.merge(botocore.client.Config(request_min_compression_size_bytes=1))
     ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
         aws_access_key_id=credentials.access_key,
         aws_secret_access_key=credentials.secret_key,
-        region_name='us-east-1', config=config)
+        region_name=region_name, config=config)
     # Unfortunately, request compression is currently not enabled by default
     # for DynamoDB requests, and there is no user-visible way to enable it.
     # Instead, compression needs to be chosen by botocore for each individual

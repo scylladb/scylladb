@@ -9,6 +9,7 @@
 import random
 import sys
 import traceback
+import time
 
 import pytest
 import urllib3
@@ -392,28 +393,51 @@ def test_batch_get_item_duplicate(test_table, test_table_s):
 # work. Testing a large request exercises our code which calculates the
 # request signature, and parses a long request (issue #7213) as well as the
 # resulting long write (issue #8183).
+#
+# Note that although a single large batch is allowed in the sense that it
+# does not cause an error, it is still possible that only part of it will
+# actually be done right way, and UnprocessedItems will be returned directing
+# the user to re-submit part of the batch. This often happens when running
+# this test on DynamoDB, because a new on-demand-billing table starts with
+# a very low WCU limitation, and performing a single big batch exceeds the
+# WCU quota.
 def test_batch_write_item_large(test_table_sn):
     p = random_string()
     long_content = random_string(100)*500
-    write_reply = test_table_sn.meta.client.batch_write_item(RequestItems = {
-        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)],
-    })
-    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+    request_items = {
+        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)]
+    }
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        write_reply = test_table_sn.meta.client.batch_write_item(
+            RequestItems=request_items)
+        request_items = write_reply['UnprocessedItems']
+        if not request_items:
+            # Write of all items finished
+            break
+        # Need to re-submit the remaining request_items, but first sleep a
+        # bit to get more WCU capacity.
+        time.sleep(1)
     assert full_query(test_table_sn, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
         ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]
 
 # Test if client breaking connection during HTTP response
 # streaming doesn't break the server.
-def test_batch_write_item_large_broken_connection(test_table_sn, new_dynamodb_session):
+# FIXME: this test was written to reproduce #14454, which has NOTHING to do
+# with testing batches (the batch is just a way to insert a bunch of data).
+# This test shouldn't have this name, shouldn't be in this position of this
+# file or even in this file at all... Also, this test was written to assume
+# the reponse uses HTTP chunked encoding, which isn't true for DynamoDB,
+# making this a scylla-only test...
+def test_batch_write_item_large_broken_connection(test_table_sn, new_dynamodb_session,scylla_only):
     fn_name = sys._getframe().f_code.co_name
     ses = new_dynamodb_session()
 
     p = random_string()
     long_content = random_string(100)*500
-    write_reply = test_table_sn.meta.client.batch_write_item(RequestItems = {
-        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)],
-    })
-    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+    with test_table_sn.batch_writer() as batch:
+        for i in range(25):
+            batch.put_item(Item={'p': p, 'c': i, 'content': long_content})
 
     read_fun = urllib3.HTTPResponse.read_chunked
     triggered = False

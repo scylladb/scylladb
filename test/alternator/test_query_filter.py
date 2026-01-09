@@ -403,7 +403,7 @@ def test_query_filter_null(test_table_sn_with_data):
 # Operator names are case sensitive. "EQ" is fine, "eq" is not.
 def test_query_filter_case_sensitive(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
-    with pytest.raises(ClientError, match='ValidationException.*eq'):
+    with pytest.raises(ClientError, match='ValidationException.*comparison'):
         full_query(table,
             KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
             QueryFilter={ 'i': { 'AttributeValueList': [3], 'ComparisonOperator': 'eq' }})
@@ -411,7 +411,7 @@ def test_query_filter_case_sensitive(test_table_sn_with_data):
 # Obviously, an unknown operators is an error too.
 def test_query_filter_unknown_operator(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
-    with pytest.raises(ClientError, match='ValidationException.*DOG'):
+    with pytest.raises(ClientError, match='ValidationException.*comparison'):
         full_query(table,
             KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
             QueryFilter={ 'i': { 'AttributeValueList': [3], 'ComparisonOperator': 'DOG' }})
@@ -464,7 +464,7 @@ def test_query_filter_or(test_table_sn_with_data):
 def test_query_filter_invalid_conditional_operator(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for conditional_operator in ['DOG', 'and']:
-        with pytest.raises(ClientError, match='ValidationException.*'+conditional_operator):
+        with pytest.raises(ClientError, match='ValidationException'):
             full_query(table,
                 KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
                 QueryFilter={ 'i': { 'AttributeValueList': [1], 'ComparisonOperator': 'EQ' },

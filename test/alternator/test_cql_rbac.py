@@ -64,10 +64,11 @@ def new_role(cql, login=True, superuser=False):
 def new_dynamodb(dynamodb, role, key):
     url = dynamodb.meta.client._endpoint.host
     config = dynamodb.meta.client._client_config
+    region_name = dynamodb.meta.client.meta.region_name
     verify = not url.startswith('https')
     ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
         aws_access_key_id=role, aws_secret_access_key=key,
-        region_name='us-east-1', config=config)
+        region_name=region_name, config=config)
     try:
         yield ret
     finally:
@@ -77,10 +78,11 @@ def new_dynamodb(dynamodb, role, key):
 def new_dynamodb_streams(dynamodb, role, key):
     url = dynamodb.meta.client._endpoint.host
     config = dynamodb.meta.client._client_config
+    region_name = dynamodb.meta.client.meta.region_name
     verify = not url.startswith('https')
     ret = boto3.client('dynamodbstreams', endpoint_url=url, verify=verify,
         aws_access_key_id=role, aws_secret_access_key=key,
-        region_name='us-east-1', config=config)
+        region_name=region_name, config=config)
     try:
         yield ret
     finally:
