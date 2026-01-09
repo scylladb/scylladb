@@ -1224,7 +1224,13 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
 
         auto [ann_column, ann_vector_expr] = _prepared_ann_ordering.value();
 
-        auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
+        auto expr_value = expr::evaluate(ann_vector_expr, options);
+
+        if (expr_value.is_null()) {
+            throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering->first->name_as_text()));
+        }
+
+        auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
         auto ann_vector = util::to_vector<float>(values);
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
