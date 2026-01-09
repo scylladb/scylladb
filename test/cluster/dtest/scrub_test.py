@@ -1,3 +1,10 @@
+#
+# Copyright (C) 2015-present The Apache Software Foundation
+# Copyright (C) 2021-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
 import glob
 import logging
 import os
