@@ -281,7 +281,7 @@ async def manager(request: pytest.FixtureRequest,
             dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
             full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
                                             urllib.parse.quote(dir_path_relative))
-            record_property("TEST_LOGS", f"<a href={full_url}>failed_test_logs</a>")
+            record_property("TEST_LOGS", full_url)
 
     cluster_status = await manager_client.after_test(test_case_name, not failed)
     await manager_client.stop()  # Stop client session and close driver after each test
