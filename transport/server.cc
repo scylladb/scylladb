@@ -12,7 +12,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
-#include "seastar/coroutine/switch_to.hh"
+#include <seastar/coroutine/switch_to.hh>
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"

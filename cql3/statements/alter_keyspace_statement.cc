@@ -19,7 +19,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
-#include "seastar/coroutine/exception.hh"
+#include <seastar/coroutine/exception.hh>
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "service/topology_mutation.hh"
