@@ -34,7 +34,6 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
     stream_reason reason,
     sstables::offstrategy offstrategy,
     service::frozen_topology_guard,
-    std::optional<int64_t> repaired_at = std::nullopt,
-    lw_shared_ptr<sstables::sstable_list> sstable_list_to_mark_as_repaired = {});
+    std::function<void (sstables::shared_sstable sst)> on_sstable_written = {});
 
 }
