@@ -2071,11 +2071,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gossiper.local().unregister_(mm.local().shared_from_this()).get();
             });
 
-            utils::loading_cache_config perm_cache_config;
-            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
-            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
             auto start_auth_service = [&mm] (sharded<auth::service>& auth_service, std::any& stop_auth_service, const char* what) {
                 auth_service.invoke_on_all(&auth::service::start, std::ref(mm), std::ref(sys_ks)).get();
 
@@ -2104,7 +2099,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
                 maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
-                maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
+                maintenance_auth_service.start(std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
                 cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
@@ -2371,7 +2366,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(auth_cache)).get();
+            auth_service.start(std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(auth_cache)).get();
 
             std::any stop_auth_service;
             // Has to be called after node joined the cluster (join_cluster())

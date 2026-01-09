@@ -12,7 +12,7 @@
       "operations":[
         {
           "method":"POST",
-          "summary":"Reset cache",
+          "summary":"Resets authorized prepared statements cache",
           "type":"void",
           "nickname":"authorization_cache_reset",
           "produces":[

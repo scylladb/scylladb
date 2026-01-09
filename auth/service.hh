@@ -20,7 +20,6 @@
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
 #include "auth/permission.hh"
-#include "auth/permissions_cache.hh"
 #include "auth/cache.hh"
 #include "auth/role_manager.hh"
 #include "auth/common.hh"
@@ -75,8 +74,6 @@ public:
 /// peering_sharded_service inheritance is needed to be able to access shard local authentication service
 /// given an object from another shard. Used for bouncing lwt requests to correct shard.
 class service final : public seastar::peering_sharded_service<service> {
-    utils::loading_cache_config _loading_cache_config;
-    std::unique_ptr<permissions_cache> _permissions_cache;
     cache& _cache;
 
     cql3::query_processor& _qp;
@@ -94,20 +91,12 @@ class service final : public seastar::peering_sharded_service<service> {
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
 
-    std::function<void(uint32_t)> _permissions_cache_cfg_cb;
-    serialized_action _permissions_cache_config_action;
-
-    utils::observer<uint32_t> _permissions_cache_max_entries_observer;
-    utils::observer<uint32_t> _permissions_cache_update_interval_in_ms_observer;
-    utils::observer<uint32_t> _permissions_cache_validity_in_ms_observer;
-
     maintenance_socket_enabled _used_by_maintenance_socket;
 
     abort_source _as;
 
 public:
     service(
-            utils::loading_cache_config,
             cache& cache,
             cql3::query_processor&,
             ::service::raft_group0_client&,
@@ -123,7 +112,6 @@ public:
     /// of the instances themselves.
     ///
     service(
-            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::raft_group0_client&,
             ::service::migration_notifier&,
@@ -137,8 +125,6 @@ public:
     future<> stop();
 
     future<> ensure_superuser_is_created();
-
-    void update_cache_config();
 
     void reset_authorization_cache();
 

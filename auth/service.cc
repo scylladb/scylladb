@@ -154,7 +154,6 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 }
 
 service::service(
-        utils::loading_cache_config c,
         cache& cache,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
@@ -163,9 +162,7 @@ service::service(
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r,
         maintenance_socket_enabled used_by_maintenance_socket)
-            : _loading_cache_config(std::move(c))
-            , _permissions_cache(nullptr)
-            , _cache(cache)
+            : _cache(cache)
             , _qp(qp)
             , _group0_client(g0)
             , _mnotifier(mn)
@@ -173,15 +170,9 @@ service::service(
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
             , _migration_listener(std::make_unique<auth_migration_listener>(*this, qp))
-            , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
-            , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
-            , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
             , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 service::service(
-        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
@@ -190,7 +181,6 @@ service::service(
         maintenance_socket_enabled used_by_maintenance_socket,
         cache& cache)
             : service(
-                      std::move(c),
                       cache,
                       qp,
                       g0,
@@ -262,7 +252,6 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
                 &service::get_uncached_permissions,
                 this, std::placeholders::_1, std::placeholders::_2));
     }
-    _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
     co_await once_among_shards([this] {
         _mnotifier.register_listener(_migration_listener.get());
         return make_ready_future<>();
@@ -275,9 +264,6 @@ future<> service::stop() {
     // unregister on each one just to make sure.
     return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
         _cache.set_permission_loader(nullptr);
-        if (_permissions_cache) {
-            return _permissions_cache->stop();
-        }
         return make_ready_future<>();
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
@@ -289,21 +275,8 @@ future<> service::ensure_superuser_is_created() {
     co_await _authenticator->ensure_superuser_is_created();
 }
 
-void service::update_cache_config() {
-    auto db = _qp.db();
-
-    utils::loading_cache_config perm_cache_config;
-    perm_cache_config.max_size = db.get_config().permissions_cache_max_entries();
-    perm_cache_config.expiry = std::chrono::milliseconds(db.get_config().permissions_validity_in_ms());
-    perm_cache_config.refresh = std::chrono::milliseconds(db.get_config().permissions_update_interval_in_ms());
-
-    if (!_permissions_cache->update_config(std::move(perm_cache_config))) {
-        log.error("Failed to apply permissions cache changes. Please read the documentation of these parameters");
-    }
-}
 
 void service::reset_authorization_cache() {
-    _permissions_cache->reset();
     _qp.reset_cache();
 }
 
