@@ -2220,6 +2220,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             db.local().check_rf_rack_validity(token_metadata.local().get());
 
+            startlog.info("Verifying that all of the tablet keyspaces use rack list replication factors");
+            db.local().check_rack_list_everywhere(cfg->enforce_rack_list());
+
             // Start audit service after join_cluster so that the table-based audit backend
             // can properly create its keyspace and table.
             checkpoint(stop_signal, "starting audit service");

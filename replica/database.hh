@@ -2135,6 +2135,15 @@ public:
     //   must contain a complete list of racks and data centers in the cluster.
     bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
 
+    // Verify that all tablet keyspaces have a rack list configured.
+    //
+    // Result:
+    // * If `enforce_rack_list`, throws an exception with a relevant message
+    //   if there is a tablet keyspace that uses numeric replication factors.
+    // * If not `enforce_rack_list`, a warning will be printed for all keyspaces
+    //   that use numeric replication factors, but no exception should be thrown.
+    void check_rack_list_everywhere(const bool enforce_rack_list) const;
+
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.

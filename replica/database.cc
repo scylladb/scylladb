@@ -3643,6 +3643,33 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     return valid;
 }
 
+void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
+
+    for (const auto& [name, info] : keyspaces) {
+        if (info.uses_tablets() && !locator::uses_rack_list_exclusively(info.get_replication_strategy().get_config_options())) {
+            if (enforce_rack_list) {
+                throw std::invalid_argument(std::format(
+                    "The option `enforce_rack_list` is enabled. It requires that all tablet keyspaces use rack lists exclusively. "
+                    "That condition is violated for keyspace '{}'", name.c_str()));
+            }
+
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.empty()) {
+        dblog.info("All tablet keyspaces use rack lists exclusively");
+    } else {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        dblog.warn("Some existing tablet keyspaces ({}) use numeric replication factors.", ks_list);
+    }
+}
+
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     static thread_local std::minstd_rand rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(0, max_value);

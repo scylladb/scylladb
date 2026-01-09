@@ -1585,6 +1585,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
         "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
         "keyspaces, attempting to start a node with this option ON will fail.")
+    , enforce_rack_list(this, "enforce_rack_list", liveness::MustRestart, value_status::Used, false,
+            "Enforce rack list for tablet keyspaces. "
+            "When the option is on, CREATE STATEMENT expands numeric rfs to rack lists "
+            "and ALTER STATEMENT is allowed only when rack lists are used in all DCs."
+            "Additionally, if there are existing tablet keyspaces with numeric rf in any DC "
+            "attempting to start a node with this option ON will fail.")
     // FIXME: make frequency per table in order to reduce work in each iteration.
     // Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
     , tablet_load_stats_refresh_interval_in_seconds(this, "tablet_load_stats_refresh_interval_in_seconds", liveness::LiveUpdate, value_status::Used, 60,
