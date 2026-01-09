@@ -91,11 +91,11 @@ static int validate_fragment_size(const std::map<sstring, sstring>& options, std
 static std::optional<double> validate_space_amplification_goal(const std::map<sstring, sstring>& options) {
     auto tmp_value = compaction_strategy_impl::get_value(options,
         incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION);
-    if (tmp_value) {
-        auto space_amplification_goal = cql3::statements::property_definitions::to_double(incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION,
-            tmp_value, 0.0);
+    auto space_amplification_goal = cql3::statements::property_definitions::to_double(incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION,
+        tmp_value, incremental_compaction_strategy::DEFAULT_SPACE_AMPLIFICATION_GOAL);
+    if (space_amplification_goal) {
         if (space_amplification_goal <= 1.0 || space_amplification_goal > 2.0) {
-            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be greater than 1.0 and less than or equal to 2.0",
+            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be greater than 1.0 and less than or equal to 2.0; or 0 to disable",
                 incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION, space_amplification_goal));
         }
         return space_amplification_goal;
