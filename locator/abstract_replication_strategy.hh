@@ -52,6 +52,8 @@ using replication_strategy_config_options = std::map<sstring, replication_strate
 // Throws configuration_exception when option is not a valid replication factor specifier.
 size_t get_replication_factor(const replication_strategy_config_option&);
 
+bool uses_rack_list_exclusively(const replication_strategy_config_options&);
+
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
