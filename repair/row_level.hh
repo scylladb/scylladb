@@ -23,6 +23,7 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/lock_holder.hh"
 
 using namespace seastar;
 
@@ -163,7 +164,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
             std::unordered_set<locator::host_id> ignore_nodes);
 
 public:
-    std::unordered_map<locator::global_tablet_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
+    std::unordered_map<locator::global_tablet_id, std::vector<utils::rwlock_holder>> _repair_compaction_locks;
 
 public:
     repair_service(sharded<service::topology_state_machine>& tsm,
