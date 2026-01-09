@@ -9,7 +9,7 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import pytest
 
@@ -20,6 +20,55 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+MarkType = int
+
+class FileSnapshot:
+    """
+    Allows examining a snapshot of a file, assuming the file is append-only.
+    The snapshot is determined at the time of opening.
+
+    Acts as an asynchronous context manager. Consume all lines like this:
+
+        async with FileSnapshot(thread_pool, path) as snap:
+            while (line := await snap.next_line()):
+                # process line
+
+    """
+
+    def __init__(self, thread_pool: ThreadPoolExecutor, path: Path, from_mark: MarkType = None):
+        self.thread_pool = thread_pool
+        self.path = path
+        self.from_mark = from_mark
+        self.loop = asyncio.get_running_loop()
+
+    def _open(self):
+        size = self.path.stat().st_size
+        file = self.path.open(encoding="utf-8")
+        return file, size
+
+    def _readline(self) -> Tuple[MarkType, str]:
+        pos = self.file.tell()
+        line = self.file.readline()
+        return pos, line
+
+    async def __aenter__(self):
+        self.file, size = await self.loop.run_in_executor(self.thread_pool, self._open)
+        self.to_mark = size
+        if self.from_mark:
+            await self.loop.run_in_executor(self.thread_pool, self.file.seek, self.from_mark)
+        return self
+
+    async def next_line(self) -> Optional[str]:
+        pos, line = await self.loop.run_in_executor(self.thread_pool, self._readline)
+        if pos >= self.to_mark or not line:
+            return None
+        if pos + len(line) > self.to_mark:
+            return line[:self.to_mark - pos]
+        return line
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.loop.run_in_executor(self.thread_pool, self.file.close)
 
 
 @universalasync_typed_wrap
@@ -96,6 +145,14 @@ class ScyllaLogFile:
 
             return await self._run_in_executor(log_file.tell, loop=loop), matches
 
+    async def _for_each_line_snapshot(self, from_mark: int | None = None):
+        """
+        Yields lines from the file, without considering lines appended after the call started.
+        """
+        async with FileSnapshot(self.thread_pool, self.file, from_mark) as snap:
+            while line := await snap.next_line():
+                yield line
+
     async def grep(self,
                    expr: str | re.Pattern[str],
                    filter_expr: str | re.Pattern[str] | None = None,
@@ -118,14 +175,11 @@ class ScyllaLogFile:
         filter_func = re.compile(filter_expr).search if filter_expr else lambda _: False
         matches = []
 
-        with self.file.open(encoding="utf-8") as log_file:
-            if from_mark:
-                await self._run_in_executor(log_file.seek, from_mark, loop=loop)
-            while line := await self._run_in_executor(log_file.readline, loop=loop):
-                if match := not filter_func(line) and expr.search(line):
-                    matches.append((line, match))
-                    if len(matches) == max_count:
-                        break
+        async for line in self._for_each_line_snapshot(from_mark=from_mark):
+            if match := not filter_func(line) and expr.search(line):
+                matches.append((line, match))
+                if len(matches) == max_count:
+                    break
 
         return matches
 
@@ -141,17 +195,14 @@ class ScyllaLogFile:
 
         Return a list of error messages.  Error message can be just one line or a list of lines.
         """
-        loop = asyncio.get_running_loop()
 
         # Each line in scylla-*.log starts with log level, so, use re.match to search from the beginning of each line.
         error_pattern = re.compile(r"ERROR\b")
         info_pattern = re.compile(r"INFO\b")
         matches = []
 
-        with self.file.open(encoding="utf-8") as log_file:
-            if from_mark:
-                await self._run_in_executor(log_file.seek, from_mark, loop=loop)
-            line = await self._run_in_executor(log_file.readline, loop=loop)
+        async with FileSnapshot(self.thread_pool, self.file, from_mark) as snap:
+            line = await snap.next_line()
             while line:
                 if error_pattern.match(line):
                     if distinct_errors:
@@ -159,12 +210,12 @@ class ScyllaLogFile:
                             matches.append(line)
                     else:
                         matches.append([line])
-                        while line := await self._run_in_executor(log_file.readline, loop=loop):
+                        while line := await snap.next_line():
                             if info_pattern.match(line):
                                 break
                             matches[-1].append(line)
                         continue
-                line = await self._run_in_executor(log_file.readline, loop=loop)
+                line = await snap.next_line()
 
         return matches
 
@@ -176,21 +227,17 @@ class ScyllaLogFile:
         If `from_mark` argument is given, the log is searched from that position, otherwise from the beginning.  
         Return a list of strings, where each string is a complete backtrace (all lines joined together).  
         """
-        loop = asyncio.get_running_loop()
 
         backtraces = []
 
-        with self.file.open(encoding="utf-8") as log_file:
-            if from_mark:
-                await self._run_in_executor(log_file.seek, from_mark, loop=loop)
-            
-            line = await self._run_in_executor(log_file.readline, loop=loop)
+        async with FileSnapshot(self.thread_pool, self.file, from_mark) as snap:
+            line = await snap.next_line()
             while line:
                 if line.strip() == "Backtrace:":
                     # Found a backtrace, collect all lines that start with exactly 2 spaces
                     backtrace_lines = [line]
                     while True:
-                        next_line = await self._run_in_executor(log_file.readline, loop=loop)
+                        next_line = await snap.next_line()
                         if not next_line:
                             # End of file
                             line = ""
@@ -210,6 +257,6 @@ class ScyllaLogFile:
                     # Continue from current line (already read in the inner loop)
                     continue
                 
-                line = await self._run_in_executor(log_file.readline, loop=loop)
+                line = await snap.next_line()
 
         return backtraces
