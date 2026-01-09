@@ -169,21 +169,21 @@ static locator::replication_strategy_config_options prepare_options(
 
         rf_change = rf_change || (old_rf && old_rf->count() != rf.count()) || (!old_rf && rf.count() != 0);
         if (!rf.is_rack_based()) {
-          if (old_rf && rf.count() != 0) {
-            if (enforce_rack_list && uses_tablets) {
-                throw exceptions::configuration_exception(fmt::format(
-                        "Cannot change replication factor for '{}' to numeric when the 'enforce_rack_list' option is enabled", dc));
-            }
-            if (old_rf->is_rack_based()) {
-                if (old_rf->count() != rf.count()) {
+            if (old_rf && rf.count() != 0) {
+                if (enforce_rack_list && uses_tablets) {
                     throw exceptions::configuration_exception(fmt::format(
-                            "Cannot change replication factor for '{}' from {} to {} when the old value was a rack list",
-                            dc, old_options.at(dc), opt));
-                } else {
-                    options[dc] = i->second; // Preserve rack list.
+                            "Cannot change replication factor for '{}' to numeric when the 'enforce_rack_list' option is enabled", dc));
+                }
+                if (old_rf->is_rack_based()) {
+                    if (old_rf->count() != rf.count()) {
+                        throw exceptions::configuration_exception(fmt::format(
+                                "Cannot change replication factor for '{}' from {} to {} when the old value was a rack list",
+                                dc, old_options.at(dc), opt));
+                    } else {
+                        options[dc] = i->second; // Preserve rack list.
+                    }
                 }
             }
-          }
             continue;
         }
         if (!rack_list_enabled) {
