@@ -84,3 +84,14 @@ ninja build/<mode>/scylla
 - Strive for simplicity and clarity, add complexity only when clearly justified
 - Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
 - Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
+
+## Test Philosophy
+- Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
+- Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
+- Unit tests should ideally test one thing and one thing only.
+- Tests for bug fixes should run before the fix - and show the failure and after the fix - and show they now pass.
+- Tests for bug fixes should have in their comments which bug fixes (GitHub or JIRA issue) they test.
+- Tests in debug are always slower, so if needed, reduce number of iterations, rows, data used, cycles, etc. in debug mode.
+- Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
+- Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
+
