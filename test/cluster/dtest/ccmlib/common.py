@@ -43,7 +43,3 @@ def wait_for(func: Callable, timeout: int, first: float = 0.0, step: float = 1.0
         time.sleep(step)
 
     return False
-
-def is_win() -> bool:
-    """ScyllaDB is never run on Windows."""
-    return False
