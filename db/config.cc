@@ -1584,7 +1584,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
     , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
         "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
-        "keyspaces, attempting to start a node with this option ON will fail.")
+        "keyspaces, attempting to start a node with this option ON will fail. "
+        "DEPRECATED. Use enforce_rack_list instead.")
     , enforce_rack_list(this, "enforce_rack_list", liveness::MustRestart, value_status::Used, false,
             "Enforce rack list for tablet keyspaces. "
             "When the option is on, CREATE STATEMENT expands numeric rfs to rack lists "
