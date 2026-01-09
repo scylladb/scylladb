@@ -490,6 +490,17 @@ public:
     virtual std::string options_to_string() const;
 };
 
+/**
+ * Schema static properties
+ *
+ * Represents some internal properties not visible to users.
+ * Unlike normal schema properties, these properties are NOT persisted in system
+ * tables along with the schema (and as such, one could argue they are not even
+ * part of the schema, despite their name); they are immutable table properties
+ * derived solely from keyspace/table names (thereby "static") and carried as
+ * part of in-memory `schema` objects.
+ * (https://github.com/scylladb/scylladb/pull/13170#issuecomment-1469848086)
+ */
 struct schema_static_props {
     bool use_null_sharder = false; // use a sharder that puts everything on shard 0
     bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog

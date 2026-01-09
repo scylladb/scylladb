@@ -1143,7 +1143,7 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
                 AND caching = {{'enabled': 'false', 'keys': 'NONE', 'rows_per_partition': 'NONE'}}
                 AND comment = 'CDC log for {table}'
                 AND compaction = {{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '60', 'compaction_window_unit': 'MINUTES', 'expired_sstable_check_frequency_seconds': '1800'}}
-                AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}
+                AND compression = {{'sstable_compression': 'LZ4WithDictsCompressor'}}
                 AND crc_check_chance = 1
                 AND default_time_to_live = 0
                 AND gc_grace_seconds = 0
