@@ -14,6 +14,7 @@ import cassandra.cluster
 from contextlib import contextmanager
 import re
 import ssl
+import time
 
 
 # This function normalizes the SSL cipher suite name (a string),
@@ -71,8 +72,7 @@ def test_system_clients_stores_tls_info(cql):
                 assert not row.ssl_enabled
                 assert row.ssl_protocol is None
                 assert row.ssl_cipher_suite is None
-
-    if cql.cluster.ssl_context:
+    else:
         # TLS v1.2 must be supported, because this is the default version that
         # "cqlsh --ssl" uses. If this fact changes in the future, we may need
         # to reconsider this test.
@@ -82,7 +82,8 @@ def test_system_clients_stores_tls_info(cql):
             # so we need to retry until all connections are initialized and have their TLS info recorded in system.clients,
             # otherwise we'd end up with some connections e.g. having their ssl_enabled=True but other fields still None.
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
-            for _ in range(1000):  # try for up to 1000 * 0.01s = 10s seconds
+            deadline = time.time() + 10  # 10 seconds timeout
+            while time.time() < deadline:
                 rows = session.execute(f"SELECT * FROM system.clients")
                 if rows and all(
                     row.ssl_enabled
@@ -92,7 +93,7 @@ def test_system_clients_stores_tls_info(cql):
                 ):
                     return
                 time.sleep(0.01)
-            pytest.fail(f"Not all connections have TLS data set correctly in system.clients after 10s seconds")
+            pytest.fail(f"Not all connections have TLS data set correctly in system.clients after 10 seconds")
 
 
 @contextmanager
