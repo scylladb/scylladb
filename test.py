@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import shlex
+import textwrap
 from random import randint
 
 import pytest
@@ -37,7 +38,7 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR, TESTPY_PREPARED_ENVIRONMENT
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
@@ -46,8 +47,7 @@ from test.pylib.suite.base import (
     init_testsuite_globals,
     output_is_a_tty,
     palette,
-    prepare_dirs,
-    start_3rd_party_services,
+    prepare_environment,
 )
 from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
@@ -55,7 +55,21 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search', TEST_DIR / 'vector_search_validator']
+PYTEST_RUNNER_DIRECTORIES = [
+    TEST_DIR / 'boost',
+    TEST_DIR / 'ldap',
+    TEST_DIR / 'raft',
+    TEST_DIR / 'unit',
+    TEST_DIR / 'vector_search',
+    TEST_DIR / 'vector_search_validator',
+    TEST_DIR / 'alternator',
+    TEST_DIR / 'broadcast_tables',
+    TEST_DIR / 'cql',
+    TEST_DIR / 'cqlpy',
+    TEST_DIR / 'rest_api',
+    TEST_DIR / 'cluster',
+    TEST_DIR / 'storage',
+]
 
 launch_time = time.monotonic()
 
@@ -130,19 +144,33 @@ def setup_signal_handlers(loop, signaled) -> None:
 
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
+    parser = argparse.ArgumentParser(description='Scylla test runner', formatter_class=argparse.RawTextHelpFormatter)
 
-    parser = argparse.ArgumentParser(description="Scylla test runner")
+    directories = '\n'.join(f" - {str(item.relative_to(TOP_SRC_DIR))}" for item in PYTEST_RUNNER_DIRECTORIES)
+    name_help = textwrap.dedent("""\
+        Can be empty. List of test names or path to test files, to look for.
+        There are two runners: test.py and pytest.
+
+        test.py works in the following way:
+        Each name is used as a substring to look for in the path to test file,
+        e.g. "mem" will run all tests that have "mem" in their name in all
+        suites, "nodetool/test_compact" will only enable tests starting with
+        "test_compact" in "nodetool" suite, and 
+        "nodetool/test_compact::test_all_keyspaces" to narrow down to a 
+        certain test case.
+
+        pytest runner works in the following way:
+        provide the path to the test file for execution or path to the directory
+        to narrow you can use function name 'test/boost/aggregate_fcts_test.cc::test_aggregate_avg'
+
+        Pytest directories are:
+        """) + directories + "\n\nDefault: run all tests in all suites."
+
     parser.add_argument(
         "name",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite, and
-                "boost/memtable_test::test_hash_is_cached" to narrow down to
-                a certain test case. Default: run all tests in all suites.""",
+        help=name_help,
     )
     parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
                         help="Path to temporary test data and log files.  The data is further segregated per build mode.")
@@ -277,19 +305,17 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
 
     return args
 
 
 async def find_tests(options: argparse.Namespace) -> None:
-
-    for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
+    for f in TEST_DIR.glob("*"):
+        config = pathlib.Path(f) / SUITE_CONFIG_FILENAME
+        if config.is_file():
             for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
+                suite = TestSuite.opt_create(config=config, options=options, mode=mode)
                 await suite.add_test_list()
-
 
 def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
@@ -300,31 +326,33 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
-    for name in options.name:
-        file_name = name
-        if '::' in name:
-            file_name, _ = name.split('::', maxsplit=1)
-        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
-            files_to_run.append(name)
-    if not options.name:
-        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if options.name:
+        for name in options.name:
+            file_name = name
+            if '::' in name:
+                file_name, _ = name.split('::', maxsplit=1)
+            if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+                files_to_run.append(name)
+    else:
+        files_to_run = [ TOP_SRC_DIR / 'test/']
     if not files_to_run:
-        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        logging.warning('No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
-        "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
         *[f'--mode={mode}' for mode in options.modes],
     ]
     if options.list_tests:
-        args.extend(['--collect-only', '--quiet'])
+        args.extend(['--collect-only', '--quiet', '--no-header'])
     else:
         args.extend([
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
-            f'-n{int(options.jobs)}',
+            '--test-py-init',
+            # f'-n{int(options.jobs)}',
+            '-n8',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
@@ -359,6 +387,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f'-m={options.markers}')
     args.extend(files_to_run)
+    print(f'Running pytest with args: {args}', file=open('/tmp/pytest_args', 'w+'))
     pytest.main(args=args)
 
     if options.list_tests:
@@ -425,8 +454,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     deadline = time.perf_counter() + options.session_timeout
     try:
-        await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
-        result = run_pytest(options)
+        # Run pytest in an executor to avoid blocking the event loop
+        # This allows resource monitoring to run concurrently
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, run_pytest, options)
         total_tests += result[0]
         failed_tests.extend(result[1])
         console.print_start_blurb()
@@ -502,16 +533,23 @@ async def main() -> int:
 
     options = parse_cmd_line()
 
-    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-
-    init_testsuite_globals()
-
     await find_tests(options)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
         run_pytest(options)
         return 0
+
+    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
+    init_testsuite_globals()
+    await prepare_environment(
+        tempdir_base=pathlib.Path(options.tmpdir),
+        modes=options.modes,
+        gather_metrics=options.gather_metrics,
+        save_log_on_success=options.save_log_on_success,
+        toxiproxy_byte_limit=options.byte_limit,
+    )
+    os.environ[TESTPY_PREPARED_ENVIRONMENT] = '1'
 
     if options.manual_execution and TestSuite.test_count() > 1:
         print('--manual-execution only supports running a single test, but multiple selected: {}'.format(

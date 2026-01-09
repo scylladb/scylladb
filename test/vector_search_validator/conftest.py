@@ -23,7 +23,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def logdir_path(request: pytest.FixtureRequest, build_mode: str) -> Path:
     return Path(request.config.getoption("--tmpdir")).absolute() / build_mode / "vector-search-validator"
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="module")
 def scylla_path(build_mode: str) -> str:
     return path_to(build_mode, "scylla")
 
