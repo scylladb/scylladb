@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("ccm")
 
 
+BIN_DIR = "bin"
+
+
 class CCMError(Exception):
     ...
 
