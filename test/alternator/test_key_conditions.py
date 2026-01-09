@@ -63,7 +63,7 @@ def test_key_conditions_partition(test_table_sn_with_sorted_partition):
 # The "ComparisonOperator" is case sensitive, "EQ" works but "eq" does not:
 def test_key_conditions_comparison_operator_case(test_table_sn_with_sorted_partition):
     table, p, items = test_table_sn_with_sorted_partition
-    with pytest.raises(ClientError, match='ValidationException.*eq'):
+    with pytest.raises(ClientError, match='ValidationException.*comparison'):
         full_query(table, KeyConditions={
             'p' : {'AttributeValueList': [p], 'ComparisonOperator': 'eq'}})
 
@@ -84,7 +84,7 @@ def test_key_conditions_partition_only_eq(test_table_sn_with_sorted_partition):
             'p' : {'AttributeValueList': [p, p], 'ComparisonOperator': 'BETWEEN'}})
     # An unknown operator, e.g., "DOG", is also not allowed, but with a
     # different error message.
-    with pytest.raises(ClientError, match='ValidationException.*DOG'):
+    with pytest.raises(ClientError, match='ValidationException.*comparison'):
         full_query(table, KeyConditions={
             'p' : {'AttributeValueList': [p, p], 'ComparisonOperator': 'DOG'}})
     # The operators 'NULL', 'NOT_NULL', 'IN', 'CONTAINS', 'NOT_CONTAINS', 'NE'
@@ -366,7 +366,7 @@ def test_key_conditions_sort_unsupported(test_table_sn_with_sorted_partition):
                 'p' : {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                 'c' : {'AttributeValueList': [], 'ComparisonOperator': op}})
     # An unknown operator, e.g., "DOG", is also not allowed.
-    with pytest.raises(ClientError, match='ValidationException.*DOG'):
+    with pytest.raises(ClientError, match='ValidationException.*comparison'):
         full_query(table, KeyConditions={
             'p' : {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
             'c' : {'AttributeValueList': [p], 'ComparisonOperator': 'DOG'}})

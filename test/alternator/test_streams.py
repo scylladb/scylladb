@@ -505,7 +505,6 @@ def create_table_sss_lsi(dynamodb, dynamodbstreams, type):
                     { 'AttributeName': 'a', 'KeyType': 'RANGE' }],
                 'Projection': {
                     'ProjectionType': 'ALL',
-                    'NonKeyAttributes': ['string']
                 }
             }
         ],
