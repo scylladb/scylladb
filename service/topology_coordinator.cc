@@ -3715,10 +3715,6 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
 future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
     rtlogger.debug("Evaluating tablet balance");
 
-    if (utils::get_local_injector().enter("tablet_load_stats_refresh_before_rebalancing")) {
-        co_await _tablet_load_stats_refresh.trigger();
-    }
-
     auto tm = get_token_metadata_ptr();
     auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
@@ -4212,6 +4208,10 @@ future<> topology_coordinator::run() {
         bool sleep = false;
         try {
             co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog", utils::wait_for_message(5min));
+
+            if (!_topo_sm._topology.tstate && utils::get_local_injector().enter("tablet_load_stats_refresh_before_rebalancing")) {
+                co_await _tablet_load_stats_refresh.trigger();
+            }
 
             if (!event_wait) {
                 event_wait = _topo_sm.event.wait();
