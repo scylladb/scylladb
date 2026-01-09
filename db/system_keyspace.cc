@@ -314,6 +314,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .with_column("paused_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("auto_rf_blacklisted_racks", map_type_impl::get_instance(utf8_type, set_type_impl::get_instance(utf8_type, false), false), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -1700,6 +1701,13 @@ static set_type_impl::native_type deserialize_set_column(const schema& s, const 
     auto cdef = s.get_column_definition(name);
     auto deserialized = cdef->type->deserialize(blob);
     return value_cast<set_type_impl::native_type>(deserialized);
+}
+
+static map_type_impl::native_type deserialize_map_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
+    auto blob = row.get_blob_unfragmented(name);
+    auto cdef = s.get_column_definition(name);
+    auto deserialized = cdef->type->deserialize(blob);
+    return value_cast<map_type_impl::native_type>(deserialized);
 }
 
 static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::token>& tokens) {
@@ -3368,6 +3376,18 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         if (some_row.has("paused_rf_change_requests")) {
             for (auto&& v : deserialize_set_column(*topology(), some_row, "paused_rf_change_requests")) {
                 ret.paused_rf_change_requests.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("auto_rf_blacklisted_racks")) {
+            for (auto&& [dc_dv, racks_dv] : deserialize_map_column(*topology(), some_row, "auto_rf_blacklisted_racks")) {
+                auto dc = value_cast<sstring>(dc_dv);
+                auto racks_set = value_cast<set_type_impl::native_type>(racks_dv);
+                auto& out = ret.auto_rf_blacklisted_racks[std::move(dc)];
+                out.reserve(racks_set.size());
+                for (auto&& rack_dv : racks_set) {
+                    out.insert(value_cast<sstring>(rack_dv));
+                }
             }
         }
 
