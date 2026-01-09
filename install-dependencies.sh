@@ -44,6 +44,7 @@ debian_base_packages=(
     python3-pytest-asyncio
     python3-pytest-timeout
     python3-pytest-sugar
+    python3-pexpect
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
@@ -107,6 +108,7 @@ fedora_packages=(
     python3-jinja2
     python3-deepdiff
     python3-cryptography
+    python3-pexpect
     dnf-utils
     pigz
     net-tools
