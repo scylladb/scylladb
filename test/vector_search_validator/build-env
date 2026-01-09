@@ -1,2 +1,2 @@
 VECTOR_STORE_GIT=https://github.com/scylladb/vector-store.git
-VECTOR_STORE_REV=3ee46a5
+VECTOR_STORE_REV=d79ee80
