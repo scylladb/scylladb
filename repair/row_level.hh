@@ -32,6 +32,9 @@ namespace service {
 class migration_manager;
 class storage_proxy;
 }
+namespace streaming {
+class stream_manager;
+}
 
 namespace db {
 
@@ -113,6 +116,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
     sharded<replica::database>& _db;
+    sharded<streaming::stream_manager>& _stream_manager;
     sharded<service::storage_proxy>& _sp;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_keyspace>& _sys_ks;
@@ -170,6 +174,7 @@ public:
             sharded<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
             sharded<replica::database>& db,
+            sharded<streaming::stream_manager>& stream_manager,
             sharded<service::storage_proxy>& sp,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_keyspace>& sys_ks,
@@ -220,6 +225,7 @@ private:
 
     // Must be called on shard 0
     future<> sync_data_using_repair(sstring keyspace,
+            size_t nr_tables,
             locator::effective_replication_map_ptr erm,
             dht::token_range_vector ranges,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,

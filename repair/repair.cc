@@ -21,6 +21,8 @@
 #include "streaming/table_check.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "streaming/stream_manager.hh"
+#include "dht/range_streamer.hh"
 #include "service/storage_service.hh"
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
@@ -1472,6 +1474,7 @@ future<> repair_service::abort_all() {
 
 future<> repair_service::sync_data_using_repair(
         sstring keyspace,
+        size_t nr_tables,
         locator::effective_replication_map_ptr erm,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
@@ -1482,6 +1485,65 @@ future<> repair_service::sync_data_using_repair(
     }
 
     SCYLLA_ASSERT(this_shard_id() == 0);
+
+    bool small_table_optimization = should_enable_small_table_optimization_for_rbno(_db.local(), keyspace, reason);
+    auto fast_stream = _db.local().get_config().enable_fast_stream_for_rbno();
+    if (fast_stream && !small_table_optimization && (reason == streaming::stream_reason::bootstrap || reason == streaming::stream_reason::decommission)) {
+        abort_source as;
+        size_t max_neighbors = 0;
+        auto ranges_per_endpoint = std::unordered_map<locator::host_id, dht::token_range_vector>();
+        for (auto& [range, rn]: neighbors) {
+            max_neighbors = std::max(max_neighbors, rn.all.size());
+            if (max_neighbors != 1) {
+                rlogger.info("Skip using stream to sync data keyspace={} max_neighbors={} reason={}", keyspace, max_neighbors, reason);
+                break;
+            }
+            ranges_per_endpoint[rn.all.front()].push_back(range);
+            co_await coroutine::maybe_yield();
+        }
+
+        if (max_neighbors == 1) {
+            auto start_time = std::chrono::steady_clock::now();
+            auto tmptr = erm->get_token_metadata_ptr();
+            const auto& my_location = tmptr->get_topology().get_location();
+            for (auto& [host, ranges] : ranges_per_endpoint) {
+                rlogger.info("Using stream to sync data with host={} local={} keyspace={} nr_ranges={} ranges={} reason={}", host, tmptr->get_my_id(), keyspace, ranges.size(), ranges, reason);
+            }
+            auto streamer = dht::range_streamer(_db, _stream_manager, tmptr, as, tmptr->get_my_id(), my_location, fmt::to_string(reason), reason, service::null_topology_guard);
+            if (reason == streaming::stream_reason::bootstrap) {
+                streamer.add_rx_ranges(keyspace, std::move(ranges_per_endpoint));
+            } else if (reason == streaming::stream_reason::decommission) {
+                streamer.add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
+            }
+            auto& c = container();
+            auto progress_updater = [&c, reason, nr_tables] (size_t nr_ranges) -> future<> {
+                co_await c.invoke_on_all([reason, nr_ranges, nr_tables] (repair_service& rs) {
+                    if (reason == streaming::stream_reason::bootstrap) {
+                        rs.get_metrics().bootstrap_finished_ranges += nr_ranges * nr_tables;
+                    } else if (reason == streaming::stream_reason::decommission) {
+                        rs.get_metrics().decommission_finished_ranges += nr_ranges * nr_tables;
+                    }
+                });
+            };
+            auto id = _repair_module->new_repair_uniq_id();
+            rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization={}, fast_stream=true", id.uuid(), keyspace, reason, small_table_optimization);
+            try {
+                co_await streamer.stream_async(progress_updater);
+            } catch (...) {
+                if (!_db.local().has_keyspace(keyspace)) {
+                    rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, std::current_exception());
+                    co_return;
+                }
+                rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  std::current_exception());
+                throw;
+            }
+            auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+            rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, small_table_optimization={}, duration={}, fast_stream=true",
+                id.uuid(), keyspace, reason, small_table_optimization, duration);
+            co_return;
+        }
+    }
+
     auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info);
     co_await task->done();
 }
@@ -1625,6 +1687,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto start_time = std::chrono::steady_clock::now();
           if (small_table_optimization) {
             try {
                 auto germs = make_lw_shared(locator::make_global_static_effective_replication_map(get_db(), keyspace_name).get());
@@ -1776,8 +1839,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             }
           }
             auto nr_ranges = desired_ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(desired_ranges), std::move(range_sources), reason, nullptr).get();
-            rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}, nr_tables={}", keyspace_name, nr_ranges * nr_tables, nr_tables);
+            sync_data_using_repair(keyspace_name, nr_tables, erm, std::move(desired_ranges), std::move(range_sources), reason, nullptr).get();
+            auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+            rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}, nr_tables={}, duration={}", keyspace_name, nr_ranges * nr_tables, nr_tables, duration);
         }
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", ks_erms | std::views::keys);
     }).finally([this, reason] { return reset_node_ops_progress(reason); });
@@ -1990,7 +2054,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 ranges.swap(ranges_for_removenode);
             }
             auto nr_ranges_synced = ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, ops).get();
+            sync_data_using_repair(keyspace_name, nr_tables, erm, std::move(ranges), std::move(range_sources), reason, ops).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node_id, nr_ranges_total, nr_ranges_synced * nr_tables, nr_ranges_skipped * nr_tables);
         }
@@ -2210,7 +2274,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                 }).get();
             }
             auto nr_ranges = ranges.size();
-            sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, nullptr).get();
+            sync_data_using_repair(keyspace_name, nr_tables, erm, std::move(ranges), std::move(range_sources), reason, nullptr).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc_for_keyspace, nr_ranges * nr_tables);
         }
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, ks_erms | std::views::keys, source_dc);
