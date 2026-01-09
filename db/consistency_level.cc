@@ -31,19 +31,23 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+static size_t get_replication_factor_for_dc(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
     const auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        const network_topology_strategy* nrs =
+        const network_topology_strategy* nts =
             static_cast<const network_topology_strategy*>(&rs);
-        size_t replication_factor = nrs->get_replication_factor(dc);
-        return replication_factor ? (replication_factor / 2) + 1 : 0;
+        return nts->get_replication_factor(dc);
     }
 
-    return quorum_for(erm);
+    return erm.get_replication_factor();
+}
+
+size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+    auto rf = get_replication_factor_for_dc(erm, dc);
+    return rf ? (rf / 2) + 1 : 0;
 }
 
 size_t block_for_local_serial(const locator::effective_replication_map& erm) {
@@ -188,18 +192,39 @@ void assure_sufficient_live_nodes(
         return pending <= live ? live - pending : 0;
     };
 
+    auto make_rf_zero_error_msg = [cl, &erm] (const sstring& local_dc) {
+        return format("Cannot achieve consistency level {} for keyspace '{}' in datacenter '{}' with replication factor 0. "
+                      "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.",
+                      cl, erm.get_keyspace_name(), local_dc);
+    };
+
     const auto& topo = erm.get_topology();
+    // Constants for unavailable_exception parameters
+    constexpr unsigned int rf_zero_alive = 0;  // When RF=0, no replicas are alive
+    constexpr unsigned int local_one_required = 1;  // LOCAL_ONE requires 1 replica
+    // Get local datacenter info for LOCAL_* consistency levels
+    decltype(auto) local_dc = topo.get_datacenter();
+    size_t local_rf = get_replication_factor_for_dc(erm, local_dc);
 
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         break;
-    case consistency_level::LOCAL_ONE:
-        if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
-            throw exceptions::unavailable_exception(cl, 1, 0);
+    case consistency_level::LOCAL_ONE: {
+        if (local_rf == 0) {
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, local_one_required, rf_zero_alive);
+        }
+        size_t local_live = topo.count_local_endpoints(live_endpoints);
+        size_t local_pending = topo.count_local_endpoints(pending_endpoints);
+        if (local_live < local_pending + 1) {
+            throw exceptions::unavailable_exception(cl, local_one_required, adjust_live_for_error(local_live, local_pending));
         }
         break;
+    }
     case consistency_level::LOCAL_QUORUM: {
+        if (local_rf == 0) {
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, rf_zero_alive);
+        }
         size_t local_live = topo.count_local_endpoints(live_endpoints);
         size_t pending = topo.count_local_endpoints(pending_endpoints);
         if (local_live < need + pending) {
