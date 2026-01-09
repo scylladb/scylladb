@@ -27,7 +27,12 @@ cache::cache(cql3::query_processor& qp, abort_source& as) noexcept
     : _current_version(0)
     , _qp(qp)
     , _loading_sem(1)
-    , _as(as) {
+    , _as(as)
+    , _permission_loader(nullptr) {
+}
+
+void cache::set_permission_loader(permission_loader_func loader) {
+    _permission_loader = std::move(loader);
 }
 
 lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) const noexcept {
@@ -36,6 +41,46 @@ lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) cons
         return {};
     }
     return it->second;
+}
+
+future<permission_set> cache::get_permissions(const role_or_anonymous& role, const resource& r) {
+    SCYLLA_ASSERT(_permission_loader);
+
+    std::unordered_map<resource, permission_set>* perms_cache;
+    lw_shared_ptr<role_record> role_ptr;
+
+    if (is_anonymous(role)) {
+        perms_cache = &_anonymous_permissions;
+    } else {
+        const auto& role_name = *role.name;
+        auto role_it = _roles.find(role_name);
+        if (role_it == _roles.end()) {
+            logger.error("Incoherent cache for role {}, missing role", role_name);
+            return make_ready_future<permission_set>(permissions::NONE);
+        }
+        role_ptr = role_it->second;
+        perms_cache = &role_ptr->cached_permissions;
+    }
+
+    if (auto it = perms_cache->find(r); it != perms_cache->end()) {
+        return make_ready_future<permission_set>(it->second);
+    }
+
+    return _permission_loader(role, r).then([&r, perms_cache, role_ptr = std::move(role_ptr)](permission_set perms) mutable {
+        (*perms_cache)[r] = perms;
+        return perms;
+    });
+}
+
+future<> cache::prune(const resource& r) {
+    auto units = co_await get_units(_loading_sem, 1, _as);
+    _anonymous_permissions.erase(r);
+    for (auto& it : _roles) {
+        // Prunning can run concurrently with other functions but it
+        // can only cause cached_permissions extra reload via get_permissions.
+        it.second->cached_permissions.erase(r);
+        co_await coroutine::maybe_yield();
+    }
 }
 
 future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& role) const {
@@ -147,6 +192,26 @@ future<> cache::load_all() {
     });
 }
 
+future<> cache::gather_inheriting_roles(std::unordered_set<role_name_t>& roles, lw_shared_ptr<cache::role_record> role, const role_name_t& name) {
+    if (roles.contains(name)) {
+        co_return; // Already processed.
+    }
+    if (!role) {
+        // Role might have been removed or not yet added, either way
+        // their members will be handled by another top call to this function.
+        co_return;
+    }
+    for (const auto& member_name : role->members) {
+        roles.insert(member_name);
+        lw_shared_ptr<cache::role_record> member_role;
+        auto r = _roles.find(member_name);
+        if (r != _roles.end()) {
+            member_role = r->second;
+        }
+        co_await gather_inheriting_roles(roles, member_role, member_name);
+    }
+}
+
 future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
     if (legacy_mode(_qp)) {
         co_return;
@@ -154,16 +219,28 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto units = co_await get_units(_loading_sem, 1, _as);
 
+    std::unordered_set<role_name_t> roles_to_clear_perms;
     for (const auto& name : roles) {
         logger.info("Loading role {}", name);
         auto role = co_await fetch_role(name);
          if (role) {
             _roles[name] = role;
+            co_await gather_inheriting_roles(roles_to_clear_perms, role, name);
         } else {
-            _roles.erase(name);
+            auto deleted = _roles.extract(name);
+            if (deleted) {
+                co_await gather_inheriting_roles(roles_to_clear_perms, deleted.mapped(), name);
+            }
         }
         co_await distribute_role(name, role);
     }
+
+    co_await container().invoke_on_all([&roles_to_clear_perms] (cache& c) -> future<> {
+        for (const auto& name : roles_to_clear_perms) {
+            c._roles[name]->cached_permissions.clear();
+            co_await coroutine::maybe_yield();
+        }
+    });
 }
 
 future<> cache::distribute_role(const role_name_t& name, lw_shared_ptr<role_record> role) {
