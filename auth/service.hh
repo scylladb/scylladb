@@ -182,6 +182,13 @@ public:
     future<bool> exists(const resource&) const;
 
     ///
+    /// Revoke all permissions granted to any role for a particular resource.
+    ///
+    /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+    ///
+    future<> revoke_all(const resource&, ::service::group0_batch&) const;
+
+    ///
     /// Produces descriptions that can be used to restore the state of auth. That encompasses
     /// roles, role grants, and permission grants.
     ///
