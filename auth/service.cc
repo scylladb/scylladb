@@ -64,11 +64,11 @@ static const sstring superuser_col_name("super");
 static logging::logger log("auth_service");
 
 class auth_migration_listener final : public ::service::migration_listener {
-    authorizer& _authorizer;
+    service& _service;
     cql3::query_processor& _qp;
 
 public:
-    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
+    explicit auth_migration_listener(service& s, cql3::query_processor& qp) : _service(s),  _qp(qp) {
     }
 
 private:
@@ -93,13 +93,13 @@ private:
         }
         // Do it in the background.
         (void)do_with(auth::make_data_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
-            return _authorizer.revoke_all(r, mc);
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
 
         (void)do_with(auth::make_functions_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
-            return _authorizer.revoke_all(r, mc);
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
@@ -112,7 +112,7 @@ private:
         }
         // Do it in the background.
         (void)do_with(auth::make_data_resource(ks_name, cf_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
-            return _authorizer.revoke_all(r, mc);
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
@@ -126,7 +126,7 @@ private:
         }
         // Do it in the background.
         (void)do_with(auth::make_functions_resource(ks_name, function_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
-            return _authorizer.revoke_all(r, mc);
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
@@ -137,7 +137,7 @@ private:
             return;
         }
         (void)do_with(auth::make_functions_resource(ks_name, aggregate_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
-            return _authorizer.revoke_all(r, mc);
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
@@ -172,7 +172,7 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
+            , _migration_listener(std::make_unique<auth_migration_listener>(*this, qp))
             , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
             , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
@@ -442,6 +442,10 @@ future<bool> service::exists(const resource& r) const {
     }
 
     return make_ready_future<bool>(false);
+}
+
+future<> service::revoke_all(const resource& r, ::service::group0_batch& mc) const {
+    co_await _authorizer->revoke_all(r, mc);
 }
 
 future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_passwords) {
@@ -798,7 +802,7 @@ future<> revoke_permissions(
 }
 
 future<> revoke_all(const service& ser, const resource& r, ::service::group0_batch& mc) {
-    return ser.underlying_authorizer().revoke_all(r, mc);
+    return ser.revoke_all(r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
