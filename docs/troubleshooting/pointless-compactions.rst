@@ -25,7 +25,7 @@ To validate that the SSTable being compacted indeed has tombstones:
 
 .. code-block:: shell
 
-    sstablemetadata /var/lib/scylla/data/some_ks/some_cf-UUID/some_ks-ka-*-Data.db | grep "Estimated droppable tombstones:"
+    scylla sstable dump-statistics /var/lib/scylla/data/some_ks/some_cf-UUID/some_ks-ka-*-Data.db | jq .sstables[].stats.estimated_tombstone_drop_time
 
 The output may be something like this:
 
