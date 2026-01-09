@@ -1186,7 +1186,7 @@ future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select
         }
         auto limit = get_limit(options, _limit);
         auto page_size = options.get_page_size();
-        if (page_size > 0 && (uint64_t) page_size < limit) {
+        if (_prepared_ann_ordering.has_value() && page_size > 0 && (uint64_t) page_size < limit) {
             result->add_warning("Paging is not supported for Vector Search queries. The entire result set has been returned.");
         }
         co_return result;
