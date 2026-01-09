@@ -65,13 +65,5 @@ For example:
   
   curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-product scylla-enterprise --scylla-version 2024.1
 
-To install a supported version of *ScyllaDB Open Source*, run the command with
-the ``--scylla-version`` option to specify the version you want to install.
-
-For example:
-
-.. code:: console
-  
-  curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 6.2.1
 
 .. include:: /getting-started/_common/setup-after-install.rst
