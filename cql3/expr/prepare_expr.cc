@@ -1803,14 +1803,14 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
 
-    // IS NOT NULL requires an additional check that the RHS is NULL.
-    // Otherwise things like `int_col IS NOT 123` would be allowed - the types match, but the value is wrong.
-    if (binop.op == oper_t::IS_NOT) {
+    // IS NULL and IS NOT NULL require an additional check that the RHS is NULL.
+    // Otherwise things like `int_col IS 123` or `int_col IS NOT 123` would be allowed - the types match, but the value is wrong.
+    if (binop.op == oper_t::IS || binop.op == oper_t::IS_NOT) {
         bool rhs_is_null = is<constant>(prepared_rhs) && as<constant>(prepared_rhs).is_null();
 
         if (!rhs_is_null) {
             throw exceptions::invalid_request_exception(format(
-                "IS NOT NULL is the only expression that is allowed when using IS NOT. Invalid binary operator: {:user}",
+                "IS NULL and IS NOT NULL are the only expressions that are allowed when using IS/IS NOT. Invalid binary operator: {:user}",
                 binop));
         }
     }
