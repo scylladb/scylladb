@@ -414,9 +414,8 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                                     conn->_ssl_cipher_suite = cipher_suite;
                                     return make_ready_future<bool>(true);
                                 });
-                        }).handle_exception([this, conn](std::exception_ptr ep) {
-                            _logger.warn("Inspecting TLS connection failed: {}", ep);
-                            return make_ready_future<bool>(false);
+                        }).handle_exception([conn](std::exception_ptr ep) {
+                            return seastar::make_exception_future<bool>(std::runtime_error(fmt::format("Inspecting TLS connection failed: {}", ep)));
                         })
                     : make_ready_future<bool>(true)
                 ).then([conn] (bool ok){
