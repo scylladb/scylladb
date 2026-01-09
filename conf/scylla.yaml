@@ -299,13 +299,11 @@ batch_size_fail_threshold_in_kb: 1024
 # max_hint_window_in_ms: 10800000 # 3 hours
 
 
-# Validity period for permissions cache (fetching permissions can be an
-# expensive operation depending on the authorizer, CassandraAuthorizer is
-# one example). Defaults to 10000, set to 0 to disable.
+# Validity period for authorized statements cache. Defaults to 10000, set to 0 to disable.
 # Will be disabled automatically for AllowAllAuthorizer.
 # permissions_validity_in_ms: 10000
 
-# Refresh interval for permissions cache (if enabled).
+# Refresh interval for authorized statements cache.
 # After this interval, cache entries become eligible for refresh. Upon next
 # access, an async reload is scheduled and the old value returned until it
 # completes. If permissions_validity_in_ms is non-zero, then this also must have
