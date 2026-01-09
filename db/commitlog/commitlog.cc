@@ -502,6 +502,9 @@ public:
     void flush_segments(uint64_t size_to_remove);
     void check_no_data_older_than_allowed();
 
+    // whitebox testing
+    std::function<future<>()> _oversized_pre_wait_memory_func;
+
 private:
     class shutdown_marker{};
 
@@ -1597,8 +1600,15 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
 
     scope_increment_counter allocating(totals.active_allocations);
 
+    // #27992 - whitebox testing. signal we are trying to lock out 
+    // all allocators
+    if (_oversized_pre_wait_memory_func) {
+        co_await _oversized_pre_wait_memory_func();
+    }
+
     auto permit = co_await std::move(fut);
-    SCYLLA_ASSERT(_request_controller.available_units() == 0);
+    // #27992 - task reordering _can_ force the available units to negative. this is ok.
+    SCYLLA_ASSERT(_request_controller.available_units() <= 0);
 
     decltype(permit) fake_permit; // can't have allocate+sync release semaphore.
     bool failed = false;
@@ -1859,13 +1869,15 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
             }
         }
     }
-    SCYLLA_ASSERT(_request_controller.available_units() == 0);
+
+    auto avail = _request_controller.available_units();
+    SCYLLA_ASSERT(avail <= 0);
     SCYLLA_ASSERT(permit.count() == max_request_controller_units());
     auto nw = _request_controller.waiters();
     permit.return_all();
     // #20633 cannot guarantee controller avail is now full, since we could have had waiters when doing
     // return all -> now will be less avail
-    SCYLLA_ASSERT(nw > 0 || _request_controller.available_units() == ssize_t(max_request_controller_units()));
+    SCYLLA_ASSERT(nw > 0 || _request_controller.available_units() == (avail + ssize_t(max_request_controller_units())));
 
     if (!failed) {
         clogger.trace("Oversized allocation succeeded.");
@@ -3949,6 +3961,9 @@ void db::commitlog::update_max_data_lifetime(std::optional<uint64_t> commitlog_d
     _segment_manager->cfg.commitlog_data_max_lifetime_in_seconds = commitlog_data_max_lifetime_in_seconds;
 }
 
+void db::commitlog::set_oversized_pre_wait_memory_func(std::function<future<>()> f) {
+    _segment_manager->_oversized_pre_wait_memory_func = std::move(f);
+}
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
     return _segment_manager->get_segments_to_replay();
