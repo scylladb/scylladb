@@ -204,6 +204,28 @@ service::service(
                       used_by_maintenance_socket) {
 }
 
+service::service(
+        utils::loading_cache_config c,
+        cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
+        ::service::migration_notifier& mn,
+        authorizer_factory z_factory,
+        authenticator_factory a_factory,
+        role_manager_factory r_factory,
+        maintenance_socket_enabled used_by_maintenance_socket,
+        cache& cache)
+            : service(
+                      std::move(c),
+                      cache,
+                      qp,
+                      g0,
+                      mn,
+                      z_factory(),
+                      a_factory(),
+                      r_factory(),
+                      used_by_maintenance_socket) {
+}
+
 future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
     SCYLLA_ASSERT(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();

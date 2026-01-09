@@ -44,6 +44,15 @@ inline bool is_anonymous(const authenticated_user& u) noexcept {
     return u == anonymous_user();
 }
 
+///
+/// Maintenance user is a special case of a logged-in user.
+///
+const authenticated_user& maintenance_user() noexcept;
+
+inline bool is_maintenance(const authenticated_user& u) noexcept {
+    return u == maintenance_user();
+}
+
 }
 
 ///
