@@ -236,3 +236,26 @@ the same mechanism for other protocol versions, such as CQLv4.
 
 The feature is identified by the `SCYLLA_USE_METADATA_ID` key, which is meant to be sent
 in the SUPPORTED message.
+
+## Sending the CLIENT_ROUTES_CHANGE event
+
+This extension allows a driver to update its connections when the
+`system.client_routes` table is modified.
+
+In some network topologies a specific mapping of addresses and ports is required (e.g.
+to support Private Link). This mapping can change dynamically even when no nodes are
+added or removed. The driver must adapt to those changes; otherwise connectivity can be
+lost.
+
+The extension is implemented as a new `EVENT` type: `CLIENT_ROUTES_CHANGE`. The event
+body consists of:
+- [string] change
+- [string list] connection_ids
+- [string list] host_ids
+
+There is only one change value: `UPDATE_NODES`, which means at least one client route
+was inserted, updated, or deleted.
+
+Events already have a subscription mechanism similar to protocol extensions (that is,
+the driver only receives the events it explicitly subscribed to), so no additional
+`cql_protocol_extension` key is introduced for this feature.

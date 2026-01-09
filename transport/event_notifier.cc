@@ -27,6 +27,9 @@ void cql_server::event_notifier::register_event(event::event_type et, cql_server
     case event::event_type::SCHEMA_CHANGE:
         _schema_change_listeners.emplace(conn);
         break;
+    case event::event_type::CLIENT_ROUTES_CHANGE:
+        _client_routes_change_listeners.emplace(conn);
+        break;
     }
 }
 
@@ -35,6 +38,7 @@ void cql_server::event_notifier::unregister_connection(cql_server::connection* c
     _topology_change_listeners.erase(conn);
     _status_change_listeners.erase(conn);
     _schema_change_listeners.erase(conn);
+    _client_routes_change_listeners.erase(conn);
 }
 
 void cql_server::event_notifier::on_create_keyspace(const sstring& ks_name)
@@ -289,6 +293,16 @@ void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, loca
                 conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, conn->_server_addr.port())));
             };
         }
+    }
+}
+
+void cql_server::event_notifier::on_client_routes_change(const service::client_routes_service::client_route_keys& client_route_keys)
+{
+    for (auto&& conn : _client_routes_change_listeners) {
+        using namespace cql_transport;
+        if (!conn->_pending_requests_gate.is_closed()) {
+            conn->write_response(conn->make_client_routes_change_event(event::client_routes_change{client_route_keys}));
+        };
     }
 }
 
