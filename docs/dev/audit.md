@@ -108,6 +108,4 @@ check the statement and throw if it is disallowed, similar to what
 
 Obviously, an audit definition must survive a server restart and stay
 consistent among all nodes in a cluster.  We'll accomplish both by
-storing audits in a system table.  They will be cached in memory the
-same way `permissions_cache` caches table contents in `permission_set`
-objects resident in memory.
+storing audits in a system table.
