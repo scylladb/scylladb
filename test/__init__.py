@@ -10,10 +10,14 @@ import time
 import os
 from pathlib import Path
 
-__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "path_to"]
+__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "path_to",
+           "TESTPY_PREPARED_ENVIRONMENT"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
+# This is used to mark that test.py has already prepared the environment and pytest
+# should skip the part of cleaning or starting 3rd party services
+TESTPY_PREPARED_ENVIRONMENT = "TESTPY_PREPARED_ENVIRONMENT"
 
 TOP_SRC_DIR = Path(__file__).parent.parent  # ScyllaDB's source code root directory
 TEST_DIR = TOP_SRC_DIR / "test"

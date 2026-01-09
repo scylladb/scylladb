@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import platform
 import sys
@@ -19,21 +20,20 @@ from random import randint
 from typing import TYPE_CHECKING
 
 import pytest
+import xdist
 import yaml
 
-from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR
+from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     TestSuite,
     get_testpy_test,
+    prepare_environment,
     init_testsuite_globals,
-    prepare_dirs,
-    start_3rd_party_services,
 )
 from test.pylib.util import get_modes_to_run
 
 if TYPE_CHECKING:
-    from asyncio import AbstractEventLoop
     from collections.abc import Generator
 
     import _pytest.nodes
@@ -171,20 +171,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
 
-    init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+    # Check if this is an xdist worker
+    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
 
-    # Run stuff just once for the pytest session even running under xdist.
-    if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
+    # Always initialize globals in xdist workers (they run in separate processes)
+    # For the main process, only init if test.py hasn't done so already
+    if is_xdist_worker or TESTPY_PREPARED_ENVIRONMENT not in os.environ:
+        init_testsuite_globals()
+        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+
+    # Run stuff just once for the main pytest process (not in xdist workers).
+    # Only prepare the environment if it hasn't been prepared by test.py
+    if not is_xdist_worker and TESTPY_PREPARED_ENVIRONMENT not in os.environ:
         temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(
+
+        prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=session.config.getoption("--gather-metrics"),
             save_log_on_success=session.config.getoption("--save-log-on-success"),
-        )
-        start_3rd_party_services(
-            tempdir_base=temp_dir,
             toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
         )
 
@@ -238,12 +243,15 @@ def pytest_runtest_logreport(report):
 def pytest_sessionfinish(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
+
+    # Check if this is an xdist worker - workers should not clean up (only the main process should)
+    # Check if test.py has already prepared the environment, so it should clean up
+    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
+    if is_xdist_worker or TESTPY_PREPARED_ENVIRONMENT in os.environ:
+        return
+    # we only clean up when running with pure pytest
     if getattr(TestSuite, "artifacts", None) is not None:
-        loop: AbstractEventLoop = asyncio.get_event_loop()
-        if not loop.is_running():
-            loop.run_until_complete(TestSuite.artifacts.cleanup_before_exit())
-        else:
-            loop.create_task(TestSuite.artifacts.cleanup_before_exit())
+        asyncio.run(TestSuite.artifacts.cleanup_before_exit())
 
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")

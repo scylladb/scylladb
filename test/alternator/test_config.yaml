@@ -1,10 +1,4 @@
 type: Python
-pool_size: 6
-run_first:
-    - test_streams
-    - test_scan
-    - test_tracing
-    - test_ttl
 extra_scylla_cmdline_options:
   - '--logger-log-level=alternator-auth=trace'
   - '--logger-log-level=alternator-conditions=trace'
