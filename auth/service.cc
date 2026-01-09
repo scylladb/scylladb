@@ -92,14 +92,14 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
+        (void)do_with(auth::make_data_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _authorizer.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
 
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _authorizer.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
@@ -111,9 +111,8 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_data_resource(ks_name, cf_name), mc);
+        (void)do_with(auth::make_data_resource(ks_name, cf_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _authorizer.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
@@ -126,9 +125,8 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, function_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name, function_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _authorizer.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
@@ -138,9 +136,8 @@ private:
             // in non legacy path revoke is part of schema change statement execution
             return;
         }
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, aggregate_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name, aggregate_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _authorizer.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
