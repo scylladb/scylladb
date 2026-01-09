@@ -672,21 +672,11 @@ class ScyllaNode:
         keyspace_dir = os.path.join(self.get_path(), 'data', keyspace)
         cf_glob = '*'
         if column_family:
-            # account for changes in data dir layout from CASSANDRA-5202
-            if self.get_base_cassandra_version() < 2.1:
-                cf_glob = column_family
-            else:
-                cf_glob = column_family + '-*'
+            cf_glob = column_family + '-*'
         if not os.path.exists(keyspace_dir):
-            raise common.ArgumentError(f"Unknown keyspace {keyspace}")
+            raise ArgumentError(f"Unknown keyspace {keyspace}")
 
-        # data directory layout is changed from 1.1
-        if self.get_base_cassandra_version() < 1.1:
-            files = glob.glob(os.path.join(keyspace_dir, f"{column_family}*-Data.db"))
-        elif self.get_base_cassandra_version() < 2.2:
-            files = glob.glob(os.path.join(keyspace_dir, cf_glob, f"{keyspace}-{column_family}*-Data.db"))
-        else:
-            files = glob.glob(os.path.join(keyspace_dir, cf_glob, "*big-Data.db"))
+        files = glob.glob(os.path.join(keyspace_dir, cf_glob, "*big-Data.db"))
         for f in files:
             if os.path.exists(f.replace('Data.db', 'Compacted')):
                 files.remove(f)
@@ -723,7 +713,7 @@ class ScyllaNode:
                     files = files + self.get_sstables(keyspace, cf)
         else:
             if not columnfamilies or len(columnfamilies) > 1:
-                raise common.ArgumentError("Exactly one column family must be specified with datafiles")
+                raise ArgumentError("Exactly one column family must be specified with datafiles")
 
             cf_dir = os.path.join(os.path.realpath(self.get_path()), 'data', keyspace, columnfamilies[0])
 
@@ -778,7 +768,7 @@ class ScyllaNode:
         if additional_args is None:
             additional_args = []
 
-        scylla_path = common.join_bin(self.get_path(), BIN_DIR, 'scylla')
+        scylla_path = self.cluster.manager.server_get_exe(server_id=self.server_id)
         ret = {}
 
         if datafiles is None and keyspace is not None and self.is_running():
@@ -790,7 +780,7 @@ class ScyllaNode:
             for column_family in column_families:
                 sstables.extend(glob.glob(os.path.join(self.get_path(), 'data', keyspace, f"{column_family}-*/snapshots/{tag}/*-Data.db")))
         else:
-            sstables = self._Node__gather_sstables(datafiles, keyspace, column_families)
+            sstables = self.__gather_sstables(datafiles, keyspace, column_families)
             tag = None
 
         self.debug(f"run_scylla_sstable(): preparing to dump sstables {sstables}")
@@ -808,9 +798,7 @@ class ScyllaNode:
                 else:
                     return stdout.encode('utf-8'), stderr.encode('utf-8')
             common_args = [scylla_path, "sstable", command] + additional_args
-            _env = self._get_environ()
-            _env.update(env or {})
-            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=_env)
+            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=env)
             if res.returncode:
                 raise ToolError(command=' '.join(common_args + sstables), exit_status=res.returncode, stdout=res.stdout, stderr=res.stderr)
             return (res.stdout, res.stderr)
