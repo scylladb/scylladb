@@ -2124,6 +2124,22 @@ SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
     });
 }
 
+// Reproducer for SCYLLADB-248.
+SEASTAR_TEST_CASE(test_no_warnings_on_paged_index_query) {
+    return do_with_cql_env([](cql_test_env& e) -> future<> {
+        co_await e.execute_cql("CREATE TABLE users (userid int, name text, PRIMARY KEY (userid));");
+        co_await e.execute_cql("CREATE INDEX ON users (name);");
+
+        // Use paging with page size of 5
+        auto qo = std::make_unique<cql3::query_options>(
+                db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{}, cql3::query_options::specific_options{5, nullptr, {}, api::new_timestamp()}
+        );
+        shared_ptr<cql_transport::messages::result_message> msg = co_await e.execute_cql("SELECT * FROM users WHERE name = 'John';", std::move(qo));
+
+        BOOST_CHECK(msg->warnings().empty());
+    });
+}
+
 // Reproducer for #18536.
 //
 // Paged index queries have been reported to cause reactor stalls on the
