@@ -12,7 +12,8 @@ ScyllaDB SSTable - 3.x
 
 .. include:: ../_common/sstable_what_is.rst
 
-In ScyllaDB 6.0 and above, the ``me`` format is mandatory, and ``md`` format is used only when upgrading from an existing cluster using ``md``. The ``sstable_format`` parameter is ignored if it is set to ``md``.
+* The supported formats are ``me`` and ``ms``.
+* The ``md`` format is used only when upgrading from an existing cluster using ``md``. The ``sstable_format`` parameter is ignored if it is set to ``md``.
 
 Additional Information
 -------------------------
