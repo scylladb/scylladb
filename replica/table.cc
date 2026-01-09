@@ -4127,18 +4127,14 @@ table::query(schema_ptr query_schema,
         }
         auto& q = *querier_opt;
 
-        std::exception_ptr ex;
-      try {
-        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
-      } catch (...) {
-        ex = std::current_exception();
-      }
-        if (ex || !qs.done()) {
+        future<> fut = co_await coroutine::as_future(q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state));
+
+        if (fut.failed() || !qs.done()) {
             co_await q.close();
             querier_opt = {};
         }
-        if (ex) {
-            co_return coroutine::exception(std::move(ex));
+        if (fut.failed()) {
+            co_return coroutine::exception(fut.get_exception());
         }
     }
 

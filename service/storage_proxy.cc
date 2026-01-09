@@ -15,6 +15,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
@@ -7110,9 +7111,9 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
     auto local_cmd = cmd;
     rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> ret;
     if (local_cmd->slice.options.contains(query::partition_slice::option::range_scan_data_variant)) {
-        ret = co_await query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout);
+        ret = co_await coroutine::try_future(query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout));
     } else {
-        auto res = co_await query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout);
+        auto res = co_await coroutine::try_future(query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout));
         ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(co_await to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
                 local_cmd->get_row_limit(), local_cmd->partition_limit, opts))), std::get<1>(res));
     }
