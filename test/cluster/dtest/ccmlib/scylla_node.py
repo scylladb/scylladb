@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import re
 import time
@@ -17,7 +18,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for
+from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 from test.pylib.manager_client import NoSuchProcess
 
@@ -666,6 +667,157 @@ class ScyllaNode:
 
     def decommission(self) -> None:
         self.cluster.manager.decommission_node(server_id=self.server_id)
+
+    def get_sstables(self, keyspace, column_family, ignore_unsealed=True, cleanup_unsealed=False):
+        keyspace_dir = os.path.join(self.get_path(), 'data', keyspace)
+        cf_glob = '*'
+        if column_family:
+            cf_glob = column_family + '-*'
+        if not os.path.exists(keyspace_dir):
+            raise ArgumentError(f"Unknown keyspace {keyspace}")
+
+        files = glob.glob(os.path.join(keyspace_dir, cf_glob, "*big-Data.db"))
+        for f in files:
+            if os.path.exists(f.replace('Data.db', 'Compacted')):
+                files.remove(f)
+        if ignore_unsealed or cleanup_unsealed:
+            # sstablelevelreset tries to open all sstables under the configured
+            # `data_file_directories` in cassandra.yaml. if any of them does not
+            # have missing component, it complains in its stderr. and some tests
+            # using this tool checks the stderr for unexpected error message, so
+            # we need to remove all unsealed sstable files in this case.
+            for toc_tmp in glob.glob(os.path.join(keyspace_dir, cf_glob, '*TOC.txt.tmp')):
+                if cleanup_unsealed:
+                    self.info(f"get_sstables: Cleaning up unsealed SSTable: {toc_tmp}")
+                    for unsealed in glob.glob(toc_tmp.replace('TOC.txt.tmp', '*')):
+                        os.remove(unsealed)
+                else:
+                    self.info(f"get_sstables: Ignoring unsealed SSTable: {toc_tmp}")
+                data_sst = toc_tmp.replace('TOC.txt.tmp', 'Data.db')
+                try:
+                    files.remove(data_sst)
+                except ValueError:
+                    pass
+        return files
+
+    def __gather_sstables(self, datafiles=None, keyspace=None, columnfamilies=None):
+        files = []
+        if keyspace is None:
+            for k in self.list_keyspaces():
+                files = files + self.get_sstables(k, "")
+        elif datafiles is None:
+            if columnfamilies is None:
+                files = files + self.get_sstables(keyspace, "")
+            else:
+                for cf in columnfamilies:
+                    files = files + self.get_sstables(keyspace, cf)
+        else:
+            if not columnfamilies or len(columnfamilies) > 1:
+                raise ArgumentError("Exactly one column family must be specified with datafiles")
+
+            cf_dir = os.path.join(os.path.realpath(self.get_path()), 'data', keyspace, columnfamilies[0])
+
+            sstables = set()
+            for datafile in datafiles:
+                if not os.path.isabs(datafile):
+                    datafile = os.path.join(os.getcwd(), datafile)
+
+                if not datafile.startswith(cf_dir + '-') and not datafile.startswith(cf_dir + os.sep):
+                    raise NodeError("File doesn't appear to belong to the specified keyspace and column family: " + datafile)
+
+                sstable = _sstable_regexp.match(os.path.basename(datafile))
+                if not sstable:
+                    raise NodeError("File doesn't seem to be a valid sstable filename: " + datafile)
+
+                sstable = sstable.groupdict()
+                if not sstable['tmp'] and sstable['identifier'] not in sstables:
+                    if not os.path.exists(datafile):
+                        raise IOError("File doesn't exist: " + datafile)
+                    sstables.add(sstable['identifier'])
+                    files.append(datafile)
+
+        return files
+
+    def run_scylla_sstable(self, command, additional_args=None, keyspace=None, datafiles=None, column_families=None, batch=False, text=True, env=None):
+        """Invoke scylla-sstable, with the specified command (operation) and additional_args.
+
+        For more information about scylla-sstable, see https://docs.scylladb.com/stable/operating-scylla/admin-tools/scylla-sstable.html.
+
+        Params:
+        * command - The scylla-sstable command (operation) to run.
+        * additional_args - Additional command-line arguments to pass to scylla-sstable, this should be a list of strings.
+        * keyspace - Restrict the operation to sstables of this keyspace.
+        * datafiles - Restrict the operation to the specified sstables (Data components).
+        * column_families - Restrict the operation to sstables of these column_families. Must contain exactly one column family when datafiles is used.
+        * batch - If True, all sstables will be passed in a single batch. If False, sstables will be passed one at a time.
+            Batch-mode can be only used if column_families contains a single item.
+        * text - If True, output of the command is treated as text, if not as bytes
+
+        If datafiles is provided, the caller is responsible for making sure these
+        files are not removed by ScyllaDB while the tool is running.
+        If datafiles = None, this function will create a snapshot and dump
+        sstables from the snapshot to ensure that the sstables are not removed
+        while the tools is running.
+        The snapshot is removed after the dump completed, but it is left there in
+        case of error, for post-mortem analysis.
+
+        Returns: map: {sstable: (stdout, stderr)} of all invokations. When batch == True, a single entry will be present, with empty key.
+
+        Raises: subprocess.CalledProcessError if scylla-sstable returns a non-zero exit code.
+        """
+        if additional_args is None:
+            additional_args = []
+
+        scylla_path = self.cluster.manager.server_get_exe(server_id=self.server_id)
+        ret = {}
+
+        if datafiles is None and keyspace is not None and self.is_running():
+            tag = "sstable-dump-{}".format(uuid.uuid1())
+            kts = ",".join(f"{keyspace}.{column_family}" for column_family in column_families)
+            self.debug(f"run_scylla_sstable(): creating snapshot with tag {tag} to be used for sstable dumping")
+            self.nodetool(f"snapshot -t {tag} {kts}")
+            sstables = []
+            for column_family in column_families:
+                sstables.extend(glob.glob(os.path.join(self.get_path(), 'data', keyspace, f"{column_family}-*/snapshots/{tag}/*-Data.db")))
+        else:
+            sstables = self.__gather_sstables(datafiles, keyspace, column_families)
+            tag = None
+
+        self.debug(f"run_scylla_sstable(): preparing to dump sstables {sstables}")
+
+        def do_invoke(sstables):
+            # there are chances that the table is not replicated on this node,
+            # in that case, scylla tool will fail to dump the sstables and error
+            # out. let's just return an empty list for the partitions, so that
+            # dump_sstables() can still parse it in the same way.
+            if not sstables:
+                empty_dump = {'sstables': {'anonymous': []}}
+                stdout, stderr = json.dumps(empty_dump), ''
+                if text:
+                    return stdout, stderr
+                else:
+                    return stdout.encode('utf-8'), stderr.encode('utf-8')
+            common_args = [scylla_path, "sstable", command] + additional_args
+            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=env)
+            if res.returncode:
+                raise ToolError(command=' '.join(common_args + sstables), exit_status=res.returncode, stdout=res.stdout, stderr=res.stderr)
+            return (res.stdout, res.stderr)
+
+        if batch:
+            if column_families is None or len(column_families) > 1:
+                raise NodeError("run_scylla_sstable(): batch mode can only be used in conjunction with a single column_family")
+            ret[""] = do_invoke(sstables)
+        else:
+            for sst in sstables:
+                ret[sst] = do_invoke([sst])
+
+        # Deliberately not putting this in a `finally` block, if the command
+        # above failed, leave the snapshot with the sstables around for
+        # post-mortem analysis.
+        if tag is not None:
+            self.nodetool(f"clearsnapshot -t {tag} {keyspace}")
+
+        return ret
 
     def hostid(self, timeout: float | None = None, force_refresh: bool | None = None) -> str | None:
         assert timeout is None, "argument `timeout` is not supported"  # not used in scylla-dtest
