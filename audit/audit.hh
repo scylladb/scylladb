@@ -10,8 +10,7 @@
 #include "seastarx.hh"
 #include "utils/log.hh"
 #include "utils/observable.hh"
-#include "db/consistency_level.hh"
-#include "locator/token_metadata_fwd.hh"
+#include "service/client_state.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
@@ -140,13 +139,16 @@ public:
     future<> start(const db::config& cfg);
     future<> stop();
     future<> shutdown();
-    bool should_log(const audit_info* audit_info) const;
+    bool should_log(const audit_info& audit_info) const;
     bool should_log_login() const { return _audited_categories.contains(statement_category::AUTH); }
-    future<> log(const audit_info* audit_info, service::query_state& query_state, const cql3::query_options& options, bool error);
+    future<> log(const audit_info& audit_info, const service::query_state& query_state, const cql3::query_options& options, bool error);
+    future<> log(const audit_info& audit_info, const service::client_state& client_state, db::consistency_level cl, bool error);
+    future<> log(const audit_info& audit_info, const sstring& client_username, socket_address client_ip, db::consistency_level cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;
 };
 
-future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error);
+future<> inspect(statement_category statmnt_cat, const sstring& ks_name, const sstring& tbl_name, const sstring& query, const service::client_state& client_state, db::consistency_level cl, bool error);
+future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query_state& query_state, const cql3::query_options& options, bool error);
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error);
 

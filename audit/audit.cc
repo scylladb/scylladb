@@ -232,24 +232,30 @@ future<> audit::shutdown() {
     return make_ready_future<>();
 }
 
-future<> audit::log(const audit_info* audit_info, service::query_state& query_state, const cql3::query_options& options, bool error) {
-    const service::client_state& client_state = query_state.get_client_state();
-    socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
-    db::consistency_level cl = options.get_consistency();
+future<> audit::log(const audit_info& audit_info, const service::query_state& query_state, const cql3::query_options& options, bool error) {
+    return log(audit_info, query_state.get_client_state(), options.get_consistency(), error);
+}
+
+future<> audit::log(const audit_info& audit_info, const service::client_state& client_state, db::consistency_level cl, bool error) {
     thread_local static sstring no_username("undefined");
     static const sstring anonymous_username("anonymous");
     const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
+    return log(audit_info, username, client_ip, cl, error);
+}
+
+future<> audit::log(const audit_info& audit_info, const sstring& client_username, socket_address client_ip, db::consistency_level cl, bool error) {
+    socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
     if (logger.is_enabled(logging::log_level::debug)) {
         logger.debug("Log written: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
-            node_ip, audit_info->category_string(), cl, error, audit_info->keyspace(),
-            audit_info->query(), client_ip, audit_info->table(), username);
+            node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+            audit_info.query(), client_ip, audit_info.table(), client_username);
     }
-    return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, audit_info, node_ip, client_ip, cl, username, error)
-        .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
+    return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, &audit_info, node_ip, client_ip, cl, client_username, error)
+        .handle_exception([audit_info, node_ip, client_ip, cl, client_username, error] (auto ep) {
             logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
-                node_ip, audit_info->category_string(), cl, error, audit_info->keyspace(),
-                audit_info->query(), client_ip, audit_info->table(),username, ep);
+                node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+                audit_info.query(), client_ip, audit_info.table(), client_username, ep);
     });
 }
 
@@ -266,16 +272,34 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
     });
 }
 
-future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error) {
+future<> inspect(const audit_info& audit_info, const service::client_state& client_state, db::consistency_level cl, bool error) {
+    return audit::local_audit_instance().log(audit_info, client_state, cl, error);
+}
+
+future<> inspect(statement_category statement_cat, const sstring& ks_name, const sstring& tbl_name, const sstring& query,
+        const service::client_state& client_state, db::consistency_level cl, bool error) {
+    audit_info audit_info(statement_cat, ks_name, tbl_name);
+    audit_info.set_query_string(query);
+    return inspect(audit_info, client_state, cl, error);
+}
+
+future<> inspect(const audit_info& audit_info, const service::query_state& query_state, const cql3::query_options& options, bool error) {
+    if(audit::local_audit_instance().should_log(audit_info)) {
+        return inspect(audit_info, query_state.get_client_state(), options.get_consistency(), error);
+    }
+    return make_ready_future<>();
+}
+
+future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query_state& query_state, const cql3::query_options& options, bool error) {
     cql3::statements::batch_statement* batch = dynamic_cast<cql3::statements::batch_statement*>(statement.get());
     if (batch != nullptr) {
         return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
             return inspect(m.statement, query_state, options, error);
         });
     } else {
-        auto audit_info = statement->get_audit_info();
-        if (bool(audit_info) && audit::local_audit_instance().should_log(audit_info)) {
-            return audit::local_audit_instance().log(audit_info, query_state, options, error);
+        const auto audit_info = statement->get_audit_info();
+        if (audit_info != nullptr) {
+            return inspect(*audit_info, query_state, options, error);
         }
     }
     return make_ready_future<>();
@@ -293,13 +317,13 @@ bool audit::should_log_table(const sstring& keyspace, const sstring& name) const
     return keyspace_it != _audited_tables.cend() && keyspace_it->second.find(name) != keyspace_it->second.cend();
 }
 
-bool audit::should_log(const audit_info* audit_info) const {
-    return _audited_categories.contains(audit_info->category())
-           && (_audited_keyspaces.find(audit_info->keyspace()) != _audited_keyspaces.cend()
-                         || should_log_table(audit_info->keyspace(), audit_info->table())
-                         || audit_info->category() == statement_category::AUTH
-                         || audit_info->category() == statement_category::ADMIN
-                         || audit_info->category() == statement_category::DCL);
+bool audit::should_log(const audit_info& audit_info) const {
+    return _audited_categories.contains(audit_info.category())
+           && (_audited_keyspaces.find(audit_info.keyspace()) != _audited_keyspaces.cend()
+                         || should_log_table(audit_info.keyspace(), audit_info.table())
+                         || audit_info.category() == statement_category::AUTH
+                         || audit_info.category() == statement_category::ADMIN
+                         || audit_info.category() == statement_category::DCL);
 }
 
 template<class T>

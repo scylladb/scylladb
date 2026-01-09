@@ -19,6 +19,7 @@
 #include "db/view/view_build_status.hh"
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "seastar/core/sstring.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -984,6 +985,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
+    // The call uses node-local info to respond, Is CL=ANY correct in this context?
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::ANY, false);
     co_return rjson::print(std::move(response));
 }
 
@@ -1142,6 +1145,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(table_description));
     elogger.trace("returning {}", response);
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this on shard0 and obtain group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::SERIAL, false);
     co_return rjson::print(std::move(response));
 }
 
@@ -1427,6 +1432,8 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this with group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::SERIAL, false);
     co_return ""; // empty response
 }
 
@@ -1448,6 +1455,8 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
     });
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this with group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::SERIAL, false);
     co_return ""; // empty response
 }
 
@@ -1455,7 +1464,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     _stats.api_operations.list_tags_of_resource++;
     const rjson::value* arn = rjson::find(request, "ResourceArn");
     if (!arn || !arn->IsString()) {
-        return make_ready_future<request_return_type>(api_error::access_denied("Incorrect resource identifier"));
+        co_return api_error::access_denied("Incorrect resource identifier");
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
     get_stats_from_schema(_proxy, *schema)->api_operations.list_tags_of_resource++;
@@ -1473,8 +1482,9 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         rjson::add(new_entry, "Value", rjson::from_string(tag_entry.second));
         rjson::push_back(tags, std::move(new_entry));
     }
-
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    // Uses node-local info to respond
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
+    co_return rjson::print(std::move(ret));
 }
 
 struct billing_mode_type {
@@ -1952,6 +1962,9 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, _proxy);
     rjson::add(status, "TableDescription", std::move(request));
+    // Is CL=SERIAL correct? I assumed it is, since we're doing this on shard0 and obtain group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+    // Also, I'm currently outputting a single entry for the whole CreateTable, which can actually instantiate up to 3 items: a base table, an LSIs and a GSIs.
+    co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, db::consistency_level::SERIAL, false);
     co_return rjson::print(std::move(status));
 }
 
@@ -2233,7 +2246,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
         }
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
-
+        // Is CL=SERIAL correct? I assumed it is, since we're doing this on shard0 and obtain group0_guard. However, I'm not sure what SERIAL actually means, just deduced it.
+        co_await audit::inspect(audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state_other_shard.get(), db::consistency_level::SERIAL, false);
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
@@ -2989,6 +3003,8 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    // The op->execute() above explicitly specifies LOCAL_QUORUM for mutations
+    co_await audit::inspect(audit::statement_category::DML, op->schema()->ks_name(), op->schema()->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_QUORUM, false);
     co_return res;
 }
 
@@ -3095,6 +3111,8 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    // The op->execute() above explicitly specifies LOCAL_QUORUM for mutations
+    co_await audit::inspect(audit::statement_category::DML, op->schema()->ks_name(), op->schema()->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_QUORUM, false);
     co_return res;
 }
 
@@ -3297,6 +3315,18 @@ future<> executor::do_batch_write(
     }
 }
 
+sstring print_names_for_audit(const std::set<sstring>& names) {
+    sstring res;
+    // Might have been useful too loop twice, with the 1st loop learning the total size of the names for the res to then reserve()
+    for(const auto& name : names) {
+        if (!res.empty()) {
+            res += "|";
+        }
+        res += name;
+    }
+    return res;
+}
+
 future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.batch_write_item++;
     auto start_time = std::chrono::steady_clock::now();
@@ -3328,6 +3358,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // For each table, we need its stats and schema.
     std::vector<std::pair<lw_shared_ptr<stats>, schema_ptr>> per_table_wcu;
 
+    std::set<sstring> ks_names, table_names; // for auditing
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
@@ -3337,6 +3368,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         per_table_stats->api_operations.batch_write_item_batch_total += it->value.Size();
         per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
+        ks_names.insert(schema->ks_name());
+        table_names.insert(schema->cf_name());
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
@@ -3450,6 +3483,10 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
     }
     _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    // The do_batch_write() above explicitly specifies LOCAL_QUORUM for mutations
+    // At this point, with #5650 opened, I honestly don't know if a batch write can partially succeed without reaching this point (due to throwing),
+    // which would mean the partial success is never audited.
+    co_await audit::inspect(audit::statement_category::DML, print_names_for_audit(ks_names), print_names_for_audit(table_names), rjson::print(request), client_state, db::consistency_level::LOCAL_QUORUM, false);
     co_return rjson::print(std::move(ret));
 }
 
@@ -4627,6 +4664,8 @@ future<executor::request_return_type> executor::update_item(client_state& client
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    // The op->execute() above explicitly specifies LOCAL_QUORUM for mutations
+    co_await audit::inspect(audit::statement_category::DML, op->schema()->ks_name(), op->schema()->cf_name(), rjson::print(request), client_state, db::consistency_level::LOCAL_QUORUM, false);
     co_return res;
 }
 
@@ -4725,6 +4764,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     if (qr.query_result->row_count().value_or(0) > 0) {
         per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
     }
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, cl, false);
     co_return rjson::print(std::move(res));
 }
 
@@ -4896,7 +4936,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // from one of the operations will be returned.
     bool some_succeeded = false;
     std::exception_ptr eptr;
-
+    std::set<sstring> ks_names, table_names; // for auditing
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Responses", rjson::empty_object());
     rjson::add(response, "UnprocessedKeys", rjson::empty_object());
@@ -4905,6 +4945,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         std::string table = table_name(*rs.schema);
+        ks_names.insert(rs.schema->ks_name());
+        table_names.insert(table);
         for (const auto& [_, cks] : rs.requests) {
             auto& fut = *fut_it;
             ++fut_it;
@@ -4957,6 +4999,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         rjson::add(response, "ConsumedCapacity", std::move(consumed_capacity));
     }
     elogger.trace("Unprocessed keys: {}", response["UnprocessedKeys"]);
+    // FIXME: CL is set per request by get_read_consistency() above, but here we pass the placeholder value ANY
+    co_await audit::inspect(audit::statement_category::QUERY, print_names_for_audit(ks_names), print_names_for_audit(table_names) , rjson::print(request), client_state, db::consistency_level::ANY, false);
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
@@ -5436,16 +5480,13 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     auto total_segments = get_int_attribute(request, "TotalSegments");
     if (segment || total_segments) {
         if (!segment || !total_segments) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "Both Segment and TotalSegments attributes need to be present for a parallel scan"));
+            co_return api_error::validation("Both Segment and TotalSegments attributes need to be present for a parallel scan");
         }
         if (*segment < 0 || *segment >= *total_segments) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "Segment must be non-negative and less than TotalSegments"));
+            co_return api_error::validation("Segment must be non-negative and less than TotalSegments");
         }
         if (*total_segments < 0 || *total_segments > 1000000) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "TotalSegments must be non-negative and less or equal to 1000000"));
+            co_return api_error::validation("TotalSegments must be non-negative and less or equal to 1000000");
         }
     }
 
@@ -5453,13 +5494,12 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
 
     db::consistency_level cl = get_read_consistency(request);
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Consistent reads are not allowed on global indexes (GSI)"));
+        co_return api_error::validation("Consistent reads are not allowed on global indexes (GSI)");
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
+        co_return api_error::validation("Limit must be greater than 0");
     }
 
     select_type select = parse_select(request, table_type);
@@ -5474,9 +5514,8 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         if (exclusive_start_key) {
             auto ring_pos = dht::ring_position{dht::decorate_key(*schema, pk_from_json(*exclusive_start_key, schema))};
             if (!range.contains(ring_pos, dht::ring_position_comparator(*schema))) {
-                return make_ready_future<request_return_type>(api_error::validation(
-                    format("The provided starting key is invalid: Invalid ExclusiveStartKey. Please use ExclusiveStartKey "
-                           "with correct Segment. TotalSegments: {} Segment: {}", *total_segments, *segment)));
+                co_return api_error::validation(format("The provided starting key is invalid: Invalid ExclusiveStartKey. Please use ExclusiveStartKey "
+                           "with correct Segment. TotalSegments: {} Segment: {}", *total_segments, *segment));
             }
         }
         partition_ranges.push_back(range);
@@ -5497,8 +5536,10 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Scan");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+    auto do_query_result = co_await do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit), _enforce_authorization, _warn_authorization);
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request).c_str(), client_state, cl, false);
+    co_return do_query_result;
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -5915,13 +5956,12 @@ future<executor::request_return_type> executor::query(client_state& client_state
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request);
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Consistent reads are not allowed on global indexes (GSI)"));
+        co_return api_error::validation("Consistent reads are not allowed on global indexes (GSI)");
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
+        co_return api_error::validation("Limit must be greater than 0");
     }
 
     const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
@@ -5956,14 +5996,12 @@ future<executor::request_return_type> executor::query(client_state& client_state
     // A query is not allowed to filter on the partition key or the sort key.
     for (const column_definition& cdef : schema->partition_key_columns()) { // just one
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text()));
         }
     }
     for (const column_definition& cdef : schema->clustering_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text()));
         }
         // FIXME: this "break" can avoid listing some clustering key columns
         // we added for GSIs just because they existed in the base table -
@@ -5978,8 +6016,10 @@ future<executor::request_return_type> executor::query(client_state& client_state
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+    auto do_query_result = co_await do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization);
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), rjson::print(request), client_state, cl, false);
+    co_return do_query_result;
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {
@@ -6032,7 +6072,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         auto& last_table_name = *std::prev(all_tables.End());
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
-
+    co_await audit::inspect(audit::statement_category::QUERY, {}, {}, rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
     co_return rjson::print(std::move(response));
 }
 
@@ -6063,6 +6103,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
+    co_await audit::inspect(audit::statement_category::QUERY, {}, {}, rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
     co_return rjson::print(std::move(response));
 }
 
@@ -6098,6 +6139,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
+    co_await audit::inspect(audit::statement_category::QUERY, schema->ks_name(), table_name, rjson::print(request), client_state, db::consistency_level::LOCAL_ONE, false);
     co_return rjson::print(std::move(response));
 }
 
