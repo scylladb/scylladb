@@ -123,6 +123,20 @@ const auto app_name = "nodetool";
 
 logging::logger nlog(format("scylla-{}", app_name));
 
+// Thread-safe and convenient localtime wrapper
+std::tm localtime(const std::time_t& timep, std::source_location loc = std::source_location::current()) {
+    std::tm result{};
+    auto ret = localtime_r(&timep, &result);
+
+    if (ret) {
+        return *ret;
+    }
+
+    char error[256];
+    strerror_r(errno, error, 256);
+    throw std::runtime_error(fmt::format("Failed to convert time to localtime at {}:{}: {}", loc.file_name(), loc.line(), error));
+}
+
 using history_entry = db::compaction_history_entry;
 
 struct operation_failed_on_scylladb : public std::runtime_error {
@@ -643,7 +657,7 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
         const auto n = clock::now();
         const auto t = clock::to_time_t(n);
         const auto ms = (n - clock::from_time_t(t)) / 1ms;
-        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+        fmt::print("[{:%F %T},{:03d}] {}\n", localtime(t), ms, msg);
     };
 
     int exit_code = EXIT_SUCCESS;
@@ -715,7 +729,7 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 std::string format_compacted_at(int64_t compacted_at) {
     const auto compacted_at_time = std::time_t(compacted_at / 1000);
     const auto milliseconds = compacted_at % 1000;
-    return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
+    return fmt::format("{:%FT%T}.{}", localtime(compacted_at_time), milliseconds);
 }
 
 template<typename Writer, typename Entry>
@@ -1830,7 +1844,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         const auto n = clock::now();
         const auto t = clock::to_time_t(n);
         const auto ms = (n - clock::from_time_t(t)) / 1ms;
-        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+        fmt::print("[{:%F %T},{:03d}] {}\n", localtime(t), ms, msg);
     };
 
     for (const auto& keyspace : keyspaces) {
