@@ -10,7 +10,7 @@
 import os
 import sys
 import argparse
-from scylla_util import *
+from scylla_util import is_nonroot, is_container, etcdir, sysconfig_parser
 
 if __name__ == '__main__':
     if not is_nonroot() and not is_container() and os.getuid() > 0:

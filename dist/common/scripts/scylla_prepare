@@ -12,8 +12,10 @@ import sys
 import glob
 import platform
 import distro
+import re
+import traceback
 
-from scylla_util import *
+from scylla_util import sysconfig_parser, out, get_set_nic_and_disks_config_value, check_sysfs_numa_topology_is_valid, sysconfdir_p, scylla_excepthook, perftune_base_command
 from subprocess import run
 
 def get_cur_cpuset():

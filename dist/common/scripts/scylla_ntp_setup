@@ -11,10 +11,9 @@ import os
 import sys
 import argparse
 import re
-import distro
 import shutil
 
-from scylla_util import *
+from scylla_util import systemd_unit, is_redhat_variant, pkg_install
 from subprocess import run
 from pathlib import Path
 

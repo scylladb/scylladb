@@ -9,8 +9,7 @@
 
 import os
 import sys
-import subprocess
-from scylla_util import *
+from scylla_util import is_redhat_variant, out, sysconfig_parser
 from subprocess import run
 
 if __name__ == '__main__':

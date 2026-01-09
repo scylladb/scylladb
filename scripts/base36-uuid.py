@@ -205,7 +205,7 @@ def main():
     default_fields = ['date', 'decimicro_seconds', 'lsb']
     parser.add_argument('--field',
                         action='append',
-                        choices=['lsb', 'msb', 'date', 'decimicro_seconds' 'time', 'node'],
+                        choices=['lsb', 'msb', 'date', 'decimicro_seconds', 'time', 'node'],
                         help='Field to be printed (default: {})'.format(
                             ", ".join(default_fields)),
                         dest='fields')

@@ -8,8 +8,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import os
+import sys
 import argparse
-from scylla_util import *
+from scylla_util import systemd_unit
 
 def update_rsysconf(rsyslog_server):
     if ':' not in rsyslog_server:

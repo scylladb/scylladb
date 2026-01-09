@@ -14,7 +14,9 @@ import subprocess
 import time
 import tempfile
 import shutil
-from scylla_util import *
+import re
+import distro
+from scylla_util import out, is_debian_variant, is_suse_variant, pkg_install, is_redhat_variant, systemd_unit, is_gentoo
 from subprocess import run
 
 

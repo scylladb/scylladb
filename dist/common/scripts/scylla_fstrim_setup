@@ -8,9 +8,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import os
-import subprocess
-import shutil
-from scylla_util import *
+import sys
+from scylla_util import systemd_unit
 
 if __name__ == '__main__':
     if os.getuid() > 0:
