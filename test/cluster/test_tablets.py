@@ -510,6 +510,66 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
     assert len(repl['dc2']) == 1
     assert repl['dc2'][0] == 'rack2a'
 
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    async def get_replication_options(ks: str):
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+        repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
+        return repl
+
+    injection = "create_with_numeric"
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+
+    servers = [await manager.server_add(config=config, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, property_file={'dc': 'dc2', 'rack': 'rack2b'})]
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key);")
+    repl = await get_replication_options("ks1")
+    assert repl['dc1'] == '1'
+
+    await cql.run_async("CREATE KEYSPACE ksv WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2} AND tablets = {'enabled': false}")
+
+    await manager.server_stop_gracefully(servers[-1].server_id)
+    try:
+        await manager.server_update_config(servers[-1].server_id, '--enforce-rack-list', 'true')
+        await manager.server_start(server_id=servers[-1].server_id, wait_others=3, connect_driver=True)
+        assert False
+    except Exception:
+        await manager.server_stop_gracefully(servers[-1].server_id)
+        await manager.remove_node(servers[0].server_id, servers[-1].server_id)
+
+    servers = servers[0:-1]
+
+    [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
+
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']};")
+    repl = await get_replication_options("ks1")
+    assert repl['dc1'] == ['rack1b']
+
+    logging.info("Rolling restart")
+    await manager.rolling_restart(servers, wait_for_cql=True, cmdline_options_override=["--enforce-rack-list", "true", "--error-injections-at-startup", "[]"])
+
+    await cql.run_async(f"create keyspace ks2 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} and tablets = {{'initial': 4}};")
+    repl = await get_replication_options("ks2")
+    assert len(repl['dc1']) == 2
+    assert 'rack1a' in repl['dc1'] and 'rack1b' in repl['dc1']
+
+    await cql.run_async("create keyspace ksv2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};")
+
+    try:
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b'], 'dc2': ['rack2a']};")
+        assert False
+    except Exception:
+        pass
+
+    await cql.run_async("alter keyspace ksv with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1};")
+
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
