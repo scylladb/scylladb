@@ -254,6 +254,14 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         co_await _role_manager->ensure_superuser_is_created();
     }
     co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
+    if (!_used_by_maintenance_socket) {
+        // Maintenance socket mode can't cache permissions because it has
+        // different authorizer. We can't mix cached permissions, they could be
+        // different in normal mode.
+        _cache.set_permission_loader(std::bind(
+                &service::get_uncached_permissions,
+                this, std::placeholders::_1, std::placeholders::_2));
+    }
     _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
     co_await once_among_shards([this] {
         _mnotifier.register_listener(_migration_listener.get());
@@ -266,6 +274,7 @@ future<> service::stop() {
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
     return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
+        _cache.set_permission_loader(nullptr);
         if (_permissions_cache) {
             return _permissions_cache->stop();
         }
@@ -319,7 +328,10 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
 }
 
 future<permission_set> service::get_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
-    return _permissions_cache->get(maybe_role, r);
+    if (legacy_mode(_qp) || _used_by_maintenance_socket) {
+        return get_uncached_permissions(maybe_role, r);
+    }
+    return _cache.get_permissions(maybe_role, r);
 }
 
 future<bool> service::has_superuser(std::string_view role_name, const role_set& roles) const {
@@ -446,6 +458,7 @@ future<bool> service::exists(const resource& r) const {
 
 future<> service::revoke_all(const resource& r, ::service::group0_batch& mc) const {
     co_await _authorizer->revoke_all(r, mc);
+    co_await _cache.prune(r);
 }
 
 future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_passwords) {
