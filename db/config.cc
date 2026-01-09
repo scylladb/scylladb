@@ -1576,9 +1576,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , disk_space_monitor_polling_interval_threshold(this, "disk_space_monitor_polling_interval_threshold", value_status::Used, 0.9, "Disk-space polling threshold. Polling interval is increased when disk utilization is greater than or equal to this threshold")
     , critical_disk_utilization_level(this, "critical_disk_utilization_level", liveness::LiveUpdate, value_status::Used, 0.98, "Disk utilization level above which mechanisms preventing a node getting out of space are activated")
     , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
-    , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
+    , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Deprecated, false,
         "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
-        "keyspaces, attempting to start a node with this option ON will fail.")
+        "keyspaces, attempting to start a node with this option ON will fail. "
+        "DEPRECATED. Use enforce_rack_list instead.")
     , enforce_rack_list(this, "enforce_rack_list", liveness::MustRestart, value_status::Used, false,
             "Enforce rack list for tablet keyspaces. "
             "When the option is on, CREATE STATEMENT expands numeric rfs to rack lists "
