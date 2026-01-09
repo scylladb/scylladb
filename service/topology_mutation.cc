@@ -229,6 +229,26 @@ topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::set_auto_rf_blacklisted_racks(
+        const std::unordered_map<sstring, std::unordered_set<sstring>>& value) {
+    auto map_type = schema().get_column_definition("auto_rf_blacklisted_racks")->type;
+    auto set_type = static_pointer_cast<const map_type_impl>(map_type)->get_values_type();
+
+    map_type_impl::native_type native;
+    native.reserve(value.size());
+    for (const auto& [dc, racks] : value) {
+        set_type_impl::native_type racks_native;
+        racks_native.reserve(racks.size());
+        for (const auto& rack : racks) {
+            racks_native.push_back(rack);
+        }
+        native.emplace_back(dc, make_set_value(set_type, std::move(racks_native)));
+    }
+
+    apply_atomic("auto_rf_blacklisted_racks", make_map_value(map_type, std::move(native)));
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
     auto dv = values | std::views::transform([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));

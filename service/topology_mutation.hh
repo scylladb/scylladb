@@ -115,6 +115,7 @@ public:
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
+    topology_mutation_builder& set_auto_rf_blacklisted_racks(const std::unordered_map<sstring, std::unordered_set<sstring>>& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
     topology_mutation_builder& set_global_topology_request_id(const utils::UUID&);
