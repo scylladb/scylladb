@@ -20,6 +20,7 @@
 #include "gms/feature_service.hh"
 
 #include <algorithm>
+#include <flat_set>
 #include <iterator>
 #include <chrono>
 
@@ -1473,7 +1474,10 @@ const effective_replication_map_ptr& token_metadata_guard::get_erm() const {
     return g ? (**g).get_erm() : get<effective_replication_map_ptr>(_guard);
 }
 
-void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars,
+        const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dc_rack_map,
+        std::function<bool(host_id)> is_normal_token_owner,
+        std::function<bool(host_id)> is_transitioning_token_owner) {
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Starting verifying that keyspace '{}' is RF-rack-valid", ks);
 
     // Any keyspace that does NOT use tablets is RF-rack-valid.
@@ -1486,8 +1490,6 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
     const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
 
-    const auto& dc_rack_map = tmptr->get_topology().get_datacenter_racks();
-
     for (const auto& dc : nts.get_datacenters()) {
         if (!dc_rack_map.contains(dc)) {
             on_internal_error(tablet_logger, seastar::format(
@@ -1499,20 +1501,44 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     for (const auto& [dc, rack_map] : dc_rack_map) {
         tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Verifying for '{}' / '{}'", ks, dc);
 
+        auto rf_data = nts.get_replication_factor_data(dc);
+        if (!rf_data) {
+            continue;
+        }
+
+        auto required_racks = rf_data->is_rack_based() ?
+                std::flat_set<sstring>(std::from_range, rf_data->get_rack_list()) : std::flat_set<sstring>{};
+
         size_t normal_rack_count = 0;
-        for (const auto& [_, rack_nodes] : rack_map) {
+        size_t transitioning_rack_count = 0;
+        for (const auto& [rack, rack_nodes] : rack_map) {
             // We must ignore zero-token nodes because they don't take part in replication.
             // Verify that this rack has at least one normal node.
-            const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (host_id host_id) {
-                return tmptr->is_normal_token_owner(host_id);
-            });
+            const bool normal_rack = std::ranges::any_of(rack_nodes, is_normal_token_owner);
             if (normal_rack) {
                 ++normal_rack_count;
+                required_racks.erase(rack);
+            } else {
+                const bool is_transitioning_rack = std::ranges::any_of(rack_nodes, is_transitioning_token_owner);
+                if (is_transitioning_rack) {
+                    ++transitioning_rack_count;
+                }
             }
         }
 
-        auto rf_data = nts.get_replication_factor_data(dc);
-        if (!rf_data || rf_data->is_rack_based()) {
+        if (required_racks.size() > 0) {
+            const auto rack_list = required_racks
+                    | std::views::join_with(std::string_view(", "))
+                    | std::ranges::to<std::string>();
+
+            throw std::invalid_argument(std::format(
+                    "The keyspace '{}' is required to be RF-rack-valid. "
+                    "That condition is violated for DC '{}': the following racks are "
+                    "required by the replication strategy, but they don't exist in the topology: {}.",
+                    ks, std::string_view(dc), rack_list));
+        }
+
+        if (rf_data->is_rack_based()) {
             continue;
         }
 
@@ -1520,20 +1546,79 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
 
         // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
         // For more context, see: scylladb/scylladb#23276.
-        const bool invalid_rf = rf != normal_rack_count && rf != 1 && rf != 0;
+        // If some rack is undetermined because it has only transitioning nodes and no normal nodes, we cannot
+        // use normal_rack_count to determine RF-rack-validity.
+        const bool valid_rf = (rf == normal_rack_count && transitioning_rack_count == 0) || rf == 1 || rf == 0;
         // Edge case: the DC in question is an arbiter DC and does NOT take part in replication.
         // Any positive RF for that DC is invalid.
         const bool invalid_arbiter_dc = normal_rack_count == 0 && rf > 0;
 
-        if (invalid_rf || invalid_arbiter_dc) {
+        if (!valid_rf || invalid_arbiter_dc) {
             throw std::invalid_argument(std::format(
-                    "The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. "
-                    "That condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': RF={} vs. rack count={}.",
+                    "The keyspace '{}' is required to be RF-rack-valid. "
+                    "That condition is violated for DC '{}': RF={} vs. rack count={}.",
                     ks, std::string_view(dc), rf, normal_rack_count));
         }
     }
 
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        tmptr->get_topology().get_datacenter_racks(),
+        [&tmptr] (host_id host) {
+            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+        },
+        [&tmptr] (host_id host) {
+            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
+                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
+        }
+    );
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, rf_rack_topology_operation op) {
+    auto dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+
+    switch (op.tag) {
+        case rf_rack_topology_operation::type::add:
+            // include the new node only if it's added to an existing DC.
+            if (dc_rack_map.contains(op.dc)) {
+                tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Including new node {} in DC '{}' and rack '{}'", op.node_id, op.dc, op.rack);
+                dc_rack_map[op.dc][op.rack].insert(op.node_id);
+            }
+            break;
+        case rf_rack_topology_operation::type::remove:
+            // remove the node from the map, if it exists.
+            tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Excluding removed node {} from DC '{}' and rack '{}'", op.node_id, op.dc, op.rack);
+            if (dc_rack_map.contains(op.dc) && dc_rack_map[op.dc].contains(op.rack)) {
+                dc_rack_map[op.dc][op.rack].erase(op.node_id);
+                if (dc_rack_map[op.dc][op.rack].empty()) {
+                    dc_rack_map[op.dc].erase(op.rack);
+                    if (dc_rack_map[op.dc].empty()) {
+                        dc_rack_map.erase(op.dc);
+                    }
+                }
+            }
+            break;
+    }
+
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        dc_rack_map,
+        [&tmptr, &op] (host_id host) {
+            if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
+                return true;
+            }
+            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+        },
+        [&tmptr, &op] (host_id host) {
+            if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
+                return false;
+            }
+            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
+                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
+        }
+    );
 }
 
 rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc) {

@@ -193,12 +193,18 @@ Limitations and Unsupported Features
 
 .. warning::
 
-    If a keyspace has tablets enabled, it must remain :term:`RF-rack-valid <RF-rack-valid keyspace>`
-    throughout its lifetime. Failing to keep that invariant satisfied may result in data inconsistencies,
-    performance problems, or other issues.
+    If a keyspace has tablets enabled and contains a materialized view or a secondary index, it must
+    remain :term:`RF-rack-valid <RF-rack-valid keyspace>` throughout its lifetime. Failing to keep that
+    invariant satisfied may result in data inconsistencies, performance problems, or other issues.
 
-To enable materialized views and secondary indexes for tablet keyspaces, use
-the `--rf-rack-valid-keyspaces` See :ref:`Views with tablets <admin-views-with-tablets>` for details.
+    The invariant is enforced while the keyspace contains a materialized view or a secondary index, or
+    if the `rf_rack_valid_keyspaces` option is set, by rejecting operations that would violate the RF-rack-valid property:
+    Altering a keyspace's replication factor, adding a node in a new rack, or removing the last node
+    in a rack, will be rejected if they would result in an RF-rack-invalid keyspace.
+
+To enable materialized views and secondary indexes for tablet keyspaces, the keyspace
+must be :term:`RF-rack-valid <RF-rack-valid keyspace>`.
+See :ref:`Views with tablets <admin-views-with-tablets>` for details.
 
 Resharding in keyspaces with tablets enabled has the following limitations:
 

@@ -320,14 +320,14 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             }
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), std::move(schema), true);
         } else if (auto p = dynamic_cast<cql3::statements::create_view_statement*>(statement)) {
-            auto&& [view, warnings] = p->prepare_view(db);
+            auto&& [view, warnings] = p->prepare_view(db, token_metadata.local().get());
             auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) { return t.schema->ks_name() == view->ks_name() && t.schema->cf_name() == view->cf_name(); });
             if (it != real_db.tables.end()) {
                 continue; // view already exists
             }
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::create_index_statement*>(statement)) {
-            auto res = p->build_index_schema(db);
+            auto [res, warnings] = p->build_index_schema(db, token_metadata.local().get());
             if (!res) {
                 continue; // index already exists
             }

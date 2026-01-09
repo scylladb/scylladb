@@ -3561,7 +3561,11 @@ database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
-void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr tmptr) const {
+bool database::enforce_rf_rack_validity_for_keyspace(const db::config& cfg, const keyspace_metadata& ksm) {
+    return cfg.rf_rack_valid_keyspaces() || ksm.views().size() > 0;
+}
+
+void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
 
@@ -3569,7 +3573,7 @@ void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
         } catch (...) {
-            if (enforce_rf_rack_valid_keyspaces) {
+            if (enforce_rf_rack_validity_for_keyspace(info)) {
                 throw;
             }
 
@@ -3592,35 +3596,51 @@ void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces
     }
 }
 
-void database::validate_tablet_views_indexes() const {
-    dblog.info("Verifying that all existing materialized views are valid");
-    const data_dictionary::database& db = this->as_data_dictionary();
+bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change) const {
+    // if it's already invalid before the topology change, it's allowed to remain invalid
+    try {
+        check_rf_rack_validity(tmptr);
+    } catch (...) {
+        return true;
+    }
 
-    std::flat_set<std::string_view> invalid_keyspaces;
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
+    bool valid = true;
 
-    for (const view_ptr& view : get_views()) {
-        const auto& ks = view->ks_name();
+    for (const auto& [name, info] : keyspaces) {
         try {
-            db::view::validate_view_keyspace(db, ks);
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(), change);
         } catch (...) {
-            invalid_keyspaces.emplace(ks);
+            if (enforce_rf_rack_validity_for_keyspace(info)) {
+                valid = false;
+            }
+
+            invalid_keyspaces.push_back(std::string_view(name));
         }
     }
 
-    if (invalid_keyspaces.empty()) {
-        dblog.info("All existing materialized views are valid");
-        return;
+    if (invalid_keyspaces.size() != 0) {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        auto op_str = [&] {
+            switch (change.tag) {
+                case locator::rf_rack_topology_operation::type::add: return "joining";
+                case locator::rf_rack_topology_operation::type::remove: return "removed";
+            }
+        }();
+
+        dblog.warn("The {} node with DC='{}' and rack='{}' makes some existing keyspaces RF-rack-invalid, i.e. the replication factor "
+                "does not match the number of racks in one of the datacenters. That may reduce "
+                "availability in case of a failure (cf. "
+                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                "Those keyspaces are: {}",
+                op_str, change.dc, change.rack, ks_list);
     }
 
-    // `std::flat_set` guarantees iteration in the increasing order.
-    const std::string ks_list = invalid_keyspaces
-            | std::views::join_with(std::string_view(", "))
-            | std::ranges::to<std::string>();
-
-    dblog.warn("Some of the existing keyspaces violate the requirements "
-            "for using materialized views or secondary indexes. Those features require enabling "
-            "the configuration option `rf_rack_valid_keyspaces` and the cluster feature "
-            "`VIEWS_WITH_TABLETS`. The keyspaces that violate that condition: {}", ks_list);
+    return valid;
 }
 
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {

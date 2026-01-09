@@ -2100,32 +2100,41 @@ public:
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
 
+    // Returns true if RF-rack-validity must be enforced for the given keyspace and config, and false otherwise.
+    static bool enforce_rf_rack_validity_for_keyspace(const db::config& cfg, const keyspace_metadata& ksm);
+
+    // Returns true if RF-rack-validity must be enforced for the given keyspace, and false otherwise.
+    bool enforce_rf_rack_validity_for_keyspace(const keyspace& ks) const {
+        return enforce_rf_rack_validity_for_keyspace(_cfg, *ks.metadata());
+    }
+
     // Verify that the existing keyspaces are all RF-rack-valid.
+    // Throws an exception or prints a warning depending on whether RF-rack-validity must be enforced for the keyspace
+    // as determined by `enforce_rf_rack_validity_for_keyspace`.
     //
     // Result:
-    // * If `enforce_rf_rack_valid_keyspaces`, throws an exception with a relevant message
-    //   if there is a keyspace that violates RF-rack-validity.
-    // * If not `enforce_rf_rack_valid_keyspaces`, a warning will be printed for each keyspace
-    //   that is not RF-rack-valid, but no exception should be produced.
+    // * throws an exception with a relevant message if there is a keyspace that violates RF-rack-validity
+    //   and RF-rack-validity must be enforced for that keyspace.
+    // * Otherwise, a warning will be printed for all keyspaces that are not RF-rack-valid but not
+    //   enforced, and no exception should be produced.
     //
     // Preconditions:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
-    void check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr) const;
+    void check_rf_rack_validity(const locator::token_metadata_ptr) const;
 
-    /// Verify that all existing materialized views are valid.
-    ///
-    /// We consider a materialized view valid if one of the following
-    /// conditions is satisfied:
-    /// * it resides in a vnode-based keyspace,
-    /// * it resides in a tablet-based keyspace, the cluster feature `VIEWS_WITH_TABLETS`
-    ///   is enabled, and the configuration option `rf_rack_valid_keyspaces` is enabled.
-    ///
-    /// Result:
-    /// * Depending on whether there are invalid materialized views, the function will
-    ///   log that either everything's OK, or that there are some keyspaces that violate
-    ///   the requirement.
-    void validate_tablet_views_indexes() const;
+    // Verifies whether all keyspaces that require RF-rack-validity (as determined by enforce_rf_rack_validity_for_keyspace)
+    // would remain RF-rack-valid after applying a topology change.
+    //
+    // Returns true if all such keyspaces would remain RF-rack-valid after the change, and false otherwise.
+    // For keyspaces that would become RF-rack-invalid but do not require enforcement,
+    // a warning is printed, but this does not affect the return value.
+    //
+    // Preconditions:
+    // * The provided locator::topology instance (from the passed locator::token_metadata_ptr)
+    //   must contain a complete list of racks and data centers in the cluster.
+    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
+
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.
