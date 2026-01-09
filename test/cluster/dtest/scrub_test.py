@@ -141,8 +141,7 @@ class TestHelper(Tester):
         """
         node1 = self.cluster.nodelist()[0]
         response = node1.nodetool(cmd, capture_output=True)[0]
-        if not common.is_win():  # nodetool always prints out on windows
-            assert len(response) == 0, response  # nodetool does not print anything unless there is an error
+        assert len(response) == 0, response  # nodetool does not print anything unless there is an error
 
     def launch_standalone_scrub(self, ks, cf):
         """
