@@ -3295,7 +3295,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
         }
 
-        if (row.has("topology_request")) {
+        if (row.has("topology_request") && nstate != service::node_state::left) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
             ret.requests.emplace(host_id, req);
             switch(req) {
