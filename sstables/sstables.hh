@@ -117,6 +117,7 @@ struct sstable_writer_config {
     run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
+    std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash;
     bool correct_pi_block_width = true;
 
 private:
@@ -620,6 +621,7 @@ private:
     sstring _origin;
     std::optional<scylla_metadata::ext_timestamp_stats> _ext_timestamp_stats;
     optimized_optional<sstable_id> _sstable_identifier;
+    std::optional<scylla_metadata::owned_ranges_hash::value_type> _owned_ranges_hash;
 
     // Total reclaimable memory from all the components of the SSTable.
     // It is initialized to 0 to prevent the sstables manager from reclaiming memory
@@ -1061,6 +1063,15 @@ public:
     // sstable_id is null iff not present in scylla_metadata
     const optimized_optional<sstable_id>& sstable_identifier() const noexcept {
         return _sstable_identifier;
+    }
+
+    // owned_ranges_hash iff present in scylla_metadata
+    const std::optional<owned_ranges_hash_type::value_type>& get_owned_ranges_hash() const noexcept {
+        return _owned_ranges_hash;
+    }
+
+    void set_owned_ranges_hash(owned_ranges_hash_type::value_type value) noexcept {
+        _owned_ranges_hash = value;
     }
 
     // Drops all evictable in-memory caches of on-disk content.

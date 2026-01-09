@@ -36,8 +36,8 @@ class test_env_sstables_manager : public sstables_manager {
     std::optional<size_t> _promoted_index_block_size;
     bool _correct_pi_block_width = true;
 public:
-    virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
-        auto ret = sstables_manager::configure_writer(std::move(origin));
+    virtual sstable_writer_config configure_writer(sstring origin = "test", std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash = std::nullopt) const override {
+        auto ret = sstables_manager::configure_writer(std::move(origin), owned_ranges_hash);
         if (_promoted_index_block_size) {
             ret.promoted_index_block_size = *_promoted_index_block_size;
         }

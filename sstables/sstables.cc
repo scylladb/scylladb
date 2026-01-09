@@ -1421,6 +1421,11 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     if (ts_stats) {
         _ext_timestamp_stats.emplace(*ts_stats);
     }
+    auto* owned_ranges_hash = _components->scylla_metadata->data.get<scylla_metadata_type::OwnedRangesHash, scylla_metadata::owned_ranges_hash>();
+    if (owned_ranges_hash) {
+        _owned_ranges_hash = le_to_cpu<scylla_metadata::owned_ranges_hash::value_type>(owned_ranges_hash->value);
+    }
+
     _open_mode.emplace(open_flags::ro);
     _stats.on_open_for_reading();
 
@@ -1485,6 +1490,8 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
     }
+
+    _owned_ranges_hash = _components->scylla_metadata->get_optional_owned_ranges_hash();
 }
 
 future<> sstable::create_data() noexcept {
@@ -2089,6 +2096,12 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
+
+    if (_owned_ranges_hash) {
+        scylla_metadata::owned_ranges_hash o;
+        o.value = cpu_to_le<scylla_metadata::owned_ranges_hash::value_type>(*_owned_ranges_hash);
+        _components->scylla_metadata->data.set<scylla_metadata_type::OwnedRangesHash>(std::move(o));
+    }
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
