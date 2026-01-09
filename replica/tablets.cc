@@ -150,8 +150,12 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
+
     if (features.tablet_repair_scheduler) {
-        m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
+        auto config = tablets.get_repair_scheduler_config();
+        if (config) {
+            m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(*config), ts);
+        }
     }
 
     tablet_id tid = tablets.first_tablet();

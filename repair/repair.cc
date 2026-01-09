@@ -2440,6 +2440,11 @@ future<> repair::tablet_repair_task_impl::run() {
                 bool hints_batchlog_flushed = false;
                 bool needs_flush_before_repair = false;
                 gc_clock::time_point flush_time;
+                auto delay = utils::get_local_injector().inject_parameter<uint32_t>("repair_tablet_repair_task_delay");
+                if (delay) {
+                    rlogger.info("Execute repair_tablet_repair_task_delay={}", *delay);
+                    co_await seastar::sleep(std::chrono::milliseconds(*delay));
+                }
                 if (!skip_flush) {
                     std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 }
