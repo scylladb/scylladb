@@ -10,6 +10,7 @@
 #include "schema/schema_fwd.hh"
 #include <deque>
 #include "dht/i_partitioner_fwd.hh"
+#include "utils/small_vector.hh"
 
 class mutation_reader;
 class reader_permit;
@@ -22,6 +23,9 @@ namespace query {
 
 mutation_reader
 make_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>);
+
+mutation_reader
+make_mutation_reader_from_fragments(schema_ptr, reader_permit, utils::small_vector<mutation_fragment_v2, 3>);
 
 mutation_reader
 make_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr);
