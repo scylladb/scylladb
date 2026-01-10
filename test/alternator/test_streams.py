@@ -1069,12 +1069,15 @@ def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_even
     # fast - depending on the alternator_streams_time_window_s parameter.
     # This is optimization is important to keep *failing* tests reasonably
     # fast and not have to wait until the following arbitrary timeout.
-    timeout = time.time() + 20
+    timeout = time.time() + 5
     region = get_region(dynamodb)
     output = []
+    output_len = -1
     while time.time() < timeout:
         iterators = fetch_more(dynamodbstreams, iterators, output)
-        print("after fetch_more number expected_events={}, output={}".format(len(expected_events), len(output)))
+        if len(output) != output_len:
+            output_len = len(output)
+            print("after fetch_more number expected_events={}, output={}".format(len(expected_events), output))
         if compare_events(expected_events, output, mode, region):
             # success!
             return
