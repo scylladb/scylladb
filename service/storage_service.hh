@@ -45,7 +45,6 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
-#include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
@@ -134,6 +133,7 @@ class group0_info;
 class raft_group0_client;
 class tablet_virtual_task;
 class task_manager_module;
+class topology_state_machine;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -934,9 +934,7 @@ private:
     future<> raft_state_monitor_fiber(raft::server&, gate::holder);
 
 public:
-    bool topology_global_queue_empty() const {
-        return !_topology_state_machine._topology.global_request.has_value();
-    }
+    bool topology_global_queue_empty() const;
     future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
@@ -1073,6 +1071,13 @@ public:
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
+
+    // Initiates abort of a topology request with a given ID.
+    // May have no effect if the request is not in an abortable state.
+    // Doesn't wait until request is done. Use wait_for_topology_request_completion().
+    // Must be called on shard 0.
+    future<> abort_topology_request(utils::UUID request_id);
+
     future<> wait_for_topology_not_busy();
 
     future<> abort_paused_rf_change(utils::UUID request_id);
