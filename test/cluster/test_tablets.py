@@ -521,6 +521,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
         cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
 
     servers = await manager.servers_add(2, config=cfg)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -1550,6 +1551,7 @@ async def test_moving_replica_to_replica(manager: ManagerClient):
     # For convenience when moving tablets.
     cmdline = ["--smp=1"]
     s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+    await manager.disable_tablet_balancing()
 
     host_id1 = await manager.get_host_id(s1.server_id)
     host_id2 = await manager.get_host_id(s2.server_id)
@@ -1588,6 +1590,7 @@ async def test_moving_replica_within_single_rack(manager: ManagerClient):
     # For convenience when moving tablets.
     cmdline = ["--smp=1"]
     s1, s2 = await manager.servers_add(2, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.disable_tablet_balancing()
 
     host_id1 = await manager.get_host_id(s1.server_id)
     host_id2 = await manager.get_host_id(s2.server_id)

@@ -1506,6 +1506,7 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
     cmdline = ['--smp=1']
 
     servers = [await manager.server_add(cmdline=cmdline)]
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     n_tablets = 1

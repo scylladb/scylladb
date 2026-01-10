@@ -1087,6 +1087,8 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     alternator = get_alternator(server.ip_addr)
 
+    await manager.disable_tablet_balancing()
+
     logger.info("Creating alternator test table")
     table = alternator.create_table(TableName=unique_table_name(),
                                     Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
