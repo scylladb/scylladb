@@ -523,7 +523,6 @@ def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
             # This assert checks that either `parent_check` is True (split case - all children point to parent) or
             # we have only one child (merge case) - `parent_check` will be True for one parent and False for the other.
             assert parent_check or len(children) == 1
-            assert parent_check
             shard_children_map[shard_id] = children
 
         shards_without_parrents = all_shards - in_children
