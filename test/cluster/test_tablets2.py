@@ -224,7 +224,7 @@ async def get_two_servers_to_move_tablet(manager: ManagerClient):
     cmdline = ['--enable-file-stream', 'false']
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
@@ -330,7 +330,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -405,7 +405,7 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     servers = [await manager.server_add()]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -475,7 +475,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
 
     logger.info("Start first node")
     servers = [await manager.server_add(cmdline=cmdline)]
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info("Populate table")
     cql = manager.get_cql()
@@ -549,7 +549,7 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
 
     # Disable load balancing, so that after the move_tablet API the load balancer does
     # not attempt to migrate the tablet back to the first node.
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     n_tablets = 1
@@ -631,7 +631,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -671,7 +671,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
         await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
 
         # Now there's a split and migration need, so they'll potentially run concurrently.
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await check()
         time.sleep(5) # Give load balancer some time to do work
@@ -700,7 +700,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     servers.append(await manager.server_add(config={
         'error_injections_at_startup': ['delay_split_compaction']
@@ -736,7 +736,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         s1_mark = await s1_log.mark()
 
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await s1_log.wait_for('Finalizing resize decision for table', from_mark=s1_mark)
 
@@ -744,7 +744,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing")
         await manager.server_update_config(servers[0].server_id, 'tablet_load_stats_refresh_interval_in_seconds', 60)
         time.sleep(1)
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
         await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
         await manager.server_start(servers[1].server_id)
@@ -752,7 +752,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         await manager.servers_see_each_other(servers)
 
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
 
@@ -769,7 +769,7 @@ async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, inj
     cmdline = []
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -826,7 +826,7 @@ async def test_concurrent_table_drop_and_major(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'compaction_manager=debug',]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -913,7 +913,7 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
     servers = await manager.servers_add(2, cmdline=cmdline)
 
     # And given disabled load balancing
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     # When two tables are created
     cql = manager.get_cql()
@@ -1002,7 +1002,7 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -1063,14 +1063,14 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
     assert len(rows) == 0
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info("Adding new server")
     servers.append(await manager.server_add(cmdline=cmdline))
 
     # Trigger concurrent migration and load-and-stream
 
-    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+    await manager.enable_tablet_balancing()
 
     await manager.api.load_new_sstables(servers[0].ip_addr, ks2, "test", primary_replica_only)
 
@@ -1131,7 +1131,7 @@ async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_us
 async def test_tablet_storage_freeing(manager: ManagerClient):
     logger.info("Start first node")
     servers = [await manager.server_add()]
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -1173,7 +1173,7 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
 async def test_schema_change_during_cleanup(manager: ManagerClient):
     logger.info("Start first node")
     servers = [await manager.server_add()]
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -1223,7 +1223,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -1265,7 +1265,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         await manager.api.enable_injection(servers[0].ip_addr, "split_sstable_rewrite", one_shot=False)
 
         logger.info("Enable balancing so split will be emitted")
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         logger.info("Waits for split of sstable containing expired tombstones")
         await s1_log.wait_for(f"split_sstable_rewrite: waiting", from_mark=s1_mark)
@@ -1421,8 +1421,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.debug("Temporarily disable tablet load balancing")
-        node1 = sorted(initial_servers.values(), key=lambda s: s.server_id)[0]
-        await manager.api.disable_tablet_balancing(node1.ip_addr)
+        await manager.disable_tablet_balancing()
 
         logger.info("Add a new rack")
         new_rack = f"rack{num_racks}"
@@ -1438,7 +1437,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
         verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
         logger.debug("Reenable tablet load balancing")
-        await manager.api.enable_tablet_balancing(node1.ip_addr)
+        await manager.enable_tablet_balancing()
 
         live_servers: dict[ServerNum, ServerInfo] = dict()
         dead_servers: dict[ServerNum, ServerInfo] = dict()
@@ -1549,7 +1548,7 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
     cfg = { 'auto_snapshot': True }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND TABLETS = {{'initial': 4}}")
@@ -1673,7 +1672,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     initial_tablets = 2
 
@@ -1697,7 +1696,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
         log_mark = await log.mark()
 
         await manager.api.enable_injection(server.ip_addr, "splitting_mutation_writer_switch_wait", one_shot=True)
-        await manager.api.enable_tablet_balancing(server.ip_addr)
+        await manager.enable_tablet_balancing()
 
         await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
         await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
@@ -1739,7 +1738,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
     }, cmdline=cmdline)]
     server = servers[0]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -1787,14 +1786,14 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
         rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
         assert len(rows) == 0
 
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
 
         s1_log = await manager.server_open_log(servers[0].server_id)
         s1_mark = await s1_log.mark()
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {initial_tablets * 2}}}")
 
@@ -1888,7 +1887,7 @@ async def test_update_load_stats_after_migration(manager: ManagerClient):
     # Disable load balancing to avoid the balancer moving the tablet from a node with less to a node with more
     # available disk space. Otherwise, the move_tablet API can fail (if the tablet is already in transisiton) or
     # be a no-op (in case the tablet has already been migrated)
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
@@ -1937,7 +1936,7 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -2010,7 +2009,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     initial_tablets = 2
 
@@ -2050,7 +2049,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
 
         token = 'all'
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         if repair_before_split:
             await generate_repair_work()
@@ -2101,7 +2100,7 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     initial_tablets = 1
 
@@ -2129,7 +2128,7 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
             dst_shard = 1
             await manager.api.move_tablet(server.ip_addr, ks, "test", replica[0], src_shard, replica[0], dst_shard, tablet_token)
 
-        await manager.api.enable_tablet_balancing(server.ip_addr)
+        await manager.enable_tablet_balancing()
 
         await manager.api.enable_injection(server.ip_addr, 'tablet_resize_finalization_postpone', one_shot=False)
         await manager.api.enable_injection(server.ip_addr, "split_sstable_force_stop_exception", one_shot=False)

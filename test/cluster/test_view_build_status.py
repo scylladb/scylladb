@@ -19,7 +19,7 @@ from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 from test.cluster.util import new_test_keyspace
 from test.cluster.test_view_building_coordinator import mark_all_servers, pause_view_building_tasks, \
-        unpause_view_building_tasks, wait_for_some_view_build_tasks_to_get_stuck, disable_tablet_load_balancing_on_all_servers
+        unpause_view_building_tasks, wait_for_some_view_build_tasks_to_get_stuck
 
 
 logger = logging.getLogger(__name__)
@@ -626,7 +626,7 @@ async def test_view_build_status_marked_started_on_node_added_during_building(ma
         '--logger-log-level', 'view_building_worker=debug',
     ])
     cql, hosts = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
         await create_table(cql, ks)

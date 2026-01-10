@@ -32,7 +32,7 @@ async def pin_the_only_tablet(manager, keyspace_name, table_or_view_name, server
     # We need to send load-balancing commands to one of the nodes and they
     # will be propagated to all of them. Since we already know of
     # target_server, let's just use that.
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
     tablet_token = 0 # Doesn't matter since there is one tablet
     source_replicas = await get_tablet_replicas(manager, server, keyspace_name, table_or_view_name, tablet_token)
     # We assume RF=1 so get_tablet_replicas() returns just one replica
@@ -297,7 +297,7 @@ async def test_mv_tablet_split(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -330,7 +330,7 @@ async def test_mv_tablet_split(manager: ManagerClient):
 
         s1_log = await manager.server_open_log(servers[0].server_id)
         s1_mark = await s1_log.mark()
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
         await s1_log.wait_for(f"Detected tablet split for table {ks}.tv", from_mark=s1_mark)
         await check()
 

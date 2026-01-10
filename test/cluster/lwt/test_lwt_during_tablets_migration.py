@@ -119,8 +119,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient):
     }
 
     servers = await manager.servers_add(6, config=cfg)
-    for server in servers:
-        await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     rf_max = len(servers) - 1
     rf = random.randint(2, rf_max)

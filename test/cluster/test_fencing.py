@@ -84,7 +84,7 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
     # This should be done before adding the last two servers,
     # otherwise it can break the version == fence_version condition
     # which the test relies on.
-    await manager.api.disable_tablet_balancing(servers[2].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info('Creating new tables')
     random_tables = RandomTables(request.node.name, manager, unique_name(), 3)
@@ -146,7 +146,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     # This should be done before adding the last two servers,
     # otherwise it can break the version == fence_version condition
     # which the test relies on.
-    await manager.api.disable_tablet_balancing(s0.ip_addr)
+    await manager.disable_tablet_balancing()
 
     [s1, s2] = await manager.servers_add(2, property_file=[
         {"dc": "dc1", "rack": "r2"},
@@ -416,7 +416,7 @@ async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager:
     host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
 
     logger.info("Disable tablet balancing")
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info("Create a test keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:

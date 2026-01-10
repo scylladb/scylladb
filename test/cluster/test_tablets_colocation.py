@@ -32,19 +32,13 @@ async def disable_injection_on(manager, error_name, servers):
     errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
 
-async def disable_tablet_balancing(manager, servers):
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
-
-async def enable_tablet_balancing(manager, servers):
-    await asyncio.gather(*[manager.api.enable_tablet_balancing(s.ip_addr) for s in servers])
-
 @asynccontextmanager
-async def no_tablet_balancing(manager, servers):
-    await disable_tablet_balancing(manager, servers)
+async def no_tablet_balancing(manager):
+    await manager.disable_tablet_balancing()
     try:
         yield
     finally:
-        await enable_tablet_balancing(manager, servers)
+        await manager.enable_tablet_balancing()
 
 async def wait_for_tablet_stage(manager, server, keyspace_name, table_name, token, stage):
     async def tablet_is_in_stage():
@@ -113,7 +107,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
         '--logger-log-level', 'raft_topology=debug',
     ]
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -194,7 +188,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -236,7 +230,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         s1_mark = await s1_log.mark()
 
         # Now there's a split and migration need, so they'll potentially run concurrently.
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await check()
         await asyncio.sleep(2) # Give load balancer some time to do work
@@ -246,7 +240,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 
         await check()
 
-        async with no_tablet_balancing(manager, servers):
+        async with no_tablet_balancing(manager):
             tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
             assert tablet_count > 1
             other_tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv')
@@ -273,7 +267,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         keys = range(total_keys - 1, total_keys)
 
         # To avoid race of major with migration
-        async with no_tablet_balancing(manager, servers):
+        async with no_tablet_balancing(manager):
             for server in servers:
                 await manager.api.flush_keyspace(server.ip_addr, ks)
                 await manager.api.keyspace_compaction(server.ip_addr, ks)
@@ -293,7 +287,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         await s1_log.wait_for(f"Detected tablet merge for table {ks}.test", from_mark=s1_mark, timeout=60)
         await s1_log.wait_for(f"Detected tablet merge for table {ks}.tv", from_mark=s1_mark, timeout=60)
 
-        async with no_tablet_balancing(manager, servers):
+        async with no_tablet_balancing(manager):
             tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
             assert tablet_count < old_tablet_count
             other_tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv')
@@ -316,7 +310,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
         '--logger-log-level', 'raft_topology=debug',
     ]
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -403,7 +397,7 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
         '--logger-log-level', 'repair=debug',
     ]
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:

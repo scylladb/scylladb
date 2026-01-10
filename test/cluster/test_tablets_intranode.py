@@ -35,7 +35,7 @@ async def test_intranode_migration(manager: ManagerClient):
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -70,7 +70,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -138,7 +138,7 @@ async def test_cross_shard_migration(manager: ManagerClient):
 
     servers = await manager.servers_add(2, cmdline=cmdline)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:

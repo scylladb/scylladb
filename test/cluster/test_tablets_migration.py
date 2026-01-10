@@ -37,11 +37,12 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
         host = await manager.get_host_id(s.server_id)
         hosts_by_rack[rack].append(host)
         host_ids.append(host)
-        await manager.api.disable_tablet_balancing(s.ip_addr)
 
     await make_server("r1")
     await make_server("r1")
     await make_server("r2")
+
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -124,11 +125,13 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
-        await manager.api.disable_tablet_balancing(s.ip_addr)
 
     await make_server("r1")
     await make_server("r2")
     await make_server("r3")
+
+    await manager.disable_tablet_balancing()
+
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
@@ -272,13 +275,13 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
         s = await manager.server_add(config=cfg)
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
-        await manager.api.disable_tablet_balancing(s.ip_addr)
 
     async def assert_rows(num):
         res = await cql.run_async(f"SELECT * FROM {ks}.test")
         assert len(res) == num
 
     await make_server()
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -318,7 +321,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
            'error_injections_at_startup': ['view_update_generator_consume_staging_sstable']}
     servers = [await manager.server_add(config=cfg)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
@@ -426,7 +429,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(2, config=cfg)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -467,7 +470,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         # Trigger tablet merge to reproduce #23481
         table_id = await manager.get_table_id(ks, 'test')
@@ -487,7 +490,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
         # Workaround for https://github.com/scylladb/scylladb/issues/21779. We don't want the keyspace drop at the end
         # of new_test_keyspace to fail because of concurrent tablet migrations.
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -500,7 +503,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
     cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = await manager.servers_add(2, config=cfg)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:

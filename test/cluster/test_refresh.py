@@ -60,7 +60,7 @@ async def test_refresh_with_streaming_scopes(manager: ManagerClient, topology_rf
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     ks = 'ks'
     cf = 'cf'
@@ -123,7 +123,7 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     ks = 'ks'
     cf = 'cf'

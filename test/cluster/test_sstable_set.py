@@ -24,7 +24,7 @@ async def test_partitioned_sstable_set(manager: ManagerClient, mode):
 
     cmdline = ['--smp=1']
     server = await manager.server_add(config=cfg, cmdline=cmdline)
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)

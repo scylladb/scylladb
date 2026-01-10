@@ -82,9 +82,7 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> N
         await wait_for_view(cql, 'mv_cf_view', node_count)
 
         # Disable tablet balancing so that the slow node doesn't get tablets moved away from it.
-        for s in servers:
-            await manager.api.disable_tablet_balancing(s.ip_addr)
-        await manager.api.disable_tablet_balancing(server.ip_addr)
+        await manager.disable_tablet_balancing()
 
         # Make sure that the slow node has a base table tablet and no view tablets, so that the
         # view updates from it are remote. (using shard 0 and token 0 when moving tablets as they don't make a difference here)

@@ -40,7 +40,7 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
 
     servers = await manager.servers_add(node_count, cmdline=cmdline)
     cql = manager.get_cql()
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
