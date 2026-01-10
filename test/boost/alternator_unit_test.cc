@@ -14,9 +14,12 @@
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
 
+#include "cdc/generation.hh"
 #include "alternator/expressions.hh"
+#include "alternator/streams.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
+
 
 static std::map<std::string, std::string> strings {
     {"", ""},
@@ -430,4 +433,739 @@ SEASTAR_TEST_CASE(test_parsed_expression_cache_resize) {
     cache.cache.reset();
 
     co_return;
+}
+
+namespace {
+    auto sid(std::int64_t token) {
+        return cdc::stream_id{ dht::token{ token }, 0 };
+    }
+    auto sids(std::initializer_list<std::int64_t> tokens) {
+        utils::chunked_vector<cdc::stream_id> result;
+        for (auto t : tokens) {
+            result.push_back(sid(t));
+        }
+        return result;
+    }
+    utils::chunked_vector<cdc::stream_id> to_sids(alternator::stream_id_range range) {
+        utils::chunked_vector<cdc::stream_id> result;
+        for (auto &sid : range.iterate()) {
+            result.push_back(sid);
+        }
+        return result;
+    }
+    std::vector<cdc::stream_id> vec(utils::chunked_vector<cdc::stream_id>& vec, int start = 0, int end = 0x7fffffff, int start2 = 0, int end2 = 0) {
+        auto update_start_end = [&](int &start, int &end) {
+            if (start < 0) start += (int)vec.size();
+            if (end < 0) end += (int)vec.size();
+            if (start < 0) start = 0;
+            if (start > (int)vec.size()) start = (int)vec.size();
+            if (end < 0) end = 0;
+            if (end > (int)vec.size()) end = (int)vec.size();
+        };
+        update_start_end(start, end);
+        update_start_end(start2, end2);
+        std::vector<cdc::stream_id> result;
+        while(start < end) {
+            result.push_back(vec[start++]);
+        }
+        while(start2 < end2) {
+            result.push_back(vec[start2++]);
+        }
+        return result;
+    }
+    std::vector<cdc::stream_id> sorted_vec(utils::chunked_vector<cdc::stream_id>& v, int start = 0, int end = 0x7fffffff, int start2 = 0, int end2 = 0) {
+        std::sort(v.begin(), v.end(), [](const cdc::stream_id &a, const cdc::stream_id &b) {
+            return a.token() < b.token();
+        });
+        auto v2 = vec(v, start, end, start2, end2);
+        std::sort(v2.begin(), v2.end(), [](const cdc::stream_id &a, const cdc::stream_id &b) {
+            return compare_unsigned(a.to_bytes(), b.to_bytes()) < 0;
+        });
+        return v2;
+    }
+}
+
+namespace cdc {
+    // must be in cdc namespace so ADL could work and BOOST could find it
+    std::ostream & operator <<(std::ostream &os, const std::vector<stream_id> &vec) {
+        os << "[";
+        bool first = true;
+        for (auto &sid : vec) {
+            if (!first) {
+                os << ", ";
+            }
+            first = false;
+            os << sid.token();
+        }
+        os << "]";
+        return os;
+    }
+}
+namespace utils {
+    std::ostream & operator <<(std::ostream &os, const utils::chunked_vector<cdc::stream_id> &vec) {
+        os << "[";
+        bool first = true;
+        for (auto &sid : vec) {
+            if (!first) {
+                os << ", ";
+            }
+            first = false;
+            os << sid.token();
+        }
+        os << "]";
+        return os;
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_simple) {
+    auto parent_streams = sids({ -50, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ -50, 50, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_merge_1) {
+    auto parent_streams = sids({ 0, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ 0, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_merge_2) {
+    auto parent_streams = sids({ 0, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ 50, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_merge_into_one) {
+    auto parent_streams = sids({ -100, -50, 25, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[4], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_split_1) {
+    auto parent_streams = sids({ 0, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ 0, 25, 50, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 3, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_split_2) {
+    auto parent_streams = sids({ 0, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ -25, 0, 50, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 3, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_split_3) {
+    auto parent_streams = sids({ 0, 50, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ 0, 50, 75, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_split_from_one) {
+    auto parent_streams = sids({ std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ -100, -50, 50, 75, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 5));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_tablets_split_and_merge) {
+    auto parent_streams = sids({ 0, 50, 100, std::numeric_limits<std::int64_t>::max() });
+    auto current_streams = sids({ 25, 75, std::numeric_limits<std::int64_t>::max() });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], true));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+
+
+
+
+
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_simple) {
+    auto parent_streams = sids({ -50, 50 });
+    auto current_streams = sids({ -50, 50 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_1) {
+    auto parent_streams = sids({ 0, 25, 50, 75 });
+    auto current_streams = sids({ 25, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_2) {
+    auto parent_streams = sids({ 0, 25, 50, 75 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_3) {
+    auto parent_streams = sids({ 0, 25, 50, 75 });
+    auto current_streams = sids({ 0, 25, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_4) {
+    auto parent_streams = sids({ 0, 25, 50, 75 });
+    auto current_streams = sids({ 0, 25, 50 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_1) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ -50 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_2) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ 0 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_3) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ 10 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_4) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ 25 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_5) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ 50 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_merge_into_one_6) {
+    auto parent_streams = sids({ 0, 25, 50 });
+    auto current_streams = sids({ 110 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_1) {
+    auto parent_streams = sids({ 0, 50, 100 });
+    auto current_streams = sids({ -25, 0, 50, 100 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 3, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_2) {
+    auto parent_streams = sids({ 0, 50, 100 });
+    auto current_streams = sids({ 0, 25, 50, 100 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 3));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 3, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_3) {
+    auto parent_streams = sids({ 0, 50, 100 });
+    auto current_streams = sids({ 0, 50, 75, 100 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 4));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_4) {
+    auto parent_streams = sids({ 0, 50, 100 });
+    auto current_streams = sids({ 0, 50, 100, 125 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1, 3, 4));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_1) {
+    auto parent_streams = sids({ -10 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_2) {
+    auto parent_streams = sids({ 0 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_3) {
+    auto parent_streams = sids({ 25 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_4) {
+    auto parent_streams = sids({ 50 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_5) {
+    auto parent_streams = sids({ 60 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_6) {
+    auto parent_streams = sids({ 75 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_from_one_7) {
+    auto parent_streams = sids({ 100 });
+    auto current_streams = sids({ 0, 50, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_1) {
+    auto parent_streams = sids({ 0, 50, 100 });
+    auto current_streams = sids({ 25, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_2) {
+    auto parent_streams = sids({ -100, -50, 25, 50, 100, 200 });
+    auto current_streams = sids({ 25, 75 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[2], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[3], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[4], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[5], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_3) {
+    auto parent_streams = sids({ -275, -75 });
+    auto current_streams = sids({ -400, -300, -200, -100, -50, -10, 0, 10, 50, 100, 200, 300, 400 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    auto tmp1 = vec(range);
+    auto tmp2 = sorted_vec(current_streams, 0, 3, 4, 13);
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 3, 4, 13));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 2, 5));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_4) {
+    auto parent_streams = sids({ 75, 275 });
+    auto current_streams = sids({ -100, -50, -10, 0, 10, 50, 100, 200, 300, 400 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 7, 8, 10));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 6, 9));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_5) {
+    auto parent_streams = sids({ 0, 10 });
+    auto current_streams = sids({ -20, -10 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_6) {
+    auto parent_streams = sids({ -20 });
+    auto current_streams = sids({ -20, 0 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_split_and_merge_7) {
+    auto parent_streams = sids({ -20, -10 });
+    auto current_streams = sids({ -20, 0 });
+
+    auto range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[0], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 0, 2));
+
+    range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[1], false));
+    BOOST_REQUIRE(vec(range) == sorted_vec(current_streams, 1, 2));
+}
+
+namespace {
+    struct encapsulated_range {
+        const int from, to;
+
+        explicit operator bool () const {
+            return from < to;
+        }
+        encapsulated_range operator & (encapsulated_range other) const {
+            auto f = std::max(from, other.from);
+            auto t = std::min(to, other.to);
+            if (f >= t) {
+                return {0, 0};
+            }
+            return {f, t};
+        }
+        // friend std::ostream &operator << (std::ostream &o, const encapsulated_range &r) {
+        //     o << "[" << r.from << ", " << r.to << ")";
+        //     return o;
+        // }
+    };
+}
+
+BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_brute_force_all_combinations) {
+    constexpr int N = 8;
+    constexpr int S = -(N / 2);
+    std::vector<int> parent_streams_values, current_streams_values;
+    utils::chunked_vector<cdc::stream_id> parent_streams, current_streams;
+    std::vector<cdc::stream_id> expected;
+    size_t prepare_iteration = std::numeric_limits<size_t>::max();
+
+    auto get_encapsulated_range = [](const std::vector<int>& v, size_t index) -> std::pair<encapsulated_range, encapsulated_range>{
+        auto end = v[index];
+        if (index > 0) {
+            auto start = v[index - 1];
+            return { encapsulated_range{start, end} , encapsulated_range{end, end} };
+        }
+        auto start = v.back();
+        return { encapsulated_range{start, std::numeric_limits<int>::max()}, encapsulated_range{std::numeric_limits<int>::min(), end} };
+    };
+    auto prepare = [&](size_t iteration) {
+        if (prepare_iteration != iteration) {
+            parent_streams_values.clear();
+            current_streams_values.clear();
+            parent_streams.clear();
+            current_streams.clear();
+            for(auto i = 0; i < N; ++i) {
+                if (iteration & (1 << i)) {
+                    parent_streams_values.push_back((S + i) * 10);
+                    parent_streams.push_back(sid(parent_streams_values.back()));
+                }
+                if (iteration & (1 << (N + i))) {
+                    current_streams_values.push_back((S + i) * 10);
+                    current_streams.push_back(sid(current_streams_values.back()));
+                }
+            }
+            prepare_iteration = iteration;
+        }
+    };
+
+    auto run = [&](size_t iteration, size_t parent_index) {
+        prepare(iteration);
+        if (current_streams.empty() || parent_streams.empty()) {
+            return;
+        }
+        // std::cout << "running iteration " << iteration << " parent_index " << parent_index << std::endl;
+        // std::cout << "parents [";
+        // for(auto v : parent_streams_values) {
+        //     if (v != parent_streams_values.front()) {
+        //         std::cout << ", ";
+        //     }
+        //     std::cout << v;
+        // }
+        // std::cout << "]" << std::endl;
+        // std::cout << "currents [";
+        // for(auto v : current_streams_values) {
+        //     if (v != current_streams_values.front()) {
+        //         std::cout << ", ";
+        //     }
+        //     std::cout << v;
+        // }
+        //std::cout << "]" << std::endl;
+        auto [ range1, range2 ] = get_encapsulated_range(parent_streams_values, parent_index);
+        
+        expected.clear();
+        for(auto i = 0u; i < current_streams_values.size(); ++i) {
+            auto [ range3, range4 ] = get_encapsulated_range(current_streams_values, i);
+
+            if (range1 & range3 || range1 & range4 || range2 & range3 || range2 & range4) {
+                expected.push_back(current_streams[i]);
+                // std::cout << "range1 " << range1 << " range2 " << range2 << " range3 " << range3 << " range4 " << range4 << " range1 & range3 " << (range1 & range3) << " range1 & range4 " << (range1 & range4) << " range2 & range3 " << (range2 & range3) << " range2 & range4 " << (range2 & range4) << std::endl;
+            }
+        }
+        std::sort(expected.begin(), expected.end(), [](const cdc::stream_id &a, const cdc::stream_id &b) {
+            return compare_unsigned(a.to_bytes(), b.to_bytes()) < 0;
+        });
+        assert(!expected.empty());
+
+        auto old_current_streams = current_streams;
+        auto old_parent_streams = parent_streams;
+        utils::chunked_vector<cdc::stream_id> range;
+        try {
+        range = to_sids(alternator::find_children_range_from_parent_token(parent_streams, current_streams, parent_streams[parent_index], false));
+        }
+        catch(...) {
+
+            BOOST_REQUIRE_MESSAGE(false,
+                                "iteration " << iteration << " parent_index " << parent_index
+                            );
+        }
+        auto produced = vec(range);
+
+        if (produced != expected) {
+            std::cout << "produced " << produced << std::endl;
+            std::cout << "expected " << expected << std::endl;
+
+            BOOST_REQUIRE_MESSAGE(produced == expected,
+                                "produced " << produced << "\n" <<
+                                "expected " << expected << "\n" <<
+                                "iteration " << iteration << " parent_index " << parent_index
+                            );
+        }
+
+        std::sort(parent_streams.begin(), parent_streams.end(), [](const cdc::stream_id &a, const cdc::stream_id &b) {
+            return a.token() < b.token();
+        });
+        std::sort(current_streams.begin(), current_streams.end(), [](const cdc::stream_id &a, const cdc::stream_id &b) {
+            return a.token() < b.token();
+        });
+        BOOST_REQUIRE_MESSAGE(parent_streams == old_parent_streams,
+                            "parent streams modified!\n" <<
+                            "produced " << parent_streams << "\n" <<
+                            "expected " << old_parent_streams << "\n" <<
+                            "iteration " << iteration << " parent_index " << parent_index
+                        );
+        BOOST_REQUIRE_MESSAGE(current_streams == old_current_streams,
+                            "current streams modified!\n" <<
+                            "produced " << current_streams << "\n" <<
+                            "expected " << old_current_streams << "\n" <<
+                            "iteration " << iteration << " parent_index " << parent_index
+                        );
+    };
+
+    run(2310, 0);
+    for(auto iteration = 0u; iteration < (2 << (2 * N)); ++iteration) {
+        prepare(iteration);
+        for(auto parent_index = 0u; parent_index < parent_streams.size(); ++parent_index) {
+            run(iteration, parent_index);
+        }
+    }
 }

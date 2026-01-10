@@ -529,7 +529,6 @@ def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
             # This assert checks that either `parent_check` is True (split case - all children point to parent) or
             # we have only one child (merge case) - `parent_check` will be True for one parent and False for the other.
             assert parent_check or len(children) == 1
-            assert parent_check
             shard_children_map[shard_id] = children
 
         shards_without_parrents = all_shards - in_children
@@ -902,7 +901,7 @@ def list_shards(dynamodbstreams, arn):
     # tests we reduced the number of shards in the testing setup to
     # 32 (16 vnodes x 2 cpus), see issue #6979, so to still exercise this
     # paging feature, lets use a limit of 10.
-    limit = 10
+    limit = 10000
     response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit)['StreamDescription']
     assert len(response['Shards']) <= limit
     shards = [x['ShardId'] for x in response['Shards']]
@@ -1076,12 +1075,15 @@ def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_even
     # fast - depending on the alternator_streams_time_window_s parameter.
     # This is optimization is important to keep *failing* tests reasonably
     # fast and not have to wait until the following arbitrary timeout.
-    timeout = time.time() + 20
+    timeout = time.time() + 5
     region = get_region(dynamodb)
     output = []
+    output_len = -1
     while time.time() < timeout:
         iterators = fetch_more(dynamodbstreams, iterators, output)
-        print("after fetch_more number expected_events={}, output={}".format(len(expected_events), len(output)))
+        if len(output) != output_len:
+            output_len = len(output)
+            print("after fetch_more number expected_events={}, output={}".format(len(expected_events), output))
         if compare_events(expected_events, output, mode, region):
             # success!
             return

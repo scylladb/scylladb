@@ -103,7 +103,44 @@ def run_alternator_cmd(pid, dir):
         print(major)
         if major < [2025,4]:
             cmd.remove('--alternator-allow-system-table-write=1')
+    cmd = cmd[0:1] + (
+            '--smp 2 -m 1G --collectd 0 --overprovisioned --max-networking-io-control-blocks 1000 --unsafe-bypass-fsync 1 --kernel-page-cache 1 --commitlog-use-o-dsync 0 --abort-on-lsa-bad-alloc 1 --abort-on-seastar-bad-alloc ' + 
+            '--abort-on-internal-error 1 --abort-on-ebadf 1 --logger-log-level raft_topology=debug --logger-log-level query_processor=debug --logger-log-level group0_raft_sm=trace --logger-log-level group0_voter_handler=debug ' +
+            '--logger-log-level alternator-auth=trace --logger-log-level alternator-conditions=trace --logger-log-level alternator-executor=trace --logger-log-level alternator-serialization=trace --logger-log-level alternator-server=trace ' +
+            '--logger-log-level alternator-executor=trace --logger-log-level alternator_controller=trace --logger-log-level alternator_ttl=trace --logger-log-level paxos=trace --tablet-load-stats-refresh-interval-in-seconds 1 '
+            '--alternator-port 8000 '
+            '--alternator-address ' + ip + ' ' +
+            '--alternator-enforce-authorization 0 ' +
+            '--alternator-write-isolation only_rmw_uses_lwt ' +
+            '--alternator-streams-time-window-s 0 ' +
+            '--alternator-timeout-in-ms 30000 ' +
+            '--alternator-ttl-period-in-seconds 0.5 ' +
+            '--alternator-allow-system-table-write=1 ' +
+            '--experimental-features=alternator-streams ' +
+            '--alternator-https-port 8043 ' +
+            '--alternator-encryption-options keyfile=/home/y/work/scylla/support-tablets-in-alternator-streams/conf/scylla.key ' +
+            '--alternator-encryption-options certificate=/home/y/work/scylla/support-tablets-in-alternator-streams/conf/scylla.crt ' +
+            # '--developer-mode 1 ' +
+            # '--ring-delay-ms 0 ' +
+            #'--auto-snapshot 0 ' +
+            #'--skip-wait-for-gossip-to-settle 0 ' +
+            #'--num-tokens 16 ' +
+            #'--enable-tablets=true ' +
+            '--tablets-initial-scale-factor=1 ' +
+            #'--minimum-replication-factor-warn-threshold=-1 ' +
+            '--workdir /tmp/scylla-test-run ' +
+            f'--api-address {ip} --rpc-address {ip} --listen-address {ip} --prometheus-address {ip} --seed-provider-parameters seeds={ip} '
+    ).split()
 
+# ['/tmp/scylla-test-618180/test_scylla', '--options-file', '/home/y/work/scylla/support-tablets-in-alternator-streams/conf/scylla.yaml', '--developer-mode', '1', '--ring-delay-ms', '0', 
+# '--collectd', '0', '--smp', '2', '-m', '1G', '--overprovisioned', '--max-networking-io-control-blocks=1000', '--unsafe-bypass-fsync', '1', '--kernel-page-cache=1', '--commitlog-use-o-dsync', '0', '--flush-schema-tables-after-modification=false', 
+# '--api-address', '127.10.110.196', '--rpc-address', '127.10.110.196', '--listen-address', '127.10.110.196', '--prometheus-address', '127.10.110.196', '--seed-provider-parameters', 'seeds=127.10.110.196', '--workdir', '/tmp/scylla-test-618180', 
+# '--auto-snapshot', '0', '--skip-wait-for-gossip-to-settle', '0', '--logger-log-level', 'compaction=warn', '--logger-log-level', 'migration_manager=warn', '--num-tokens', '16', '--query-tombstone-page-limit=1000', '--range-request-timeout-in-ms', '300000', 
+# '--read-request-timeout-in-ms', '300000', '--counter-write-request-timeout-in-ms', '300000', '--cas-contention-timeout-in-ms', '300000', '--truncate-request-timeout-in-ms', '300000', '--write-request-timeout-in-ms', '300000', '--request-timeout-in-ms', '300000', 
+# '--user-defined-function-time-limit-ms', '1000', '--group0-raft-op-timeout-in-ms=300000', '--experimental-features=udf', '--experimental-features=keyspace-storage-options', '--experimental-features=views-with-tablets', 
+# '--enable-tablets=true', '--enable-user-defined-functions', '1', '--rf-rack-valid-keyspaces=1', '--authenticator', 'PasswordAuthenticator', '--authorizer', 'CassandraAuthorizer', '--strict-allow-filtering=true', '--strict-is-not-null-in-views=true', 
+# '--permissions-update-interval-in-ms', '100', '--permissions-validity-in-ms', '5', '--shutdown-announce-in-ms', '0', '--maintenance-socket=workdir', '--service-levels-interval-ms=500', '--tablets-initial-scale-factor=1', 
+# '--minimum-replication-factor-warn-threshold=-1', '--default-log-level', 'trace']    
     return (cmd, env)
 
 pid = run.run_with_temporary_dir(run_alternator_cmd)

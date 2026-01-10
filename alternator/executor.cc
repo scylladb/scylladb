@@ -2955,11 +2955,11 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
-
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -3059,10 +3059,11 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
@@ -4619,10 +4620,11 @@ future<executor::request_return_type> executor::update_item(client_state& client
     auto op = make_shared<update_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard

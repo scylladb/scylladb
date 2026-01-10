@@ -44,7 +44,7 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
         dir = run_dir_generator(pid)
         (cmd, env) = run_cmd_generator(pid, dir)
         # redirect stdout and stderr to log file, as in a shell's >log 2>&1:
-        log = os.path.join(dir, 'log')
+        log = os.path.join('/tmp', 'scylla-log')
         fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
         sys.stdout.flush()
         os.close(1)
@@ -144,7 +144,8 @@ def abort_run_with_dir(pid, tmpdir):
     # to not happen in that case. So we need to open the log file first,
     # delete the directory (the open file will not be really deleted unti we
     # close it) - and only then start showing the log file.
-    f = open(os.path.join(tmpdir, 'log'), 'rb')
+    os.makedirs(tmpdir, exist_ok=True)  # in case the dir was already removed
+    f = open('/dev/null', 'rb')
     # Be paranoid about rmtree accidentally removing the entire disk...
     # TODO: check tmpdir is actually in TMPDIR and refuse to remove it
     # if not.
@@ -331,6 +332,7 @@ def run_scylla_cmd(pid, dir):
         '--tablets-initial-scale-factor=1',
         # Avoid unhelpful "guardrails" warnings
         '--minimum-replication-factor-warn-threshold=-1',
+        '--default-log-level', 'trace',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same

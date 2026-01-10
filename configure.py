@@ -2794,7 +2794,8 @@ def write_build_file(f,
                     flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
 
                     if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
-                        flags += ' -fno-sanitize-address-use-after-scope'
+                        pass
+                        #flags += ' -fno-sanitize-address-use-after-scope'
                 f.write('  obj_cxxflags = %s\n' % flags)
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
