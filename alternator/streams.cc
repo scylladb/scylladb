@@ -482,29 +482,10 @@ stream_id_range::stream_id_range(
 }
 
 bool stream_id_range::apply_starting_position_update(const cdc::stream_id &update_to) {
-    auto it = std::lower_bound(lo1, end1, update_to.token(), [](const cdc::stream_id& id, const dht::token& t) {
-        return id.token() < t;
-    });
-    bool found_in_first = true;
-    if (it == end1) {
-        found_in_first = false;
-        it = std::lower_bound(lo2, end2, update_to.token(), [](const cdc::stream_id& id, const dht::token& t) {
-            return id.token() < t;
-        });
-    }
-    if (it == items->end() || *it != update_to) {
-        elogger.info("Could not find starting position update shard id {} in stream id ranges [{}] [{}]", 
-            update_to, fmt::join(lo1, end1, "; "), fmt::join(lo2, end2, "; "));
-        return false;
-    }
-    if (found_in_first) {
-        lo1 = std::next(it);
-    } else {
-        lo1 = end1;
-        lo2 = std::next(it);
-    }
+    skip_to = &update_to;
     return true;
 }
+
 std::generator<const cdc::stream_id&> stream_id_range::iterate() {
     assert(end1 <= lo2);
     // we need to manually swap both ranges into one, sort and yield over
@@ -514,6 +495,40 @@ std::generator<const cdc::stream_id&> stream_id_range::iterate() {
         std::swap(*tgt, *src);
     }
     std::sort(lo1, tgt, id_cmp);
+    if (skip_to) {
+        auto it = std::lower_bound(lo1, tgt, *skip_to, id_cmp);
+        if (it == items->end() || it->token() != skip_to->token()) {
+            elogger.info("Could not find starting position update shard id {}", *skip_to);
+        }
+        else {
+            elogger.info("QWERTY found starting position");
+            lo1 = std::next(it);
+        }
+    }
+
+    // auto it = std::lower_bound(lo1, end1, update_to.token(), [](const cdc::stream_id& id, const dht::token& t) {
+    //     return id.token() < t;
+    // });
+    // bool found_in_first = true;
+    // if (it == end1) {
+    //     found_in_first = false;
+    //     it = std::lower_bound(lo2, end2, update_to.token(), [](const cdc::stream_id& id, const dht::token& t) {
+    //         return id.token() < t;
+    //     });
+    // }
+    // if (it == items->end() || *it != update_to) {
+    //     elogger.info("Could not find starting position update shard id {} in stream id ranges [{}] [{}]", 
+    //         update_to, fmt::join(lo1, end1, "; "), fmt::join(lo2, end2, "; "));
+    //     return false;
+    // }
+    // if (found_in_first) {
+    //     lo1 = std::next(it);
+    // } else {
+    //     lo1 = end1;
+    //     lo2 = std::next(it);
+    // }
+    // return true;
+
     for(auto it = lo1; it != tgt; ++it) {
         co_yield *it;
     }
@@ -751,6 +766,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     std::optional<shard_id> shard_start;
     try {
         shard_start = rjson::get_opt<shard_id>(request, "ExclusiveStartShardId");
+        elogger.info("QWERTY got start shard");
     } catch (...) {
         // If we cannot parse the start shard, it is treated as non-matching 
         // in dynamo. We can just shortcut this and say "no records", i.e limit=0
@@ -893,7 +909,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 limit = 0;
                 break;
             }
-            shard_start = std::nullopt;
+            
         }
         for(const auto &id : shard_range->iterate()) {
             auto shard = rjson::empty_object();
@@ -932,6 +948,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
             last = std::nullopt;
         }
+        shard_start = std::nullopt;
     }
 
     if (last) {

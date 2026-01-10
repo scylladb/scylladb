@@ -19,7 +19,7 @@ namespace alternator {
     class stream_id_range {
         utils::chunked_vector<cdc::stream_id> *items;
         utils::chunked_vector<cdc::stream_id>::iterator lo1, end1, lo2, end2;
-
+        const cdc::stream_id *skip_to = nullptr;
     public:
         stream_id_range(
                 utils::chunked_vector<cdc::stream_id> &items,

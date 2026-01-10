@@ -895,7 +895,7 @@ def list_shards(dynamodbstreams, arn):
     # tests we reduced the number of shards in the testing setup to
     # 32 (16 vnodes x 2 cpus), see issue #6979, so to still exercise this
     # paging feature, lets use a limit of 10.
-    limit = 10
+    limit = 10000
     response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit)['StreamDescription']
     assert len(response['Shards']) <= limit
     shards = [x['ShardId'] for x in response['Shards']]
