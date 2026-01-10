@@ -300,9 +300,7 @@ experimental:
   uses vnodes instead of tablets. However, by default new tables use tablets
   so to create a table that can be used with Streams, you must set the tag
   `system:initial_tablets` set to `none` during CreateTable - so that the
-  new table will use vnodes. Streams cannot be enabled on an already-existing
-  table that uses tablets.
-  See <https://github.com/scylladb/scylla/issues/23838>.
+  new table will use vnodes.
 
   Alternator streams also differ in some respects from DynamoDB Streams:
   * The number of separate "shards" in Alternator's streams is significantly

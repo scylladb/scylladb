@@ -127,13 +127,13 @@ def multiset(items):
 # NOTE: alternator_Test prefix contains a capital letter on purpose,
 #in order to validate case sensitivity in alternator
 test_table_prefix = 'alternator_Test_'
-def unique_table_name():
+def unique_table_name(table_prefix=test_table_prefix):
     current_ms = int(round(time.time() * 1000))
     # If unique_table_name() is called twice in the same millisecond...
     if unique_table_name.last_ms >= current_ms:
         current_ms = unique_table_name.last_ms + 1
     unique_table_name.last_ms = current_ms
-    return test_table_prefix + str(current_ms)
+    return table_prefix + str(current_ms)
 unique_table_name.last_ms = 0
 
 def create_test_table(dynamodb, name=None, **kwargs):

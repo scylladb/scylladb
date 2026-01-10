@@ -207,9 +207,3 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
-Because the tablets support is incomplete, when tablets are enabled for an
-Alternator table, the following features will not work for this table:
-
-* Enabling Streams with CreateTable or UpdateTable doesn't work
-  (results in an error).
-  See <https://github.com/scylladb/scylla/issues/23838>.
