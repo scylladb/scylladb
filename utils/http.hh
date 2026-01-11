@@ -25,20 +25,19 @@ class dns_connection_factory : public seastar::http::experimental::connection_fa
 protected:
     std::string _host;
     int _port;
-    bool _use_https;
-    uint16_t _addr_pos{0};
     logging::logger& _logger;
-    struct state {
-        bool initialized = false;
-        std::vector<net::inet_address> addr_list;
-        shared_ptr<tls::certificate_credentials> creds;
-        state(shared_ptr<tls::certificate_credentials>);
-    };
-    lw_shared_ptr<state> _state;
-    shared_future<> _done;
+    semaphore _init_semaphore{1};
+    bool _addr_init = false;
+    bool _creds_init = false;
+    std::vector<net::inet_address> _addr_list;
+    shared_ptr<tls::certificate_credentials> _creds;
+    uint16_t _addr_pos{0};
+    bool _use_https;
 
-    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger);
+    future<> init_addresses();
+    future<> init_credentials();
+    future<net::inet_address> get_address();
+    future<shared_ptr<tls::certificate_credentials>> get_creds();
     future<connected_socket> connect();
 public:
     dns_connection_factory(dns_connection_factory&&);
