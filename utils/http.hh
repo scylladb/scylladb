@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <seastar/core/gate.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/http/client.hh>
@@ -35,7 +36,11 @@ protected:
         const std::string& _host;
         size_t _addr_pos{0};
         bool _use_https;
+        std::chrono::seconds _address_ttl{0};
         logging::logger& _logger;
+        semaphore _addr_sem{1};
+        seastar::named_gate _addr_update_gate;
+        timer<lowres_clock> _addr_update_timer;
 
         future<> init_addresses();
         future<> init_credentials();
@@ -46,6 +51,7 @@ protected:
         future<net::inet_address> get_address();
         future<shared_ptr<tls::certificate_credentials>> get_creds();
         future<> renew_addresses();
+        future<> close();
     };
     connection_resources _provider;
 
@@ -56,6 +62,7 @@ public:
     dns_connection_factory(std::string endpoint_url, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
 
     virtual future<connected_socket> make(abort_source*) override;
+    future<> close() override;
 };
 
 // simple URL parser, just enough to handle required aspects for normal endpoint usage

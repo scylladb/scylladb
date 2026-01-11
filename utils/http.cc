@@ -27,13 +27,31 @@ utils::http::dns_connection_factory::connection_resources::connection_resources(
                                                                         bool use_https,
                                                                         shared_ptr<tls::certificate_credentials> creds,
                                                                         logging::logger& logger)
-    : _creds(std::move(creds)), _host(host), _use_https(use_https), _logger(logger) {
+    : _creds(std::move(creds)), _host(host), _use_https(use_https), _logger(logger), _addr_update_gate("address_provider"), _addr_update_timer([this] {
+        auto gh = _addr_update_gate.hold();
+        // Can safely ignore the future here, as the gate will ensure the instance is held
+        std::ignore = [this]() -> future<> {
+            _logger.debug("Host resolution expired, re-resolving host {}", _host);
+            co_await renew_addresses();
+        }();
+    }) {
+    _addr_update_timer.arm(lowres_clock::now());
 }
 
 future<> utils::http::dns_connection_factory::connection_resources::init_addresses() {
+    auto units = co_await get_units(_addr_sem, 1);
     auto hent = co_await net::dns::get_host_by_name(_host, net::inet_address::family::INET);
+    _address_ttl = std::chrono::seconds(*std::ranges::min_element(hent.addr_ttls));
     _addr_list = std::move(hent.addr_list);
     _logger.debug("Initialized addresses={}", _addr_list);
+
+    if (_address_ttl.count() != 0) {
+        // Zero values are interpreted to mean that the Resource
+        // Record can only be used for the transaction in progress,
+        // and should not be cached.
+        // https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.1
+        _addr_update_timer.rearm(lowres_clock::now() + _address_ttl);
+    }
 }
 
 future<> utils::http::dns_connection_factory::connection_resources::init_credentials() {
@@ -54,6 +72,13 @@ future<net::inet_address> utils::http::dns_connection_factory::connection_resour
             _addr_init = true;
         }
     }
+
+    // Re-initialize addresses if the timer is not armed, meaning the TTL is 0
+    // So the record can only be used for the transaction in progress,
+    // and should not be cached.
+    if (!_addr_update_timer.armed()) {
+        co_await init_addresses();
+    }
     co_return _addr_list[_addr_pos++ % _addr_list.size()];
 }
 
@@ -70,6 +95,14 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::dns_connection_fac
 
 future<> utils::http::dns_connection_factory::connection_resources::renew_addresses() {
     co_await init_addresses();
+}
+
+future<> utils::http::dns_connection_factory::connection_resources::close() {
+    _addr_update_timer.cancel();
+    if (!_addr_update_gate.is_closed()) {
+        return _addr_update_gate.close();
+    }
+    return make_ready_future<>();
 }
 
 future<connected_socket> utils::http::dns_connection_factory::connect() {
@@ -103,6 +136,9 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
 
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
     co_return co_await connect();
+}
+future<> utils::http::dns_connection_factory::close() {
+    return _provider.close();
 }
 
 static const char HTTPS[] = "https";
