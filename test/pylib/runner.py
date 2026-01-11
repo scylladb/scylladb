@@ -97,7 +97,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
-
+    parser.addoption('--exe-path', default=False,
+                     dest="exe_path", action="store",
+                     help="exe_path")
+    parser.addoption('--exe-url', default=False,
+                     dest="exe_url", action="store",
+                     help="exe_url")
 
 @pytest.fixture(autouse=True)
 def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
@@ -196,6 +201,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    if config.getoption("--exe-url") and config.getoption("--exe-path"):
+        raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+
+    if  config.getoption("--exe-path") or config.getoption("--exe-url"):
+            if config.getoption("--mode"):
+                raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+            config.option.modes = ["custom_exe"]
+
     config.build_modes = get_modes_to_run(config)
 
     if testpy_run_id := config.getoption("--run_id"):
@@ -204,6 +217,8 @@ def pytest_configure(config: pytest.Config) -> None:
         config.run_ids = (testpy_run_id,)
     else:
         config.run_ids = tuple(range(1, config.getoption("--repeat") + 1))
+
+
 
 
 @pytest.hookimpl(wrapper=True)

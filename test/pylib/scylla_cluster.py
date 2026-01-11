@@ -213,15 +213,17 @@ async def with_file_lock(lock_path: pathlib.Path) -> AsyncIterator[None]:
             await asyncio.to_thread(fcntl.flock, f, fcntl.LOCK_UN)
 
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
-    async def run_process(cmd, **kwargs):
-        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
-        await proc.communicate()
-        assert proc.returncode == 0
-
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "scylla-debug" if is_debug else "scylla"
     arch = platform.machine()
     url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.0-0.20250325.9dca28d2b818.{arch}.tar.gz'
+    return get_scylla_executable(url)
+
+async def get_scylla_executable(url: str) -> str:
+    async def run_process(cmd, **kwargs):
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+        await proc.communicate()
+        assert proc.returncode == 0
 
     archive_filename = urllib.parse.urlparse(url).path.split("/")[-1]
 
