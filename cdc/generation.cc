@@ -204,7 +204,7 @@ future<topology_description> topology_description::clone_async() const {
 
     for (const auto& entry : _entries) {
         vec.push_back(entry);
-        co_await seastar::maybe_yield();
+        co_await coroutine::maybe_yield();
     }
 
     co_return topology_description{std::move(vec)};

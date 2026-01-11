@@ -16,6 +16,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
@@ -377,7 +378,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
             for (const auto& [fm, s] : fms) {
                 mutations.emplace_back(fm.to_mutation(s));
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
             }
 
             if (!mutations.empty()) {

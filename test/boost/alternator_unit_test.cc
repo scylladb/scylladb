@@ -16,6 +16,7 @@
 
 #include "alternator/expressions.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
 
 static std::map<std::string, std::string> strings {
@@ -407,14 +408,14 @@ SEASTAR_TEST_CASE(test_parsed_expression_cache_resize) {
     cache.max_cache_entries.set(large_size);
     for (size_t i = 0; i < large_size; i++) {
         cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, miss);
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
     cache.max_cache_entries.set(first_reduce);
     cache.expected_stats.expression_cache.evictions += (large_size - first_reduce);
     co_await cache.wait_check_stats("async, after resizing cache");
     for (size_t i = 0; i < first_reduce; i++) {
         cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, eviction_miss);
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
     cache.max_cache_entries.set(0);
     cache.expected_stats.expression_cache.evictions += first_reduce;
@@ -423,7 +424,7 @@ SEASTAR_TEST_CASE(test_parsed_expression_cache_resize) {
     cache.max_cache_entries.set(large_size);
     for (size_t i = 0; i < large_size; i++) {
         cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, miss);
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
     cache.max_cache_entries.set(1000);
     co_await cache.cache->stop();
