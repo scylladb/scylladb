@@ -135,6 +135,13 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
 {}
 
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
+    try {
+        co_return co_await connect();
+    } catch (...) {
+        // On failure, forcefully renew address resolution and try again
+        _logger.debug("Connection failed, resetting address provider and retrying: {}", std::current_exception());
+    }
+    co_await _provider.renew_addresses();
     co_return co_await connect();
 }
 future<> utils::http::dns_connection_factory::close() {
