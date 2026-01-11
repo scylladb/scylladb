@@ -9,6 +9,7 @@
 #include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/http/exception.hh>
 
 #include "task_manager.hh"
@@ -264,7 +265,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
                 if (id) {
                     module->unregister_task(id);
                 }
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
             }
         });
         co_return json_void();

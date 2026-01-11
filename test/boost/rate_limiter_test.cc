@@ -11,6 +11,7 @@
 #include <seastar/core/manual_clock.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/later.hh>
 #include <seastar/testing/test_case.hh>
 
@@ -40,7 +41,7 @@ SEASTAR_TEST_CASE(test_rate_limiter_no_rejections_on_sequential) {
 
     for (uint64_t token = 0; token < token_count; token++) {
         BOOST_REQUIRE_LE(limiter.increase_and_get_counter(lbl, token), 1);
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
 }
 
@@ -55,7 +56,7 @@ SEASTAR_TEST_CASE(test_rate_limiter_partition_label_separation) {
         for (uint64_t token = 0; token < token_count; token++) {
             for (auto& l : labels) {
                 BOOST_REQUIRE_EQUAL(limiter.increase_and_get_counter(l, token), i + 1);
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
             }
         }
     }
@@ -123,7 +124,7 @@ SEASTAR_TEST_CASE(test_rate_limiter_account_operation) {
             encountered_rejection = true;
             break;
         }
-        co_await maybe_yield();
+        co_await coroutine::maybe_yield();
     }
     BOOST_REQUIRE(encountered_rejection);
 }

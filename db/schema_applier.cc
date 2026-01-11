@@ -961,15 +961,15 @@ public:
 
         auto include_pending_changes = [&table_schemas](schema_diff_per_shard d) -> future<> {
             for (auto& schema : d.dropped) {
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
                 table_schemas.erase(schema->id());
             }
             for (auto& change : d.altered) {
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
                 table_schemas.insert_or_assign(change.new_schema->id(), change.new_schema);
             }
             for (auto& schema : d.created) {
-                co_await maybe_yield();
+                co_await coroutine::maybe_yield();
                 table_schemas.insert_or_assign(schema->id(), schema);
             }
         };
