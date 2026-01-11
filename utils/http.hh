@@ -28,17 +28,17 @@ protected:
     bool _use_https;
     size_t _addr_pos{0};
     logging::logger& _logger;
-    struct state {
+    struct connection_resources {
         bool initialized = false;
         std::vector<net::inet_address> addr_list;
         shared_ptr<tls::certificate_credentials> creds;
-        state(shared_ptr<tls::certificate_credentials>);
+        connection_resources(shared_ptr<tls::certificate_credentials>);
     };
-    lw_shared_ptr<state> _state;
+    lw_shared_ptr<connection_resources> _state;
     shared_future<> _done;
 
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<state> state, std::string host, bool use_https, logging::logger& logger);
+    static future<> initialize(lw_shared_ptr<connection_resources> state, std::string host, bool use_https, logging::logger& logger);
     future<connected_socket> connect();
 public:
     dns_connection_factory(dns_connection_factory&&);
