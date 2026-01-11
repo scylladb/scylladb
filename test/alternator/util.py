@@ -404,7 +404,7 @@ class ManualRequestError(Exception):
         return f'{self.code} {self.type} {self.message}'
     __repr__ = __str__
 
-def get_signed_request(dynamodb, op, payload):
+def get_signed_request(dynamodb, op, payload, extra_headers=None):
     # Usually "payload" will be a Python string and we'll write it as UTF-8.
     # but in some tests we may want to write bytes directly - potentially
     # bytes which include invalid UTF-8.
@@ -413,7 +413,7 @@ def get_signed_request(dynamodb, op, payload):
     # to unexpected changes
     class Request:
         url=dynamodb.meta.client._endpoint.host
-        headers={'X-Amz-Target': 'DynamoDB_20120810.' + op, 'Content-Type': 'application/x-amz-json-1.0'}
+        headers={'X-Amz-Target': 'DynamoDB_20120810.' + op, 'Content-Type': 'application/x-amz-json-1.0'} | (extra_headers or {})
         body=payload_bytes
         method='POST'
         context={}
