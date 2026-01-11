@@ -374,13 +374,40 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     for (const auto& header : signed_headers) {
         signed_headers_map.emplace(header, std::string_view());
     }
+    std::vector<std::string> modified_values;
     for (auto& header : req._headers) {
         std::string header_str;
         header_str.resize(header.first.size());
         std::transform(header.first.begin(), header.first.end(), header_str.begin(), ::tolower);
         auto it = signed_headers_map.find(header_str);
         if (it != signed_headers_map.end()) {
-            it->second = std::string_view(header.second);
+            // replace multiple spaces in the header value header.second with
+            // a single space, as required by AWS SigV4 header canonization.
+            // If we modify the value, we need to save it in modified_values
+            // to keep it alive.
+            std::string value;
+            value.reserve(header.second.size());
+            bool prev_space = false;
+            bool modified = false;
+            for (char ch : header.second) {
+                if (ch == ' ') {
+                    if (!prev_space) {
+                        value += ch;
+                        prev_space = true;
+                    } else {
+                        modified = true; // skip a space
+                    }
+                } else {
+                    value += ch;
+                    prev_space = false;
+                }
+            }
+            if (modified) {
+                modified_values.emplace_back(std::move(value));
+                it->second = std::string_view(modified_values.back());
+            } else {
+                it->second = std::string_view(header.second);
+            }
         }
     }
 
@@ -393,6 +420,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
                                                     datestamp = std::move(datestamp),
                                                     signed_headers_str = std::move(signed_headers_str),
                                                     signed_headers_map = std::move(signed_headers_map),
+                                                    modified_values = std::move(modified_values),
                                                     region = std::move(region),
                                                     service = std::move(service),
                                                     user_signature = std::move(user_signature)] (future<key_cache::value_ptr> key_ptr_fut) {

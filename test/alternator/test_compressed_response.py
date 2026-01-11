@@ -341,7 +341,6 @@ def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
 # in the 'Accept-Encoding' header value, as required by the AWS sigv4 specification.
 # If not handled correctly a 'wrong signature' error is returned.
 # Reproduces #27775.
-@pytest.mark.xfail(reason="issue #27775")
 def test_signature_trims_accept_encoding_spaces(dynamodb, test_table_s):
     p = random_string()
 
