@@ -1888,11 +1888,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
         }
-        // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
-        // GSI and LSI indexes are based on materialized views which require this option to avoid consistency issues.
-        if (!view_builders.empty() && ksm->uses_tablets() && !_proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-            co_return api_error::validation("GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled.");
-        }
         try {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
         } catch (exceptions::already_exists_exception&) {
@@ -2113,10 +2108,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         if (p.local().data_dictionary().has_schema(keyspace_name, lsi_name(table_name, index_name, false))) {
                             co_return api_error::validation(fmt::format(
                                 "LSI {} already exists in table {}, can't use same name for GSI", index_name, table_name));
-                        }
-                        if (p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy().uses_tablets() &&
-                                !p.local().data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-                            co_return api_error::validation("GlobalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled.");
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
