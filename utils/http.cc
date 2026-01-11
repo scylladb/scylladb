@@ -98,6 +98,14 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string host, in
 }
 
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
+    try {
+        auto address = co_await get_address();
+        co_return co_await connect(address);
+    } catch (...) {
+        // On failure, forcefully renew address resolution and try again
+        _logger.debug("Connection failed, resetting address provider and retrying: {}", std::current_exception());
+    }
+    _addr_list.reset();
     auto address = co_await get_address();
     co_return co_await connect(address);
 }
