@@ -25,20 +25,30 @@ class dns_connection_factory : public seastar::http::experimental::connection_fa
 protected:
     std::string _host;
     int _port;
-    bool _use_https;
-    size_t _addr_pos{0};
     logging::logger& _logger;
-    struct connection_resources {
-        bool initialized = false;
-        std::vector<net::inet_address> addr_list;
-        shared_ptr<tls::certificate_credentials> creds;
-        connection_resources(shared_ptr<tls::certificate_credentials>);
-    };
-    lw_shared_ptr<connection_resources> _state;
-    shared_future<> _done;
+    class connection_resources {
+        semaphore _init_semaphore{1};
+        bool _addr_init = false;
+        bool _creds_init = false;
+        std::vector<net::inet_address> _addr_list;
+        shared_ptr<tls::certificate_credentials> _creds;
+        const std::string& _host;
+        size_t _addr_pos{0};
+        bool _use_https;
+        logging::logger& _logger;
 
-    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<connection_resources> state, std::string host, bool use_https, logging::logger& logger);
+        future<> init_addresses();
+        future<> init_credentials();
+
+    public:
+        connection_resources(const std::string& host, bool use_https, shared_ptr<tls::certificate_credentials> creds, logging::logger& logger);
+
+        future<net::inet_address> get_address();
+        future<shared_ptr<tls::certificate_credentials>> get_creds();
+        future<> renew_addresses();
+    };
+    connection_resources _provider;
+
     future<connected_socket> connect();
 public:
     dns_connection_factory(dns_connection_factory&&);
