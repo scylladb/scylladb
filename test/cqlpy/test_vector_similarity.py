@@ -12,7 +12,7 @@ from math import sqrt, isclose
 # Tests for vector search related functions
 ###############################################################################
 
-similarity_functions = {"cosine", "euclidean", "dot_product"}
+similarity_functions = ["cosine", "euclidean", "dot_product"]
 
 
 @pytest.fixture(scope="module")
@@ -231,7 +231,7 @@ def test_vector_similarity_with_two_literals(cql, table1, similarity_function):
         isclose(row[1], compute_similarity(similarity_function, v1, v2))
 
 
-@pytest.mark.parametrize("similarity_function", similarity_functions - {"cosine"})
+@pytest.mark.parametrize("similarity_function", sorted(set(similarity_functions) - {"cosine"}))
 def test_vector_similarity_with_zero_vectors(cql, table1, similarity_function):
     zero = [0.0, 0.0, 0.0]
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}(v1, {zero}) FROM {table1}")

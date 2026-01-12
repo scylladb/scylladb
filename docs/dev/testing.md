@@ -114,9 +114,16 @@ in `./testlog`. Scylla data files are stored in `/tmp`.
 There are several test directories that are excluded from orchestration by `test.py`:
 
 - test/boost
-- test/raft
 - test/ldap
+- test/raft
 - test/unit
+- test/vector_search
+- test/vector_search_validator
+- test/alternator
+- test/broadcast_tables
+- test/cql
+- test/cqlpy
+- test/rest_api
 
 This means that `test.py` will not run tests directly, but will delegate all work to `pytest`.
 That's why all these directories do not have `suite.yaml` files.
