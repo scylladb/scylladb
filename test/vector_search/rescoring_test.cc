@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
 }
 
 // Test is failing until rescoring is implemented (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored, *boost::unit_test::expected_failures(6)) {
+SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored, *boost::unit_test::expected_failures(12)) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
@@ -271,8 +271,7 @@ SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored, *boost::unit_test
     }
 }
 
-// Test is failing until rescoring is implemented (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results, *boost::unit_test::expected_failures(24)) {
+SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
     // This is a dedicated test that uses a similarity function in the SELECT clause.
     // We want to keep two tests, one with and one without (see `result_returned_by_vector_store_is_rescored`)\
     // a similarity function in the SELECT clause, to ensure both code paths are covered.
