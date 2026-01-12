@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import logging
 import subprocess
+import tempfile
+import pathlib
 from functools import cache, cached_property
 from itertools import chain
 from textwrap import dedent
@@ -20,7 +22,6 @@ import allure
 from test.pylib.cpp.base import CppFile, CppTestFailure
 
 if TYPE_CHECKING:
-    import pathlib
 
     from test.pylib.cpp.base import CppTestCase
 
@@ -61,11 +62,10 @@ class BoostTestFile(CppFile):
     def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
         run_test = f"{self.test_name}/{test_case.test_case_name}" if self.combined else test_case.test_case_name
 
-        log_sink = test_case.get_artifact_path(suffix=".xml")
+        log_sink = tempfile.NamedTemporaryFile(mode="w+t")
         args = [
-            "--report_level=no",
-            "--output_format=XML",
-            f"--log_sink={log_sink}",
+            "--logger=HRF,warning,stdout",
+            f"--logger=XML,warning,{log_sink.name}",
             "--catch_system_errors=no",
             "--color_output=false",
         ]
@@ -82,7 +82,7 @@ class BoostTestFile(CppFile):
         process = test_case.run_exe(test_args=args, output_file=stdout_file_path)
 
         try:
-            log_xml = log_sink.read_text(encoding="utf-8")
+            log_xml = pathlib.Path(log_sink.name).read_text(encoding="utf-8")
         except IOError:
             log_xml = ""
         results = parse_boost_test_log_sink(log_xml=log_xml)
@@ -102,7 +102,7 @@ class BoostTestFile(CppFile):
             )], ""
 
         if not self.config.getoption("--save-log-on-success"):
-            log_sink.unlink(missing_ok=True)
+            log_sink.close()
             stdout_file_path.unlink(missing_ok=True)
 
         return None, ""
