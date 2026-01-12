@@ -2991,6 +2991,46 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
         for recreate_statement in desc_iter:
             cql.execute(recreate_statement.create_statement)
 
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that `sl:default_batch` is described similarly to `sl:driver` -
+    with `CREATE SERVICE LEVEL IF NOT EXISTS ...` and `ALTER SERVICE LEVEL ...` statements.
+    """
+    with AuthSLContext(cql):
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_default_batch=False)
+
+        [create, alter] = list(desc_iter)
+
+        assert create.type == "service_level"
+        assert create.name == "default_batch"
+        assert create.create_statement.startswith("CREATE SERVICE LEVEL IF NOT EXISTS default_batch")
+
+        assert alter.type == "service_level"
+        assert alter.name == "default_batch"
+        assert alter.create_statement.startswith("ALTER SERVICE LEVEL default_batch")
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_removed_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that if `sl:default_batch` is removed, `DESC SCHEMA WITH INTERNALS`
+    emits `DROP SERVICE LEVEL IF EXISTS default_batch;`.
+    """
+    with AuthSLContext(cql):
+        cql.execute("DROP SERVICE LEVEL default_batch")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_default_batch=False)
+
+        [drop] = list(desc_iter)
+
+        assert drop.type == "service_level"
+        assert drop.name == "default_batch"
+        assert drop.create_statement == "DROP SERVICE LEVEL IF EXISTS default_batch;"
+
 def test_desc_restore(cql):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities
