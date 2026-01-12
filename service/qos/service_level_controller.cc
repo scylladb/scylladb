@@ -470,7 +470,8 @@ future<utils::chunked_vector<mutation>> service_level_controller::get_create_dri
     auto sl_mutations = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), service_level_controller::driver_service_level_name, get_driver_service_level_slo(), timestamp);
     std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
 
-    auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, timestamp);
+    auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(
+            service_level_controller::driver_service_level_name, true, timestamp);
     mutations.push_back(std::move(sys_ks_mutation));
 
     co_return mutations;
@@ -487,7 +488,8 @@ future<std::optional<service::group0_guard>> service_level_controller::migrate_t
             constexpr bool if_not_exists = true;
             co_await add_distributed_service_level(service_level_controller::driver_service_level_name, get_driver_service_level_slo(), if_not_exists, mc);
 
-            auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, mc.write_timestamp());
+            auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(
+                    service_level_controller::driver_service_level_name, true, mc.write_timestamp());
             mc.add_mutation(std::move(sys_ks_mutation), "set service_level_driver_created=true");
 
             co_await commit_mutations(std::move(mc));
