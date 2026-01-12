@@ -244,9 +244,7 @@ SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
             }));
 }
 
-// Rescoring is not implemented yet (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-// Test is expected to report errors until then.
-SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored, *boost::unit_test::expected_failures(6)) {
+SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
@@ -310,9 +308,7 @@ SEASTAR_TEST_CASE(f32_quantization_disables_rescoring) {
             }));
 }
 
-// Rescoring is not implemented yet (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-// Test is expected to report errors until then.
-SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results, *boost::unit_test::expected_failures(24)) {
+SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
     // This is a dedicated test that uses a similarity function in the SELECT clause.
     // We want to keep two tests, one with and one without (see `result_returned_by_vector_store_is_rescored`)
     // a similarity function in the SELECT clause, to ensure both code paths are covered.
@@ -353,9 +349,7 @@ SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results, *boost
     }
 }
 
-// Rescoring is not implemented yet (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-// Test is expected to report errors until then.
-SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored, *boost::unit_test::expected_failures(12)) {
+SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored) {
     // Another case with slightly different path of processing is "SELECT * ...".
 
     for (const auto& params : test_data) {
@@ -391,9 +385,7 @@ SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored, *boost::unit_test::expe
     }
 }
 
-// Rescoring is not implemented yet (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-// Test is expected to report errors until then.
-SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering, *boost::unit_test::expected_failures(4)) {
+SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering) {
     // Another tricky case with similarity column with argument different from ANN ordering vector.
     // Especially if we use prepared statement and the difference is only seen at execution time.
     const auto& params = test_data[0];
@@ -432,9 +424,9 @@ SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering, *boost::un
             }));
 }
 
-// Rescoring is not implemented yet (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-// Test is expected to report errors until then.
-SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_failures(6)) {
+// Rescoring does not filter out NULL embeddings yet, but they should be sorted as last.
+// So this test is expected to report error on result set size, but passes if the first element is correct.
+SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_failures(3)) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();

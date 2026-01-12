@@ -387,7 +387,7 @@ private:
 
     void update_stats() const;
 
-    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options) const;
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;
 
     std::vector<float> get_ann_ordering_vector(const query_options& options) const;
 
