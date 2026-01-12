@@ -9,7 +9,6 @@
 #pragma once
 
 #include <seastar/core/seastar.hh>
-#include <seastar/core/shared_future.hh>
 #include <seastar/http/client.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
