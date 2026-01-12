@@ -228,3 +228,16 @@ future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id tab
 table_streams::const_iterator get_new_base_for_gc(const table_streams&, std::chrono::seconds ttl);
 
 } // namespace cdc
+
+template <>
+struct fmt::formatter<cdc::stream_id> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const cdc::stream_id &id, FormatContext& ctx) const {
+        fmt::format_to(ctx.out(), "{} ", id.token());
+
+        for (auto b : id.to_bytes()) {
+            fmt::format_to(ctx.out(), "{:02x}", (unsigned char)b);
+        }
+        return ctx.out();
+    }
+};

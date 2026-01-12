@@ -5,8 +5,11 @@
 # Tests for stream operations: ListStreams, DescribeStream, GetShardIterator,
 # GetRecords.
 
+import asyncio
 import time
 import urllib.request
+import random
+import requests
 from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 
@@ -15,13 +18,11 @@ from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
 from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
+from test.cluster.test_cdc_with_tablets import CdcStreamState
 
-# All tests in this file are expected to fail with tablets due to #23838.
-# To ensure that Alternator Streams is still being tested, instead of
-# xfailing these tests, we temporarily coerce the tests below to avoid
-# using default tablets setting, even if it's available. We do this by
-# using the following tags when creating each table below:
-TAGS = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
+# all tests in this module are parametrized to run twice (with vnodes and tablets respectively).
+# `TAGS` being empty means default behaviour (tablets),with key `system:initial_tablets` - vnodes.
+pytestmark = pytest.mark.parametrize('TAGS', [ [], [{'Key': 'system:initial_tablets', 'Value': 'none'}] ], scope='module')
 
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
@@ -54,7 +55,7 @@ def disable_stream(dynamodbstreams, table):
 # So we have to create and delete a table per test. And not run this 
 # test to often against aws.  
 @contextmanager
-def create_stream_test_table(dynamodb, StreamViewType=None):
+def create_stream_test_table(dynamodb, TAGS, StreamViewType=None, name=None):
     spec = { 'StreamEnabled': False }
     if StreamViewType != None:
         spec = {'StreamEnabled': True, 'StreamViewType': StreamViewType}
@@ -66,7 +67,7 @@ def create_stream_test_table(dynamodb, StreamViewType=None):
         AttributeDefinitions=[
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
                     { 'AttributeName': 'c', 'AttributeType': 'S' },
-        ])
+        ], name=name)
     try:
         yield table
     finally:
@@ -127,24 +128,24 @@ def ensure_java_server(dynamodbstreams, error='ValidationException'):
         return
     assert False
 
-def test_list_streams_create(dynamodb, dynamodbstreams):
+def test_list_streams_create(dynamodb, dynamodbstreams, TAGS):
     for type in stream_types:
-        with create_stream_test_table(dynamodb, StreamViewType=type) as table:
+        with create_stream_test_table(dynamodb, TAGS, StreamViewType=type) as table:
             wait_for_active_stream(dynamodbstreams, table)
 
-def test_list_streams_alter(dynamodb, dynamodbstreams):
+def test_list_streams_alter(dynamodb, dynamodbstreams, TAGS):
     for type in stream_types:
-        with create_stream_test_table(dynamodb, StreamViewType=None) as table:
+        with create_stream_test_table(dynamodb, TAGS, StreamViewType=None) as table:
             table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': type});
             wait_for_active_stream(dynamodbstreams, table)
 
-def test_list_streams_paged(dynamodb, dynamodbstreams):
+def test_list_streams_paged(dynamodb, dynamodbstreams, TAGS):
     # There is no reason to run this test for all stream types - we have
     # other tests for creating tables with all stream types, and for using
     # them. This one is only about list_streams.
     for type in stream_types[0:1]:
-        with create_stream_test_table(dynamodb, StreamViewType=type) as table1:
-            with create_stream_test_table(dynamodb, StreamViewType=type) as table2:
+        with create_stream_test_table(dynamodb, TAGS, StreamViewType=type) as table1:
+            with create_stream_test_table(dynamodb, TAGS, StreamViewType=type) as table2:
                 wait_for_active_stream(dynamodbstreams, table1)
                 wait_for_active_stream(dynamodbstreams, table2)
                 streams = dynamodbstreams.list_streams(Limit=1)
@@ -169,14 +170,14 @@ def test_list_streams_paged(dynamodb, dynamodbstreams):
 # reshuffled. It's also not exactly the situation of issue #12601 - there
 # we suspect the hash table got different order for different pages for
 # other reasons - not because of added tables.
-def test_list_streams_paged_with_new_table(dynamodb, dynamodbstreams):
+def test_list_streams_paged_with_new_table(dynamodb, dynamodbstreams, TAGS):
     N1    = 4  # Number of tables to create initially
     LIMIT = 2  # Number of tables out of N1 to list in the first page
     N2    = 30 # Number of additional tables to create later
     N1_tables = []
     with ExitStack() as created_tables:
         for i in range(N1):
-            table = created_tables.enter_context(create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY'))
+            table = created_tables.enter_context(create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY'))
             wait_for_active_stream(dynamodbstreams, table)
             N1_tables.append(table.name)
         streams = dynamodbstreams.list_streams(Limit=LIMIT)
@@ -186,7 +187,7 @@ def test_list_streams_paged_with_new_table(dynamodb, dynamodbstreams):
         first_tables = [s['TableName'] for s in streams['Streams']]
         last_arn = streams['LastEvaluatedStreamArn']
         for i in range(N2):
-            table = created_tables.enter_context(create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY'))
+            table = created_tables.enter_context(create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY'))
             wait_for_active_stream(dynamodbstreams, table)
         # Get the rest of the streams (no limit, assuming we don't have
         # a huge number of streams)
@@ -199,8 +200,8 @@ def test_list_streams_paged_with_new_table(dynamodb, dynamodbstreams):
         for t in N1_tables:
             assert tables.count(t) == 1
 
-def test_list_streams_zero_limit(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_list_streams_zero_limit(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         with pytest.raises(ClientError, match='ValidationException'):
             wait_for_active_stream(dynamodbstreams, table)
             dynamodbstreams.list_streams(Limit=0)
@@ -212,26 +213,26 @@ def test_list_streams_zero_limit(dynamodb, dynamodbstreams):
 # because theoretically (if we have a huge number of tables...) it can result
 # in a huge response, which we don't want to allow.
 @pytest.mark.xfail(reason="no upper limit for Limit")
-def test_list_streams_too_high_limit(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_list_streams_too_high_limit(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         with pytest.raises(ClientError, match='ValidationException'):
             wait_for_active_stream(dynamodbstreams, table)
             dynamodbstreams.list_streams(Limit=100000)
 
-def test_create_streams_wrong_type(dynamodb, dynamodbstreams, test_table):
+def test_create_streams_wrong_type(dynamodb, dynamodbstreams, test_table, TAGS):
     with pytest.raises(ClientError, match='ValidationException'):
         # should throw
         test_table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'Fisk'});
         # just in case the test fails, disable stream again
         test_table.update(StreamSpecification={'StreamEnabled': False});
 
-def test_list_streams_empty(dynamodb, dynamodbstreams, test_table):
+def test_list_streams_empty(dynamodb, dynamodbstreams, test_table, TAGS):
     streams = dynamodbstreams.list_streams(TableName=test_table.name)
     assert 'Streams' in streams
     assert not streams['Streams'] # empty
 
-def test_list_streams_with_nonexistent_last_stream(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_list_streams_with_nonexistent_last_stream(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         with pytest.raises(ClientError, match='ValidationException'):
             streams = dynamodbstreams.list_streams(TableName=table.name, ExclusiveStartStreamArn='kossaapaaasdafsdaasdasdasdasasdasfadfadfasdasdas')
             assert 'Streams' in streams
@@ -240,8 +241,8 @@ def test_list_streams_with_nonexistent_last_stream(dynamodb, dynamodbstreams):
             # malformed stream arn here. verify 
             ensure_java_server(dynamodbstreams)
 
-def test_describe_stream(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_describe_stream(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
@@ -261,8 +262,8 @@ def test_describe_stream(dynamodb, dynamodbstreams):
         assert desc['StreamDescription']['Shards'][0]['SequenceNumberRange']['StartingSequenceNumber'].isdecimal()
 
 @pytest.mark.xfail(reason="alternator does not have creation time on streams")
-def test_describe_stream_create_time(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_describe_stream_create_time(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
@@ -271,12 +272,12 @@ def test_describe_stream_create_time(dynamodb, dynamodbstreams):
         # note these are non-required attributes
         assert 'CreationRequestDateTime' in desc['StreamDescription']
 
-def test_describe_nonexistent_stream(dynamodb, dynamodbstreams):
+def test_describe_nonexistent_stream(dynamodb, dynamodbstreams, TAGS):
     with pytest.raises(ClientError, match='ResourceNotFoundException' if is_local_java(dynamodbstreams) else 'ValidationException'):
         dynamodbstreams.describe_stream(StreamArn='sdfadfsdfnlfkajakfgjalksfgklasjklasdjfklasdfasdfgasf')
 
-def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
         try:
@@ -286,8 +287,8 @@ def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
             # local java throws here. real does not. 
             ensure_java_server(dynamodbstreams, error=None)
 
-def test_get_shard_iterator(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_get_shard_iterator(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
@@ -345,8 +346,8 @@ def test_get_shard_iterator(dynamodb, dynamodbstreams):
                 ShardIteratorType='LATEST', SequenceNumber='sdfsafglldfngjdafnasdflgnaldklkafdsgklnasdlv'
                 )
 
-def test_get_shard_iterator_for_nonexistent_stream(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_get_shard_iterator_for_nonexistent_stream(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
         shards = desc['StreamDescription']['Shards']
@@ -355,8 +356,8 @@ def test_get_shard_iterator_for_nonexistent_stream(dynamodb, dynamodbstreams):
                     StreamArn='sdfadfsddafgdafsgjnadflkgnalngalsdfnlkasnlkasdfasdfasf', ShardId=shards[0]['ShardId'], ShardIteratorType='LATEST'
                 )
 
-def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
         with pytest.raises(ClientError, match='ResourceNotFoundException'):
@@ -364,9 +365,319 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams):
                     StreamArn=arn, ShardId='adfasdasdasdasdasdasdasdasdasasdasd', ShardIteratorType='LATEST'
                 )
 
-def test_get_records(dynamodb, dynamodbstreams):
+def get_table_or_view_id(cql, keyspace: str, table: str):
+    rows = cql.execute(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
+    try:
+        row = rows.one()
+    except Exception:
+        row = None
+    if row is not None:
+        return row.id
+    rows = cql.execute(f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{table}'")
+    return rows.one().id
+
+def get_base_table(cql, table_id):
+    # copied from tablets.py:get_base_table
+    # this might return more than one row, but we don't care as all rows
+    # will have the same base_table value
+    rows = cql.execute(f"SELECT base_table FROM system.tablets where table_id = {table_id} limit 1")
+    return rows.one().base_table
+
+def assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name):
+    # we'll try twice here, as in my tests occasionally i've got into a situation, where this function
+    # failed, it seems streams were not yet fully updated (debug build).
+    for x in range(0, 2):
+        tablet_count = get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name)
+        ts = cql.execute(f"SELECT toUnixTimestamp(timestamp) AS ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='{table_name}' ORDER BY timestamp DESC LIMIT 1").one().ts
+        count = cql.execute(f"SELECT count(*) FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table_name}' AND timestamp = {ts} AND stream_state = {CdcStreamState.CURRENT} limit 1").one().count
+        if count == tablet_count:
+            break
+        # on debug occasionally we need more time
+        time.sleep(0.1)
+    assert count == tablet_count
+
+def get_tablet_count_for_base_table_of_table(rest_api, cql, keyspace_name: str, table_name: str):
+    table_id = get_table_or_view_id(cql, keyspace_name, table_name)
+    table_id = get_base_table(cql, table_id)
+    # this might return more than one row, but we don't care as all rows
+    # will have the same tablet_count value
+    rows = cql.execute(f"SELECT tablet_count FROM system.tablets where table_id = {table_id} limit 1")
+    return rows.one().tablet_count
+
+def set_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, expected_tablet_count):
+    assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
+    cql.execute(f"ALTER TABLE {ks}.{cdc_log_table_name} WITH tablets = {{'min_tablet_count': {expected_tablet_count}}};")
+    start = time.time()
+    while time.time() < start + 10:
+        if get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name) == expected_tablet_count:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail(f'Tablet count did not reach expected value {expected_tablet_count} within timeout')
+
+
+def iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=None):
+    params = {
+        'StreamArn': arn
+    }
+    if filter_shard_id is not None:
+        params['ShardFilter'] = {
+            'Type': 'CHILD_SHARDS',
+            'ShardId': filter_shard_id
+        }
+    desc = dynamodbstreams.describe_stream(**params)
+
+    while True:
+        assert time.time() <= end_ts, "Time ran out"
+        shards = desc['StreamDescription']['Shards']
+
+        for shard in shards:
+            yield shard
+            assert time.time() <= end_ts, "Time ran out"
+
+        last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
+        if not last_shard:
+            break
+
+        desc = dynamodbstreams.describe_stream(ExclusiveStartShardId=last_shard, **params)
+
+# the test will:
+#   - create a table with streams enabled
+#   - get initial tablet count
+#   - for each multiplier in tablet_multipliers:
+#       - modify tablet count to initial * multiplier - this will trigger
+#         creation of new stream shards in the stream as currently we have 1 to 1
+#         mapping between tablets and stream shards
+#   - after all modifications, use DescribeStream to get all stream shards
+#   - build a map of stream shard -> parent stream shard (shard_parents_map) and
+#     a map of stream shard -> child stream shards (shard_children_map)
+#   - verify that:
+#       - number of root stream shards (stream shards without parent) is correct -
+#         should be equal to initial tablet count
+#       - starting from root stream shards and following children, each path
+#         down the tree has length equal to len(tablet_multipliers) -
+#         this is because every change in tablet count causes new generation
+#         of stream shards to be created. Each stream shard from previous generation will point
+#         to at least one stream shard in the next generation and never to some other generation.
+def test_parent_filtering(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
+    if TAGS:
+        # TODO: for now we will ignore `vnodes` - we have no easy to apply consistent way
+        # to modify vnodes count on the fly to trigger new shards and `tablets` are the way to go
+        # for users.
+        return
+    tablet_multipliers = [1, 2, 4, 8, 16, 8, 4, 2, 1]
+
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES', name=unique_table_name('alternator_test_')) as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+
+        ks = f'alternator_{table.name}'
+        table_name = table.name
+        cdc_log_table_name = f'{table_name}_scylla_cdc_log'
+        init_table_count = get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name)
+
+        for tablet_mult in tablet_multipliers:
+            set_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, init_table_count * tablet_mult)
+
+        total_shard_count = sum(tablet_multipliers) * init_table_count
+        print(f'Expecting {total_shard_count} shards in total')
+        end_ts = time.time() + 30
+        shard_parents_map = {}
+        while time.time() < end_ts:
+            root_shard_ids = []
+            shard_parents_map = {}
+
+            for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts):
+                shard_id = shard['ShardId']
+                parent_shard_id = shard.get('ParentShardId', None)
+                assert shard_id not in shard_parents_map
+                if parent_shard_id is None:
+                    root_shard_ids.append(shard_id)
+                shard_parents_map[shard_id] = parent_shard_id
+            
+            if len(shard_parents_map) >= total_shard_count:
+                break
+
+            time.sleep(0.1)
+
+        assert len(shard_parents_map) == total_shard_count
+
+        shard_children_map = {}
+        all_shards = set()
+        in_children = set()
+        for shard_id in shard_parents_map:
+            children = []
+            all_shards.add(shard_id)
+            parent_check = True
+            for child_shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=shard_id):
+                child_shard_id = child_shard['ShardId']
+                in_children.add(child_shard_id)
+                parent_shard_id = child_shard.get('ParentShardId', None)
+                if parent_shard_id != shard_id:
+                    parent_check = False
+                children.append(child_shard_id)
+            # Between generations (currently) we can have either splits by half or merges two into one.
+            # In case of split - children count will be > 1 and all children will point exactly to parent.
+            # In case of merge - children count will be 1, the `child_shard_id` stream shard will appear twice 
+            # under two different `shard_id` parent values and will have a `ParentShardId`
+            # equal to one of those parents.
+            # This assert checks that either `parent_check` is True (split case - all children point to parent) or
+            # we have only one child (merge case) - `parent_check` will be True for one parent and False for the other.
+            assert parent_check or len(children) == 1
+            shard_children_map[shard_id] = children
+
+        shards_without_parrents = all_shards - in_children
+        assert shards_without_parrents == set(root_shard_ids)
+
+        def run_and_verify(shard_id, history):
+            history.append(shard_id)
+            children = shard_children_map.get(shard_id, None)
+            if not children:
+                assert len(history) == len(tablet_multipliers)
+            else:
+                for ch in children:
+                    run_and_verify(ch, history)
+            history.pop()
+
+        for r in root_shard_ids:
+            run_and_verify(r, [])
+
+# this test will:
+#  - create a table with streams enabled
+#  - get initial tablet count
+#  - for each multiplier in tablet_multipliers:
+#      - modify tablet count to initial * multiplier - this will trigger
+#        creation of new stream shards in the stream as currently we have 1 to 1
+#        mapping between tablets and stream shards
+#      - perform writes_per_tablet_multiplier writes to the table
+#  - after all modifications, use DescribeStream to build shard_parents_map (parent -> child) stream shards map
+#  - use GetRecords to read all stream records
+#  - verify that:
+#      - all written items are present in the stream (check count and then sorted content)
+#      - within each partition key, the records are in order of writes (check that `e` is monotonically increasing for each record)
+#      - the stream shard parent-child relationships are correct - stream shards create "generations" (all stream shards are split or merged at the same moment,
+#        when tablet count is changed). Every stream shard except first ones has a parent, but not every stream shard is being point to as a parent - when stream shard merge
+#        (let's say A & B merge into C), then next generation stream shard (C) has two parents (A & B), but api allows to appoint only one - let's say A
+#        (the other one - B - will never be pointed to as a parent by anything else).
+#        NOTE: it's not the same as having no children - the stream shard (B) will have a child (C), but that child (C) will have it's sibling as parent (A).
+#        Then we try to walk the tree starting from every stream shard that is not pointed to as a parent. Depending on which generation that stream shard is in,
+#        the path will have different length.
+def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, rest_api, cql, TAGS):
+    if TAGS:
+        # this test tests tablet count changes, no need to run it on vnode variation.
+        return
+    
+    tablet_multipliers = [1, 2, 4, 8, 16, 8, 4, 2, 1]
+    writes_per_tablet_multiplier = 100
+    partition_count = 32
+
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES', name=unique_table_name('alternator_test_')) as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+
+        ks = f'alternator_{table.name}'
+        table_name = table.name
+        cdc_log_table_name = f'{table_name}_scylla_cdc_log'
+        init_table_count = get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name)
+
+        index = 0
+        expected_items = []
+        retrieved_items = []
+        for tablet_mult in tablet_multipliers:
+            set_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, init_table_count * tablet_mult)
+            for _ in range(0, writes_per_tablet_multiplier):
+                p = str(random.randint(0, partition_count - 1))
+                index += 1
+                # we want to partition keys by small set of partitions to force key collisions
+                # to detect any ordering issues within a partition
+                c = '1'
+                e = str(index)
+                table.put_item(Item={'p': p, 'c': c, 'e': e})
+                expected_items.append((p, c, e))
+
+        iterators = {}
+        shard_parents_map = {}
+        root_shard_ids = []
+        end_ts = time.time() + 30
+        while len(retrieved_items) < len(expected_items):
+            for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts):
+                shard_id = shard['ShardId']
+                parent_shard_id = shard.get('ParentShardId', None)
+                if parent_shard_id is None:
+                    root_shard_ids.append(shard_id)
+                elif shard_id in shard_parents_map:
+                    assert shard_parents_map[shard_id] == parent_shard_id
+                else:
+                    shard_parents_map[shard_id] = parent_shard_id
+                if shard_id in iterators:
+                    pytest.fail(f"Iterator for shard {shard_id} already exists")
+                start = shard['SequenceNumberRange']['StartingSequenceNumber']
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
+                assert iter is not None
+                iterators[shard_id] = iter
+
+
+            for shard_id, iter in iterators.items():
+                response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
+                if 'NextShardIterator' in response:
+                    iterators[shard_id] = response['NextShardIterator']
+
+                records = response.get('Records')
+                for record in records:
+                    dynamodb = record['dynamodb']
+                    keys = dynamodb['NewImage']
+                    
+                    assert set(keys) == set(['p', 'c', 'e'])
+                    p = keys['p'].get('S')
+                    c = keys['c'].get('S')
+                    e = keys['e'].get('S')
+                    retrieved_items.append((p, c, e))
+
+        assert len(retrieved_items) == len(expected_items)
+        assert sorted(retrieved_items) == sorted(expected_items)
+        previous_values = {}
+        # we iterate over retrieved items here in an order of how they were read from the stream
+        # implementation might (and will) reorder items for data with different partition keys as it pleases,
+        # but for the same partition key the order of events must be preserved.
+        # `previous_values` keeps track of last `e` value seen for each partition key `p`. When written for the same `p`
+        # next value will always have `e` greater than previous one.
+        for p, c, e in retrieved_items:
+            e = int(e)
+            pv = previous_values.get(p, -1)
+            assert pv < e
+            previous_values[p] = e
+        
+        assert len(root_shard_ids) == init_table_count
+
+        have_parents = set()
+        for (shard_id, parent_shard_id) in shard_parents_map.items():
+            have_parents.add(parent_shard_id)
+
+        def get_generation_from_shard(t):
+            # H 19b22b8563a:7fffffffffffffffe8547ce46400000
+            # 0 2 4 6 8 0 2 4 6 8
+            return t[2:13]
+        count_map = {}
+        for r in shard_parents_map:
+            gen = get_generation_from_shard(r)
+            count = count_map.get(gen, 0)
+            count_map[gen] = count + 1
+        def get_path(shard_id):
+            path = [ shard_id ]
+            current_shard_id = shard_id
+            while True:
+                parent_shard_id = shard_parents_map.get(current_shard_id, None)
+                if parent_shard_id is None:
+                    return path
+                path.append(parent_shard_id)
+                current_shard_id = parent_shard_id
+        for r in shard_parents_map:
+            if r not in have_parents:
+                path = get_path(r)
+                siblings_count = count_map[get_generation_from_shard(r)]
+                assert siblings_count == 1 << (len(tablet_multipliers) + 1 - len(path))
+
+def test_get_records(dynamodb, dynamodbstreams, TAGS):
     # TODO: add tests for storage/transactionable variations and global/local index
-    with create_stream_test_table(dynamodb, StreamViewType='NEW_AND_OLD_IMAGES') as table:
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='NEW_AND_OLD_IMAGES') as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
 
         p = 'piglet'
@@ -390,23 +701,13 @@ def test_get_records(dynamodb, dynamodbstreams):
         # but it is useful to see a working null-iteration as well, so 
         # lets go already.
         while True:
-            desc = dynamodbstreams.describe_stream(StreamArn=arn)
             iterators = []
 
-            while True:
-                shards = desc['StreamDescription']['Shards']
-
-                for shard in shards:
-                    shard_id = shard['ShardId']
-                    start = shard['SequenceNumberRange']['StartingSequenceNumber']
-                    iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
-                    iterators.append(iter)
-
-                last_shard = desc["StreamDescription"].get("LastEvaluatedShardId")
-                if not last_shard:
-                    break
-
-                desc = dynamodbstreams.describe_stream(StreamArn=arn, ExclusiveStartShardId=last_shard)
+            for shard in iterate_over_describe_stream(dynamodbstreams, arn, time.time() + 60):
+                shard_id = shard['ShardId']
+                start = shard['SequenceNumberRange']['StartingSequenceNumber']
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',SequenceNumber=start)['ShardIterator']
+                iterators.append(iter)
 
             next_iterators = []
             while iterators:
@@ -457,7 +758,7 @@ def test_get_records(dynamodb, dynamodbstreams):
             time.sleep(10)
             iterators = next_iterators
 
-def test_get_records_nonexistent_iterator(dynamodbstreams):
+def test_get_records_nonexistent_iterator(dynamodbstreams, TAGS):
     with pytest.raises(ClientError, match='ValidationException'):
         dynamodbstreams.get_records(ShardIterator='sdfsdfsgagaddafgagasgasgasdfasdfasdfasdfasdgasdasdgasdg', Limit=1000)
 
@@ -482,7 +783,7 @@ def test_get_records_nonexistent_iterator(dynamodbstreams):
 # and if in the future we can work around the DynamoDB problem, we can return
 # these fixtures to module scope.
 
-def create_table_ss(dynamodb, dynamodbstreams, type):
+def create_table_ss(dynamodb, dynamodbstreams, type, TAGS):
     table = create_test_table(dynamodb,
         Tags=TAGS,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
@@ -492,7 +793,7 @@ def create_table_ss(dynamodb, dynamodbstreams, type):
     yield table, arn
     table.delete()
 
-def create_table_sss_lsi(dynamodb, dynamodbstreams, type):
+def create_table_sss_lsi(dynamodb, dynamodbstreams, type, TAGS):
     table = create_test_table(dynamodb,
         Tags=TAGS,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
@@ -513,7 +814,7 @@ def create_table_sss_lsi(dynamodb, dynamodbstreams, type):
     yield table, arn
     table.delete()
 
-def create_table_s_no_ck(dynamodb, dynamodbstreams, type):
+def create_table_s_no_ck(dynamodb, dynamodbstreams, type, TAGS):
     table = create_test_table(dynamodb,
         Tags=TAGS,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -524,45 +825,45 @@ def create_table_s_no_ck(dynamodb, dynamodbstreams, type):
     table.delete()
 
 @pytest.fixture(scope="function")
-def test_table_sss_new_and_old_images_lsi(dynamodb, dynamodbstreams):
-    yield from create_table_sss_lsi(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+def test_table_sss_new_and_old_images_lsi(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_sss_lsi(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_ss_keys_only(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+def test_table_ss_keys_only(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_ss_new_image(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_IMAGE')
+def test_table_ss_new_image(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_IMAGE', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_ss_old_image(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'OLD_IMAGE')
+def test_table_ss_old_image(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'OLD_IMAGE', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams):
-    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_s_no_ck_new_image(dynamodb, dynamodbstreams):
-    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_IMAGE')
+def test_table_s_no_ck_new_image(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_IMAGE', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_s_no_ck_old_image(dynamodb, dynamodbstreams):
-    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'OLD_IMAGE')
+def test_table_s_no_ck_old_image(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'OLD_IMAGE', TAGS)
 
 @pytest.fixture(scope="function")
-def test_table_s_no_ck_new_and_old_images(dynamodb, dynamodbstreams):
-    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+def test_table_s_no_ck_new_and_old_images(dynamodb, dynamodbstreams, TAGS):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', TAGS)
 
 # Test that it is, sadly, not allowed to use UpdateTable on a table which
 # already has a stream enabled to change that stream's StreamViewType.
 # Relates to #6939
-def test_streams_change_type(test_table_ss_keys_only):
+def test_streams_change_type(test_table_ss_keys_only, TAGS):
     table, arn = test_table_ss_keys_only
     with pytest.raises(ClientError, match='ValidationException.*already'):
         table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE'});
@@ -571,13 +872,13 @@ def test_streams_change_type(test_table_ss_keys_only):
 
 # It is not allowed to enable stream for a table that already has a stream,
 # even if of the same type.
-def test_streams_enable_on_enabled(test_table_ss_new_and_old_images):
+def test_streams_enable_on_enabled(test_table_ss_new_and_old_images, TAGS):
     table, arn = test_table_ss_new_and_old_images
     with pytest.raises(ClientError, match='ValidationException.*already.*enabled'):
         table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'});
 
 # It is not allowed to disbale stream on a table that does not have a stream.
-def test_streams_disable_on_disabled(test_table):
+def test_streams_disable_on_disabled(test_table, TAGS):
     with pytest.raises(ClientError, match='ValidationException.*stream.*disable'):
         test_table.update(StreamSpecification={'StreamEnabled': False});
 
@@ -593,7 +894,7 @@ def list_shards(dynamodbstreams, arn):
     # tests we reduced the number of shards in the testing setup to
     # 32 (16 vnodes x 2 cpus), see issue #6979, so to still exercise this
     # paging feature, lets use a limit of 10.
-    limit = 10
+    limit = 10000
     response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit)['StreamDescription']
     assert len(response['Shards']) <= limit
     shards = [x['ShardId'] for x in response['Shards']]
@@ -767,12 +1068,15 @@ def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_even
     # fast - depending on the alternator_streams_time_window_s parameter.
     # This is optimization is important to keep *failing* tests reasonably
     # fast and not have to wait until the following arbitrary timeout.
-    timeout = time.time() + 20
+    timeout = time.time() + 5
     region = get_region(dynamodb)
     output = []
+    output_len = -1
     while time.time() < timeout:
         iterators = fetch_more(dynamodbstreams, iterators, output)
-        print("after fetch_more number expected_events={}, output={}".format(len(expected_events), len(output)))
+        if len(output) != output_len:
+            output_len = len(output)
+            print("after fetch_more number expected_events={}, output={}".format(len(expected_events), output))
         if compare_events(expected_events, output, mode, region):
             # success!
             return
@@ -801,7 +1105,7 @@ def do_batch_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, m
 
 # Test a single PutItem of a new item. Should result in a single INSERT
 # event. Reproduces #6930.
-def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
+def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'x': 2})
@@ -811,7 +1115,7 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbst
 
 # Replacing an item should result in a MODIFY, rather than REMOVE and MODIFY.
 # Moreover, the old item should be visible in OldImage. Reproduces #6930.
-def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'a': 1})
@@ -827,7 +1131,7 @@ def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images
 
 # Same as test_streams_putitem_new_items_overrides_old, but for a replaced
 # column is used in LSI. Reproduces #6930.
-def test_streams_putitem_new_item_overrides_old_lsi(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams):
+def test_streams_putitem_new_item_overrides_old_lsi(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'a': '1'})
@@ -839,7 +1143,7 @@ def test_streams_putitem_new_item_overrides_old_lsi(test_table_sss_new_and_old_i
     do_test(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test PutItem streams in a table with no clustering key.
-def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, _):
         events = []
         table.put_item(Item={'p': p, 'a': 1})
@@ -862,7 +1166,7 @@ def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and
 # differently by CDC. In issue #26382 - which this test reproduces - we
 # discovered that our implementation doesn't select a preimage for partition
 # deletions, resulting in a missing OldImage.
-def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_images, test_table_s_no_ck_old_image, dynamodb, dynamodbstreams):
+def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_images, test_table_s_no_ck_old_image, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, _):
         events = []
         table.update_item(Key={'p': p},
@@ -876,7 +1180,7 @@ def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_image
 
 # Test a single UpdateItem. Should result in a single INSERT event.
 # Reproduces #6918.
-def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
+def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -888,7 +1192,7 @@ def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodb, dynamod
 # Test OLD_IMAGE using UpdateItem. Verify that the OLD_IMAGE indeed includes,
 # as needed, the entire old item and not just the modified columns.
 # Reproduces issue #6935
-def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
+def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -909,7 +1213,7 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodb, dynamod
 # key - in this case since the item did exist, OLD_IMAGE should be returned -
 # and include just the key. This is a special case of reproducing #6935 -
 # the first patch for this issue failed in this special case.
-def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodb, dynamodbstreams):
+def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         # Create an *empty* item, with nothing except a key:
@@ -935,7 +1239,7 @@ def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamo
 # Currently fails in Alternator because the item's key is missing in
 # OldImage (#6935) and the LSI key is also missing (#7030).
 @pytest.fixture(scope="function")
-def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
+def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams, TAGS):
     table = create_test_table(dynamodb,
         Tags=TAGS,
         KeySchema=[
@@ -957,7 +1261,7 @@ def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
     yield table, arn
     table.delete()
 
-def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams):
+def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -976,7 +1280,7 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
 # adds a special deleted$k marker for a missing column in the preimage, and
 # this test verifies that Alternator Streams doesn't put this extra marker in
 # its output.
-def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams):
+def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         # Note that we do *not* set the "k" attribute (the LSI key)
@@ -999,7 +1303,7 @@ def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image
 # Corresponding tests for PutItem are included in tests based on do_updates_1.
 # The case for a PutItem within a BatchWriteItem is tested in
 # test_streams_batch_overwrite_identical. Reproduces #6918.
-def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -1065,7 +1369,7 @@ def test_streams_updateitem_equal_but_not_identical(test_table_ss_keys_only, tes
 # Tests that deleting a missing attribute with UpdateItem doesn't generate a
 # REMOVE event. Other cases are tested in test_streams_batch_delete_missing
 # and in tests based on do_updates_1. Reproduces #6918.
-def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         # Create an item
@@ -1090,7 +1394,7 @@ def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_s
 # that deleting the item results in a missing NEW_IMAGE, and that setting the
 # item to be empty has a different result - a NEW_IMAGE with just a key.
 # Reproduces issue #7107.
-def test_streams_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
+def test_streams_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -1121,7 +1425,7 @@ def test_streams_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
 # implementation of the combined mode has unique bugs, so it is worth testing
 # it separately.
 # Reproduces issue #7107.
-def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -1152,7 +1456,7 @@ def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, 
 
 # Test that when a stream shard has no data to read, GetRecords returns an
 # empty Records array - not a missing one. Reproduces issue #6926.
-def test_streams_no_records(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_no_records(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     # Get just one shard - any shard - and its LATEST iterator. Because it's
     # LATEST, there will be no data to read from this iterator.
@@ -1167,7 +1471,7 @@ def test_streams_no_records(test_table_ss_keys_only, dynamodbstreams):
 
 # Test that after fetching the last result from a shard, we don't get it
 # yet again. Reproduces issue #6942.
-def test_streams_last_result(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_last_result(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     iterators = latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
@@ -1196,7 +1500,7 @@ def test_streams_last_result(test_table_ss_keys_only, dynamodbstreams):
 # after reading the only one. In this test we verify that if we *do* perform
 # another change on the same key, we do get another event and it happens on the
 # *same* shard.
-def test_streams_another_result(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_another_result(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     iterators = latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
@@ -1245,7 +1549,7 @@ def test_streams_another_result(test_table_ss_keys_only, dynamodbstreams):
 # Test the SequenceNumber attribute returned for stream events, and the
 # "AT_SEQUENCE_NUMBER" iterator that can be used to re-read from the same
 # event again given its saved "sequence number".
-def test_streams_at_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_at_sequence_number(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
@@ -1291,7 +1595,7 @@ def test_streams_at_sequence_number(test_table_ss_keys_only, dynamodbstreams):
 # Test the SequenceNumber attribute returned for stream events, and the
 # "AFTER_SEQUENCE_NUMBER" iterator that can be used to re-read *after* the same
 # event again given its saved "sequence number".
-def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
     # Do two UpdateItem operations to the same key, that are expected to leave
@@ -1338,7 +1642,7 @@ def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams)
 # NOTE: This test relies on the test_table_ss_keys_only fixture giving us a
 # brand new stream, with no old events saved from other tests. If we ever
 # change this, we should change this test to use a different fixture.
-def test_streams_trim_horizon(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_trim_horizon(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
     # Do two UpdateItem operations to the same key, that are expected to leave
@@ -1392,7 +1696,7 @@ def test_streams_trim_horizon(test_table_ss_keys_only, dynamodbstreams):
 # that the important thing is that reading a shard starting at
 # StartingSequenceNumber will result in reading all the available items -
 # similar to how TRIM_HORIZON works. This is what the following test verifies.
-def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     # Do two UpdateItem operations to the same key, that are expected to leave
     # two events in the stream.
@@ -1404,14 +1708,8 @@ def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstrea
         UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
     # Get for all the stream shards the iterator starting at the shard's
     # StartingSequenceNumber:
-    response = dynamodbstreams.describe_stream(StreamArn=arn)
-    shards = response['StreamDescription']['Shards']
-    while 'LastEvaluatedShardId' in response['StreamDescription']:
-        response = dynamodbstreams.describe_stream(StreamArn=arn,
-            ExclusiveStartShardId=response['StreamDescription']['LastEvaluatedShardId'])
-        shards.extend(response['StreamDescription']['Shards'])
     iterators = []
-    for shard in shards:
+    for shard in iterate_over_describe_stream(dynamodbstreams, arn, time.time() + 60):
         shard_id = shard['ShardId']
         start = shard['SequenceNumberRange']['StartingSequenceNumber']
         assert start.isdecimal()
@@ -1507,42 +1805,42 @@ def do_updates_1_no_ck(table, p, _):
     events.append(['MODIFY', {'p': p}, {'p': p, 'b': 4, 'x': 5}, {'p': p, 'x': 5}])
     return events
 
-def test_streams_1_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
+def test_streams_1_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates_1, 'KEYS_ONLY')
 
-def test_streams_1_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
+def test_streams_1_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates_1, 'NEW_IMAGE')
 
-def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
+def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
 
-def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
 
-def test_streams_1_no_ck_keys_only(test_table_s_no_ck_keys_only, dynamodb, dynamodbstreams):
+def test_streams_1_no_ck_keys_only(test_table_s_no_ck_keys_only, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_s_no_ck_keys_only, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'KEYS_ONLY')
 
-def test_streams_1_no_ck_new_image(test_table_s_no_ck_new_image, dynamodb, dynamodbstreams):
+def test_streams_1_no_ck_new_image(test_table_s_no_ck_new_image, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_s_no_ck_new_image, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'NEW_IMAGE')
 
-def test_streams_1_no_ck_old_image(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams):
+def test_streams_1_no_ck_old_image(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'OLD_IMAGE')
 
-def test_streams_1_no_ck_new_and_old_images(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_1_no_ck_new_and_old_images(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
         do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1_no_ck, 'NEW_AND_OLD_IMAGES')
 
 # Tests that a DeleteItem within a BatchWriteItem that tries to remove a
 # missing item doesn't generate a REMOVE event. 
 # Reproduces #6918.
-def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, ps, cs):
         # Deleting items that don't exist shouldn't produce any events.
         table.meta.client.batch_write_item(RequestItems = {
@@ -1560,7 +1858,7 @@ def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new
 # tested for a standard PutItem (see tests based on do_updates_1), and an
 # UpdateItem (see test_streams_updateitem_overwrite_identical). Reproduces
 # #6918.
-def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     # Batch PutItem identical items
     def do_updates(table, ps, cs):
         # Emit a separate event for each item in the batch.
@@ -1579,7 +1877,7 @@ def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_s
         do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
         do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
-def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, TAGS):
     def do_updates(table, ps, cs):
         # Emit a separate event for each item in the batch.
         table.meta.client.batch_write_item(RequestItems = {
@@ -1604,7 +1902,7 @@ def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_s
 # because we are not going to actually use or change this stream, we will
 # just do multiple tests on its setup.
 @pytest.fixture(scope="module")
-def test_table_stream_with_result(dynamodb, dynamodbstreams):
+def test_table_stream_with_result(dynamodb, dynamodbstreams, TAGS):
     tablename = unique_table_name()
     result = dynamodb.meta.client.create_table(TableName=tablename,
         Tags=TAGS,
@@ -1650,7 +1948,7 @@ def wait_for_status_active(table):
 # Test that in a table with Streams enabled, LatestStreamArn is returned
 # by CreateTable, DescribeTable and UpdateTable, and is the same ARN as
 # returned by ListStreams. Reproduces issue #7157.
-def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
+def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams, TAGS):
     (result, table) = test_table_stream_with_result
     assert 'LatestStreamArn' in result['TableDescription']
     arn_in_create_table = result['TableDescription']['LatestStreamArn']
@@ -1672,7 +1970,7 @@ def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
 # Test that in a table with Streams enabled, LatestStreamLabel is returned
 # by CreateTable, DescribeTable and UpdateTable, and is the same "label" as
 # returned by ListStreams. Reproduces issue #7162.
-def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams):
+def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams, TAGS):
     (result, table) = test_table_stream_with_result
     assert 'LatestStreamLabel' in result['TableDescription']
     label_in_create_table = result['TableDescription']['LatestStreamLabel']
@@ -1693,7 +1991,7 @@ def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams):
 
 # Test that in a table with Streams enabled, StreamSpecification is returned
 # by CreateTable, DescribeTable and UpdateTable. Reproduces issue #7163.
-def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
+def test_stream_specification(test_table_stream_with_result, dynamodbstreams, TAGS):
     # StreamSpecification as set in test_table_stream_with_result:
     stream_specification = {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}
     (result, table) = test_table_stream_with_result
@@ -1724,7 +2022,7 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
 # that the right answer is that NextShardIterator should be *missing*
 # (reproduces issue #7237).
 @pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
-def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
@@ -1778,7 +2076,7 @@ def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
 # stream's shards should give an indication that they are all closed - but
 # all these shards should still be readable.
 @pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
-def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     iterators = latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
@@ -1863,8 +2161,8 @@ def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams):
 # still using this to read from the stream. We (incorrectly) suspected in
 # issue #12601 that changes to the version of the schema lead to a change of
 # the ARN. In this test we show that it doesn't happen.
-def test_stream_arn_unchanging(dynamodb, dynamodbstreams):
-    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+def test_stream_arn_unchanging(dynamodb, dynamodbstreams, TAGS):
+    with create_stream_test_table(dynamodb, TAGS, StreamViewType='KEYS_ONLY') as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
         # Change a tag on the table. This changes its schema.
         table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
@@ -1882,7 +2180,7 @@ def test_stream_arn_unchanging(dynamodb, dynamodbstreams):
 # this name as a substring is listed.
 # In test_gsi.py and test_lsi.py we have similar tests for GSI and LSI.
 # Reproduces #19911
-def test_stream_list_tables(dynamodb):
+def test_stream_list_tables(dynamodb, TAGS):
     with new_test_table(dynamodb,
         Tags=TAGS,
         StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
@@ -1906,7 +2204,7 @@ def test_stream_list_tables(dynamodb):
 # no reason not to. In any case, some maximum is needed unless we make
 # sure the relevant code (executor::get_records()) has preemption points -
 # and currently it does not. Reproduces issue #23534
-def test_get_records_too_high_limit(test_table_ss_keys_only, dynamodbstreams):
+def test_get_records_too_high_limit(test_table_ss_keys_only, dynamodbstreams, TAGS):
     table, arn = test_table_ss_keys_only
     # Get just one shard - any shard - and its LATEST iterator. Because it's
     # LATEST, there will be no data to read from this iterator, but we don't
@@ -1942,7 +2240,7 @@ def padded_name(length):
 # We have two versions of this test - one with the stream created with the
 # table, and one with the stream added to the existing table.
 # Reproduces #24598
-def test_stream_table_name_length_222_create(dynamodb):
+def test_stream_table_name_length_222_create(dynamodb, TAGS):
     try:
         with new_test_table(dynamodb, name=padded_name(222),
             Tags=TAGS,
@@ -1958,7 +2256,7 @@ def test_stream_table_name_length_222_create(dynamodb):
         assert 'table name is longer than' in str(e) or 'TableName must be' in str(e)
 
 # Reproduces #24598
-def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams):
+def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams, TAGS):
     try:
         with new_test_table(dynamodb, name=padded_name(222),
             Tags=TAGS,
@@ -1974,7 +2272,7 @@ def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams):
 
 # When the table has a shorter name length, like 192, we should be able to
 # create both the table and streams, with no problems.
-def test_stream_table_name_length_192_create(dynamodb):
+def test_stream_table_name_length_192_create(dynamodb, TAGS):
     with new_test_table(dynamodb, name=padded_name(192),
         Tags=TAGS,
         StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
@@ -1983,7 +2281,7 @@ def test_stream_table_name_length_192_create(dynamodb):
     ) as table:
         pass
 
-def test_stream_table_name_length_192_update(dynamodb, dynamodbstreams):
+def test_stream_table_name_length_192_update(dynamodb, dynamodbstreams, TAGS):
     with new_test_table(dynamodb, name=padded_name(192),
         Tags=TAGS,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],

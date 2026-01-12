@@ -38,6 +38,7 @@
 #include "expressions.hh"
 #include "conditions.hh"
 #include <optional>
+#include <generator>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "mutation/collection_mutation.hh"
@@ -311,6 +312,7 @@ executor::executor(gms::gossiper& gossiper,
          service::storage_service& ss,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
+         db::system_keyspace& system_keyspace,
          cdc::metadata& cdc_metadata,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
@@ -319,6 +321,7 @@ executor::executor(gms::gossiper& gossiper,
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
+      _system_keyspace(system_keyspace),
       _cdc_metadata(cdc_metadata),
       _enforce_authorization(_proxy.data_dictionary().get_config().alternator_enforce_authorization),
       _warn_authorization(_proxy.data_dictionary().get_config().alternator_warn_authorization),
@@ -351,16 +354,6 @@ static double get_table_creation_time(const schema &schema) {
         catch(...) {}
     }
     return 0.0;
-}
-
-void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    auto creation_time = get_table_creation_time(schema);
-
-    rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
-    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
-
-    executor::supplement_table_stream_info(descr, schema, sp);
 }
 
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
@@ -1875,17 +1868,12 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
-        // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
                 locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
                 const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
                 auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
-                if (rs->uses_tablets()) {
-                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                    "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
-                }
             }
         }
         // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
@@ -1950,8 +1938,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await _mm.wait_for_schema_agreement(_proxy.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
-    executor::supplement_table_info(request, *schema, _proxy);
-    rjson::add(status, "TableDescription", std::move(request));
+    rjson::value table_description = co_await fill_table_description(schema, table_status::creating, client_state, trace_state, empty_service_permit());    
+    rjson::add(status, "TableDescription", std::move(table_description));
     co_return rjson::print(std::move(status));
 }
 
@@ -2041,14 +2029,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
-                        if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                            "If you want to enable streams, re-create this table with vnodes (with the tag 'system:initial_tablets' set to 'none').");
-                        }
                         if (tab->cdc_options().enabled()) {
                             co_return api_error::validation("Table already has an enabled stream: TableName: " + tab->cf_name());
                         }
@@ -2235,8 +2218,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
-        supplement_table_info(request, *schema, p.local());
-        rjson::add(status, "TableDescription", std::move(request));
+        auto cs = client_state_other_shard.get();
+        rjson::value table_description = co_await e.local().fill_table_description(schema, table_status::updating, cs, gt, empty_service_permit());
+        rjson::add(status, "TableDescription", std::move(table_description));
         co_return rjson::print(std::move(status));
     });
 }
@@ -2571,15 +2555,17 @@ db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
 
-static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
+static lw_shared_ptr<query::read_command> previous_items_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
-        const clustering_key& ck,
+        std::generator<const clustering_key&> cks,
         shared_ptr<cql3::selection::selection> selection) {
     std::vector<query::clustering_range> bounds;
     if (schema->clustering_key_size() == 0) {
         bounds.push_back(query::clustering_range::make_open_ended_both_sides());
     } else {
-        bounds.push_back(query::clustering_range::make_singular(ck));
+        for(const auto &ck : cks) {
+            bounds.push_back(query::clustering_range::make_singular(ck));
+        }
     }
     // FIXME: We pretend to take a selection (all callers currently give us a
     // wildcard selection...) but here we read the entire item anyway. We
@@ -2590,6 +2576,13 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(proxy.get_tombstone_limit()));
+}
+
+static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
+        schema_ptr schema,
+        const clustering_key& ck,
+        shared_ptr<cql3::selection::selection> selection) {
+    return previous_items_read_command(proxy, schema, [&]() -> std::generator<const clustering_key&> { co_yield ck; }(), selection);
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -2800,32 +2793,34 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         .alternator = true,
         .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
-    if (needs_read_before_write) {
-        if (_write_isolation == write_isolation::FORBID_RMW) {
-            throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
-        }
-        global_stats.reads_before_write++;
-        per_table_stats.reads_before_write++;
-        if (_write_isolation == write_isolation::UNSAFE_RMW) {
-            // This is the old, unsafe, read before write which does first
-            // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
-                if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
-                }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+    if (!cdc_opts.alternator_streams_increased_compatibility) {
+        if (needs_read_before_write) {
+            if (_write_isolation == write_isolation::FORBID_RMW) {
+                throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
+            }
+            global_stats.reads_before_write++;
+            per_table_stats.reads_before_write++;
+            if (_write_isolation == write_isolation::UNSAFE_RMW) {
+                // This is the old, unsafe, read before write which does first
+                // a read, then a write. TODO: remove this mode entirely.
+                return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
+                        [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
+                    if (!m) {
+                        return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
+                    }
+                    return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
+                        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+                    });
                 });
+            }
+        } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+            std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
+            SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+            return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
+                return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
             });
         }
-    } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
-        std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-        });
     }
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
@@ -2835,7 +2830,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
-    auto read_command = needs_read_before_write ?
+    auto read_command = needs_read_before_write || cdc_opts.alternator_streams_increased_compatibility ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), *this, read_command, to_partition_ranges(*schema(), _pk),
@@ -2960,11 +2955,11 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
-
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -3064,10 +3059,11 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
@@ -3149,6 +3145,10 @@ public:
             } else {
                 ret = mutation_builder.build(schema, ts);
             }
+
+            // ensure unique timestamps
+            // timestamp +- 1 has some additional meaning, so we add 2
+            ts += 2;
         }
         return ret;
     }
@@ -3191,7 +3191,18 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
         .alternator_streams_increased_compatibility =
                 schema->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
-    return _proxy.cas(schema, std::move(cas_shard), *op_ptr, nullptr, to_partition_ranges(dk),
+
+    lw_shared_ptr<query::read_command> read_command;
+    if (cdc_opts.alternator_streams_increased_compatibility) {
+        auto selection = cql3::selection::selection::wildcard(schema);
+        read_command = previous_items_read_command(_proxy, schema, [&]() -> std::generator<const clustering_key&> { 
+            for(auto& mb : mutation_builders) {
+                co_yield mb.ck();
+            }
+        }(), selection);
+    }
+    
+    return _proxy.cas(schema, std::move(cas_shard), *op_ptr, std::move(read_command), to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout, true, std::move(cdc_opts)).finally([op = std::move(op)]{}).discard_result();
@@ -3242,6 +3253,10 @@ future<> executor::do_batch_write(
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));
             any_cdc_enabled |= b.first->cdc_options().enabled();
+
+            // ensure unique timestamps
+            // timestamp +- 1 has some additional meaning, so we add 2
+            now += 2;
         }
         return _proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
@@ -4561,6 +4576,13 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     if (_attribute_updates) {
         apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
     }
+
+    if (cdc_opts.alternator_streams_increased_compatibility && !previous_item && !any_updates) {
+        // note: `cdc_opts.alternator_streams_increased_compatibility` set to true forces user to pass
+        // `read_command`, which guarantees that `previous_item` is nullptr only if item does not exist
+        // no previous item and only deletes - nothing to do
+        return mutation{ _schema, _pk };
+    }
     if (!modified_attrs.empty()) {
         auto serialized_map = modified_attrs.to_mut().serialize(*attrs_type());
         row.cells().apply(attrs_column(*_schema), std::move(serialized_map));
@@ -4598,10 +4620,11 @@ future<executor::request_return_type> executor::update_item(client_state& client
     auto op = make_shared<update_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
