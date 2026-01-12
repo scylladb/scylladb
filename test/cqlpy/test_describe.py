@@ -3180,6 +3180,73 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
         for recreate_statement in desc_iter:
             cql.execute(recreate_statement.create_statement)
 
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that `sl:default_batch` is described similarly to `sl:driver` -
+    with `CREATE SERVICE LEVEL IF NOT EXISTS ...` and `ALTER SERVICE LEVEL ...` statements.
+    """
+    with AuthSLContext(cql):
+        cql.execute("ALTER SERVICE LEVEL default_batch WITH SHARES=45")
+        cql.execute("ALTER SERVICE LEVEL default_batch WITH TIMEOUT=654s")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, include_default_batch=True)
+
+        [create, alter] = list(desc_iter)
+
+        assert create.keyspace_name == None
+        assert create.type == "service_level"
+        assert create.name == "default_batch"
+        assert create.create_statement == "CREATE SERVICE LEVEL IF NOT EXISTS default_batch WITH TIMEOUT = 654000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 45;"
+
+        assert alter.keyspace_name == None
+        assert alter.type == "service_level"
+        assert alter.name == "default_batch"
+        assert alter.create_statement == "ALTER SERVICE LEVEL default_batch WITH TIMEOUT = 654000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 45;"
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_removed_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that if `sl:default_batch` is removed, `DESC SCHEMA WITH INTERNALS`
+    emits `DROP SERVICE LEVEL IF EXISTS default_batch;`.
+    """
+    with AuthSLContext(cql):
+        cql.execute("DROP SERVICE LEVEL default_batch")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, include_default_batch=True)
+
+        [drop] = list(desc_iter)
+
+        assert drop.type == "service_level"
+        assert drop.name == "default_batch"
+        assert drop.create_statement == "DROP SERVICE LEVEL IF EXISTS default_batch;"
+
+        # As for `sl:driver`, `DROP ... default_batch` has to be emitted before any other
+        # service level, so that restoring from the output of `DESC SCHEMA WITH INTERNALS`
+        # doesn't run out of slots. The steps below verify it the same way.
+        for i in range(MAX_USER_SERVICE_LEVELS + 1): # sl:default_batch removed, so we can use an additional slot
+            # "a_sl" name to make sure "default_batch" service level will be listed in DESC SCHEMA
+            # even before service levels with lexicographically smaller name
+            cql.execute(f"CREATE SERVICE LEVEL a_sl{i}")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, include_default_batch=True)
+
+        service_levels_iter = cql.execute("LIST ALL SERVICE LEVELS")
+        service_levels = [record.service_level for record in service_levels_iter]
+        for sl in service_levels:
+            cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+        cql.execute("CREATE SERVICE LEVEL default_batch WITH shares=100 AND workload_type='batch'")
+        # `sl:driver` occupies a slot too, so it has to be restored as well to keep
+        # the replay below exactly at the service level limit.
+        cql.execute("CREATE SERVICE LEVEL driver WITH shares=200 AND workload_type='batch'")
+        for recreate_statement in desc_iter:
+            cql.execute(recreate_statement.create_statement)
+
 def test_desc_restore(cql):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities
