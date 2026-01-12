@@ -252,22 +252,22 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
 
 @pytest.mark.asyncio
 async def test_get_object_store_endpoints(manager: ManagerClient):
-    badconf = MinioServer.create_conf('a', 123, 'bad_region')
-    cfg = {'object_storage_endpoints': badconf}
+    objconf = MinioServer.create_conf('a', 123, 'bad_region')
+    cfg = {'object_storage_endpoints': objconf}
 
     print('Scylla returns the object storage endpoints')
     server = await manager.server_add(config=cfg)
     endpoints = await manager.api.get_config(server.ip_addr, 'object_storage_endpoints')
 
     print('Also check the returned string is valid JSON')
-    del badconf[0]['name']
-    assert json.loads(endpoints['a']) == badconf[0]
+    del objconf[0]['name']
+    assert json.loads(endpoints['a']) == objconf[0]
 
     print('Check that system.config contains the object storage endpoints')
     cql = manager.get_cql()
     res = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'object_storage_endpoints';").one().value)
     assert 'a' in res
-    assert json.loads(res['a']) == badconf[0]
+    assert json.loads(res['a']) == objconf[0]
 
 
 @pytest.mark.asyncio
