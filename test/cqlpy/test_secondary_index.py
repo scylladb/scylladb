@@ -2134,6 +2134,34 @@ def test_short_read(cql, test_keyspace):
         rows = [(col[0], col[1]) for col in list(rs)]
         assert sorted(rows) == [(1,1), (1,2), (1,3), (2,1)]
 
+# Another reproducer for issue #25839, this time asking for a count() as
+# a user tried in #28026 and noticing that adding an additional column
+# to the selection causes the count to become smaller.
+@pytest.mark.xfail(reason="issue #25839")
+def test_short_count(cql, test_keyspace):
+    # Newer Scylla have configurable query_page_size_in_bytes so we can set
+    # it low to have a faster test. Older Scylla and Cassandra have hard-coded
+    # 1MB setting for this so we need to use larger data in this test.
+    config = 'query_page_size_in_bytes'
+    configurable = is_scylla(cql) and list(cql.execute(f"SELECT value FROM system.config WHERE name='{config}'")) != []
+    page_memory_limit = 1024 if configurable else 1024 * 1024
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with ExitStack() as stack:
+        table = stack.enter_context(new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, data text, primary key (pk, ck1, ck2)'))
+        if configurable:
+            stack.enter_context(config_value_context(cql, 'query_page_size_in_bytes', str(page_memory_limit)))
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 'A' * row_size])
+        cql.execute(stmt, [1, 1, 2, 'B' * row_size])
+        cql.execute(stmt, [1, 1, 3, 'C' * row_size])
+        cql.execute(stmt, [2, 1, 1, 'D' * row_size])
+        rs = list(cql.execute(f'SELECT count(*) FROM {table} WHERE ck1 = 1'))
+        assert len(rs) == 1
+        assert rs[0].count == 4
+        rs = list(cql.execute(f'SELECT count(*), pk, data FROM {table} WHERE ck1 = 1'))
+        assert len(rs) == 1
+        assert rs[0].count == 4
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
