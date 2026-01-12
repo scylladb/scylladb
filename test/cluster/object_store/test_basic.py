@@ -253,13 +253,13 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
 @pytest.mark.asyncio
 @pytest.mark.parametrize('config_with_full_url', [True, False])
 async def test_get_object_store_endpoints(manager: ManagerClient, config_with_full_url):
-    objconf = MinioServer.create_conf('a', 123, 'bad_region')
     if config_with_full_url:
-        proto = "https" if objconf[0]["use_https"] else "http"
-        objconf[0]['name'] = f'{proto}://{objconf[0]["name"]}:{objconf[0]["port"]}'
-        objconf[0]['type'] = 's3'
-        del objconf[0]["port"]
-        del objconf[0]["use_https"]
+        objconf = MinioServer.create_conf('http://a:123', 'region')
+    else:
+        objconf = MinioServer.create_conf('a', 'region')
+        objconf[0]["port"] = 123
+        objconf[0]["use_https"] = False
+        del objconf[0]["type"]
 
     cfg = {'object_storage_endpoints': objconf}
 
@@ -287,10 +287,11 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     cql = manager.get_cql()
 
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
+    endpoint = 'http://a:456'
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
     storage_opts = format_tuples(type=f'{object_storage.type}',
-                                 endpoint='a',
+                                 endpoint=endpoint,
                                  bucket=object_storage.bucket_name)
 
     with pytest.raises(ConfigurationException):
@@ -298,9 +299,9 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
                       f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
 
     print('Update config with a new endpoint and SIGHUP Scylla to reload configuration')
-    new_endpoint = MinioServer.create_conf('a', 456, 'region')
+    new_endpoint = MinioServer.create_conf(endpoint, 'region')
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', new_endpoint)
-    await wait_for_config(manager, server, 'object_storage_endpoints', {'a': '{ "port": 456, "use_https": false, "aws_region": "region", "iam_role_arn": "" }'})
+    await wait_for_config(manager, server, 'object_storage_endpoints', {endpoint: '{ "type": "s3", "aws_region": "region", "iam_role_arn": "" }'})
 
     print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
