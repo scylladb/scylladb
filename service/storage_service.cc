@@ -6695,6 +6695,11 @@ void storage_service::init_messaging_service() {
                 mutations.push_back(canonical_mutation(*sl_driver_created_mut));
             }
 
+            auto sl_default_batch_created_mut = co_await ss._sys_ks.local().get_service_level_default_batch_created_mutation();
+            if (sl_default_batch_created_mut) {
+                mutations.push_back(canonical_mutation(*sl_default_batch_created_mut));
+            }
+
             auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();
             if (sl_version_mut) {
                 mutations.push_back(canonical_mutation(*sl_version_mut));
