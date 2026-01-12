@@ -6,6 +6,7 @@
 import pytest
 import time
 import asyncio
+import json
 import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
@@ -14,6 +15,8 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.util import trigger_snapshot, reconnect_driver, \
         wait_for_token_ring_and_group0_consistency, get_topology_coordinator
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
+from test.cluster.test_strong_consistency import get_table_raft_group_id, wait_for_leader
+from test.cqlpy.vector_store_mock import VectorStoreMock
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement, BatchType
 from cassandra.protocol import InvalidRequest, QueryMessage, PrepareMessage, ExecuteMessage, BatchMessage
@@ -449,34 +452,46 @@ async def test_internal_service_level_creation_failure(manager: ScyllaClusterMan
         service_level_names = [sl.service_level for sl in service_levels]
         assert sl_name not in service_level_names
 
-async def _verify_requests_count_metrics(manager, server, used_group, unused_group, func):
+async def _verify_group_metrics(manager, server, metric_name, group_label, used_group, unused_group, func):
     number_of_requests = 1000
+    # The metric advances by at least one per request in the group that runs it.
     # If the service level is changed, the scheduling group is changed in connection::process()
     # after a request is finished. Therefore, a small number of initial requests can be
     # processed in the previous scheduling group. To handle it and prevent test flakiness,
     # we add a relatively large margin of requests that are allowed to be processed by a group 
     # different from used_group.
-    expected_number_of_requests = number_of_requests * 0.9
+    expected_metric_delta = number_of_requests * 0.9
 
-    def get_requests_for_group(metrics, group):
-        res = metrics.get("scylla_transport_cql_requests_count", {'scheduling_group_name': group})
-        logger.info(f"group={group}, _transport_cql_requests_count={res}")
+    def get_metric_for_group(metrics, group):
+        res = metrics.get(metric_name, {group_label: group})
+        logger.info(f"group={group}, {metric_name}={res}")
 
         if res is None:
             return 0
         return res
 
     metrics = await manager.metrics.query(server.ip_addr)
-    initial_requests_processed_by_used_group = get_requests_for_group(metrics, used_group)
-    initial_requests_processed_by_unused_group = get_requests_for_group(metrics, unused_group)
+    initial_used_group_metric = get_metric_for_group(metrics, used_group)
+    initial_unused_group_metric = get_metric_for_group(metrics, unused_group)
 
     await asyncio.gather(*[asyncio.to_thread(func) for i in range(number_of_requests)])
 
     metrics = await manager.metrics.query(server.ip_addr)
-    requests_processed_by_used_group = get_requests_for_group(metrics, used_group)
-    requests_processed_by_unused_group = get_requests_for_group(metrics, unused_group)
-    assert requests_processed_by_used_group - initial_requests_processed_by_used_group >= expected_number_of_requests
-    assert requests_processed_by_unused_group - initial_requests_processed_by_unused_group < expected_number_of_requests
+    used_group_metric = get_metric_for_group(metrics, used_group)
+    unused_group_metric = get_metric_for_group(metrics, unused_group)
+    assert used_group_metric - initial_used_group_metric >= expected_metric_delta
+    assert unused_group_metric - initial_unused_group_metric < expected_metric_delta
+
+async def _verify_requests_count_metrics(manager, server, used_group, unused_group, func):
+    await _verify_group_metrics(manager, server, "scylla_transport_cql_requests_count", "scheduling_group_name",
+                                used_group, unused_group, func)
+
+# `scylla_transport_cql_requests_count` is labeled with the scheduling group of the connection,
+# which doesn't change when a single statement is redirected to `sl:default_batch`. Only the
+# tasks the statement spawns run in the redirected group, so the scheduler metric is used here.
+async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
+    await _verify_group_metrics(manager, server, "scylla_scheduler_tasks_processed", "group",
+                                used_group, unused_group, func)
 
 async def test_driver_service_level_not_used_for_user_queries(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config=auth_config)
@@ -916,3 +931,166 @@ async def test_service_level_metrics(manager: ScyllaClusterManager) -> None:
     logger.info(f"Verifying service level metric for {sl_name}")
     await wait_for(verify_new_sl_metric, deadline=time.time() + 30)
 
+async def test_default_batch_service_level_used_for_scan_queries(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(config=auth_config)
+    cql, [h] = await manager.get_ready_cql([server])
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", host=h)
+    await cql.run_async("CREATE TABLE ks.t2 (pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2)))", host=h)
+
+    func = lambda: cql.execute("SELECT * FROM ks.t")
+
+    logger.info("A scan by a role with its own service level runs in that service level")
+    await cql.run_async("CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async("ATTACH SERVICE LEVEL test TO cassandra", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:default_batch', func)
+
+    logger.info("Once the role has no service level of its own, the scan runs in sl:default_batch")
+    await cql.run_async("DETACH SERVICE LEVEL FROM cassandra", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', func)
+
+    logger.info("A partition key that is restricted but not pinned still means reading the whole table")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test',
+                                          lambda: cql.execute("SELECT * FROM ks.t WHERE pk > 0 ALLOW FILTERING"))
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test',
+                                          lambda: cql.execute("SELECT * FROM ks.t2 WHERE pk1 = 1 ALLOW FILTERING"))
+
+    logger.info("With sl:default_batch dropped, the scan falls back to sl:default")
+    await cql.run_async("DROP SERVICE LEVEL default_batch", host=h)
+    # Dropping a service level renames its scheduling group to `sl_deleted:<name>`, so that is
+    # where a redirect surviving the drop would show up.
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl_deleted:default_batch', func)
+
+    logger.info("Recreating sl:default_batch brings the redirect back")
+    await cql.run_async("CREATE SERVICE LEVEL default_batch WITH timeout = 10s AND workload_type = 'batch' AND shares = 100", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', func)
+
+async def test_default_batch_service_level_used_for_batch_queries(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(config=auth_config)
+    cql, [h] = await manager.get_ready_cql([server])
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", host=h)
+
+    batch_func = lambda statements: (lambda: cql.execute("BEGIN UNLOGGED BATCH " + "INSERT INTO ks.t (pk, v) VALUES (1, 1); " * statements + "APPLY BATCH;"))
+    small_batch_func = batch_func(1)
+    large_batch_func = batch_func(12)
+    conditional_batch_func = lambda: cql.execute("BEGIN UNLOGGED BATCH " + "INSERT INTO ks.t (pk, v) VALUES (1, 1) IF NOT EXISTS; " * 12 + "APPLY BATCH;")
+
+    logger.info("A service level attached to the role is used even if its workload type is unspecified")
+    await cql.run_async("CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async("ATTACH SERVICE LEVEL test TO cassandra", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:default_batch', large_batch_func)
+
+    await cql.run_async("DETACH SERVICE LEVEL FROM cassandra", host=h)
+
+    logger.info("A small batch runs in sl:default")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', small_batch_func)
+
+    logger.info("A batch just below the threshold still runs in sl:default")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', batch_func(11))
+
+    logger.info("A batch at the threshold runs in sl:default_batch")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', large_batch_func)
+
+    logger.info("A conditional batch is a single-partition LWT holding the paxos lock, so it stays in sl:default")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', conditional_batch_func)
+
+async def test_default_batch_service_level_not_used_for_bounded_queries(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(config=auth_config)
+    cql, [h] = await manager.get_ready_cql([server])
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, w int, PRIMARY KEY (pk, ck))", host=h)
+    await cql.run_async("CREATE INDEX ON ks.t (v)", host=h)
+    await cql.run_async("INSERT INTO ks.t (pk, ck, v, w) VALUES (1, 1, 1, 1)", host=h)
+
+    logger.info("Reading a known partition is not a scan, even when it needs filtering")
+    func = lambda: cql.execute("SELECT * FROM ks.t WHERE pk = 1 AND w = 1 ALLOW FILTERING")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+
+    logger.info("A single token is one partition, not a scan")
+    func = lambda: cql.execute("SELECT * FROM ks.t WHERE token(pk) = token(1)")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+
+    logger.info("A secondary index lookup is not a scan either")
+    func = lambda: cql.execute("SELECT * FROM ks.t WHERE v = 1")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+
+    logger.info("A statement naming a service level explicitly is not redirected")
+    await cql.run_async("CREATE SERVICE LEVEL test", host=h)
+    func = lambda: cql.execute("SELECT * FROM ks.t USING SERVICE LEVEL test")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+
+async def test_default_batch_service_level_not_used_for_vector_search(manager: ScyllaClusterManager) -> None:
+    mock = VectorStoreMock()
+    mock.start("127.0.0.1")
+    try:
+        config = auth_config | {'vector_store_primary_uri': f"http://127.0.0.1:{mock.port}"}
+        server = await manager.server_add(config=config)
+        cql, [h] = await manager.get_ready_cql([server])
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+        await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                            " AND tablets = {'enabled': true}", host=h)
+        await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, embedding vector<float, 3>)", host=h)
+        await cql.run_async("CREATE CUSTOM INDEX ON ks.t(embedding) USING 'vector_index'", host=h)
+        await cql.run_async("INSERT INTO ks.t (pk, embedding) VALUES (1, [0.1, 0.2, 0.3])", host=h)
+        mock.set_next_ann_response(200, json.dumps({"primary_keys": {"pk": [1]}, "similarity_scores": [0.1]}))
+
+        # An ANN query has no partition key restriction, so it looks like a full scan to the
+        # generic restriction machinery, but it reads only the keys the index node returned.
+        func = lambda: cql.execute("SELECT pk FROM ks.t ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 1")
+        logger.info("A vector search is bounded by its mandatory LIMIT, so it stays in sl:default")
+        await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+        assert len(mock.ann_requests) > 0
+    finally:
+        mock.stop()
+
+# A request forwarded to another node keeps the role's service level: the forward travels
+# on the per-tenant RPC connection of the sender's scheduling group, and the receiver
+# isolates that connection into the same group. The redirect to `sl:default_batch`
+# therefore sees the role's group on the receiving node and leaves the request alone.
+async def test_forwarded_request_keeps_attached_service_level(manager: ScyllaClusterManager) -> None:
+    config = auth_config | {'experimental_features': ['strongly-consistent-tables']}
+    servers = await manager.servers_add(2, config=config, auto_rack_dc='dc1')
+    cql, hosts = await manager.get_ready_cql(servers)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+                        " AND tablets = {'initial': 1} AND consistency = 'global'", host=hosts[0])
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", host=hosts[0])
+
+    host_ids = [str(await manager.get_host_id(s.server_id)) for s in servers]
+    group_id = await get_table_raft_group_id(manager, "ks", "t")
+    leader_host_id = str(await wait_for_leader(manager, servers[0], group_id))
+    leader = next(s for s, hid in zip(servers, host_ids) if hid == leader_host_id)
+    follower = next(s for s, hid in zip(servers, host_ids) if hid != leader_host_id)
+    follower_host = next(h for h, hid in zip(hosts, host_ids) if hid != leader_host_id)
+    logger.info(f"Leader is {leader}, writes are coordinated by {follower}")
+
+    async def node_bounces():
+        metrics = await manager.metrics.query(follower.ip_addr)
+        return metrics.get("scylla_strong_consistency_coordinator_write_node_bounces") or 0
+
+    # A strongly consistent write coordinated by a node other than the raft leader is
+    # forwarded to the leader, which executes the statement itself.
+    stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.QUORUM)
+    func = lambda: cql.execute(stmt, host=follower_host)
+
+    logger.info("The forwarded write runs in the role's service level on the receiving node")
+    await cql.run_async("CREATE SERVICE LEVEL test", host=hosts[0])
+    await cql.run_async("ATTACH SERVICE LEVEL test TO cassandra", host=hosts[0])
+    bounces_before = await node_bounces()
+    await _verify_tasks_processed_metrics(manager, leader, 'sl:test', 'sl:default', func)
+    bounces_after = await node_bounces()
+    logger.info(f"write_node_bounces on the coordinator: {bounces_before} -> {bounces_after}")
+    assert bounces_after > bounces_before
+
+    logger.info("Once the role has no service level of its own, it runs in sl:default there")
+    await cql.run_async("DETACH SERVICE LEVEL FROM cassandra", host=hosts[0])
+    await _verify_tasks_processed_metrics(manager, leader, 'sl:default', 'sl:test', func)
