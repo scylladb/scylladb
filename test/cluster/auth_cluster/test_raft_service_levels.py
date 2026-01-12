@@ -719,3 +719,61 @@ async def test_anonymous_user(manager: ManagerClient) -> None:
             return
 
     assert False, f"None of clients use sl:default, rows={rows}"
+
+@pytest.mark.asyncio
+async def test_default_batch_service_level_used_for_scan_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    # Setup keyspace and table
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", host=h)
+
+    # Attach service level, veriy it is used
+    await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
+    func = lambda: cql.execute("SELECT * FROM ks.t")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:default_batch', func)
+
+    # Detach service level. Verify default_batch is used (sl:default_batch exists by default)
+    await cql.run_async(f"DETACH SERVICE LEVEL FROM cassandra", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', func)
+
+    # Drop default_batch
+    await cql.run_async(f"DROP SERVICE LEVEL default_batch", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', func)
+
+    # Recreate default_batch, verify default_batch is used again
+    await cql.run_async(f"CREATE SERVICE LEVEL default_batch WITH timeout = 10s AND workload_type = 'batch'", host=h)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', func)
+
+@pytest.mark.asyncio
+async def test_default_batch_service_level_used_for_batch_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    # Setup keyspace and table
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", host=h)
+
+    # Attach service level with unspecified workload
+    await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
+
+    small_batch_func = lambda: cql.execute("BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, v) VALUES (1, 1); APPLY BATCH;")
+    large_batch_func = lambda: cql.execute("BEGIN UNLOGGED BATCH " + "INSERT INTO ks.t (pk, v) VALUES (1, 1); " * 12 + "APPLY BATCH;")
+
+    # Service level is specified. It should be used even if workload type is unspecified.
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:default_batch', small_batch_func)
+
+    # Detach service level.
+    await cql.run_async(f"DETACH SERVICE LEVEL FROM cassandra", host=h)
+
+    # Batch is small - sl:default is used
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:default_batch', small_batch_func)
+    # Batch is large - sl:default_batch is used
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default_batch', 'sl:test', large_batch_func)
