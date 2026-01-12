@@ -200,10 +200,7 @@ enum class tablet_repair_incremental_mode : uint8_t {
     disabled,
 };
 
-// FIXME: Incremental repair is disabled by default due to
-// https://github.com/scylladb/scylladb/issues/26041 and
-// https://github.com/scylladb/scylladb/issues/27414
-constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::disabled};
+constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::incremental};
 
 sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode);
 tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring&);
