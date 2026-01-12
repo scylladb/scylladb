@@ -28,8 +28,7 @@ Incremental Repair is only supported for tables that use the tablets architectur
 Incremental Repair Modes
 ------------------------
 
-Incremental is currently disabled by default. You can control its behavior for a given repair operation using the ``incremental_mode`` parameter.
-This is useful for enabling incremental repair, or in situations where you might need to force a full data validation.
+While incremental repair is the default and recommended mode, you can control its behavior for a given repair operation using the ``incremental_mode`` parameter. This is useful for situations where you might need to force a full data validation.
 
 The available modes are:
 
