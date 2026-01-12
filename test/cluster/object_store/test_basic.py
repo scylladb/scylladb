@@ -251,23 +251,34 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
 @pytest.mark.asyncio
-async def test_get_object_store_endpoints(manager: ManagerClient):
+@pytest.mark.parametrize('config_with_full_url', [True, False])
+async def test_get_object_store_endpoints(manager: ManagerClient, config_with_full_url):
     objconf = MinioServer.create_conf('a', 123, 'bad_region')
+    if config_with_full_url:
+        proto = "https" if objconf[0]["use_https"] else "http"
+        objconf[0]['name'] = f'{proto}://{objconf[0]["name"]}:{objconf[0]["port"]}'
+        objconf[0]['type'] = 's3'
+        del objconf[0]["port"]
+        del objconf[0]["use_https"]
+
     cfg = {'object_storage_endpoints': objconf}
 
     print('Scylla returns the object storage endpoints')
     server = await manager.server_add(config=cfg)
     endpoints = await manager.api.get_config(server.ip_addr, 'object_storage_endpoints')
 
-    print('Also check the returned string is valid JSON')
+    name = objconf[0]['name']
     del objconf[0]['name']
-    assert json.loads(endpoints['a']) == objconf[0]
+
+    print('Also check the returned string is valid JSON')
+    assert name in endpoints
+    assert json.loads(endpoints[name]) == objconf[0]
 
     print('Check that system.config contains the object storage endpoints')
     cql = manager.get_cql()
     res = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'object_storage_endpoints';").one().value)
-    assert 'a' in res
-    assert json.loads(res['a']) == objconf[0]
+    assert name in res
+    assert json.loads(res[name]) == objconf[0]
 
 
 @pytest.mark.asyncio
