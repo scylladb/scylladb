@@ -55,6 +55,7 @@ public:
     void set_permission_loader(permission_loader_func loader);
     future<permission_set> get_permissions(const role_or_anonymous& role, const resource& r);
     future<> prune(const resource& r);
+    future<> reload_all_permissions() noexcept;
     future<> load_all();
     future<> load_roles(std::unordered_set<role_name_t> roles);
     static bool includes_table(const table_id&) noexcept;

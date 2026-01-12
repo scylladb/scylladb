@@ -8,6 +8,7 @@
 
 #include "auth/cache.hh"
 #include "auth/common.hh"
+#include "auth/role_or_anonymous.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -95,6 +96,23 @@ future<> cache::prune(const resource& r) {
         it.second->cached_permissions.erase(r);
         co_await coroutine::maybe_yield();
     }
+}
+
+future<> cache::reload_all_permissions() noexcept {
+    SCYLLA_ASSERT(_permission_loader);
+    auto units = co_await get_units(_loading_sem, 1, _as);
+    const role_or_anonymous anon;
+    for (auto& [res, perms] : _anonymous_permissions) {
+        perms = co_await _permission_loader(anon, res);
+    }
+    for (auto& [role, entry] : _roles) {
+        auto& perms_cache = entry->cached_permissions;
+        auto r = role_or_anonymous(role);
+        for (auto& [res, perms] : perms_cache) {
+            perms = co_await _permission_loader(r, res);
+        }
+    }
+    logger.debug("Reloaded auth cache with {} entries", _roles.size());
 }
 
 future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& role) const {

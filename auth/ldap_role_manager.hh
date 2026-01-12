@@ -10,6 +10,7 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/future.hh>
 #include <stdexcept>
 
 #include "ent/ldap/ldap_connection.hh"
@@ -34,14 +35,22 @@ class ldap_role_manager : public role_manager {
     seastar::sstring _target_attr; ///< LDAP entry attribute containing the Scylla role name.
     seastar::sstring _bind_name; ///< Username for LDAP simple bind.
     seastar::sstring _bind_password; ///< Password for LDAP simple bind.
+
+    uint32_t _permissions_update_interval_in_ms;
+    utils::observer<uint32_t> _permissions_update_interval_in_ms_observer;
+
     mutable ldap_reuser _connection_factory; // Potentially modified by query_granted().
     seastar::abort_source _as;
+    cache& _cache;
+    seastar::future<> _cache_pruner;
   public:
     ldap_role_manager(
             std::string_view query_template, ///< LDAP query template as described in Scylla documentation.
             std::string_view target_attr, ///< LDAP entry attribute containing the Scylla role name.
             std::string_view bind_name, ///< LDAP bind credentials.
             std::string_view bind_password, ///< LDAP bind credentials.
+            uint32_t permissions_update_interval_in_ms,
+            utils::observer<uint32_t> permissions_update_interval_in_ms_observer,
             cql3::query_processor& qp, ///< Passed to standard_role_manager.
             ::service::raft_group0_client& rg0c, ///< Passed to standard_role_manager.
             ::service::migration_manager& mm, ///< Passed to standard_role_manager.
