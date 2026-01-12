@@ -8,6 +8,7 @@
 
 #include "cql3/util.hh"
 #include "utils/assert.hh"
+#include <algorithm>
 #include <chrono>
 
 #include <seastar/core/sleep.hh>
@@ -456,49 +457,51 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
     }
 }
 
-static service_level_options get_driver_service_level_slo() {
-    service_level_options slo;
-    slo.shares = 200;
-    slo.workload = service_level_options::workload_type::batch;
-    return slo;
+static service_level_options get_internal_service_level_slo(std::string_view sl_name) {
+    const auto& internal_sls = service_level_controller::internal_service_levels;
+    auto it = std::ranges::find(internal_sls, sl_name, &service_level_controller::internal_service_level::name);
+    if (it == internal_sls.end()) {
+        on_internal_error(sl_logger, format("unknown internal service level sl:{}", sl_name));
+    }
+    return service_level_options{.workload = service_level_options::workload_type::batch, .shares = it->shares};
 }
 
-future<utils::chunked_vector<mutation>> service_level_controller::get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) {
+future<utils::chunked_vector<mutation>> service_level_controller::get_create_internal_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp,
+        std::string_view sl_name) {
 
     utils::chunked_vector<mutation> mutations;
 
-    auto sl_mutations = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), service_level_controller::driver_service_level_name, get_driver_service_level_slo(), timestamp);
+    auto sl_mutations = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), sstring(sl_name), get_internal_service_level_slo(sl_name), timestamp);
     std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
 
-    auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(
-            service_level_controller::driver_service_level_name, true, timestamp);
+    auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(sl_name, true, timestamp);
     mutations.push_back(std::move(sys_ks_mutation));
 
     co_return mutations;
 }
 
-future<std::optional<service::group0_guard>> service_level_controller::migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks) {
-    // Don't try creating driver service level too often if it already failed.
+future<std::optional<service::group0_guard>> service_level_controller::migrate_to_internal_service_level(service::group0_guard guard, db::system_keyspace& sys_ks,
+        std::string_view sl_name) {
+    // Don't try creating the service level too often if it already failed.
     // We don't want to block the topology coordinator.
-    if (_sl_data_accessor && _last_unsuccessful_driver_sl_creation_attemp + 5min < seastar::lowres_clock::now()) {
-        sl_logger.info("migrate_to_driver_service_level: starting sl:{} creation", service_level_controller::driver_service_level_name);
+    if (_sl_data_accessor && _last_unsuccessful_internal_sl_creation_attempt + 5min < seastar::lowres_clock::now()) {
+        sl_logger.info("migrate_to_internal_service_level: starting sl:{} creation", sl_name);
         try {
             service::group0_batch mc{std::move(guard)};
 
             constexpr bool if_not_exists = true;
-            co_await add_distributed_service_level(service_level_controller::driver_service_level_name, get_driver_service_level_slo(), if_not_exists, mc);
+            co_await add_distributed_service_level(sstring(sl_name), get_internal_service_level_slo(sl_name), if_not_exists, mc);
 
-            auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(
-                    service_level_controller::driver_service_level_name, true, mc.write_timestamp());
-            mc.add_mutation(std::move(sys_ks_mutation), "set service_level_driver_created=true");
+            auto sys_ks_mutation = co_await sys_ks.make_service_level_created_mutation(sl_name, true, mc.write_timestamp());
+            mc.add_mutation(std::move(sys_ks_mutation), format("mark sl:{} as created", sl_name));
 
             co_await commit_mutations(std::move(mc));
-            sl_logger.info("create_driver_service_level: sl:{} created", service_level_controller::driver_service_level_name);
+            sl_logger.info("migrate_to_internal_service_level: sl:{} created", sl_name);
         } catch (service::group0_concurrent_modification&) {
             throw; // Let caller handle `group0_concurrent_modification`
         } catch (...) {
-            sl_logger.error("Failed to create service level for driver: {:t}. Removal of user service levels below the limit is necessary to allow sl:driver creation.", std::current_exception());
-            _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::now();
+            sl_logger.error("Failed to create sl:{}: {:t}. Removal of user service levels below the limit is necessary to allow sl:{} creation.", sl_name, std::current_exception(), sl_name);
+            _last_unsuccessful_internal_sl_creation_attempt = seastar::lowres_clock::now();
         }
         co_return std::nullopt;
     }
@@ -983,33 +986,33 @@ static sstring describe_service_level(std::string_view sl_name, const service_le
     return seastar::format("{} {} WITH {};", describe_cmd_to_sstring(cmd), sl_name_formatted, fmt::join(opts, " AND "));
 }
 
-utils::small_vector<cql3::description, 2> describe_driver_service_level(const std::optional<service_level_options>& driver_service_level_slo) {
+static utils::small_vector<cql3::description, 2> describe_internal_service_level(std::string_view sl_name, const std::optional<service_level_options>& slo) {
     utils::small_vector<cql3::description, 2> result;
     const auto service_level_type = "service_level";
-    if (driver_service_level_slo.has_value()) {
-        // We need to use CREATE IF EXISTS because `driver` service level can be already created automatically
-        // We also need to ALTER because if driver exists, it can have different shares number
-        const sstring create_statement = describe_service_level(service_level_controller::driver_service_level_name, driver_service_level_slo.value(), describe_cmd::CREATE_IF_NOT_EXISTS);
-        const sstring alter_statement = describe_service_level(service_level_controller::driver_service_level_name, driver_service_level_slo.value(), describe_cmd::ALTER);
+    if (slo.has_value()) {
+        // We need to use CREATE IF NOT EXISTS because the service level can be already created automatically.
+        // We also need to ALTER because if it exists, it can have a different shares number.
+        const sstring create_statement = describe_service_level(sl_name, slo.value(), describe_cmd::CREATE_IF_NOT_EXISTS);
+        const sstring alter_statement = describe_service_level(sl_name, slo.value(), describe_cmd::ALTER);
 
         result.push_back(cql3::description {
             .keyspace = std::nullopt,
             .type = service_level_type,
-            .name = service_level_controller::driver_service_level_name,
+            .name = sstring(sl_name),
             .create_statement = managed_string(create_statement)
         });
         result.push_back(cql3::description {
             .keyspace = std::nullopt,
             .type = service_level_type,
-            .name = service_level_controller::driver_service_level_name,
+            .name = sstring(sl_name),
             .create_statement = managed_string(alter_statement)
         });
     } else {
-        const sstring drop_statement = describe_service_level(service_level_controller::driver_service_level_name, service_level_options{}, describe_cmd::DROP_IF_EXISTS);
+        const sstring drop_statement = describe_service_level(sl_name, service_level_options{}, describe_cmd::DROP_IF_EXISTS);
         result.push_back(cql3::description {
             .keyspace = std::nullopt,
             .type = service_level_type,
-            .name = service_level_controller::driver_service_level_name,
+            .name = sstring(sl_name),
             .create_statement = managed_string(drop_statement)
         });
     }
@@ -1055,7 +1058,7 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
     }
 
     std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
-    auto driver_sl_description = describe_driver_service_level(driver_service_level_slo);
+    auto driver_sl_description = describe_internal_service_level(driver_service_level_name, driver_service_level_slo);
 
     std::vector<cql3::description> combined;
     combined.reserve(result.size() + driver_sl_description.size());

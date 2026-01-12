@@ -4655,7 +4655,8 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
         const auto sl_driver_created = co_await _sys_ks.get_service_level_created(
                 qos::service_level_controller::driver_service_level_name);
         if (!sl_driver_created.value_or(false)) {
-            co_return co_await _sl_controller.migrate_to_driver_service_level(std::move(guard), _sys_ks);
+            co_return co_await _sl_controller.migrate_to_internal_service_level(std::move(guard), _sys_ks,
+                    qos::service_level_controller::driver_service_level_name);
         }
     }
 

@@ -22,6 +22,7 @@
 #include "seastarx.hh"
 #include "auth/service.hh"
 #include "cql3/description.hh"
+#include <array>
 #include <map>
 #include <unordered_map>
 #include "qos_common.hh"
@@ -109,6 +110,21 @@ class service_level_controller : public peering_sharded_service<service_level_co
 public:
     static inline const int32_t default_shares = 1000;
     static constexpr auto driver_service_level_name = "driver";
+    static constexpr int32_t driver_service_level_shares = 200;
+    static constexpr auto default_batch_service_level_name = "default_batch";
+    static constexpr int32_t default_batch_service_level_shares = 100;
+
+    // Service levels that ScyllaDB creates and manages on its own. They are
+    // enumerated here so that creation, migration and description all iterate
+    // the same list instead of special casing each name.
+    struct internal_service_level {
+        std::string_view name;
+        int32_t shares;
+    };
+    static constexpr std::array<internal_service_level, 2> internal_service_levels {{
+        {driver_service_level_name, driver_service_level_shares},
+        {default_batch_service_level_name, default_batch_service_level_shares},
+    }};
 
     class service_level_distributed_data_accessor {
     public:
@@ -219,7 +235,7 @@ private:
     unsigned _logged_intervals;
     atomic_vector<qos_configuration_change_subscriber*> _subscribers;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
-    seastar::lowres_clock::time_point _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::time_point::min();
+    seastar::lowres_clock::time_point _last_unsuccessful_internal_sl_creation_attempt = seastar::lowres_clock::time_point::min();
     void do_abort() noexcept;
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
@@ -338,15 +354,17 @@ public:
 
     /**
      * Get mutations required to:
-     * 1. create `sl:driver`
-     * 2. store information that `sl:driver` was created in `system.scylla_local`
+     * 1. create the internal service level `sl_name`
+     * 2. store information that `sl_name` was created in `system.scylla_local`
      */
-    static future<utils::chunked_vector<mutation>> get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp);
+    static future<utils::chunked_vector<mutation>> get_create_internal_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp,
+            std::string_view sl_name);
     /**
-     * Create `sl:driver` using _sl_data_accessor if possible. If `sl:driver` exists or it's created, store
-       the information it was created in `system.scylla_local`.
+     * Create the internal service level `sl_name` using _sl_data_accessor if possible. If it exists or
+       it's created, store the information it was created in `system.scylla_local`.
      */
-    future<std::optional<service::group0_guard>> migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
+    future<std::optional<service::group0_guard>> migrate_to_internal_service_level(service::group0_guard guard, db::system_keyspace& sys_ks,
+            std::string_view sl_name);
 
     /**
      * Updates the service level cache from the distributed data store.
