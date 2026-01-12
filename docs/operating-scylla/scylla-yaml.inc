@@ -89,7 +89,7 @@ Enabling Experimental Features
 There are two ways to enable experimental features:
 
 * Enable all experimental features (which may be risky)
-* Enable only the features you want to try (available in Scylla Open Source from version 3.2)
+* Enable only the features you want to try
 
 Enable All Experimental Features
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
