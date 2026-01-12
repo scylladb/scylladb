@@ -1981,7 +1981,7 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
 }
 
 future<> memtable_list::flush() {
-    if (!may_flush()) {
+    if (!can_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
         promise<> flushed;
@@ -2801,18 +2801,15 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         dblog.info("truncate_compaction_disabled_wait: done");
     }, false);
 
-    const auto should_flush = with_snapshot && cf.can_flush();
+    const auto should_flush = with_snapshot;
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
-    std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
-            [] (replica::table& cf) {
-                // TODO:
-                // this is not really a guarantee at all that we've actually
-                // gotten all things to disk. Again, need queue-ish or something.
+    auto flush_or_clear = [should_flush] (replica::table& cf) {
+            if (should_flush && cf.can_flush()) {
                 return cf.flush();
-            } :
-            [] (replica::table& cf) {
+            } else {
                 return cf.clear();
-            };
+            }
+        };
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
         unsigned shard = this_shard_id();
         auto& cf = *table_shards;

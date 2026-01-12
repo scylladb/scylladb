@@ -250,12 +250,12 @@ public:
         : memtable_list({}, std::move(cs), dirty_memory_manager, table_shared_data, table_stats, compaction_scheduling_group, shared_gc_state) {
     }
 
-    bool may_flush() const noexcept {
+    bool can_flush() const noexcept {
         return bool(_seal_immediate_fn);
     }
 
-    bool can_flush() const noexcept {
-        return may_flush() && !empty();
+    bool needs_flush() const noexcept {
+        return !empty();
     }
 
     bool empty() const noexcept {
@@ -1013,6 +1013,7 @@ public:
     void start();
     future<> stop();
     future<> flush(std::optional<db::replay_position> = {});
+    bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
