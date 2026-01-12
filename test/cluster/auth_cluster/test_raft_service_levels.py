@@ -407,7 +407,7 @@ async def test_driver_service_creation_failure(manager: ScyllaClusterManager) ->
     for host in hosts:
         await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key = 'service_level_driver_created'", host=host)
     await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
-    await log_file.wait_for("Failed to create service level for driver", from_mark=mark)
+    await log_file.wait_for("Failed to create sl:driver", from_mark=mark)
 
     logger.info("Verify topology coordinator is not blocked despite the failure")
     mark = await log_file.mark()
