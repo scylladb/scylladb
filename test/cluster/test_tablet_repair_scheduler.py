@@ -495,3 +495,199 @@ async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ManagerCl
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: ManagerClient):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")
+
+async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
+
+async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):
+    if not config_per_table:
+        await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
+        await live_update_config(manager, servers, 'auto_repair_enabled_default', str(auto_repair_enabled).lower())
+    else:
+        raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_auto_repair(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", True, 1)
+
+    map1 = {}
+    map2 = {}
+
+    timeout = 300
+    start = time.time()
+    while True:
+        map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        logger.info(f'map1={map1}')
+        has_repair_time = True
+        for k, v in map1.items():
+            if v == None:
+              has_repair_time = False
+        if has_repair_time:
+            break;
+        duration = time.time() - start
+        # check the first auto repair is finished in less than 5 minutes
+        assert duration < timeout
+        time.sleep(1)
+
+    start = time.time()
+    while True:
+        map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        logger.info(f'map1={map1}, map2={map2}')
+        repair_time_updated = True
+        for k, v in map2.items():
+            if map1[k] >= v:
+                repair_time_updated = False
+        if repair_time_updated:
+            break
+        duration = time.time() - start
+        # check the second auto repair is finished in less than 5 minutes
+        assert duration < timeout
+        time.sleep(1)
+
+async def check_has_repair_time(cql, hosts, table_id, timeout = 300):
+    timeout = 300
+    start = time.time()
+    while True:
+        m = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        has_repair_time = True
+        for k, v in m.items():
+            if v == None:
+              has_repair_time = False
+        if has_repair_time:
+            break;
+        duration = time.time() - start
+        assert duration < timeout
+        time.sleep(1)
+
+@pytest.mark.asyncio
+async def test_tablet_auto_repair_cfg_enable(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "1",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+    # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+@pytest.mark.skip(reason="no per tablet support yet")
+@pytest.mark.asyncio
+async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1, config_per_table=True)
+
+    # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+def parse_repair_plans(log_line):
+    """
+    Parses a log line containing repair plans with diff_seconds as float.
+    Format: [{key=value ...}, {key=value ...}]
+    """
+    # Isolate the list content between [ and ]
+    start = log_line.find('[')
+    end = log_line.rfind(']')
+
+    if start == -1 or end == -1:
+        return []
+
+    list_content = log_line[start+1:end]
+
+    # Extract individual plan strings enclosed in curly braces {}
+    plan_strings = re.findall(r'\{([^}]+)\}', list_content)
+
+    parsed_plans = []
+
+    for plan_str in plan_strings:
+        plan_data = {}
+        # Extract key=value pairs within each plan
+        pairs = re.findall(r'(\w+)=([^\s,]+)', plan_str)
+        for key, value in pairs:
+            if value.lower() == 'true':
+                plan_data[key] = True
+            elif value.lower() == 'false':
+                plan_data[key] = False
+            elif key == 'diff_seconds':
+                try:
+                    plan_data[key] = float(value)
+                except ValueError:
+                    plan_data[key] = value
+            else:
+                try:
+                    plan_data[key] = int(value)
+                except ValueError:
+                    plan_data[key] = value
+        parsed_plans.append(plan_data)
+
+    return parsed_plans
+
+def verify_sort_order(plans):
+    """
+    Verifies the list is sorted by:
+    1. is_user_req (True first)
+    2. diff_seconds (Larger first)
+    """
+    is_sorted = True
+    for i in range(len(plans) - 1):
+        curr = plans[i]
+        next_p = plans[i+1]
+        # Check 1: User Request Priority (True > False)
+        if curr['is_user_req'] < next_p['is_user_req']:
+            is_sorted = False
+        # Check 2: Diff Seconds Priority (Larger > Smaller)
+        elif curr['is_user_req'] == next_p['is_user_req']:
+            if curr['diff_seconds'] < next_p['diff_seconds']:
+                is_sorted = False
+    return is_sorted
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_user_and_auto_repair_priority(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Add delay so each tablet has a differnt repair_time
+    await inject_error_on(manager, "repair_tablet_repair_task_delay", servers, params={'value':'1000'})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="all", await_completion=True)
+
+    # No delay after the first repair
+    await inject_error_off(manager, "repair_tablet_repair_task_delay", servers)
+
+    # Schedule but do not exeucte the repair plan
+    await inject_error_on(manager, "tablet_skip_repair_plan", servers)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1)
+
+    # Issue user repair
+    res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="-1", await_completion=False)
+    task_id = res['tablet_task_id']
+
+    # Dump repair plans
+    await inject_error_on(manager, "tablet_dump_repair_plan", servers)
+
+    async def check_repair_plan():
+        # Check order in repair plan is correct
+        found = False
+        while True:
+            for s in servers:
+                log = await manager.server_open_log(s.server_id)
+                plans = await log.grep(r"dump_repair_plans=(\[.*?\])")
+                for line, match in plans:
+                    results = parse_repair_plans(match.group(1))
+                    assert verify_sort_order(results)
+                    found = True
+            if found:
+                break
+
+    await check_repair_plan()
+
+    await inject_error_off(manager, "tablet_skip_repair_plan", servers)
+
+    await manager.api.wait_task(servers[0].ip_addr, task_id)
+
+    await check_repair_plan()
