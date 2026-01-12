@@ -327,7 +327,7 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
         auto schema = co_await create_test_table(env, "ks", "vs");
         auto& vs = env.local_qp().vector_store_client();
 
-        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
         BOOST_REQUIRE(!keys);
         BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(keys.error()));
     });
@@ -345,7 +345,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(keys.error()));
             },
@@ -365,7 +365,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
             },
@@ -392,7 +392,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset(milliseconds(10)));
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset(milliseconds(10)));
 
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
@@ -418,7 +418,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // server responds with 404 - client should return service_error
                 server->next_ann_response({status_type::not_found, "idx2 not found"});
-                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
+                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!server->ann_requests().empty());
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx2/ann");
@@ -429,7 +429,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!server->ann_requests().empty());
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx/ann");
@@ -438,37 +438,37 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // missing distances in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances1":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing pk1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing ck1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // correct reply - service should return keys
                 server->next_ann_response({status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(keys);
                 BOOST_REQUIRE_EQUAL(keys->size(), 2);
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
@@ -571,7 +571,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
                 // Wait until requests are handled by s2
                 // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return s2->ann_requests().size() > 0;
                 }));
             },
@@ -601,7 +601,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return unavail_s->connections().size() > 1;
                 }));
 
@@ -635,7 +635,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -665,7 +665,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return unavail_s->connections().size() > 1;
                 }));
 
@@ -699,7 +699,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -824,7 +824,7 @@ SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
                 vs.start_background_tasks();
 
                 // Send request to unavailable node - this will put the node to backoff.
-                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_CHECK(!result);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(result.error()));
@@ -835,7 +835,7 @@ SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
 
                 // Wait until node is taken out of the backoff state and used for requests again.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     co_return result.has_value();
                 }));
             },
@@ -866,7 +866,7 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
                 vs.start_background_tasks();
 
                 for (int i = 0; i < NUM_OF_PARALLEL_REQUESTS; ++i) {
-                    requests.push_back(vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                    requests.push_back(vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset()));
                 }
                 // Wait for all requests to establish a connection with the server.
                 co_await repeat_until([&unavail_s]() -> future<bool> {
@@ -908,7 +908,7 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
                 // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
                 cfg.db_config->read_request_timeout_in_ms.set(100);
                 // Trigger status checking by making ANN request to unavailable server.
-                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 co_await repeat_until([&unavail_s]() -> future<bool> {
                     // Wait for 1 ANN request + 4 status check connections (5 total)
                     co_return unavail_s->connections().size() > 4;
@@ -951,7 +951,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri) {
                         {{"primary.node", std::vector<std::string>{primary->host()}}, {"secondary.node", std::vector<std::string>{secondary->host()}}});
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_CHECK(keys);
             },
@@ -974,7 +974,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
                 configure(vs).with_dns({{"secondary.node", std::vector<std::string>{secondary->host()}}});
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_CHECK(keys);
             },
@@ -998,7 +998,7 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_CHECK(keys);
                 co_return;
@@ -1028,7 +1028,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
                 co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
                     auto schema = env.local_db().find_schema("ks", "idx");
                     auto as = abort_source_timeout();
-                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                     BOOST_REQUIRE(!keys);
                 });
 
@@ -1041,7 +1041,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
                     auto schema = env.local_db().find_schema("ks", "idx");
                     auto as = abort_source_timeout();
                     BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                         co_return keys.has_value();
                     }));
                 });
@@ -1070,7 +1070,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
                 configure(vs).with_dns({{hostname, std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
@@ -1096,7 +1096,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));

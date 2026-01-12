@@ -31,6 +31,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index.hh"
 #include "types/vector.hh"
+#include "vector_search/filter.hh"
 #include "validation.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include <optional>
@@ -2032,8 +2033,9 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
+        auto filter_json = restrictions::to_json(*_restrictions, options, _parameters->allow_filtering());
         auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, filter_json, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));

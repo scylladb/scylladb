@@ -137,8 +137,11 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(vs_vector vs_vector, limit limit) -> json_content {
-    return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
+auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter) -> json_content {
+    if (filter.ObjectEmpty()) {
+        return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
+    }
+    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter));
 }
 
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
@@ -297,7 +300,7 @@ struct vector_store_client::impl {
         return _primary_uris.empty() && _secondary_uris.empty();
     }
 
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>> {
         if (is_disabled()) {
             vslogger.error("Disabled Vector Store while calling ann");
@@ -305,7 +308,7 @@ struct vector_store_client::impl {
         }
 
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit);
+        auto content = write_ann_json(std::move(vs_vector), limit, filter);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
@@ -377,9 +380,9 @@ auto vector_store_client::is_disabled() const -> bool {
     return _impl->is_disabled();
 }
 
-auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
         -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(keyspace, name, schema, vs_vector, limit, as);
+    return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
