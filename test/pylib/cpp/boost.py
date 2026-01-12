@@ -96,8 +96,8 @@ class BoostTestFile(CppFile):
                     working_dir: {os.getcwd()}
                     Internal Error: calling {self.exe_path} for test {run_test} failed ({return_code=}):
                     output file: {stdout_file_path}
-                    log: {log_xml}
                     command to repeat: {subprocess.list2cmdline(process.args)}
+                    error: {results[0].lines}
                 """),
             )], ""
 
