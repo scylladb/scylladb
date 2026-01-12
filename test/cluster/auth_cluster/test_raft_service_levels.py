@@ -531,35 +531,44 @@ async def test_service_level_reuse_name(manager: ManagerClient):
     cql = await create_sl_and_use(cql, sl1)
 
 @pytest.mark.asyncio
-async def test_driver_service_level(manager: ManagerClient) -> None:
+@pytest.mark.parametrize("sl_name", ["driver", "default_batch"])
+async def test_internal_service_level(manager: ManagerClient, sl_name: str) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-    logger.info("Verify that sl:driver is created properly on system startup")
+    logger.info(f"Verify that sl:{sl_name} is created properly on system startup")
     service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert len(service_levels) == 2  # driver, default_batch
-    sl_names = [sl.service_level for sl in service_levels]
-    assert "driver" in sl_names
-    assert "default_batch" in sl_names
-    driver_sl = next(sl for sl in service_levels if sl.service_level == "driver")
-    assert driver_sl.workload_type == "batch"
-    assert driver_sl.shares == 200
-    assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+    assert len(service_levels) == 2
+    all_sl_names = [sl.service_level for sl in service_levels]
+    assert "driver" in all_sl_names
+    assert "default_batch" in all_sl_names
 
-    # Drop default_batch to not obfuscate this test
-    await cql.run_async(f"DROP SERVICE LEVEL default_batch")
+    
+    target_sl = next(sl for sl in service_levels if sl.service_level == sl_name)
+    assert target_sl.workload_type == "batch"
+    if sl_name == "driver":
+        assert target_sl.shares == 200
+    else:
+        assert target_sl.shares == 100
 
-    logger.info("Verify that sl:driver can be removed")
-    await cql.run_async(f"DROP SERVICE LEVEL driver")
+    scylla_local_key = f"service_level_{sl_name}_created"
+    result = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = '{scylla_local_key}'")
+    assert result[0].value == "true"
+
+    other_sl = "default_batch" if sl_name == "driver" else "driver"
+    await cql.run_async(f"DROP SERVICE LEVEL {other_sl}")
+
+    logger.info(f"Verify that sl:{sl_name} can be removed")
+    await cql.run_async(f"DROP SERVICE LEVEL {sl_name}")
     assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
 
     logger.info("Add a new server so that the Raft state machine snapshot is used")
     new_servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
 
-    logger.info("Verify that sl:driver is not re-created even after topology coordinator reload")
+    logger.info(f"Verify that sl:{sl_name} is not re-created even after topology coordinator reload")
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
     await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
@@ -569,17 +578,18 @@ async def test_driver_service_level(manager: ManagerClient) -> None:
         assert len(await cql.run_async("LIST ALL SERVICE LEVELS", host=host)) == 0
 
 @pytest.mark.asyncio
-async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
+@pytest.mark.parametrize("sl_name", ["driver", "default_batch"])
+async def test_internal_service_level_creation_failure(manager: ManagerClient, sl_name: str) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-    logger.info("Drop sl:driver to prepare the system state and re-create it later")
-    await cql.run_async(f"DROP SERVICE LEVEL driver")
+    logger.info(f"Drop sl:{sl_name} to prepare the system state and re-create it later")
+    await cql.run_async(f"DROP SERVICE LEVEL {sl_name}")
 
-    logger.info("Create new service levels to occupy all slots, including the slot of the removed sl:driver")
+    logger.info(f"Create new service levels to occupy all slots, including the slot of the removed sl:{sl_name}")
     for i in range(MAX_USER_SERVICE_LEVELS + 1):
         await cql.run_async(f"CREATE SERVICE_LEVEL new_sl_{i}")
 
@@ -588,30 +598,31 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
     service_level_names = [sl.service_level for sl in service_levels]
     for i in range(MAX_USER_SERVICE_LEVELS + 1):
         assert f"new_sl_{i}" in service_level_names
-    assert "driver" not in service_level_names
+    assert sl_name not in service_level_names
 
-    logger.info("Check the logs to see that sl:driver creation failed")
+    logger.info(f"Check the logs to see that sl:{sl_name} creation failed")
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
     log_file = await manager.server_open_log(coord_serv.server_id)
     mark = await log_file.mark()
 
-    logger.info("Set service_level_driver_created=false in system.scylla_local and reload topology coordinator")
+    scylla_local_key = f"service_level_{sl_name}_created"
+    logger.info(f"Set {scylla_local_key}=false in system.scylla_local and reload topology coordinator")
     for host in hosts:
-        await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key = 'service_level_driver_created'", host=host)
+        await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key = '{scylla_local_key}'", host=host)
     await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
-    await log_file.wait_for("Failed to create service level for driver", from_mark=mark)
+    await log_file.wait_for(f"Failed to create service level for {sl_name}", from_mark=mark)
 
     logger.info("Verify topology coordinator is not blocked despite the failure")
     mark = await log_file.mark()
     await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
     await log_file.wait_for("topology coordinator fiber has nothing to do. Sleeping.", from_mark=mark)
 
-    logger.info("Double-check that the driver is not re-created")
+    logger.info(f"Double-check that sl:{sl_name} is not re-created")
     for host in hosts:
         service_levels = await cql.run_async("LIST ALL SERVICE LEVELS", host=host)
         service_level_names = [sl.service_level for sl in service_levels]
-        assert "driver" not in service_level_names
+        assert sl_name not in service_level_names
 
 @pytest.mark.asyncio
 async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
