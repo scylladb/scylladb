@@ -7040,7 +7040,8 @@ void storage_service::init_messaging_service() {
                 std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
             }
 
-            auto sl_driver_created_mut = co_await ss._sys_ks.local().get_service_level_driver_created_mutation();
+            auto sl_driver_created_mut = co_await ss._sys_ks.local().get_service_level_created_mutation(
+                    qos::service_level_controller::driver_service_level_name);
             if (sl_driver_created_mut) {
                 mutations.push_back(canonical_mutation(*sl_driver_created_mut));
             }
