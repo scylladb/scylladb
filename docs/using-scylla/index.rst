@@ -27,7 +27,7 @@ ScyllaDB for Developers
   :class: my-panel
 
   * `ScyllaDB Drivers <https://docs.scylladb.com/stable/drivers/index.html>`_ - ScyllaDB and third-party drivers for CQL and DynamoDB
-  * :doc:`ScyllaDB Alternator </using-scylla/alternator/index>` - The Open Source DynamoDB-compatible API
+  * :doc:`ScyllaDB Alternator </using-scylla/alternator/index>` - DynamoDB-compatible API
   * :doc:`CQL Reference </cql/index>` - Reference for the Apache Cassandra Query Language (CQL) and its ScyllaDB extensions
 
   
