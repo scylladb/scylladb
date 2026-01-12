@@ -108,6 +108,7 @@ class service_level_controller : public peering_sharded_service<service_level_co
 public:
     static inline const int32_t default_shares = 1000;
     static constexpr auto driver_service_level_name = "driver";
+    static constexpr auto default_batch_service_level_name = "default_batch";
 
     class service_level_distributed_data_accessor {
     public:
@@ -229,6 +230,7 @@ private:
     atomic_vector<qos_configuration_change_subscriber*> _subscribers;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     seastar::lowres_clock::time_point _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::time_point::min();
+    seastar::lowres_clock::time_point _last_unsuccessful_default_batch_sl_creation_attempt = seastar::lowres_clock::time_point::min();
     void do_abort() noexcept;
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
@@ -380,6 +382,18 @@ public:
        the information it was created in `system.scylla_local`.
      */
     future<std::optional<service::group0_guard>> migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
+
+    /**
+     * Get mutations required to:
+     * 1. create `sl:default_batch`
+     * 2. store information that `sl:default_batch` was created in `system.scylla_local`
+     */
+    static future<utils::chunked_vector<mutation>> get_create_default_batch_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp);
+    /**
+     * Create `sl:default_batch` using _sl_data_accessor if possible. If `sl:default_batch` exists or it's created, store
+       the information it was created in `system.scylla_local`.
+     */
+    future<std::optional<service::group0_guard>> migrate_to_default_batch_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
 
     /**
      * Request abort of update loop.
