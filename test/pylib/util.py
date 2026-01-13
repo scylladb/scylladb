@@ -188,7 +188,6 @@ class KeyGenerator:
         with self.pk_lock:
             return self.pk
 
-
 async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False):
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
@@ -205,6 +204,21 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
     key_gen = KeyGenerator()
 
     async def do_writes(worker_id: int):
+        async def run_retry_async(cql, *args, **kwargs):
+            retry_attempts = 1 if ignore_errors else 3
+            sleep_time = 0.05  # 50ms
+            error = None
+            for _ in range(retry_attempts):
+                try:
+                    return await cql.run_async(*args, **kwargs)
+                except Exception as e:
+                    error = e
+
+                logger.debug(f"Retrying in {sleep_time} second(s)")
+                await asyncio.sleep(sleep_time)
+                sleep_time *= 2  # Exponential backoff
+            raise error
+
         write_count = 0
         while not stop_event.is_set():
             pk = key_gen.next_pk()
@@ -212,18 +226,20 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
             # Once next_pk() is produced, key_gen.last_key() is assumed to be in the database
             # hence we can't give up on it.
             while True:
+                start_time = time.time()
                 try:
                     await cql.run_async(stmt, [pk, pk])
                     # Check read-your-writes
-                    rows = await cql.run_async(rd_stmt, [pk])
+                    rows = await run_retry_async(cql, rd_stmt, [pk])
                     assert(len(rows) == 1)
                     assert(rows[0].c == pk)
                     write_count += 1
                     break
                 except Exception as e:
                     if ignore_errors:
-                        pass # Expected when node is brought down temporarily
+                        logger.debug(f"Suppressed exception: {e} (expected when node is brought down temporarily)")
                     else:
+                        logger.error(f"Exception occurred during read/write operation for pk={pk} started {time.time() - start_time}s ago: {e}")
                         raise e
 
             if pk == warmup_writes:
