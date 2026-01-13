@@ -123,7 +123,7 @@ _get_distribution_components() {
                 continue
                 ;;
         esac
-        echo $target
+        echo "$target"
     done
 }
 
@@ -164,7 +164,7 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
 
     echo "[clang-stage3] build the compiler applied CSPGO profile"
     cd "${CLANG_BUILD_DIR}"
-    llvm-profdata merge build/csprofiles/default_*.profraw -output=csir.prof
+    llvm-profdata merge build/profiles/csir-*.profraw -output=csir.prof
     llvm-profdata merge ir.prof csir.prof -output=combined.prof
     rm -rf build
     # linker flags are needed for BOLT
