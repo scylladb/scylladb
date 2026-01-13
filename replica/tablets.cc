@@ -185,20 +185,21 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         if (features.tablet_migration_virtual_task && tablet.migration_task_info.is_valid()) {
             m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
         }
+        const auto& repair_info = tablets.get_tablet_repair_info(tid);
         if (features.tablet_repair_scheduler) {
-            if (tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            if (repair_info.repair_task_info.is_valid()) {
+                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(repair_info.repair_task_info), ts);
                 if (features.tablet_incremental_repair) {
-                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(repair_info.repair_task_info.repair_incremental_mode), ts);
                 }
             }
-            if (tablet.repair_time != db_clock::time_point{}) {
-                m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+            if (repair_info.repair_time != db_clock::time_point{}) {
+                m.set_clustered_cell(ck, "repair_time", data_value(repair_info.repair_time), ts);
             }
         }
 
         if (features.tablet_incremental_repair) {
-            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
+            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(repair_info.sstables_repaired_at), ts);
         }
 
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
@@ -657,7 +658,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
+    map.set_tablet(tid, std::move(tablet_replicas), repair_time, std::move(repair_task_info), std::move(migration_task_info), sstables_repaired_at);
 
     if (row.has("raft_group_id")) {
         if (!map.has_raft_info()) {

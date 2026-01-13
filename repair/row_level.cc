@@ -1190,7 +1190,7 @@ private:
             on_internal_error(rlogger, format("Repair range={} does not match tablet range={}", _range, range));
         }
         bool full = is_incremental_repair_using_all_sstables();
-        auto& tinfo = tmap.get_tablet_info(id);
+        auto& tinfo = tmap.get_tablet_repair_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
         auto gid = locator::global_tablet_id{tid, id};
         // Consider this:
@@ -3381,7 +3381,7 @@ public:
                 auto erm = table.get_effective_replication_map();
                 auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_table_id);
                 auto last_token = _range.end() ? _range.end()->value() : dht::maximum_token();
-                auto& tinfo = tmap.get_tablet_info(last_token);
+                auto& tinfo = tmap.get_tablet_repair_info(last_token);
                 auto sstables_repaired_at = tinfo.sstables_repaired_at;
                 repaired_at = sstables_repaired_at + 1;
             }

@@ -97,7 +97,8 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
         }
         std::optional<locator::tablet_id> tid = tmap.first_tablet();
         for (const locator::tablet_info& info : tmap.tablets()) {
-            auto task_type = maybe_get_task_type(info.repair_task_info, task_id).or_else([&] () {
+            const auto& rinfo = tmap.get_tablet_repair_info(*tid);
+            auto task_type = maybe_get_task_type(rinfo.repair_task_info, task_id).or_else([&] () {
                 return maybe_get_task_type(info.migration_task_info, task_id);
             });
             if (task_type.has_value()) {
@@ -156,7 +157,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
             return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
         } else {    // Repair task.
             return std::all_of(res->tablets.begin(), res->tablets.end(), [&] (const locator::tablet_id& tablet) {
-                return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
+                return tmap.get_tablet_repair_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
             });
         }
     });
@@ -200,13 +201,14 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
             res.push_back(std::move(resize_stats.value()));
         }
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto repair_stats = maybe_make_task_stats(info.repair_task_info, schema);
+            const auto& rinfo = tmap.get_tablet_repair_info(tid);
+            auto repair_stats = maybe_make_task_stats(rinfo.repair_task_info, schema);
             if (repair_stats) {
-                if (info.repair_task_info.is_user_repair_request()) {
+                if (rinfo.repair_task_info.is_user_repair_request()) {
                     // User requested repair may encompass more that one tablet.
-                    auto task_id = tasks::task_id{info.repair_task_info.tablet_task_id.uuid()};
+                    auto task_id = tasks::task_id{rinfo.repair_task_info.tablet_task_id.uuid()};
                     user_requests[task_id] = std::move(repair_stats.value());
-                    sched_num_sum[task_id] += info.repair_task_info.sched_nr;
+                    sched_num_sum[task_id] += rinfo.repair_task_info.sched_nr;
                 } else {
                     res.push_back(std::move(repair_stats.value()));
                 }
@@ -270,7 +272,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             }
         }
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto& task_info = info.repair_task_info;
+            auto& task_info = tmap.get_tablet_repair_info(tid).repair_task_info;
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
                 update_status(task_info, res.status, sched_nr);
                 res.tablets.push_back(tid);

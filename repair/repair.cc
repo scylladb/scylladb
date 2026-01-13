@@ -2276,8 +2276,8 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto myhostid = guard.get_token_metadata()->get_my_id();
 
     auto range = tmap.get_token_range(tablet_id);
-    auto& info = tmap.get_tablet_info(tablet_id);
-    auto replicas = rebuild_replicas.value_or(info.replicas);
+    auto& info = tmap.get_tablet_repair_info(tablet_id);
+    auto replicas = rebuild_replicas.value_or(tmap.get_tablet_info(tablet_id).replicas);
     std::vector<locator::host_id> nodes;
     std::vector<shard_id> shards;
     std::optional<shard_id> master_shard_id;

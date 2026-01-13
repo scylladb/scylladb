@@ -184,20 +184,26 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at)
+tablet_info::tablet_info(tablet_replica_set replicas, tablet_task_info migration_task_info)
     : replicas(std::move(replicas))
-    , repair_time(repair_time)
-    , repair_task_info(std::move(repair_task_info))
     , migration_task_info(std::move(migration_task_info))
-    , sstables_repaired_at(sstables_repaired_at)
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
+    : tablet_info(std::move(replicas), tablet_task_info{})
 {}
 
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
-    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info, b.repair_task_info);
+tablet_repair_info::tablet_repair_info(db_clock::time_point repair_time,
+                                 tablet_task_info repair_task_info,
+                                 int64_t sstables_repaired_at)
+    : repair_time(repair_time)
+    , repair_task_info(std::move(repair_task_info))
+    , sstables_repaired_at(sstables_repaired_at)
+{}
+
+std::optional<std::pair<tablet_info, tablet_repair_info>> merge_tablet_info(
+        const tablet_info& a, const tablet_repair_info& ar, const tablet_info& b, const tablet_repair_info& br) {
+    auto repair_task_info = tablet_task_info::merge_repair_tasks(ar.repair_task_info, br.repair_task_info);
     if (!repair_task_info) {
         return {};
     }
@@ -210,10 +216,11 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
         return {};
     }
 
-    auto repair_time = std::max(a.repair_time, b.repair_time);
-    int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
-    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info, a.migration_task_info, sstables_repaired_at);
-    return info;
+    auto repair_time = std::max(ar.repair_time, br.repair_time);
+    int64_t sstables_repaired_at = std::max(ar.sstables_repaired_at, br.sstables_repaired_at);
+    auto info = tablet_info(a.replicas, a.migration_task_info);
+    auto rinfo = tablet_repair_info(repair_time, *repair_task_info, sstables_repaired_at);
+    return std::make_pair(std::move(info), std::move(rinfo));
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
@@ -470,46 +477,70 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
     return true;
 }
 
+tablet_map::shared_map::shared_map(size_t tablet_count)
+        : log2_tablets(log2ceil(tablet_count)) {
+}
+
 tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
-        : _log2_tablets(log2ceil(tablet_count)) {
-    if (tablet_count != 1ul << _log2_tablets) {
+        : _shared_map(make_lw_shared<shared_map>(tablet_count))
+        , _repair_info(repair_info{
+            .tablets_info = utils::chunked_vector<tablet_repair_info>(tablet_count),
+            .scheduler_config = std::nullopt
+        }) {
+    if (tablet_count != 1ul << _shared_map->log2_tablets) {
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
-    _tablets.resize(tablet_count);
+    _shared_map->tablets.resize(tablet_count);
     if (with_raft_info) {
-        _raft_info.resize(tablet_count);
+        _shared_map->raft_info.resize(tablet_count);
     }
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, 
-        _repair_scheduler_config, _raft_info);
+    return tablet_map(_shared_map->tablets, _shared_map->log2_tablets, _shared_map->transitions,
+            _shared_map->resize, _shared_map->raft_info, _repair_info);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
     tablet_container tablets;
-    tablets.reserve(_tablets.size());
-    for (const auto& t : _tablets) {
+    tablets.reserve(_shared_map->tablets.size());
+    for (const auto& t : _shared_map->tablets) {
         tablets.emplace_back(t);
         co_await coroutine::maybe_yield();
     }
 
     transitions_map transitions;
-    transitions.reserve(_transitions.size());
-    for (const auto& [id, trans] : _transitions) {
+    transitions.reserve(_shared_map->transitions.size());
+    for (const auto& [id, trans] : _shared_map->transitions) {
         transitions.emplace(id, trans);
         co_await coroutine::maybe_yield();
     }
 
     raft_info_container raft_info;
-    raft_info.reserve(_raft_info.size());
-    for (const auto& i: _raft_info) {
+    raft_info.reserve(_shared_map->raft_info.size());
+    for (const auto& i: _shared_map->raft_info) {
         raft_info.emplace_back(i);
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, 
-        _resize_task_info, _repair_scheduler_config, std::move(raft_info));
+    utils::chunked_vector<tablet_repair_info> tablets_repair_info;
+    tablets_repair_info.reserve(_repair_info.tablets_info.size());
+    for (const auto& t : _repair_info.tablets_info) {
+        tablets_repair_info.emplace_back(t);
+        co_await coroutine::maybe_yield();
+    }
+    auto rinfo = repair_info{
+        .tablets_info = std::move(tablets_repair_info),
+        .scheduler_config = _repair_info.scheduler_config
+    };
+
+    co_return tablet_map(std::move(tablets), _shared_map->log2_tablets, std::move(transitions),
+            _shared_map->resize, std::move(raft_info), std::move(rinfo));
+}
+
+bool tablet_map::operator==(const tablet_map& o) const {
+    return *_shared_map == *o._shared_map
+        && _repair_info == o._repair_info;
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -520,15 +551,20 @@ void tablet_map::check_tablet_id(tablet_id id) const {
 
 const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
     check_tablet_id(id);
-    return _tablets[size_t(id)];
+    return _shared_map->tablets[size_t(id)];
+}
+
+const tablet_repair_info& tablet_map::get_tablet_repair_info(tablet_id id) const {
+    check_tablet_id(id);
+    return _repair_info.tablets_info[size_t(id)];
 }
 
 tablet_id tablet_map::get_tablet_id(token t) const {
-    return tablet_id(dht::compaction_group_of(_log2_tablets, t));
+    return tablet_id(dht::compaction_group_of(_shared_map->log2_tablets, t));
 }
 
 std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side(token t) const {
-    auto id_after_split = dht::compaction_group_of(_log2_tablets + 1, t);
+    auto id_after_split = dht::compaction_group_of(_shared_map->log2_tablets + 1, t);
     auto current_id = id_after_split >> 1;
     return {tablet_id(current_id), tablet_range_side(id_after_split & 0x1)};
 }
@@ -539,7 +575,7 @@ dht::token tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
 
 dht::token tablet_map::get_last_token(tablet_id id) const {
     check_tablet_id(id);
-    return get_last_token(id, _log2_tablets);
+    return get_last_token(id, _shared_map->log2_tablets);
 }
 
 dht::token tablet_map::get_first_token(tablet_id id) const {
@@ -560,12 +596,12 @@ dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) 
 
 dht::token_range tablet_map::get_token_range(tablet_id id) const {
     check_tablet_id(id);
-    return get_token_range(id, _log2_tablets);
+    return get_token_range(id, _shared_map->log2_tablets);
 }
 
 dht::token_range tablet_map::get_token_range_after_split(const token& t) const noexcept {
     // when the tablets are split, the tablet count doubles, (i.e.) _log2_tablets increases by 1
-    const auto log2_tablets_after_split = _log2_tablets + 1;
+    const auto log2_tablets_after_split = _shared_map->log2_tablets + 1;
     auto id_after_split = tablet_id(dht::compaction_group_of(log2_tablets_after_split, t));
     return get_token_range(id_after_split, log2_tablets_after_split);
 }
@@ -640,29 +676,39 @@ future<utils::chunked_vector<token>> tablet_map::get_sorted_tokens() const {
 
 void tablet_map::set_tablet(tablet_id id, tablet_info info) {
     check_tablet_id(id);
-    _tablets[size_t(id)] = std::move(info);
+    _shared_map->tablets[size_t(id)] = std::move(info);
+}
+
+void tablet_map::set_tablet_repair_info(tablet_id id, tablet_repair_info info) {
+    check_tablet_id(id);
+    _repair_info.tablets_info[size_t(id)] = std::move(info);
+}
+
+void tablet_map::set_tablet(tablet_id id, tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at) {
+    set_tablet(id, tablet_info(std::move(replicas), std::move(migration_task_info)));
+    set_tablet_repair_info(id, tablet_repair_info(repair_time, std::move(repair_task_info), sstables_repaired_at));
 }
 
 void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info info) {
     check_tablet_id(id);
-    _transitions.insert_or_assign(id, std::move(info));
+    _shared_map->transitions.insert_or_assign(id, std::move(info));
 }
 
 void tablet_map::set_resize_decision(locator::resize_decision decision) {
-    _resize_decision = std::move(decision);
+    _shared_map->resize.decision = std::move(decision);
 }
 
 void tablet_map::set_resize_task_info(tablet_task_info task_info) {
-    _resize_task_info = std::move(task_info);
+    _shared_map->resize.task_info = std::move(task_info);
 }
 
 void tablet_map::set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config) {
-    _repair_scheduler_config = std::move(config);
+    _repair_info.scheduler_config = std::move(config);
 }
 
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
-    _transitions.erase(id);
+    _shared_map->transitions.erase(id);
 }
 
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
@@ -675,9 +721,9 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tabl
 
 future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const {
     auto make_desc = [this] (tablet_id tid) {
-        return tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
+        return tablet_desc{tid, &get_tablet_info(tid), &get_tablet_repair_info(tid), get_tablet_transition_info(tid)};
     };
-    if (_tablets.size() == 1) {
+    if (_shared_map->tablets.size() == 1) {
         co_return co_await func(make_desc(first_tablet()), std::nullopt);
     }
     for (std::optional<tablet_id> tid = first_tablet(); tid; tid = next_tablet(*tid)) {
@@ -692,7 +738,7 @@ future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<futu
 }
 
 void tablet_map::clear_transitions() {
-    _transitions.clear();
+    _shared_map->transitions.clear();
 }
 
 bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
@@ -708,12 +754,17 @@ bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
 }
 
 future<> tablet_map::clear_gently() {
-    return utils::clear_gently(_tablets);
+    if (auto shared_map = _shared_map.release()) {
+        co_await utils::clear_gently(shared_map->tablets);
+        co_await utils::clear_gently(shared_map->transitions);
+    }
+
+    co_await utils::clear_gently(_repair_info.tablets_info);
 }
 
 const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id id) const {
-    auto i = _transitions.find(id);
-    if (i == _transitions.end()) {
+    auto i = _shared_map->transitions.find(id);
+    if (i == _shared_map->transitions.end()) {
         return nullptr;
     }
     return &i->second;
@@ -721,20 +772,20 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
 
 const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {
     check_tablet_id(id);
-    if (_raft_info.empty()) {
+    if (_shared_map->raft_info.empty()) {
         on_internal_error(tablet_logger, "Tablet map doesn't have raft info");
     }
-    return _raft_info[size_t(id)];
+    return _shared_map->raft_info[size_t(id)];
 }
 
 void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) {
     check_tablet_id(id);
-    if (_raft_info.empty()) {
+    if (_shared_map->raft_info.empty()) {
         on_internal_error(tablet_logger,
             format("Tablet map has no raft info, tablet_id {}, group_id {}",
                 id, raft_info.group_id));
     }
-    _raft_info[size_t(id)] = std::move(raft_info);
+    _shared_map->raft_info[size_t(id)] = std::move(raft_info);
 }
 
 // The names are persisted in system tables so should not be changed.
@@ -864,11 +915,26 @@ tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const 
     return tablet_repair_incremental_mode_from_name.at(name);
 }
 
+// Estimates the external memory usage of std::unordered_map<>.
+// Does not include external memory usage of elements.
+template <typename K, typename V>
+static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
+    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
+}
+
 size_t tablet_map::external_memory_usage() const {
-    size_t result = _tablets.external_memory_usage();
-    for (auto&& tablet : _tablets) {
+    size_t result = _shared_map->tablets.external_memory_usage();
+    for (auto&& tablet : _shared_map->tablets) {
         result += tablet.replicas.external_memory_usage();
     }
+    result += estimate_external_memory_usage(_shared_map->transitions);
+    result += _repair_info.tablets_info.external_memory_usage();
+    return result;
+}
+
+size_t tablet_map::external_non_shared_memory_usage() const {
+    size_t result = 0;
+    result += _repair_info.tablets_info.external_memory_usage();
     return result;
 }
 
@@ -877,23 +943,23 @@ bool resize_decision::operator==(const resize_decision& o) const {
 }
 
 bool tablet_map::needs_split() const {
-    return std::holds_alternative<resize_decision::split>(_resize_decision.way);
+    return std::holds_alternative<resize_decision::split>(_shared_map->resize.decision.way);
 }
 
 bool tablet_map::needs_merge() const {
-    return std::holds_alternative<resize_decision::merge>(_resize_decision.way);
+    return std::holds_alternative<resize_decision::merge>(_shared_map->resize.decision.way);
 }
 
 const locator::resize_decision& tablet_map::resize_decision() const {
-    return _resize_decision;
+    return _shared_map->resize.decision;
 }
 
 const tablet_task_info& tablet_map::resize_task_info() const {
-    return _resize_task_info;
+    return _shared_map->resize.task_info;
 }
 
 const std::optional<locator::repair_scheduler_config> tablet_map::get_repair_scheduler_config() const {
-    return _repair_scheduler_config;
+    return _repair_info.scheduler_config;
 }
 
 static auto to_resize_type(sstring decision) {
@@ -1166,17 +1232,14 @@ std::optional<tablet_range_splitter::range_split_result> tablet_range_splitter::
     return {};
 }
 
-// Estimates the external memory usage of std::unordered_map<>.
-// Does not include external memory usage of elements.
-template <typename K, typename V>
-static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
-    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
-}
-
 size_t tablet_metadata::external_memory_usage() const {
     size_t result = estimate_external_memory_usage(_tablets);
     for (auto&& [id, map] : _tablets) {
-        result += map->external_memory_usage();
+        if (is_base_table(id)) {
+            result += map->external_memory_usage();
+        } else {
+            result += map->external_non_shared_memory_usage();
+        }
     }
     return result;
 }
@@ -1744,7 +1807,7 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
     out = fmt::format_to(out, "{{");
     bool first = true;
     locator::tablet_id tid = r.first_tablet();
-    for (auto&& tablet : r._tablets) {
+    for (auto&& tablet : r._shared_map->tablets) {
         if (!first) {
             out = fmt::format_to(out, ",");
         }

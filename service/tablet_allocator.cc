@@ -1061,7 +1061,7 @@ public:
         return _db.get_config().auto_repair_enabled_default();
     }
 
-    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
+    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_repair_info& info,
             const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
@@ -1189,6 +1189,7 @@ public:
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+                const auto& repair_info = tmap.get_tablet_repair_info(id);
                 auto gid = locator::global_tablet_id{table, id};
                 if (auto_repair_enabled) {
                     auto_repair_stats.enabled_nr++;
@@ -1219,17 +1220,17 @@ public:
                 // Avoid rescheduling a failed tablet repair in a loop
                 // TODO: Allow user to config
                 const auto min_reschedule_time = std::chrono::seconds(5);
-                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                if (now - repair_info.repair_task_info.sched_time < min_reschedule_time) {
                     lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
                     co_return;
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
+                auto is_user_reuqest = repair_info.repair_task_info.is_user_repair_request();
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, repair_info, config, now, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
@@ -1399,7 +1400,7 @@ public:
 
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
             // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            all_colocated &= bool(merge_tablet_info(*t1.info, *t1.repair_info, *t2.info, *t2.repair_info));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -3985,9 +3986,12 @@ private:
             tablet_id new_right_tid = tablet_id(new_left_tid.value() + 1);
 
             auto& tablet_info = tablets.get_tablet_info(tid);
+            auto& tablet_repair_info = tablets.get_tablet_repair_info(tid);
 
             new_tablets.set_tablet(new_left_tid, tablet_info);
+            new_tablets.set_tablet_repair_info(new_left_tid, tablet_repair_info);
             new_tablets.set_tablet(new_right_tid, tablet_info);
+            new_tablets.set_tablet_repair_info(new_right_tid, tablet_repair_info);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4009,7 +4013,9 @@ private:
             tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
 
             auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
+            auto& left_tablet_repair_info = tablets.get_tablet_repair_info(old_left_tid);
             auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+            auto& right_tablet_repair_info = tablets.get_tablet_repair_info(old_right_tid);
 
             auto sorted = [] (tablet_replica_set set) {
                 std::ranges::sort(set, std::less<tablet_replica>());
@@ -4021,14 +4027,15 @@ private:
                 throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info);
+            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, left_tablet_repair_info, right_tablet_info, right_tablet_repair_info);
             if (!merged_tablet_info) {
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
+            lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->second.sstables_repaired_at);
 
-            new_tablets.set_tablet(tid, *merged_tablet_info);
+            new_tablets.set_tablet(tid, std::move(merged_tablet_info->first));
+            new_tablets.set_tablet_repair_info(tid, std::move(merged_tablet_info->second));
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",

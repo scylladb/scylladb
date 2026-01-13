@@ -1366,8 +1366,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             rtlogger.warn("Tablet already in transition, ignoring repair: {}", gid);
             return;
         }
-        auto& info = tmap.get_tablet_info(gid.tablet);
-        auto repair_task_info = info.repair_task_info;
+        auto repair_task_info = tmap.get_tablet_repair_info(gid.tablet).repair_task_info;
         if (!repair_task_info.is_user_repair_request()) {
             repair_task_info = locator::tablet_task_info::make_auto_repair_request();
         }
@@ -1818,7 +1817,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     bool fail_repair = utils::get_local_injector().enter("handle_tablet_migration_repair_fail");
                     if (fail_repair || action_failed(tablet_state.repair)) {
                         if (do_barrier()) {
-                            auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                            auto& tinfo = tmap.get_tablet_repair_info(gid.tablet);
                             _tablet_ops_metrics.inc_failed(tinfo.repair_task_info.request_type);
                             updates.emplace_back(get_mutation_builder()
                                     .set_stage(last_token, locator::tablet_transition_stage::end_repair)
@@ -1828,7 +1827,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         break;
                     }
                     if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        auto& tinfo = tmap.get_tablet_repair_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
                         if (!valid) {
                             rtlogger.info("Skipping tablet repair for tablet={} which is cancelled by user", gid);
@@ -1881,7 +1880,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
 
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        auto& tinfo = tmap.get_tablet_repair_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
                         auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
                         auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;

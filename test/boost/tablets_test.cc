@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             // Add table1
             {
                 tablet_map tmap(1);
-                tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tmap.set_tablet(tmap.first_tablet(),
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
@@ -217,7 +217,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request(),
                     0
-                });
+                );
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             {
                 tablet_map tmap(4);
                 auto tb = tmap.first_tablet();
-                tmap.set_tablet(tb, tablet_info {
+                tmap.set_tablet(tb,
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                     },
@@ -235,7 +235,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     {},
                     locator::tablet_task_info::make_migration_request(),
                     0
-                });
+                );
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -243,7 +243,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     }
                 });
                 tb = *tmap.next_tablet(tb);
-                tmap.set_tablet(tb, tablet_info {
+                tmap.set_tablet(tb,
                     tablet_replica_set {
                         tablet_replica {h2, 2},
                     },
@@ -251,7 +251,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     {},
                     locator::tablet_task_info::make_migration_request(),
                     0
-                });
+                );
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -483,6 +483,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h4 = host_id(utils::UUID_gen::get_time_UUID());
 
         auto table1 = add_table(e).get();
         auto table2 = add_table(e).get();
@@ -493,8 +494,9 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
 
             // Add table1
             {
-                tablet_map tmap(1);
-                tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_map tmap(2);
+                auto tid = tmap.first_tablet();
+                tmap.set_tablet(tid,
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
@@ -503,8 +505,20 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                     db_clock::now(),
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request(),
-                    0
-                });
+                    5
+                );
+                tid = *tmap.next_tablet(tid);
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h2, 1},
+                        tablet_replica {h3, 2},
+                        tablet_replica {h4, 1},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc3"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    10
+                );
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -513,10 +527,102 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
 
             const auto& tmap1 = tm.get_tablet_map(table1);
             const auto& tmap2 = tm.get_tablet_map(table2);
-            BOOST_REQUIRE_EQUAL(tmap1, tmap2);
+            BOOST_REQUIRE_EQUAL(tmap1.tablet_count(), tmap2.tablet_count());
+
+            auto tid = tmap1.first_tablet();
+            {
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+                BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
+
+                BOOST_REQUIRE_EQUAL(5, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+            }
+
+            tid = *tmap1.next_tablet(tid);
+            {
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+                BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
+
+                BOOST_REQUIRE_EQUAL(10, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+            }
 
             verify_tablet_metadata_persistence(e, tm, ts);
 
+            // set shared tablet transition info
+            tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+                auto tb = tmap.first_tablet();
+
+                tmap.set_tablet_transition_info(tb, tablet_transition_info{
+                    tablet_transition_stage::allow_write_both_read_old,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                        tablet_replica {h1, 0},
+                        tablet_replica {h2, 3},
+                        tablet_replica {h4, 1},
+                    },
+                    tablet_replica {h4, 1}
+                });
+
+                return make_ready_future();
+            }).get();
+
+            // verify the transition info is shared
+            {
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                auto tid = tmap1.first_tablet();
+                const auto* tinfo1 = tmap1.get_tablet_transition_info(tid);
+                const auto* tinfo2 = tmap2.get_tablet_transition_info(tid);
+                BOOST_REQUIRE(tinfo1 != nullptr);
+                BOOST_REQUIRE(tinfo2 != nullptr);
+                BOOST_REQUIRE_EQUAL(tinfo1->stage, tinfo2->stage);
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
+
+            // reduce replica count
+            {
+                tablet_map tmap(2);
+                auto tid = tmap.first_tablet();
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h1, 0},
+                        tablet_replica {h2, 3},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    5
+                );
+                tid = *tmap.next_tablet(tid);
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h2, 1},
+                        tablet_replica {h3, 2},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc3"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    10
+                );
+                tm.set_tablet_map(table1, std::move(tmap));
+            }
+
+            {
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                auto tid = tmap1.first_tablet();
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
