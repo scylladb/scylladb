@@ -1026,7 +1026,29 @@ You can enable the after-repair tombstone GC by setting the ``repair`` mode usin
 
     ALTER TABLE ks.cf WITH tombstone_gc = {'mode':'repair'} ;
 
-The following modes are available:
+To support writes arriving out-of-order -- either due to natural delays, or user provided timestamps -- the repair mode has a propagation delay.
+Out-of-order writes present a problem for repair mode tombstone gc. Consider the following example sequence of events:
+
+1) Write ``DELETE FROM table WHERE key = K1`` arrives at the node.
+2) Repair is run.
+3) Compaction runs and garbage collects the tombstone for ``key = K1``.
+4) Write ``INSERT INTO table (key, ...) VALUES (K1, ...)`` arrives at the node with timestamp smaller than that of the delete. The tombstone for ``key = K1`` should apply to this write, but it is already garbage collected, so this data is resurrected.
+
+Propagation delay solves this problem by establishing a window before repair, where tombstones are not yet garbage collectible: a tombstone is garbage collectible if it was written before the last repair by at least the propagation delay.
+
+The value of the propagation delay can be set via the ``propagation_delay_in_seconds`` parameter:
+
+.. code-block:: cql
+
+    CREATE TABLE ks.cf (key blob PRIMARY KEY, val blob) WITH tombstone_gc = {'mode':'repair', 'propagation_delay_in_seconds': 120};
+
+.. code-block:: cql
+
+    ALTER TABLE ks.cf WITH tombstone_gc = {'mode':'repair', 'propagation_delay_in_seconds': 120};
+
+The default value of the propagation delay is 1 hour. This parameter should only be changed if your application uses user provided timestamps and writes and deletes can arrive out-of-order by more than the default 1 hour.
+
+The following tombstone gc modes are available:
 
 .. list-table::
    :widths: 20 80
