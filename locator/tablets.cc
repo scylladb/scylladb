@@ -363,7 +363,9 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     // share the tablet map with all co-located tables
     for (auto colocated_id : _table_groups.at(id)) {
         if (colocated_id != id) {
-            _tablets[colocated_id] = make_foreign(new_map_ptr);
+            const auto& prev_colocated_map = *_tablets.at(colocated_id);
+            auto colocated_tablet_map = tablet_map::construct_colocated_tablet_map(*new_map_ptr, prev_colocated_map);
+            _tablets[colocated_id] = make_foreign(make_lw_shared<const tablet_map>(std::move(colocated_tablet_map)));
         }
     }
     it->second = make_foreign(std::move(new_map_ptr));
@@ -390,7 +392,9 @@ void tablet_metadata::set_tablet_map(table_id id, tablet_map map) {
     } else {
         for (auto colocated_id : it->second) {
             if (colocated_id != id) {
-                _tablets[colocated_id] = map_ptr;
+                const auto& prev_colocated_map = *_tablets.at(colocated_id);
+                auto colocated_map = tablet_map::construct_colocated_tablet_map(*map_ptr, prev_colocated_map);
+                _tablets[colocated_id] = make_lw_shared<const tablet_map>(std::move(colocated_map));
             }
         }
     }
@@ -424,11 +428,19 @@ future<> tablet_metadata::set_colocated_table(table_id id, table_id base_id) {
         if (!_tablets.contains(base_id)) {
             on_internal_error(tablet_logger, format("Base table {} of co-located table {} does not have a tablet map", base_id, id));
         }
-        auto map_ptr = co_await _tablets.at(base_id).copy();
-        _tablets[id] = std::move(map_ptr);
     } else if (it->second != base_id) {
         on_internal_error(tablet_logger, format("Cannot set base table {} for table {} because it already has base table {}", base_id, id, it->second));
     }
+
+    if (auto cit = _tablets.find(id); cit != _tablets.end()) {
+        auto colocated_map = tablet_map::construct_colocated_tablet_map(*_tablets.at(base_id), *cit->second);
+        _tablets[id] = make_lw_shared<const tablet_map>(std::move(colocated_map));
+    } else {
+        auto colocated_map = tablet_map::construct_colocated_tablet_map(*_tablets.at(base_id), repair_info{});
+        _tablets[id] = make_lw_shared<const tablet_map>(std::move(colocated_map));
+    }
+
+    co_return;
 }
 
 void tablet_metadata::drop_tablet_map(table_id id) {
@@ -499,6 +511,14 @@ tablet_map::tablet_map(size_t tablet_count)
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets->resize(tablet_count);
+}
+
+tablet_map tablet_map::construct_colocated_tablet_map(const tablet_map& base_map, const tablet_map& prev_colocated_map) {
+    return tablet_map(base_map, prev_colocated_map._repair_info);
+}
+
+tablet_map tablet_map::construct_colocated_tablet_map(const tablet_map& base_map, repair_info rinfo) {
+    return tablet_map(base_map, make_lw_shared<repair_info>(std::move(rinfo)));
 }
 
 tablet_map tablet_map::clone() const {

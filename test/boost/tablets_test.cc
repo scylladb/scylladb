@@ -537,6 +537,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                 BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
 
                 BOOST_REQUIRE_EQUAL(5, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+                BOOST_REQUIRE_EQUAL(0, tmap2.get_tablet_repair_info(tid).sstables_repaired_at);
             }
 
             tid = *tmap1.next_tablet(tid);
@@ -547,6 +548,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                 BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
 
                 BOOST_REQUIRE_EQUAL(10, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+                BOOST_REQUIRE_EQUAL(0, tmap2.get_tablet_repair_info(tid).sstables_repaired_at);
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
@@ -580,6 +582,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                 BOOST_REQUIRE(tinfo1 != nullptr);
                 BOOST_REQUIRE(tinfo2 != nullptr);
                 BOOST_REQUIRE_EQUAL(tinfo1->stage, tinfo2->stage);
+
+                // verify the repair info is still separate
+                BOOST_REQUIRE_EQUAL(5, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+                BOOST_REQUIRE_EQUAL(0, tmap2.get_tablet_repair_info(tid).sstables_repaired_at);
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
@@ -620,6 +626,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                 const auto& tinfo1 = tmap1.get_tablet_info(tid);
                 const auto& tinfo2 = tmap2.get_tablet_info(tid);
                 BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+
+                // verify the repair info is still separate
+                BOOST_REQUIRE_EQUAL(5, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+                BOOST_REQUIRE_EQUAL(0, tmap2.get_tablet_repair_info(tid).sstables_repaired_at);
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
