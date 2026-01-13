@@ -629,6 +629,12 @@ private:
         , _repair_info(std::move(rinfo))
     {}
 
+    // Internal constructor, used to construct a tablet map of a colocated table from a base tablet map.
+    tablet_map(const tablet_map& base, repair_info rinfo)
+        : _shared_map(base._shared_map)
+        , _repair_info(std::move(rinfo))
+    {}
+
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
 
@@ -649,6 +655,8 @@ public:
 
     tablet_map clone() const;
     future<tablet_map> clone_gently() const;
+
+    static tablet_map construct_colocated_tablet_map(const tablet_map& base_map);
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;

@@ -351,7 +351,8 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     // share the tablet map with all co-located tables
     for (auto colocated_id : _table_groups.at(id)) {
         if (colocated_id != id) {
-            _tablets[colocated_id] = make_foreign(new_map_ptr);
+            auto colocated_tablet_map = tablet_map::construct_colocated_tablet_map(*new_map_ptr);
+            _tablets[colocated_id] = make_foreign(make_lw_shared<const tablet_map>(std::move(colocated_tablet_map)));
         }
     }
     it->second = make_foreign(std::move(new_map_ptr));
@@ -378,7 +379,8 @@ void tablet_metadata::set_tablet_map(table_id id, tablet_map map) {
     } else {
         for (auto colocated_id : it->second) {
             if (colocated_id != id) {
-                _tablets[colocated_id] = map_ptr;
+                auto colocated_map = tablet_map::construct_colocated_tablet_map(*map_ptr);
+                _tablets[colocated_id] = make_lw_shared<const tablet_map>(std::move(colocated_map));
             }
         }
     }
@@ -412,11 +414,15 @@ future<> tablet_metadata::set_colocated_table(table_id id, table_id base_id) {
         if (!_tablets.contains(base_id)) {
             on_internal_error(tablet_logger, format("Base table {} of co-located table {} does not have a tablet map", base_id, id));
         }
-        auto map_ptr = co_await _tablets.at(base_id).copy();
-        _tablets[id] = std::move(map_ptr);
+
+        const auto& base_map = *_tablets.at(base_id);
+        auto colocated_map = tablet_map::construct_colocated_tablet_map(base_map);
+        _tablets[id] = make_lw_shared<const tablet_map>(std::move(colocated_map));
     } else if (it->second != base_id) {
         on_internal_error(tablet_logger, format("Cannot set base table {} for table {} because it already has base table {}", base_id, id, it->second));
     }
+
+    co_return;
 }
 
 void tablet_metadata::drop_tablet_map(table_id id) {
@@ -494,6 +500,13 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
     if (with_raft_info) {
         _shared_map->raft_info.resize(tablet_count);
     }
+}
+
+tablet_map tablet_map::construct_colocated_tablet_map(const tablet_map& base_map) {
+    return tablet_map(base_map, repair_info{
+        .tablets_info = utils::chunked_vector<tablet_repair_info>(base_map.tablet_count()),
+        .scheduler_config = base_map._repair_info.scheduler_config,
+    });
 }
 
 tablet_map tablet_map::clone() const {
