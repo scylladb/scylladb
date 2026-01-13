@@ -1371,7 +1371,7 @@ private:
     future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
 
-lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);
+lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::shared_tablet_map&);
 
 using user_types_metadata = data_dictionary::user_types_metadata;
 

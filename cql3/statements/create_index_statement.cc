@@ -202,14 +202,7 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         "";
     builder.with_view_info(schema, false, where_clause);
 
-    bool is_colocated = [&] {
-        if (!db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
-            return false;
-        }
-        return im.local();
-    }();
-
-    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name(), !is_colocated));
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name()));
     builder.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 
     // A local secondary index should be backed by a *synchronous* view,

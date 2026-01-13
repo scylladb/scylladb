@@ -382,30 +382,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-
-    bool is_colocated = [&] {
-        if (!db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
-            return false;
-        }
-        if (target_partition_keys.size() != schema->partition_key_columns().size()) {
-            return false;
-        }
-        for (size_t i = 0; i < target_partition_keys.size(); ++i) {
-            if (target_partition_keys[i] != &schema->partition_key_columns()[i]) {
-                return false;
-            }
-        }
-        return true;
-    }();
-
-    if (is_colocated) {
-        auto gc_opts = _properties.properties()->get_tombstone_gc_options(schema_extensions);
-        if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
-            throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables.");
-        }
-    }
-
-    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), !is_colocated);
+    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

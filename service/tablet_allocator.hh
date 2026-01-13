@@ -284,7 +284,7 @@ public:
 
     void set_use_table_aware_balancing(bool);
 
-    future<locator::tablet_map> resize_tablets(locator::token_metadata_ptr, table_id);
+    future<std::pair<locator::shared_tablet_map, locator::per_table_tablet_map>> resize_tablets(locator::token_metadata_ptr, table_id);
 
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();

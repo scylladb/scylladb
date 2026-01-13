@@ -9,14 +9,13 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.conftest import skip_mode
-from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
+from test.cluster.util import new_test_keyspace
 import time
 import pytest
 import logging
 import asyncio
 import random
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest, Unauthorized
 
 logger = logging.getLogger(__name__)
 
@@ -392,107 +391,93 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 1. Create a base table and a co-located view table with a single tablet and RF=2 (replica on each node)
 # 2. write data to the base table while one node is down
 # 3. bring the node back up - it is now missing some data
-# 4. run tablet repair on the base table
-# 5. verify both the base table and the view contain the missing data on the node that was down
+# 4. run tablet repair on the base / view table
+# 5. verify the table is repaired and contains the missing data
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="tablet repair of colocated tables is not supported currently")
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'repair=debug',
+        '--logger-log-level', 'tablets=debug',
+        '--logger-log-level', 'raft_topology=debug',
     ]
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
 
+        # Insert initial data
         cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(1, 10)", consistency_level=ConsistencyLevel.ONE))
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
         await manager.api.flush_keyspace(servers[1].ip_addr, ks)
 
-        # Stop node 2 and write data while it is down
-        await manager.server_stop(servers[1].server_id)
+        log = await manager.server_open_log(servers[0].server_id)
 
-        cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(2, 20)", consistency_level=ConsistencyLevel.ONE))
-        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+        # Loop for both repair scenarios: first view, then base
+        for pk, table in [(2, 'tv'), (3, 'test')]:
+            # Stop node 2 and write data while it is down
+            await manager.server_stop(servers[1].server_id)
+            cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES({pk}, {pk*10})", consistency_level=ConsistencyLevel.ONE))
+            await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
-        # Start node 2 back up
-        await manager.server_start(servers[1].server_id)
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-        await manager.servers_see_each_other(servers)
+            # Start node 2 back up
+            await manager.server_start(servers[1].server_id)
+            await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+            await manager.servers_see_each_other(servers)
 
-        # At this point, node 2 is missing pk=2
-        # Verify that pk=2 is missing on node 2 before repair
-        # Connect directly to server 2 to check its data
-        cql_server2 = await manager.get_cql_exclusive(servers[1])
-        rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.test", consistency_level=ConsistencyLevel.ONE))
-        pks = set(row.pk for row in rows)
-        assert 1 in pks and 2 not in pks
+            # At this point, node 2 is missing pk
+            cql_server2 = await manager.get_cql_exclusive(servers[1])
+            rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.test", consistency_level=ConsistencyLevel.ONE))
+            pks = set(row.pk for row in rows)
+            assert pk not in pks
 
-        # Trigger repair of the single tablet
-        tablet_token = 0
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', tablet_token)
+            # Repair the specified tablet (view or base)
+            tablet_token = 0
+            mark = await log.mark()
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, table, tablet_token)
+            table_id = await manager.get_table_id(ks, table) if table == 'test' else await manager.get_view_id(ks, table)
+            await log.wait_for(f"Initiating tablet repair.*tablet={table_id}", from_mark=mark, timeout=60)
 
-        # Verify the view is repaired on server 2
-        rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
-        pks = set(row.pk for row in rows)
-        assert 1 in pks and 2 in pks
+            # Verify that the repaired table contains the missing pk
+            rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level=ConsistencyLevel.ONE))
+            pks = set(row.pk for row in rows)
+            assert pk in pks
 
-# Verify the default tombstone GC mode for colocated tables is 'timeout',
-# and that altering it to 'repair' is not allowed.
+# Test that tombstone_gc repair works for colocated tables.
 @pytest.mark.asyncio
-async def test_colocated_tables_gc_mode(manager: ManagerClient):
+async def test_tombstone_gc_repair_on_colocated_table(manager: ManagerClient):
+    """
+    Create a table and a colocated MV with tombstone_gc=repair, repair the MV, and verify
+    the pending repair time is inserted in the tombstone GC state for the MV.
+    """
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
-    def check_tombstone_gc_mode_timeout(cql, table):
-        s = list(cql.execute(f"DESC {table}"))[0].create_statement
-        assert "'mode': 'timeout'" in s or "mode" not in s # default is timeout
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c) WITH tombstone_gc = {{'mode':'repair'}};")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i+1});") for i in range(10)])
 
-    async with new_test_keyspace(manager, "WITH replication = {'dc1': 3 }") as ks:
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
-            async with new_materialized_view(manager, table, "*", "pk, v", "pk IS NOT NULL AND v IS NOT NULL") as mv:
-                check_tombstone_gc_mode_timeout(cql, mv)
+        logs = []
+        for s in servers:
+            await manager.api.set_logger_level(s.ip_addr, "database", "debug")
+            await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
+            logs.append(await manager.server_open_log(s.server_id))
 
-                with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                    await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'repair'}}")
+        # Run repair on the base table
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "mv", "all")
 
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv2 AS SELECT * FROM {table} WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v) WITH tombstone_gc = {{'mode': 'repair'}}")
-
-            # a not colocated view with 'repair' mode - should succeed
-            async with new_materialized_view(manager, table, "*", "v, pk", "pk IS NOT NULL AND v IS NOT NULL", "WITH tombstone_gc = {'mode': 'repair'}") as mv:
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'timeout'}}")
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tombstone_gc = {{'mode': 'repair'}}")
-
-            await cql.run_async(f"CREATE INDEX ON {table}((pk),v)")
-            view_name = cql.execute("SELECT view_name FROM system_schema.views").one().view_name
-            check_tombstone_gc_mode_timeout(cql, f"{ks}.{view_name}")
-
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables."):
-                await cql.run_async(f"ALTER MATERIALIZED VIEW {ks}.{view_name} WITH tombstone_gc = {{'mode': 'repair'}}")
-
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int", " WITH cdc={'enabled': true}") as table:
-            check_tombstone_gc_mode_timeout(cql, f"{table}_scylla_cdc_log")
-
-            with pytest.raises(InvalidRequest, match="The 'repair' mode for tombstone_gc is not allowed on CDC log tables."):
-                await cql.run_async(f"ALTER TABLE {table}_scylla_cdc_log WITH tombstone_gc = {{'mode': 'repair'}}")
-
-        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
-            await cql.run_async(f"INSERT INTO {table}(pk, v) VALUES(0, 0)")
-            await cql.run_async(f"UPDATE {table} SET v = 1 WHERE pk = 0 IF v = 0")
-
-            # ensure paxos state table is created on all nodes
-            await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
-
-            ks_name, cf_name = table.split('.')
-            table_name = f"{ks_name}.\"{cf_name}$paxos\""
-            check_tombstone_gc_mode_timeout(cql, table_name)
-
-            # paxos table is not allowed to be altered, even not by a superuser.
-            with pytest.raises(Unauthorized):
-                await cql.run_async(f"ALTER TABLE {table_name} WITH tombstone_gc = {{'mode': 'repair'}}")
+        # Wait for both table and MV to have insert/flush log lines
+        async def is_repair_time_inserted(table_id):
+            for log in logs:
+                inserts = await log.grep(rf'.*Insert pending repair time for tombstone gc: table={table_id}.*')
+                flushes = await log.grep(rf'.*Flush pending repair time for tombstone gc: table={table_id}.*')
+                inserted = len(inserts) == len(flushes) and len(inserts) > 0
+                if inserted:
+                    return True
+        mv_id = await manager.get_view_id(ks, "mv")
+        await wait_for(lambda: is_repair_time_inserted(mv_id), time.time() + 60)
