@@ -16,6 +16,7 @@ import subprocess
 import json
 import uuid
 
+from test import path_to
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
@@ -256,10 +257,11 @@ async def test_wrong_cipher_algorithm(manager, key_provider):
     assert len(expected_errors) == len(broken_ciphers), expected_errors
 
 @pytest.mark.parametrize(argnames="compression", argvalues=("LZ4", "Snappy", "Deflate"))
-async def test_encryption_table_compression(manager, tmpdir, compression):
+async def test_encryption_table_compression(manager, tmpdir, compression, build_mode):
     """Test compression + ear"""
+    scylla_exe = path_to(build_mode, 'scylla')
     logger.debug("---- Test with compression: %s -----", compression)
-    async with make_key_provider_factory(KeyProvider.local, tmpdir) as key_provider:
+    async with make_key_provider_factory(KeyProvider.local, tmpdir, scylla_exe) as key_provider:
         await _smoke_test(manager, key_provider,
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           compression=compression)

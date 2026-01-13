@@ -78,7 +78,7 @@ def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
     add_cql_connection_options(parser)
-    parser.addoption('--skip-internet-dependent-tests', action='store_true',
+    parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
@@ -400,7 +400,8 @@ async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> Asy
     yield await get_scylla_2025_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
-async def key_provider(request, tmpdir):
+async def key_provider(request, tmpdir, build_mode):
     """Encryption providers fixture"""
-    async with make_key_provider_factory(request.param, tmpdir) as res:
+    scylla_exe = path_to(build_mode, 'scylla')
+    async with make_key_provider_factory(request.param, tmpdir, scylla_exe) as res:
         yield res
