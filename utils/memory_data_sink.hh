@@ -8,6 +8,7 @@
 
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/util/memory-data-sink.hh>
 #include "utils/small_vector.hh"
 
 #include "seastarx.hh"
@@ -21,12 +22,14 @@ class memory_data_sink_buffers {
     buffers_type _bufs;
     size_t _size = 0;
 public:
+    using value_type = temporary_buffer<char>; // for std::back_inserter to work
+
     size_t size() const { return _size; }
     buffers_type& buffers() { return _bufs; }
     const buffers_type& buffers() const { return _bufs; }
 
     // Strong exception guarantees
-    void put(temporary_buffer<char>&& buf) {
+    void push_back(temporary_buffer<char>&& buf) {
         auto size = buf.size();
         _bufs.emplace_back(std::move(buf));
         _size += size;
@@ -46,23 +49,8 @@ public:
     }
 };
 
-class memory_data_sink : public data_sink_impl {
-    memory_data_sink_buffers& _bufs;
-public:
-    memory_data_sink(memory_data_sink_buffers& b) : _bufs(b) {}
-    virtual future<> put(std::span<temporary_buffer<char>> bufs) override {
-        for (auto&& buf : bufs) {
-            _bufs.put(std::move(buf));
-        }
-        return make_ready_future<>();
-    }
-    virtual future<> flush() override {
-        return make_ready_future<>();
-    }
-    virtual future<> close() override {
-        return make_ready_future<>();
-    }
-    size_t buffer_size() const noexcept override {
-        return 128*1024;
-    }
-};
+inline void append_buffers(memory_data_sink_buffers& c, std::span<temporary_buffer<char>> bufs) {
+    std::ranges::move(bufs, std::back_inserter(c));
+}
+
+using memory_data_sink = seastar::util::basic_memory_data_sink<memory_data_sink_buffers, 128*1024>;
