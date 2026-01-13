@@ -143,8 +143,12 @@ that also regenerates clang.
    commit it. The commit updating install-dependencies.sh should
    include the toolchain change, for atomicity. Do not push the commit
    to `next` yet.
-2. Push the commit to a personal repository/branch.
-3. Perform the following on an x86 and an ARM machine:
+2. In tools/toolchain/optimized_clang.sh, adjust the variable LLVM_CLANG_TAG
+   to point to the version of clang you want to build. It should match what
+   is available in Fedora at this point in time. Amend the commit with this,
+   but don't push it to `next` yet.
+3. Push the commit to a personal repository/branch.
+4. Perform the following on an x86 and an ARM machine:
     1. check out the branch containing the new toolchain name
     2. Run `git submodule update --init --recursive` to make sure
        all the submodules are synchronized
@@ -156,11 +160,11 @@ that also regenerates clang.
        The URLs point to an object storage bucket we maintain.
     5. Upload the generated clang image to its URL. Use `gsutil cp <filename> <GSURL>` where `GSURL` is the same
        as `URL` except the protocol is `gs` instead of `https`.
-4. Now, create a multiarch image with the following:
+5. Now, create a multiarch image with the following:
     1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
     2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
     3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
-5. Now push the commit that updated the toolchain with `git push`. Remember to record the clang archive URLs for future reference.
+6. Now push the commit that updated the toolchain with `git push`. Remember to record the clang archive URLs for future reference.
 
 ## Troubleshooting
 
