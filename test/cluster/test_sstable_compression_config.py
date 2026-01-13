@@ -6,6 +6,8 @@
 
 import os
 import time
+from pathlib import Path
+
 import pytest
 import asyncio
 import logging
@@ -94,7 +96,7 @@ async def test_crc_check_chance_out_of_bounds(manager: ManagerClient, cfg_source
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
 @pytest.mark.asyncio
-async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
+async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     Check that the default SSTable compression algorithm is:
     * LZ4Compressor if SSTABLE_COMPRESSION_DICTS is disabled.
@@ -121,9 +123,6 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
         assert actual_compression == expected_compression, \
             f"Expected {expected_compression} for {table_name} ({context}), got: {actual_compression}"
 
-    new_exe = os.getenv("SCYLLA")
-    assert new_exe
-
     logger.info("Starting servers with version 2025.1")
     servers = await manager.servers_add(2, version=scylla_2025_1)
 
@@ -134,13 +133,13 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
     await create_table_and_check_compression(cql, "test_ks", "table_before_upgrade", "org.apache.cassandra.io.compress.LZ4Compressor", "before upgrade")
 
     logger.info("Upgrading server 0")
-    await manager.server_change_version(servers[0].server_id, new_exe)
+    await manager.server_change_version(servers[0].server_id, scylla_binary)
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     await create_table_and_check_compression(cql, "test_ks", "table_during_upgrade", "org.apache.cassandra.io.compress.LZ4Compressor", "during upgrade")
 
     logger.info("Upgrading server 1")
-    await manager.server_change_version(servers[1].server_id, new_exe)
+    await manager.server_change_version(servers[1].server_id, scylla_binary)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Waiting for SSTABLE_COMPRESSION_DICTS cluster feature to be enabled on all nodes")

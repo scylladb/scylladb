@@ -16,6 +16,7 @@ from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count, product
 from functools import cache, cached_property
+from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING
 
@@ -149,6 +150,10 @@ async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test |
     if request.scope == "module":
         return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
     return None
+
+@pytest.fixture(scope="function")
+def scylla_binary(testpy_test) -> Path:
+    return testpy_test.suite.scylla_exe
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

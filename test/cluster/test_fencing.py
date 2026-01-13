@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from pathlib import Path
+
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType, CounterType
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
@@ -357,14 +359,12 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
-async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
+async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     The test runs some LWT workload on a vnodes-based table, rolling-restarts nodes
     with a new Scylla version and checks that LWTs complete as expected. Downgrading
     a single node back to original version is also covered.
     """
-    new_exe = os.getenv("SCYLLA")
-    assert new_exe
 
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(3,
@@ -417,7 +417,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
         wait_for_some_lwts()
 
         logger.info(f"Upgrading {servers[0].server_id}")
-        await manager.server_change_version(servers[0].server_id, new_exe)
+        await manager.server_change_version(servers[0].server_id, scylla_binary)
         wait_for_some_lwts()
 
         logger.info(f"Downgrading {servers[0].server_id}")
@@ -437,7 +437,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
                     return True
                 await wait_for(all_hosts_are_alive, deadline=time.time() + 60, period=0.1)
             logger.info(f"Upgrading {s.server_id}")
-            await manager.server_change_version(s.server_id, new_exe)
+            await manager.server_change_version(s.server_id, scylla_binary)
 
         logger.info("Done upgrading servers")
 

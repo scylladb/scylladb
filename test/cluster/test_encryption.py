@@ -256,10 +256,10 @@ async def test_wrong_cipher_algorithm(manager, key_provider):
     assert len(expected_errors) == len(broken_ciphers), expected_errors
 
 @pytest.mark.parametrize(argnames="compression", argvalues=("LZ4", "Snappy", "Deflate"))
-async def test_encryption_table_compression(manager, tmpdir, compression):
+async def test_encryption_table_compression(manager, tmpdir, compression, scylla_binary):
     """Test compression + ear"""
     logger.debug("---- Test with compression: %s -----", compression)
-    async with make_key_provider_factory(KeyProvider.local, tmpdir) as key_provider:
+    async with make_key_provider_factory(KeyProvider.local, tmpdir, scylla_binary) as key_provider:
         await _smoke_test(manager, key_provider,
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           compression=compression)
