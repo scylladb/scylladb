@@ -67,6 +67,7 @@ PYTEST_RUNNER_DIRECTORIES = [
     TEST_DIR / 'cql',
     TEST_DIR / 'cqlpy',
     TEST_DIR / 'rest_api',
+    TEST_DIR / 'cluster',
 ]
 
 launch_time = time.monotonic()
@@ -324,16 +325,17 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
-    for name in options.name:
-        file_name = name
-        if '::' in name:
-            file_name, _ = name.split('::', maxsplit=1)
-        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
-            files_to_run.append(name)
-    if not options.name:
-        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if options.name:
+        for name in options.name:
+            file_name = name
+            if '::' in name:
+                file_name, _ = name.split('::', maxsplit=1)
+            if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+                files_to_run.append(name)
+    else:
+        files_to_run = [ TOP_SRC_DIR / 'test/']
     if not files_to_run:
-        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        logging.info('Skipping pytest execution because no tests were selected for pytest.')
         return 0, []
     args = [
         '--color=yes',
@@ -343,12 +345,16 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet', '--no-header'])
     else:
+        threads = int(options.jobs)
+        # debug mode is very CPU and memory hungry, so we need to lower the number of threads to be able to finish tests
+        if 'debug' in options.modes:
+            threads = int(threads * 0.75)
         args.extend([
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
             '--test-py-init',
-            f'-n{int(options.jobs)}',
+            f'-n{threads}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
@@ -449,7 +455,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     deadline = time.perf_counter() + options.session_timeout
     try:
-        result = run_pytest(options)
+        # Run pytest in an executor to avoid blocking the event loop
+        # This allows resource monitoring to run concurrently
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, run_pytest, options)
         total_tests += result[0]
         failed_tests.extend(result[1])
         console.print_start_blurb()
