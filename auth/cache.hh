@@ -17,6 +17,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/metrics_registration.hh>
 
 #include <absl/container/flat_hash_map.h>
 
@@ -72,11 +73,20 @@ private:
     abort_source& _as;
     permission_loader_func _permission_loader;
     semaphore _permission_loader_sem; // protects against reload storms on a single role change
+    metrics::metric_groups _metrics;
+    size_t _cached_permissions_count = 0;
 
     future<lw_shared_ptr<role_record>> fetch_role(const role_name_t& role) const;
     future<> prune_all() noexcept;
     future<> distribute_role(const role_name_t& name, const lw_shared_ptr<role_record> role);
     future<> gather_inheriting_roles(std::unordered_set<role_name_t>& roles, lw_shared_ptr<cache::role_record> role, const role_name_t& name);
+
+    void add_role(const role_name_t& name, lw_shared_ptr<role_record> role);
+    void remove_role(const role_name_t& name);
+    void remove_role(roles_map::iterator it);
+    void clear_role_permissions(const role_name_t& name);
+    void add_permissions(std::unordered_map<resource, permission_set>& cache, const resource& r, permission_set perms);
+    void remove_permissions(std::unordered_map<resource, permission_set>& cache, const resource& r);
 
     future<permission_set> load_permissions(const role_or_anonymous& role, const resource& r, std::unordered_map<resource, permission_set>* perms_cache);
 };
