@@ -1785,6 +1785,21 @@ const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
 
+compression_parameters db::config::get_sstable_compression_user_table_options(bool dicts_feature_enabled) const {
+    if (sstable_compression_user_table_options.is_set()
+            || dicts_feature_enabled
+            || !sstable_compression_user_table_options().uses_dictionary_compressor()) {
+        return sstable_compression_user_table_options();
+    } else {
+        // Fall back to non-dict if dictionary compression is not enabled cluster-wide.
+        auto options = sstable_compression_user_table_options();
+        auto params = options.get_options();
+        auto algo = compression_parameters::non_dict_equivalent(options.get_algorithm());
+        params[compression_parameters::SSTABLE_COMPRESSION] = sstring(compression_parameters::algorithm_to_name(algo));
+        return compression_parameters{params};
+    }
+}
+
 std::map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
     // We decided against using the construct-on-first-use idiom here:
     // https://github.com/scylladb/scylla/pull/5369#discussion_r353614807

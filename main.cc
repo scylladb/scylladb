@@ -2220,47 +2220,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Semantic validation of sstable compression parameters from config.
             // Adding here (i.e., after `join_cluster`) to ensure that the
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
-            //
-            // Also, if the dictionary compression feature is not enabled, use
-            // LZ4Compressor as the default algorithm instead of LZ4WithDictsCompressor.
-            const auto& dicts_feature_enabled = feature_service.local().sstable_compression_dicts;
-            auto& sstable_compression_options = cfg->sstable_compression_user_table_options;
-
-            gms::feature::listener_registration reg_listener;
-
-            if (!sstable_compression_options.is_set() && !dicts_feature_enabled) {
-                if (sstable_compression_options().get_algorithm() != compression_parameters::algorithm::lz4_with_dicts) {
-                    on_internal_error(startlog, "expected LZ4WithDictsCompressor as default algorithm for sstable_compression_user_table_options.");
-                }
-
-                startlog.info("SSTABLE_COMPRESSION_DICTS feature is disabled. Overriding default SSTable compression to use LZ4Compressor instead of LZ4WithDictsCompressor.");
-                compression_parameters original_params{sstable_compression_options().get_options()};
-                auto params = sstable_compression_options().get_options();
-                params[compression_parameters::SSTABLE_COMPRESSION] = sstring(compression_parameters::algorithm_to_name(compression_parameters::algorithm::lz4));
-                smp::invoke_on_all([&sstable_compression_options, params = std::move(params)] {
-                    if (!sstable_compression_options.is_set()) { // guard check; in case we ever make the option live updateable
-                        sstable_compression_options(compression_parameters{params}, utils::config_file::config_source::None);
-                    }
-                }).get();
-
-                // Register a callback to update the default compression algorithm when the feature is enabled.
-                // Precondition:
-                //   The callback must run inside seastar::async context:
-                //   - If the listener fires immediately, we are running inside seastar::async already.
-                //   - If the listener is deferred, `feature_service::enable()` runs it inside seastar::async.
-                reg_listener = feature_service.local().sstable_compression_dicts.when_enabled([&sstable_compression_options, params = std::move(original_params)] {
-                    startlog.info("SSTABLE_COMPRESSION_DICTS feature is now enabled. Overriding default SSTable compression to use LZ4WithDictsCompressor.");
-                    smp::invoke_on_all([&sstable_compression_options, params = std::move(params)] {
-                        if (!sstable_compression_options.is_set()) { // guard check; in case we ever make the option live updateable
-                            sstable_compression_options(params, utils::config_file::config_source::None);
-                        }
-                    }).get();
-                });
-            }
+            const auto dicts_feature_enabled = bool(feature_service.local().sstable_compression_dicts);
 
             try {
-                cfg->sstable_compression_user_table_options().validate(
-                        compression_parameters::dicts_feature_enabled(bool(dicts_feature_enabled)));
+                cfg->get_sstable_compression_user_table_options(dicts_feature_enabled).validate(
+                        compression_parameters::dicts_feature_enabled(dicts_feature_enabled));
             } catch (const std::exception& e) {
                 startlog.error("Invalid sstable_compression_user_table_options: {}", e.what());
                 throw bad_configuration_error();
