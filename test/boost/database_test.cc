@@ -2020,4 +2020,129 @@ SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
     });
 }
 
+struct scoped_execption_log_level {
+    scoped_execption_log_level() {
+        smp::invoke_on_all([] {
+            global_logger_registry().set_logger_level("exception", log_level::debug);
+        }).get();
+    }
+    ~scoped_execption_log_level() {
+        smp::invoke_on_all([] {
+            global_logger_registry().set_logger_level("exception", log_level::info);
+        }).get();
+    }
+};
+
+SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
+    cql_test_config cfg;
+    const auto read_timeout = 10ms;
+    const auto write_timeout = 10s;
+    cfg.query_timeout.emplace(timeout_config{
+            .read_timeout = read_timeout,
+            .write_timeout = write_timeout,
+            .range_read_timeout = read_timeout,
+            .counter_write_timeout = write_timeout,
+            .truncate_timeout = write_timeout,
+            .cas_timeout = write_timeout,
+            .other_timeout = read_timeout});
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const sstring ks_name = get_name();
+        const sstring tbl_name = "tbl";
+
+        // Disable tablets because we want to exercise the legacy range-scan path too.
+        // With tablets, only the table::query() path is used. Vnodes cover both.
+        e.execute_cql(format("CREATE KEYSPACE {} WITH"
+                    " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND"
+                    " tablets = {{'enabled': 'false'}}", ks_name)).get();
+
+        e.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}", ks_name, tbl_name)).get();
+
+        e.execute_cql(format("INSERT INTO {}.{} (pk, ck, v) VALUES (1, 0, 0)", ks_name, tbl_name)).get();
+        replica::database::flush_table_on_all_shards(e.db(), ks_name, tbl_name).get();
+
+        e.execute_cql(format("INSERT INTO {}.{} (pk, ck, v) VALUES (1, 1, 1)", ks_name, tbl_name)).get();
+        replica::database::flush_table_on_all_shards(e.db(), ks_name, tbl_name).get();
+
+        e.execute_cql(format("INSERT INTO {}.{} (pk, ck, v) VALUES (1, 2, 2)", ks_name, tbl_name)).get();
+
+        // One successful read, so the auth cache is populated.
+        e.execute_cql(format("SELECT * FROM {}.{} WHERE pk = 1", ks_name, tbl_name)).get();
+
+        auto get_cxx_exceptions = [&e] {
+            return e.db().map_reduce0([] (replica::database&) { return engine().cxx_exceptions(); }, 0, std::plus<size_t>()).get();
+        };
+
+        auto full_scan_id = e.prepare(format("SELECT * FROM {}.{} BYPASS CACHE", ks_name, tbl_name)).get();
+        auto partition_scan_id = e.prepare(format("SELECT * FROM {}.{} WHERE pk = 1 BYPASS CACHE", ks_name, tbl_name)).get();
+
+        auto execute_test = [&] (const char* test_name, bool scan) {
+            testlog.info("Executing test: {} scan={}", test_name, scan);
+
+            const auto cxx_exceptions_before = get_cxx_exceptions();
+            const size_t num_reads = 1000;
+
+            scoped_execption_log_level exception_log_level_scope;
+
+            const auto query = scan ? full_scan_id  : partition_scan_id;
+
+            testlog.info("Executing {} {}", num_reads, scan ? "full scans" : "partition scans");
+
+            std::vector<future<>> futures;
+            for (size_t i = 0; i < num_reads; ++i) {
+                futures.emplace_back(e.execute_prepared(query, {}).discard_result());
+            }
+
+            // Wait for all futures and check that they all fail with a timeout exception -- without throwing any exception in the process.
+            while (!futures.empty()) {
+                auto f = std::move(futures.back());
+                futures.pop_back();
+
+                f.wait();
+                BOOST_REQUIRE(f.failed());
+                auto ex = f.get_exception();
+                BOOST_REQUIRE(try_catch<exceptions::read_timeout_exception>(ex));
+            }
+            const auto cxx_exceptions_after = get_cxx_exceptions();
+
+            testlog.info("Exceptions: before={}, after={}", cxx_exceptions_before, cxx_exceptions_after);
+
+            BOOST_REQUIRE_EQUAL(cxx_exceptions_after, cxx_exceptions_before);
+        };
+
+        // Test 1: execute reads that reach the disk but time out while reading from the disk.
+        // Ensure no exceptions are thrown, but the reads fail with a read timeout exception.
+        if constexpr (std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+            utils::get_local_injector().enable("sstables_mx_reader_fill_buffer_timeout", false, {{"table", format("{}.{}", ks_name, tbl_name)}});
+            execute_test("disk reads", false);
+            execute_test("disk reads", true);
+            utils::get_local_injector().disable("sstables_mx_reader_fill_buffer_timeout");
+        }
+
+        // Test 2: execute reads that get queued on the semaphore and time out while waiting for the permit.
+        // Ensure no exceptions are thrown, but the reads fail with a read timeout exception.
+        {
+            // Take all semaphore resources and add an active permit
+            // Ensures that all new subsequent reads will be queued.
+            std::vector<foreign_ptr<std::unique_ptr<reader_permit>>> dummy_permits;
+            for (shard_id shard = 0; shard < smp::count; ++shard) {
+                dummy_permits.emplace_back();
+            }
+            e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+                auto& sem = db.get_reader_concurrency_semaphore();
+                sem.set_resources({1, 1});
+                dummy_permits[this_shard_id()] = std::make_unique<reader_permit>(co_await sem.obtain_permit(
+                    db.find_column_family(ks_name, tbl_name).schema(),
+                    "dummy",
+                    1,
+                    db::no_timeout,
+                    {}));
+            }).get();
+
+            execute_test("queued reads", false);
+            execute_test("queued reads", true);
+        }
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

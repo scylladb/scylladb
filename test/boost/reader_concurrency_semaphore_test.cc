@@ -2355,9 +2355,12 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) 
     // Set timeout to 0 and wait for permit to time out.
     permit2->set_timeout(db::timeout_clock::now());
     eventually_true([&] {
-        try {
-            permit2->check_abort();
+        auto ex = permit2->get_abort_exception();
+        if (!ex) {
             return false;
+        }
+        try {
+            std::rethrow_exception(ex);
         } catch (named_semaphore_timed_out&) {
             return true;
         } catch (...) {
