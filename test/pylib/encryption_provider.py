@@ -71,17 +71,15 @@ class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
 
 class ReplicatedKeyProviderFactory(KeyProviderFactory):
     """ReplicatedKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
+    def __init__(self, tmpdir, scylla_exe):
         super(ReplicatedKeyProviderFactory, self).__init__(KeyProvider.replicated, tmpdir)
         self.system_key_file_name = "system_key"
+        self.scylla_exe = scylla_exe
 
     async def __aenter__(self):
         await super().__aenter__()
-        scylla = os.path.abspath(os.getenv('SCYLLA'))
-        if not scylla:
-            raise RuntimeError('No scylla in environment')
         args = ["local-file-key-generator", "generate", os.path.join(self.system_key_location, self.system_key_file_name)]
-        proc = await asyncio.create_subprocess_exec(scylla, *args, stderr=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(self.scylla_exe, *args, stderr=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f'Could not generate system key: {stderr.decode()}')
@@ -292,13 +290,13 @@ class AzureKeyProviderFactory(KeyProviderFactory):
     def require_restart(self):
         return True
 
-def make_key_provider_factory(provider: KeyProvider, tmpdir):
+def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
     """Create key provider factory for enum"""
     res = None
     if provider == KeyProvider.local:
         res = LocalFileSystemKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.replicated:
-        res = ReplicatedKeyProviderFactory(tmpdir)
+        res = ReplicatedKeyProviderFactory(tmpdir, scylla_exe)
     elif provider == KeyProvider.kmip:
         res = KmipKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.kms:

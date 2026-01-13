@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Checks basic functionality on the cluster with different values of the --smp parameter on the nodes.
 @pytest.mark.asyncio
-async def test_nodes_with_different_smp(request: FixtureRequest, manager: ManagerClient) -> None:
+async def test_nodes_with_different_smp(request: FixtureRequest, manager: ManagerClient, build_mode) -> None:
     # In this test it's more convenient to start with a fresh cluster.
 
     # When the node starts it tries to communicate with others
@@ -42,11 +42,9 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Manage
     # The test is flaky on CI in debug builds on aarch64 (#14752),
     # here we sprinkle more logs for debug/aarch64
     # hoping it'll help to debug it.
-    # The hack with xmlpath: it's set by test.py to some file with mode in the path,
-    # couldn't think of a better way to determine the current mode.
     # This should produce ~16M of logs per Scylla node.
     log_args = []
-    if ('/debug/' in request.config.getoption('xmlpath', '')) and ('aarch64' in platform.processor()):
+    if build_mode == 'debug' and ('aarch64' in platform.processor()):
         log_args = [
             '--default-log-level', 'debug',
             '--logger-log-level', 'raft_group0=trace:group0_client=trace:storage_service=trace'
