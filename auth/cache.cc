@@ -18,6 +18,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/metrics.hh>
 
 namespace auth {
 
@@ -29,6 +30,14 @@ cache::cache(cql3::query_processor& qp, abort_source& as) noexcept
     , _loading_sem(1)
     , _as(as)
     , _permission_loader(nullptr) {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("auth_cache", {
+        sm::make_gauge("roles", [this] { return _roles.size(); },
+                sm::description("Number of roles currently cached")),
+        sm::make_gauge("permissions", [this] {
+            return _cached_permissions_count;
+        }, sm::description("Total number of permission sets currently cached across all roles"))
+    });
 }
 
 void cache::set_permission_loader(permission_loader_func loader) {
@@ -66,8 +75,8 @@ future<permission_set> cache::get_permissions(const role_or_anonymous& role, con
         return make_ready_future<permission_set>(it->second);
     }
 
-    return _permission_loader(role, r).then([&r, perms_cache, role_ptr = std::move(role_ptr)](permission_set perms) mutable {
-        (*perms_cache)[r] = perms;
+    return _permission_loader(role, r).then([this, &r, perms_cache, role_ptr = std::move(role_ptr)](permission_set perms) {
+        add_permissions(*perms_cache, r, perms);
         return perms;
     });
 }
@@ -78,7 +87,7 @@ future<> cache::prune(const resource& r) {
     for (auto& it : _roles) {
         // Prunning can run concurrently with other functions but it
         // can only cause cached_permissions extra reload via get_permissions.
-        it.second->cached_permissions.erase(r);
+        remove_permissions(it.second->cached_permissions, r);
         co_await coroutine::maybe_yield();
     }
 }
@@ -90,6 +99,7 @@ future<> cache::prune_all_permissions() noexcept {
         it.second->cached_permissions.clear();
         co_await coroutine::maybe_yield();
     }
+    _cached_permissions_count = 0;
 }
 
 future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& role) const {
@@ -159,7 +169,7 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
 future<> cache::prune_all() noexcept {
     for (auto it = _roles.begin(); it != _roles.end(); ) {
         if (it->second->version != _current_version) {
-            _roles.erase(it++);
+            remove_role(it++);
             co_await coroutine::maybe_yield();
         } else {
             ++it;
@@ -183,7 +193,7 @@ future<> cache::load_all() {
         const auto name = r.get_as<sstring>("role");
         auto role = co_await fetch_role(name);
         if (role) {
-            _roles[name] = role;
+            add_role(name, role);
         }
         co_return stop_iteration::no;
     };
@@ -233,12 +243,13 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
         logger.info("Loading role {}", name);
         auto role = co_await fetch_role(name);
          if (role) {
-            _roles[name] = role;
+            add_role(name, role);
             co_await gather_inheriting_roles(roles_to_clear_perms, role, name);
         } else {
-            auto deleted = _roles.extract(name);
-            if (deleted) {
-                co_await gather_inheriting_roles(roles_to_clear_perms, deleted.mapped(), name);
+            if (auto it = _roles.find(name); it != _roles.end()) {
+                auto old_role = it->second;
+                remove_role(it);
+                co_await gather_inheriting_roles(roles_to_clear_perms, old_role, name);
             }
         }
         co_await distribute_role(name, role);
@@ -246,7 +257,7 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
 
     co_await container().invoke_on_all([&roles_to_clear_perms] (cache& c) -> future<> {
         for (const auto& name : roles_to_clear_perms) {
-            c._roles[name]->cached_permissions.clear();
+            c.clear_role_permissions(name);
             co_await coroutine::maybe_yield();
         }
     });
@@ -256,11 +267,11 @@ future<> cache::distribute_role(const role_name_t& name, lw_shared_ptr<role_reco
     auto role_ptr = role.get();
     co_await container().invoke_on_others([&name, role_ptr](cache& c) {
         if (!role_ptr) {
-            c._roles.erase(name);
+            c.remove_role(name);
             return;
         }
         auto role_copy = make_lw_shared<role_record>(*role_ptr);
-        c._roles[name] = std::move(role_copy);
+        c.add_role(name, std::move(role_copy));
     });
 }
 
@@ -269,6 +280,42 @@ bool cache::includes_table(const table_id& id) noexcept {
             || id == db::system_keyspace::role_members()->id()
             || id == db::system_keyspace::role_attributes()->id()
             || id == db::system_keyspace::role_permissions()->id();
+}
+
+void cache::add_role(const role_name_t& name, lw_shared_ptr<role_record> role) {
+    if (auto it = _roles.find(name); it != _roles.end()) {
+        _cached_permissions_count -= it->second->cached_permissions.size();
+    }
+    _cached_permissions_count += role->cached_permissions.size();
+    _roles[name] = std::move(role);
+}
+
+void cache::remove_role(const role_name_t& name) {
+    if (auto it = _roles.find(name); it != _roles.end()) {
+        remove_role(it);
+    }
+}
+
+void cache::remove_role(roles_map::iterator it) {
+    _cached_permissions_count -= it->second->cached_permissions.size();
+    _roles.erase(it);
+}
+
+void cache::clear_role_permissions(const role_name_t& name) {
+    if (auto it = _roles.find(name); it != _roles.end()) {
+        _cached_permissions_count -= it->second->cached_permissions.size();
+        it->second->cached_permissions.clear();
+    }
+}
+
+void cache::add_permissions(std::unordered_map<resource, permission_set>& cache, const resource& r, permission_set perms) {
+    if (cache.emplace(r, perms).second) {
+        ++_cached_permissions_count;
+    }
+}
+
+void cache::remove_permissions(std::unordered_map<resource, permission_set>& cache, const resource& r) {
+    _cached_permissions_count -= cache.erase(r);
 }
 
 } // namespace auth
