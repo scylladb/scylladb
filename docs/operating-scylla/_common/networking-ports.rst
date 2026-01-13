@@ -25,4 +25,8 @@ Port    Description                                   Protocol
 19142   Native shard-aware transport port  (ssl)         TCP
 ======  ============================================  ========
 
+If you're using ScyllaDB Alternator, ensure that the ports configured
+for Alternator with the ``alternator_port`` or ``alternator_https_port`` parameter
+are open. See :doc:`ScyllaDB Alternator </alternator/alternator>` for details.
+
 .. note:: For ScyllaDB Manager ports, see the `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ documentation.
