@@ -566,12 +566,12 @@ CREATE TABLE system.clients (
     driver_version text,
     hostname text,
     protocol_version int,
+    scheduling_group text,
     shard_id int,
     ssl_cipher_suite text,
     ssl_enabled boolean,
     ssl_protocol text,
     username text,
-    scheduling_group text,
     PRIMARY KEY (address, port, client_type)
 ) WITH CLUSTERING ORDER BY (port ASC, client_type ASC)
 ~~~
