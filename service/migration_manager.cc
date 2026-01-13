@@ -959,7 +959,7 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
     auto erm = base_cf.get_effective_replication_map();
     auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(base_id);
 
-    co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
+    co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info, const auto& tablet_repair_info) -> future<> {
         auto last_token = tablet_map.get_last_token(tid);
         for (auto& replica: tablet_info.replicas) {
             auto id = utils::UUID_gen::get_time_UUID();

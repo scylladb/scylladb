@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             // Add table1
             {
                 tablet_map tmap(1);
-                tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tmap.set_tablet(tmap.first_tablet(),
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
@@ -217,7 +217,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request(),
                     0
-                });
+                );
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             {
                 tablet_map tmap(4);
                 auto tb = tmap.first_tablet();
-                tmap.set_tablet(tb, tablet_info {
+                tmap.set_tablet(tb,
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                     },
@@ -235,7 +235,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     {},
                     locator::tablet_task_info::make_migration_request(),
                     0
-                });
+                );
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -243,7 +243,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     }
                 });
                 tb = *tmap.next_tablet(tb);
-                tmap.set_tablet(tb, tablet_info {
+                tmap.set_tablet(tb,
                     tablet_replica_set {
                         tablet_replica {h2, 2},
                     },
@@ -251,7 +251,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     {},
                     locator::tablet_task_info::make_migration_request(),
                     0
-                });
+                );
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -483,6 +483,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h4 = host_id(utils::UUID_gen::get_time_UUID());
 
         auto table1 = add_table(e).get();
         auto table2 = add_table(e).get();
@@ -493,8 +494,9 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
 
             // Add table1
             {
-                tablet_map tmap(1);
-                tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_map tmap(2);
+                auto tid = tmap.first_tablet();
+                tmap.set_tablet(tid,
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
@@ -503,8 +505,20 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                     db_clock::now(),
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request(),
-                    0
-                });
+                    5
+                );
+                tid = *tmap.next_tablet(tid);
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h2, 1},
+                        tablet_replica {h3, 2},
+                        tablet_replica {h4, 1},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc3"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    10
+                );
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -513,10 +527,102 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
 
             const auto& tmap1 = tm.get_tablet_map(table1);
             const auto& tmap2 = tm.get_tablet_map(table2);
-            BOOST_REQUIRE_EQUAL(tmap1, tmap2);
+            BOOST_REQUIRE_EQUAL(tmap1.tablet_count(), tmap2.tablet_count());
+
+            auto tid = tmap1.first_tablet();
+            {
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+                BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
+
+                BOOST_REQUIRE_EQUAL(5, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+            }
+
+            tid = *tmap1.next_tablet(tid);
+            {
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+                BOOST_REQUIRE_EQUAL(tinfo1.migration_task_info, tinfo2.migration_task_info);
+
+                BOOST_REQUIRE_EQUAL(10, tmap1.get_tablet_repair_info(tid).sstables_repaired_at);
+            }
 
             verify_tablet_metadata_persistence(e, tm, ts);
 
+            // set shared tablet transition info
+            tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+                auto tb = tmap.first_tablet();
+
+                tmap.set_tablet_transition_info(tb, tablet_transition_info{
+                    tablet_transition_stage::allow_write_both_read_old,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                        tablet_replica {h1, 0},
+                        tablet_replica {h2, 3},
+                        tablet_replica {h4, 1},
+                    },
+                    tablet_replica {h4, 1}
+                });
+
+                return make_ready_future();
+            }).get();
+
+            // verify the transition info is shared
+            {
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                auto tid = tmap1.first_tablet();
+                const auto* tinfo1 = tmap1.get_tablet_transition_info(tid);
+                const auto* tinfo2 = tmap2.get_tablet_transition_info(tid);
+                BOOST_REQUIRE(tinfo1 != nullptr);
+                BOOST_REQUIRE(tinfo2 != nullptr);
+                BOOST_REQUIRE_EQUAL(tinfo1->stage, tinfo2->stage);
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
+
+            // reduce replica count
+            {
+                tablet_map tmap(2);
+                auto tid = tmap.first_tablet();
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h1, 0},
+                        tablet_replica {h2, 3},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    5
+                );
+                tid = *tmap.next_tablet(tid);
+                tmap.set_tablet(tid,
+                    tablet_replica_set {
+                        tablet_replica {h2, 1},
+                        tablet_replica {h3, 2},
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc3"}),
+                    locator::tablet_task_info::make_intranode_migration_request(),
+                    10
+                );
+                tm.set_tablet_map(table1, std::move(tmap));
+            }
+
+            {
+                const auto& tmap1 = tm.get_tablet_map(table1);
+                const auto& tmap2 = tm.get_tablet_map(table2);
+
+                auto tid = tmap1.first_tablet();
+                const auto& tinfo1 = tmap1.get_tablet_info(tid);
+                const auto& tinfo2 = tmap2.get_tablet_info(tid);
+                BOOST_REQUIRE_EQUAL(tinfo1.replicas, tinfo2.replicas);
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
@@ -2149,7 +2255,7 @@ void check_no_rack_overload(const token_metadata& tm) {
     auto& topo = tm.get_topology();
     for (const auto& [table, tmap_p] : tm.tablets().all_tables_ungrouped()) {
         const tablet_map& tmap = *tmap_p;
-        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
             std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
             auto replicas = tinfo.replicas;
             for (auto& r : tinfo.replicas) {
@@ -2169,7 +2275,7 @@ void check_no_rack_overload(const token_metadata& tm) {
 // and not placed on any of the bad_nodes.
 void check_rack_list(const locator::topology& topo, const tablet_map& tmap, sstring dc, rack_list racks, std::set<host_id> bad_nodes = {}) {
     std::sort(racks.begin(), racks.end());
-    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
         std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
         auto replicas = tinfo.replicas;
         rack_list actual_racks;
@@ -2627,7 +2733,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_with_load_stats_uses_tablet_sizes) {
 
         // Set load on shard 0 to 0 (all tablet sizes are 0),
         // and set all tablet sizes on shard 1 to default_target_tablet_size
-        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
             dht::token_range trange { tmap.get_token_range(tid) };
             size_t tablet_size = 0;
             if (tinfo.replicas[0].shard == 1) {
@@ -2730,7 +2836,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_without_all_tablet_sizes_throws) {
         auto& tmap = stm.get()->tablets().get_tablet_map(table);
 
         // Set all tablet sizes except for tablet_id == 0
-        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
             if (tid.id != 0) {
                 dht::token_range trange { tmap.get_token_range(tid) };
                 shared_stats.stats.tablet_stats[host].tablet_sizes[table][trange] = service::default_target_tablet_size;
@@ -2767,7 +2873,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_minimal_tablet_size) {
         auto& tmap = stm.get()->tablets().get_tablet_map(table);
 
         // Set all tablet sizes to 1 byte
-        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
             dht::token_range trange { tmap.get_token_range(tid) };
             shared_stats.stats.tablet_stats[host].tablet_sizes[table][trange] = GB / 2;
             return make_ready_future<>();
@@ -3037,7 +3143,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         // Verify we do not treat leaving nodes as having capacity.
         BOOST_REQUIRE_EQUAL(tmap.tablet_count(), 2);
 
-        tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+        tmap.for_each_tablet([&](auto tid, auto& tinfo, auto& trepair) {
             for (auto& replica : tinfo.replicas) {
                 BOOST_REQUIRE_NE(replica.host, host3);
                 BOOST_REQUIRE_NE(replica.host, host4);
@@ -3067,7 +3173,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_rack_decommission) {
         auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(table1);
 
-        tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+        tmap.for_each_tablet([&](auto tid, auto& tinfo, auto& trepair) {
             for (auto& replica : tinfo.replicas) {
                 BOOST_REQUIRE_NE(replica.host, host3);
                 BOOST_REQUIRE_NE(replica.host, host4);
@@ -3148,7 +3254,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         {
             auto tm = stm.get();
             auto& tmap = tm->tablets().get_tablet_map(table1);
-            tmap.for_each_tablet([&](auto tid, auto& tinfo) -> future<> {
+            tmap.for_each_tablet([&](auto tid, auto& tinfo, auto& trepair) -> future<> {
                 auto rack1 = tm->get_topology().get_rack(tinfo.replicas[0].host);
                 auto rack2 = tm->get_topology().get_rack(tinfo.replicas[1].host);
                 BOOST_REQUIRE_NE(rack1, rack2);
@@ -3654,7 +3760,7 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
 static
 void check_tablet_invariants(const tablet_metadata& tmeta) {
     for (const auto& [table, tmap] : tmeta.all_tables_ungrouped()) {
-        tmap->for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
+        tmap->for_each_tablet([&](auto tid, const tablet_info& tinfo, const tablet_repair_info& trepair) -> future<> {
             std::unordered_set<host_id> hosts;
             // Uniqueness of hosts
             for (const auto& replica: tinfo.replicas) {
@@ -3996,7 +4102,7 @@ static table_id create_table_and_set_tablet_sizes(cql_test_env& e, topology_buil
 
     auto& stm = e.shared_token_metadata().local();
     auto& tmap = stm.get()->tablets().get_tablet_map(table);
-    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo, const tablet_repair_info& trepair) {
         auto replicas = tinfo.replicas;
         for (auto& r : tinfo.replicas) {
             locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
@@ -5144,7 +5250,7 @@ SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
 
         // check that all tablets have been migrated from host2 to host1
         auto& tmap = stm.get()->tablets().get_tablet_map(table);
-        tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+        tmap.for_each_tablet([&](auto tid, auto& tinfo, auto& trepair) {
             for (auto& replica : tinfo.replicas) {
                 BOOST_REQUIRE_EQUAL(replica.host, host1);
             }

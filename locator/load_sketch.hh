@@ -154,7 +154,7 @@ private:
 
     future<> populate_table(table_id table, const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc) {
         const topology& topo = _tm->get_topology();
-        co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+        co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti, const tablet_repair_info& trepair) -> future<> {
             auto trinfo = tmap.get_tablet_transition_info(tid);
             for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
                 if (host && *host != replica.host) {
