@@ -43,14 +43,14 @@ faulthandler.enable(all_threads=True)
 # region.
 def pytest_addoption(parser):
     parser.addoption("--aws", action="store_true",
-        help="run against AWS instead of a local Scylla installation")
+        help="run against AWS instead of a local Scylla installation", default=False)
     parser.addoption("--https", action="store_true",
         help="communicate via HTTPS protocol on port 8043 instead of HTTP when"
-            " running against a local Scylla installation")
+            " running against a local Scylla installation", default=False)
     parser.addoption("--url", action="store",
-        help="communicate with given URL instead of defaults")
+        help="communicate with given URL instead of defaults", default=None)
     parser.addoption("--runveryslow", action="store_true",
-        help="run tests marked veryslow instead of skipping them")
+        help="run tests marked veryslow instead of skipping them", default=False)
     add_host_option(parser)
 
 def pytest_configure(config):
