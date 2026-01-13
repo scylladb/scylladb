@@ -576,7 +576,6 @@ async def profdata_to_lcov(
     known_file_ids: Dict[PathLike, str] = {},
     id_search_paths: Iterable[PathLike] = [],
     clear_on_success: bool = False,
-    update_known_ids: bool = True,
     semaphore: Semaphore = Semaphore(1),
     logger: LoggerType = COVERAGE_TOOLS_LOGGER,
 ):
@@ -595,8 +594,6 @@ async def profdata_to_lcov(
         to facilitate the conversion. Defaults to [].
         clear_on_success (bool, optional): Whether to remove the llvm profiles on successful conversion or not.
         Defaults to False.
-        update_known_ids (bool, optional): Whether to update the known ids map given in `known_file_ids` by
-        the user. Defaults to True.
         semaphore (Semaphore, optional): Concurrency limitation for the operation. Defaults to Semaphore(1) (no concurrency).
         logger (LoggerType, optional): logger to which log information. Defaults to COVERAGE_TOOLS_LOGGER.
 
@@ -605,13 +602,14 @@ async def profdata_to_lcov(
         weren't contained in any of `id_search_paths`), or, if the conversion itself failed for some reason.
 
     """
+    updated_known_file_ids = {}
+    updated_known_file_ids.update(known_file_ids)
+
     found_ids = await get_binary_ids_map(
         paths = id_search_paths, filter = PROFILED_ELF_TYPES, semaphore = semaphore, logger = logger
     )
-    if not update_known_ids:
-        known_file_ids = dict(known_file_ids)
+    updated_known_file_ids.update(found_ids)
 
-    known_file_ids.update(found_ids)
     excludes = list(excludes)
     exclude_params = sum(map(lambda exclude: ["-ignore-filename-regex", exclude], excludes), [])
     profiles = [Path(p) for p in profiles]
@@ -624,8 +622,8 @@ async def profdata_to_lcov(
     # validate that we know all of the files that created the profiles
     profile_ids_set = set()
     [profile_ids_set.update(ids) for ids in per_profile_ids]
-    known_ids_set = set(known_file_ids.values())
-    id_to_files_map = {v: k for k, v in known_file_ids.items()}
+    known_ids_set = set(updated_known_file_ids.values())
+    id_to_files_map = {v: k for k, v in updated_known_file_ids.items()}
     if not profile_ids_set.issubset(known_ids_set):
         missing_ids = profile_ids_set.difference(known_ids_set)
         raise RuntimeError(
