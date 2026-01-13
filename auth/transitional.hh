@@ -33,8 +33,6 @@ class transitional_authenticator : public authenticator {
     std::unique_ptr<authenticator> _authenticator;
 
 public:
-    static const sstring PASSWORD_AUTHENTICATOR_NAME;
-
     transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache);
     transitional_authenticator(std::unique_ptr<authenticator> a);
 
