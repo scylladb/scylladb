@@ -1026,9 +1026,7 @@ public:
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        for (auto&& buf : data) {
-            _bufs.put(std::move(buf));
-        }
+        append_buffers(_bufs, std::move(data));
         return maybe_flush();
     }
 
