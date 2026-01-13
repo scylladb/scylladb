@@ -760,6 +760,7 @@ public:
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
+<<<<<<< HEAD
         if (!utils::get_local_injector().enter("tablet_migration_bypass")) {
             // Prepare plans for each DC separately and combine them to be executed in parallel.
             for (auto&& dc : topo.get_datacenters()) {
@@ -777,6 +778,30 @@ public:
                     plan.merge(std::move(dc_plan));
                 }
             }
+||||||| parent of c9f0a9d0eb (tablets: scheduler: Balance racks separately when rf_rack_valid_keyspaces is true)
+        // Prepare plans for each DC separately and combine them to be executed in parallel.
+        for (auto&& dc : topo.get_datacenters()) {
+            auto dc_plan = co_await make_plan(dc);
+            auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
+            plan.merge(std::move(dc_plan));
+=======
+        // Prepare plans for each DC separately and combine them to be executed in parallel.
+        for (auto&& dc : topo.get_datacenters()) {
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
+                    auto rack_plan = co_await make_plan(dc, rack);
+                    auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                    lblogger.log(level, "Prepared {} migrations in rack {} in DC {}", rack_plan.size(), rack, dc);
+                    plan.merge(std::move(rack_plan));
+                }
+            } else {
+                auto dc_plan = co_await make_plan(dc);
+                auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
+                plan.merge(std::move(dc_plan));
+            }
+>>>>>>> c9f0a9d0eb (tablets: scheduler: Balance racks separately when rf_rack_valid_keyspaces is true)
         }
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
