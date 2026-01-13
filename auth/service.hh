@@ -45,11 +45,10 @@ namespace auth {
 
 class role_or_anonymous;
 
-struct service_config final {
-    sstring authorizer_java_name;
-    sstring authenticator_java_name;
-    sstring role_manager_java_name;
-};
+/// Factory function types for creating auth module instances on each shard.
+using authorizer_factory = std::function<std::unique_ptr<authorizer>()>;
+using authenticator_factory = std::function<std::unique_ptr<authenticator>()>;
+using role_manager_factory = std::function<std::unique_ptr<role_manager>()>;
 
 ///
 /// Due to poor (in this author's opinion) decisions of Apache Cassandra, certain choices of one role-manager,
@@ -119,7 +118,7 @@ public:
 
     ///
     /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
-    /// arguments must be copyable, which is why we delay construction with instance-construction instructions instead
+    /// arguments must be copyable, which is why we delay construction with instance-construction factories instead
     /// of the instances themselves.
     ///
     service(
@@ -127,8 +126,9 @@ public:
             cql3::query_processor&,
             ::service::raft_group0_client&,
             ::service::migration_notifier&,
-            ::service::migration_manager&,
-            const service_config&,
+            authorizer_factory,
+            authenticator_factory,
+            role_manager_factory,
             maintenance_socket_enabled,
             cache&);
 
@@ -402,5 +402,45 @@ future<> commit_mutations(service& ser, ::service::group0_batch&& mc);
 
 // Migrates data from old keyspace to new one which supports linearizable writes via raft.
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
+
+///
+/// Factory helper functions for creating auth module instances.
+/// These are intended for use with sharded<service>::start() where copyable arguments are required.
+/// The returned factories capture the sharded references and call .local() when invoked on each shard.
+///
+
+/// Creates an authorizer factory for config-selectable authorizer types.
+/// @param name The authorizer class name (e.g., "CassandraAuthorizer", "AllowAllAuthorizer")
+authorizer_factory make_authorizer_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm);
+
+/// Creates an authenticator factory for config-selectable authenticator types.
+/// @param name The authenticator class name (e.g., "PasswordAuthenticator", "AllowAllAuthenticator")
+authenticator_factory make_authenticator_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a role_manager factory for config-selectable role manager types.
+/// @param name The role manager class name (e.g., "CassandraRoleManager")
+role_manager_factory make_role_manager_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a factory for the maintenance socket role manager.
+/// This role manager is not config-selectable and is only used for the maintenance socket.
+role_manager_factory make_maintenance_socket_role_manager_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
 
 }

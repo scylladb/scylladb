@@ -23,8 +23,16 @@
 
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
+#include "auth/certificate_authenticator.hh"
 #include "auth/common.hh"
+#include "auth/default_authorizer.hh"
+#include "auth/ldap_role_manager.hh"
+#include "auth/maintenance_socket_role_manager.hh"
+#include "auth/password_authenticator.hh"
 #include "auth/role_or_anonymous.hh"
+#include "auth/saslauthd_authenticator.hh"
+#include "auth/standard_role_manager.hh"
+#include "auth/transitional.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/description.hh"
@@ -43,7 +51,6 @@
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "service/storage_service.hh"
@@ -188,20 +195,21 @@ service::service(
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
-        ::service::migration_manager& mm,
-        const service_config& sc,
+        authorizer_factory z_factory,
+        authenticator_factory a_factory,
+        role_manager_factory r_factory,
         maintenance_socket_enabled used_by_maintenance_socket,
         cache& cache)
             : service(
-                      std::move(c),
-                      cache,
-                      qp,
-                      g0,
-                      mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
-                      used_by_maintenance_socket) {
+                    std::move(c),
+                    cache,
+                    qp,
+                    g0,
+                    mn,
+                    z_factory(),
+                    a_factory(),
+                    r_factory(),
+                    used_by_maintenance_socket) {
 }
 
 future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
@@ -934,6 +942,117 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             std::move(gen),
             as,
             std::nullopt);
+}
+
+
+namespace {
+
+// Helper to check if a name matches any of the given suffixes (case-insensitive comparison for the suffix part)
+bool name_matches(std::string_view name, std::initializer_list<std::string_view> suffixes) {
+    for (auto suffix : suffixes) {
+        if (name.size() >= suffix.size()) {
+            auto name_suffix = name.substr(name.size() - suffix.size());
+            if (std::equal(name_suffix.begin(), name_suffix.end(), suffix.begin(), suffix.end(),
+                    [](char a, char b) { return std::tolower(a) == std::tolower(b); })) {
+                return true;
+            }
+        }
+        // Also check exact match
+        if (name == suffix) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // anonymous namespace
+
+authorizer_factory make_authorizer_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm) {
+    // Match by suffix or full name to support both short names (e.g., "AllowAllAuthorizer")
+    // and fully qualified names (e.g., "org.apache.cassandra.auth.AllowAllAuthorizer")
+    if (name_matches(name, {"AllowAllAuthorizer"})) {
+        return [&qp, &g0, &mm] {
+            return std::make_unique<allow_all_authorizer>(qp.local(), g0, mm.local());
+        };
+    }
+    if (name_matches(name, {"CassandraAuthorizer"})) {
+        return [&qp, &g0, &mm] {
+            return std::make_unique<default_authorizer>(qp.local(), g0, mm.local());
+        };
+    }
+    if (name_matches(name, {"TransitionalAuthorizer"})) {
+        return [&qp, &g0, &mm] {
+            return std::make_unique<transitional_authorizer>(qp.local(), g0, mm.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown authorizer: {}", name));
+}
+
+authenticator_factory make_authenticator_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    if (name_matches(name, {"AllowAllAuthenticator"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<allow_all_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    if (name_matches(name, {"PasswordAuthenticator"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    if (name_matches(name, {"CertificateAuthenticator"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    if (name_matches(name, {"SaslauthdAuthenticator"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<saslauthd_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    if (name_matches(name, {"TransitionalAuthenticator"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<transitional_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown authenticator: {}", name));
+}
+
+role_manager_factory make_role_manager_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    if (name_matches(name, {"CassandraRoleManager"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<standard_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    if (name_matches(name, {"LDAPRoleManager"})) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<ldap_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown role manager: {}", name));
+}
+
+role_manager_factory make_maintenance_socket_role_manager_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    return [&qp, &g0, &mm, &auth_cache] {
+        return std::make_unique<maintenance_socket_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+    };
 }
 
 }
