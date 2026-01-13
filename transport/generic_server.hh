@@ -63,7 +63,7 @@ protected:
 
     bool _ssl_enabled = false;
     std::optional<sstring> _ssl_cipher_suite = std::nullopt;
-    std::optional<sstring> _ssl_protocol = std::nullopt;;
+    std::optional<sstring> _ssl_protocol = std::nullopt;
 
 private:
     future<> process_until_tenant_switch();

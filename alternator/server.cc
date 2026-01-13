@@ -1036,9 +1036,8 @@ client_data server::ongoing_request::make_client_data() const {
     // and keep "driver_version" unset.
     cd.driver_name = _user_agent;
     // Leave "protocol_version" unset, it has no meaning in Alternator.
-    // Leave "hostname", "ssl_protocol" and "ssl_cipher_suite" unset.
-    // As reported in issue #9216, we never set these fields in CQL
-    // either (see cql_server::connection::make_client_data()).
+    // Leave "hostname", "ssl_protocol" and "ssl_cipher_suite" unset for Alternator.
+    // Note: CQL sets ssl_protocol and ssl_cipher_suite via generic_server::connection base class.
     return cd;
 }
 
