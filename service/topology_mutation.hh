@@ -131,6 +131,8 @@ public:
     topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
     topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
+    topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
+    topology_mutation_builder& finish_rf_change_migrations(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

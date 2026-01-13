@@ -1466,6 +1466,11 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
             co_return true;
         }
     }
+    for (auto request_id : _topology_state_machine._topology.ongoing_rf_changes) {
+        if (co_await ongoing_ks_rf_change(request_id)) {
+            co_return true;
+        }
+    }
     co_return false;
 }
 
