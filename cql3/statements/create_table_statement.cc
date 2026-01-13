@@ -125,7 +125,8 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
 #endif
 
     if (!_properties->get_compression_options() && !is_internal_keyspace(keyspace())) {
-        builder.set_compressor_params(db.get_config().sstable_compression_user_table_options());
+        const auto& dicts_feature_enabled = bool(db.features().sstable_compression_dicts);
+        builder.set_compressor_params(db.get_config().get_sstable_compression_user_table_options(dicts_feature_enabled));
     }
 
     _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace(), true);
