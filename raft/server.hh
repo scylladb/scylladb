@@ -254,6 +254,16 @@ public:
     // It it passes nullptr, the function is unabortable.
     virtual future<> wait_for_state_change(seastar::abort_source* as) = 0;
 
+    // The returned future is resolved when a leader is elected for the current term.
+    // Note that it is not guaranteed that the leader will remain the same by the time
+    // the future is resolved, so the caller must check the synchronous
+    // `current_leader()` function and retry `wait_for_leader()` if it returns an empty
+    // `raft::server_id`.
+    //
+    // The caller may pass a pointer to an abort_source to make the function abortable.
+    // It it passes nullptr, the function is unabortable.
+    virtual future<> wait_for_leader(seastar::abort_source* as) = 0;
+
     // Manually trigger snapshot creation and log truncation.
     //
     // Does nothing if the current apply index is less or equal to the last persisted snapshot descriptor index
