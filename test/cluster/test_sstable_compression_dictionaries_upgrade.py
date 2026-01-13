@@ -11,6 +11,7 @@ import os
 import pathlib
 import contextlib
 import time
+
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.scylla_cluster import ScyllaVersionDescription
@@ -23,9 +24,7 @@ from cassandra.query import SimpleStatement
 logger = logging.getLogger(__name__)
 
 
-async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
-    new_exe = os.getenv("SCYLLA")
-    assert new_exe
+async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: pathlib.Path):
 
     logger.info("Bootstrapping cluster")
     servers = (await manager.servers_add(2, cmdline=[
@@ -104,7 +103,7 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
         raise Exception(f'Expected HTTPError, got no exception')
 
     logger.info("Upgrading server 0")
-    await manager.server_change_version(servers[0].server_id, new_exe)
+    await manager.server_change_version(servers[0].server_id, scylla_binary)
 
     logger.info("Checking that new version returns 500 on retrain_dict before full upgrade")
     try:
@@ -157,8 +156,8 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
 
     logger.info("Upgrading both servers")
     await asyncio.gather(
-        manager.server_change_version(servers[0].server_id, new_exe),
-        manager.server_change_version(servers[1].server_id, new_exe)
+        manager.server_change_version(servers[0].server_id, scylla_binary),
+        manager.server_change_version(servers[1].server_id, scylla_binary)
     )
 
     logger.info("Waiting for SSTABLE_COMPRESSION_DICTS cluster feature")
