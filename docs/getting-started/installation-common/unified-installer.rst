@@ -15,33 +15,23 @@ Ensure your platform is supported by the ScyllaDB version you want to install.
 See `OS Support <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
 for information about supported Linux distributions and versions.
 
-Note that if you're on CentOS 7, only root offline installation is supported.
-
 Download and Install
 -----------------------
 
 #. Download the latest tar.gz file for ScyllaDB version (x86 or ARM) from ``https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-<version>/``.
 
-   Example for version 6.1: https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-6.1/
+   Example for version 2025.1:
+   
+   - Go to https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/
+   - Download the ``scylla-unified`` file for the patch version you want to
+     install. For example, to install 2025.1.9 (x86), download
+     ``scylla-unified-2025.1.9-0.20251010.6c539463bbda.x86_64.tar.gz``.
 
 #. Uncompress the downloaded package.
 
-   The following example shows the package for ScyllaDB 6.1.1 (x86):
-
-   .. code:: console
-
-    tar xvfz scylla-unified-6.1.1-0.20240814.8d90b817660a.x86_64.tar.gz
-
-#. Install OpenJDK 8 or 11.
-
-   The following example shows Java installation on a CentOS-like system:
-
-   .. code:: console
-    
-    sudo yum install -y java-11-openjdk-headless
-
-   For root offline installation on Debian-like systems, two additional packages, ``xfsprogs`` 
-   and ``mdadm``, should be installed to be used in RAID setup.
+#. (Root offline installation only) For root offline installation on Debian-like
+   systems, two additional packages, ``xfsprogs`` and ``mdadm``, should be
+   installed to be used in RAID setup.
 
 #. Install ScyllaDB as a user with non-root privileges:
 
@@ -83,13 +73,8 @@ Run cqlsh:
 
 .. code:: console
 
-    ~/scylladb/share/cassandra/bin/cqlsh 
+    ~/scylladb/bin/cqlsh 
 
-Run cassandra-stress:
-
-.. code:: console
-
-    ~/scylladb/share/cassandra/bin/cassandra-stress write
 
 .. note::
 
@@ -120,7 +105,7 @@ Nonroot install
 
     ./install.sh --upgrade --nonroot
 
-.. note:: The installation script does not upgrade scylla-jmx and scylla-tools. You will have to upgrade them separately. 
+.. note:: The installation script does not upgrade scylla-tools. You will have to upgrade them separately. 
 
 Uninstall
 ===========
