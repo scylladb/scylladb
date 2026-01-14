@@ -3570,7 +3570,7 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     for (const auto& [name, info] : keyspaces) {
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
             if (enforce_rf_rack_validity_for_keyspace(info)) {
                 throw;
             }
@@ -3598,7 +3598,7 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     // if it's already invalid before the topology change, it's allowed to remain invalid
     try {
         check_rf_rack_validity(tmptr);
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
         return true;
     }
 
@@ -3609,7 +3609,7 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     for (const auto& [name, info] : keyspaces) {
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(), change);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
             if (enforce_rf_rack_validity_for_keyspace(info)) {
                 valid = false;
             }

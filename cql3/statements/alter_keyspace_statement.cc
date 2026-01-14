@@ -225,10 +225,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             //    The second hyphen is not really true because currently topological changes can
             //    disturb it (see scylladb/scylladb#23345), but we ignore that.
             locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
-        } catch (const std::exception& e) {
+        } catch (const std::invalid_argument& e) {
             if (replica::database::enforce_rf_rack_validity_for_keyspace(qp.db().get_config(), *ks_md)) {
-                // There's no guarantee what the type of the exception will be, so we need to
-                // wrap it manually here in a type that can be passed to the user.
+                // wrap the exception manually here in a type that can be passed to the user.
                 throw exceptions::invalid_request_exception(e.what());
             } else {
                 // Even when RF-rack-validity is not enforced for the keyspace, we'd
