@@ -21,6 +21,7 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
+#include "utils/http.hh"
 #include "exceptions/exceptions.hh"
 
 namespace sstables {

@@ -25,7 +25,9 @@ class object_storage_endpoint_param {
 public:
     struct s3_storage {
         std::string endpoint;
-        s3::endpoint_config config;
+        std::string region;
+        std::string iam_role_arn;
+        bool legacy_format; // FIXME convert it to bool_class after seastar#3198
 
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;

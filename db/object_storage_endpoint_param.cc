@@ -14,15 +14,20 @@
 #include <boost/lexical_cast.hpp>
 
 #include "utils/s3/creds.hh"
+#include "utils/http.hh"
 #include "object_storage_endpoint_param.hh"
 
 using namespace std::string_literals;
+
+static auto format_url(std::string_view host, unsigned port, bool use_https) {
+    return fmt::format("{}://{}:{}", use_https ? "https" : "http", host, port);
+}
 
 db::object_storage_endpoint_param::object_storage_endpoint_param(s3_storage s)
     : _data(std::move(s))
 {}
 db::object_storage_endpoint_param::object_storage_endpoint_param(std::string endpoint, s3::endpoint_config config)
-    : object_storage_endpoint_param(s3_storage{std::move(endpoint), std::move(config)})
+    : object_storage_endpoint_param(s3_storage{format_url(endpoint, config.port, config.use_https), std::move(config.region), std::move(config.role_arn), true /* legacy_format */})
 {}
 db::object_storage_endpoint_param::object_storage_endpoint_param(gs_storage s)
     : _data(std::move(s))
@@ -32,13 +37,29 @@ db::object_storage_endpoint_param::object_storage_endpoint_param() = default;
 db::object_storage_endpoint_param::object_storage_endpoint_param(const object_storage_endpoint_param&) = default;
 
 std::string db::object_storage_endpoint_param::s3_storage::to_json_string() const {
+    if (!legacy_format) {
+        return fmt::format("{{ \"type\": \"s3\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
+            region, iam_role_arn
+        );
+    }
+
+    auto url = utils::http::parse_simple_url(endpoint);
     return fmt::format("{{ \"port\": {}, \"use_https\": {}, \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
-        config.port, config.use_https, config.region, config.role_arn
+        url.port, url.is_https(), region, iam_role_arn
     );
 }
 
 std::string db::object_storage_endpoint_param::s3_storage::key() const {
-    return endpoint;
+    // The `endpoint` is full URL all the time, so only return it as a key
+    // if it wasn't configured "the old way". In the latter case, split the
+    // URL and return its host part to mimic the old behavior.
+
+    if (!legacy_format) {
+        return endpoint;
+    }
+
+    auto url = utils::http::parse_simple_url(endpoint);
+    return url.host;
 }
 
 std::string db::object_storage_endpoint_param::gs_storage::to_json_string() const {
@@ -99,8 +120,6 @@ const std::string& db::object_storage_endpoint_param::type() const {
 
 db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(const YAML::Node& node) {
     auto name = node["name"];
-    auto aws_region = node["aws_region"];
-    auto iam_role_arn = node["iam_role_arn"];
     auto type = node["type"];
 
     auto get_opt = [](auto& node, const std::string& key, auto def) {
@@ -108,13 +127,20 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
         return tmp ? tmp.template as<std::decay_t<decltype(def)>>() : def;
     };
     // aws s3 endpoint. 
-    if (!type || type.as<std::string>() == s3_type || aws_region || iam_role_arn) {
+    if (!type || type.as<std::string>() == s3_type) {
         s3_storage ep;
-        ep.endpoint = name.as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        ep.config.region = aws_region ? aws_region.as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
-        ep.config.role_arn = iam_role_arn ? iam_role_arn.as<std::string>() : "";
+        auto endpoint = name.as<std::string>();
+        ep.legacy_format = (!endpoint.starts_with("http://") && !endpoint.starts_with("https://"));
+
+        if (!ep.legacy_format) {
+            ep.endpoint = std::move(endpoint);
+        } else {
+            ep.endpoint = format_url(endpoint, node["port"].as<unsigned>(), node["https"].as<bool>(false));
+        }
+
+        auto aws_region = node["aws_region"];
+        ep.region = aws_region ? aws_region.as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
+        ep.iam_role_arn = get_opt(node, "iam_role_arn", ""s);
 
         return object_storage_endpoint_param{std::move(ep)};
     }
