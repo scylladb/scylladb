@@ -37,9 +37,9 @@ size_t local_quorum_for(const locator::effective_replication_map& erm, const sst
     const auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        const network_topology_strategy* nrs =
+        const network_topology_strategy* nts =
             static_cast<const network_topology_strategy*>(&rs);
-        size_t replication_factor = nrs->get_replication_factor(dc);
+        size_t replication_factor = nts->get_replication_factor(dc);
         return replication_factor ? (replication_factor / 2) + 1 : 0;
     }
 
