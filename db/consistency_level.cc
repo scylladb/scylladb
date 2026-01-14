@@ -192,18 +192,30 @@ void assure_sufficient_live_nodes(
         return pending <= live ? live - pending : 0;
     };
 
+    auto make_rf_zero_error_msg = [cl] (const sstring& local_dc) {
+        return format("Cannot achieve consistency level {} in datacenter '{}' with replication factor 0. "
+                      "Ensure the keyspace is replicated to this datacenter or use a non-local consistency level.", cl, local_dc);
+    };
+
     const auto& topo = erm.get_topology();
+    const sstring& local_dc = topo.get_datacenter();
 
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE:
+        if (size_t local_rf = get_replication_factor_for_dc(erm, local_dc); local_rf == 0) {
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, 1, 0);
+        }
         if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
             throw exceptions::unavailable_exception(cl, 1, 0);
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
+        if (size_t local_rf = get_replication_factor_for_dc(erm, local_dc); local_rf == 0) {
+            throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, 0);
+        }
         size_t local_live = topo.count_local_endpoints(live_endpoints);
         size_t pending = topo.count_local_endpoints(pending_endpoints);
         if (local_live < need + pending) {
