@@ -2414,4 +2414,73 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_always_admit_one_perm
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_release_base_resources) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    const std::string test_name = get_name();
+
+    const auto total_resources = reader_resources{2, 2048};
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(total_resources.count),
+            total_resources.memory,
+            test_name + " semaphore",
+            std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t>(200),
+            utils::updateable_value<uint32_t>(400),
+            utils::updateable_value<uint32_t>(1),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    const auto expected_base_resources = reader_resources{1, 1024};
+    const auto expected_available_resources = total_resources - expected_base_resources;
+    const auto expected_consumed_resources = expected_base_resources;
+
+    {
+        auto permit = semaphore.obtain_permit(s.schema(), get_name(), 1024, db::no_timeout, {}).get();
+
+        BOOST_REQUIRE_EQUAL(permit.base_resources(), expected_base_resources);
+        BOOST_REQUIRE_EQUAL(permit.consumed_resources(), permit.base_resources());
+
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), expected_available_resources);
+        BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), expected_consumed_resources);
+
+        permit.release_base_resources();
+
+        // Should be unchanged, it is just not consumed
+        BOOST_REQUIRE_EQUAL(permit.base_resources(), expected_base_resources);
+        BOOST_REQUIRE_EQUAL(permit.consumed_resources(), reader_resources{});
+
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), total_resources);
+        BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+    }
+
+    {
+        auto permit = semaphore.obtain_permit(s.schema(), get_name(), 1024, db::no_timeout, {}).get();
+
+        auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
+        BOOST_REQUIRE(irh);
+
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(!irh);
+
+        BOOST_REQUIRE_EQUAL(permit.consumed_resources(), reader_resources{});
+        BOOST_REQUIRE_EQUAL(permit.base_resources(), expected_base_resources);
+
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), total_resources);
+        BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+
+        // Should be no-op
+        permit.release_base_resources();
+
+        // Should be unchanged, it is just not consumed
+        BOOST_REQUIRE_EQUAL(permit.base_resources(), expected_base_resources);
+        BOOST_REQUIRE_EQUAL(permit.consumed_resources(), reader_resources{});
+
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), total_resources);
+        BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
