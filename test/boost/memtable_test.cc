@@ -1602,4 +1602,39 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
     }, cfg);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_memtable_reader_abort) {
+    simple_schema ss;
+    const auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    replica::table_stats tbl_stats;
+    replica::memtable_table_shared_data table_shared_data;
+    replica::dirty_memory_manager mgr;
+
+    auto mt = make_lw_shared<replica::memtable>(s, mgr, table_shared_data, tbl_stats);
+
+    auto pk = ss.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    mutation m(s, pk);
+    for (int i = 0; i < 10; ++i) {
+        ss.add_row(m, ss.make_ckey(i), "v1");
+    }
+    mt->apply(m);
+
+    auto permit = semaphore.make_permit();
+
+    auto reader_opt = mt->make_mutation_reader_opt(s, permit, pr, s->full_slice());
+    BOOST_REQUIRE(reader_opt);
+    auto close_reader = deferred_close(*reader_opt);
+
+    permit.set_timeout(db::timeout_clock::now());
+
+    // Wait for timer to fire so the permit is timed out.
+    BOOST_REQUIRE(eventually_true([&] { return bool(permit.get_abort_exception()); }));
+
+    BOOST_REQUIRE_THROW((*reader_opt)().get(), named_semaphore_timed_out);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
