@@ -370,8 +370,9 @@ uint64_t select_statement::get_inner_loop_limit(uint64_t limit, bool is_aggregat
 }
 
 bool select_statement::needs_post_query_ordering() const {
-    // We need post-query ordering only for queries with IN on the partition key and an ORDER BY.
-    return _restrictions->key_is_in_relation() && !_parameters->orderings().empty();
+    // We need post-query ordering for queries with IN on the partition key and an ORDER BY
+    // and ANN index queries with rescoring.
+    return static_cast<bool>(_ordering_comparator);
 }
 
 struct select_statement_executor {
