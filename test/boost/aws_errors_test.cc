@@ -108,3 +108,57 @@ BOOST_AUTO_TEST_CASE(TestErrorsWithoutPrefixParse) {
     BOOST_REQUIRE_EQUAL("JunkMessage", error.get_error_message());
     BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
 }
+
+BOOST_AUTO_TEST_CASE(TestNestedException) {
+    // Test nested exceptions where the innermost is a system_error
+    try {
+        try {
+            try {
+                throw std::system_error(std::error_code(ECONNABORTED, std::system_category()));
+            } catch (...) {
+                std::throw_with_nested(std::runtime_error("Higher level runtime_error"));
+            }
+        } catch (...) {
+            std::throw_with_nested(std::logic_error("Higher level logic_error"));
+        }
+    } catch (...) {
+        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::NETWORK_CONNECTION, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("Software caused connection abort", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::yes);
+    }
+
+    // Test nested exceptions where the innermost is NOT a system_error
+    try {
+        try {
+            throw std::logic_error("Something bad happened");
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error("Higher level runtime_error"));
+        }
+    } catch (...) {
+        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("Higher level runtime_error", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
+    }
+
+    // Test single exception which is NOT a nested exception
+    try {
+        throw std::runtime_error("Something bad happened");
+    } catch (...) {
+        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("Something bad happened", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
+    }
+
+    // Test with non-std::exception
+    try {
+        throw "foo";
+    } catch (...) {
+        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("No error message was provided, exception content: char const*", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
+    }
+}
