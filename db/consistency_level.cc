@@ -31,7 +31,7 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+static size_t get_replication_factor_for_dc(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
     const auto& rs = erm.get_replication_strategy();
@@ -39,11 +39,15 @@ size_t local_quorum_for(const locator::effective_replication_map& erm, const sst
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nts =
             static_cast<const network_topology_strategy*>(&rs);
-        size_t replication_factor = nts->get_replication_factor(dc);
-        return replication_factor ? (replication_factor / 2) + 1 : 0;
+        return nts->get_replication_factor(dc);
     }
 
-    return quorum_for(erm);
+    return erm.get_replication_factor();
+}
+
+size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+    auto rf = get_replication_factor_for_dc(erm, dc);
+    return rf ? (rf / 2) + 1 : 0;
 }
 
 size_t block_for_local_serial(const locator::effective_replication_map& erm) {
