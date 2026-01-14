@@ -11,6 +11,7 @@
 #include "utils/s3/aws_error.hh"
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/sstring.hh>
+#include <seastar/http/exception.hh>
 
 enum class message_style : uint8_t { singular = 1, plural = 2 };
 
@@ -122,7 +123,7 @@ BOOST_AUTO_TEST_CASE(TestNestedException) {
             std::throw_with_nested(std::logic_error("Higher level logic_error"));
         }
     } catch (...) {
-        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
         BOOST_REQUIRE_EQUAL(aws::aws_error_type::NETWORK_CONNECTION, error.get_error_type());
         BOOST_REQUIRE_EQUAL("Software caused connection abort", error.get_error_message());
         BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::yes);
@@ -136,7 +137,7 @@ BOOST_AUTO_TEST_CASE(TestNestedException) {
             std::throw_with_nested(std::runtime_error("Higher level runtime_error"));
         }
     } catch (...) {
-        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
         BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
         BOOST_REQUIRE_EQUAL("Higher level runtime_error", error.get_error_message());
         BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
@@ -146,7 +147,7 @@ BOOST_AUTO_TEST_CASE(TestNestedException) {
     try {
         throw std::runtime_error("Something bad happened");
     } catch (...) {
-        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
         BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
         BOOST_REQUIRE_EQUAL("Something bad happened", error.get_error_message());
         BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
@@ -156,9 +157,39 @@ BOOST_AUTO_TEST_CASE(TestNestedException) {
     try {
         throw "foo";
     } catch (...) {
-        auto error = aws::aws_error::from_maybe_nested_exception(std::current_exception());
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
         BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
         BOOST_REQUIRE_EQUAL("No error message was provided, exception content: char const*", error.get_error_message());
         BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
+    }
+
+    // Test system_error
+    try {
+        throw std::system_error(std::error_code(ECONNABORTED, std::system_category()));
+    } catch (...) {
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::NETWORK_CONNECTION, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("Software caused connection abort", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::yes);
+    }
+
+    // Test aws_exception
+    try {
+        throw aws::aws_exception(aws::aws_error::get_errors().at("HTTP_TOO_MANY_REQUESTS"));
+    } catch (...) {
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::HTTP_TOO_MANY_REQUESTS, error.get_error_type());
+        BOOST_REQUIRE_EQUAL("", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::yes);
+    }
+
+    // Test httpd::unexpected_status_error
+    try {
+        throw seastar::httpd::unexpected_status_error(seastar::http::reply::status_type::network_connect_timeout);
+    } catch (...) {
+        auto error = aws::aws_error::from_exception_ptr(std::current_exception());
+        BOOST_REQUIRE_EQUAL(aws::aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, error.get_error_type());
+        BOOST_REQUIRE_EQUAL(" HTTP code: 599 Network Connect Timeout", error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::yes);
     }
 }
