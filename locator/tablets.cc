@@ -576,7 +576,23 @@ std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tabl
     tablet_replica_set replica_set_copy = replica_set;
     std::ranges::sort(replica_set_copy, tablet_replica_comparator(topo));
     const auto replicas = replica_set_copy | std::views::filter(std::move(filter)) | std::ranges::to<tablet_replica_set>();
-    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+    
+    if (replicas.empty()) {
+        tablet_logger.debug("No replicas in scope for tablet {}", id);
+        return std::nullopt;
+    }
+
+    // Once the filter was pushed down, we got here a set of replicas which live within the selected scope.
+    // replicas[ (id + id / size) % size ] is used to distribute the load evenly across all replicas in the scope.
+    // Let's take for instance a cluster with 1 dc, 3 racks, 9 nodes, rf=3, scope=dc. The `replicas` array here will contain 3
+    // replicas - one from each rack.
+    // Tablet id=0 will end up choosing replicas[0]
+    // Tablet id=1 will end up choosing replicas[1]
+    // Tablet id=2 will end up choosing replicas[2]
+    // We want tablet id=3 to choose replicas[1] and subsequently tablet id=6 to pick replicas[2] to ensure even distribution.
+    auto primary = replicas.at((size_t(id) + size_t(id) / replicas.size()) % replicas.size());
+    tablet_logger.debug("Primary replica of tablet {} is {}: replicas in scope: {}", id, primary, fmt::join(replicas, ","));
+    return primary;
 }
 
 tablet_replica tablet_map::get_primary_replica(tablet_id id, const locator::topology& topo) const {
