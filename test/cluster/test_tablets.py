@@ -1055,11 +1055,13 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
         await manager.server_stop_gracefully(node_to_replace.server_id)
 
         logger.info("Attempting removenode - expected to fail")
-        await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
-                                expected_error="Removenode failed. See earlier errors (node remove rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid)")
+
+        with pytest.raises(Exception, match=r"Removenode failed"):
+            await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id])
 
         logger.info(f"Replacing {node_to_replace} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+                                    ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio

@@ -3233,7 +3233,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     case topology_request::leave: {
                         SCYLLA_ASSERT(node.rs->ring);
 
-                        auto validation_result = validate_removing_node(node);
+                        auto validation_result = validate_removing_node(_db, to_host_id(node.id));
                         if (std::holds_alternative<node_validation_failure>(validation_result)) {
                             builder.with_node(node.id)
                                    .del("topology_request");
@@ -3260,7 +3260,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     case topology_request::remove: {
                         SCYLLA_ASSERT(node.rs->ring);
 
-                        auto validation_result = validate_removing_node(node);
+                        auto validation_result = validate_removing_node(_db, to_host_id(node.id));
                         if (std::holds_alternative<node_validation_failure>(validation_result)) {
                             builder.with_node(node.id)
                                    .del("topology_request");
@@ -3350,12 +3350,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
-    struct node_validation_success {};
-    struct node_validation_failure {
-        sstring reason;
-    };
-    using node_validation_result = std::variant<node_validation_success, node_validation_failure>;
-
     node_validation_result
     validate_joining_node(const node_to_work_on& node) {
         if (*node.request == topology_request::replace) {
@@ -3395,16 +3389,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 };
             }
         }, std::move(validation_result));
-    }
-
-    node_validation_result
-    validate_removing_node(const node_to_work_on& node) {
-        if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
-                locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::remove,
-                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
-            return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
-        }
-        return node_validation_success {};
     }
 
     // Tries to finish accepting the joining node by updating the cluster

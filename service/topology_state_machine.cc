@@ -10,6 +10,8 @@
 #include "topology_state_machine.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
+#include "replica/database.hh"
+#include "locator/tablets.hh"
 
 namespace service {
 
@@ -241,6 +243,21 @@ future<> topology_state_machine::await_not_busy() {
     while (_topology.is_busy()) {
         co_await event.wait();
     }
+}
+
+node_validation_result
+validate_removing_node(replica::database& db, locator::host_id host_id) {
+    auto tmptr = db.get_token_metadata_ptr();
+    auto* node = tmptr->get_topology().find_node(host_id);
+    if (!node) {
+        return node_validation_failure{fmt::format("Node {} not found in topology", host_id)};
+    }
+    auto op = locator::rf_rack_topology_operation{
+            locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
+    if (!db.check_rf_rack_validity_with_topology_change(tmptr, std::move(op))) {
+        return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
+    }
+    return node_validation_success {};
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
