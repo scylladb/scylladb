@@ -725,7 +725,11 @@ query_processor::prepare(sstring query_string, service::query_state& query_state
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
-        auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
+    auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
+
+    // Keep retrying until we either get a live prepared statement pointer or hit the request deadline.
+    auto deadline = db::timeout_clock::now() + client_state.get_timeout_config().other_timeout;
+    while (true) {
         prepared_statements_cache::value_type prep_ptr;
         try {
             prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
@@ -745,6 +749,15 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
             throw prepared_statement_is_too_big(query_string);
         }
 
+        if (!prep_ptr) {
+            if (db::timeout_clock::now() > deadline) {
+                // The entry kept getting invalidated by concurrent schema changes until the deadline.
+                throw exceptions::server_exception("Prepared statement could not be prepared due to concurrent schema changes (timed out)");
+            }
+            // checked_weak_ptr expired after retrieval; retry within the same deadline.
+            continue;
+        }
+
         const auto& warnings = prep_ptr->warnings;
         const auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_ptr),
                     client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
@@ -752,6 +765,7 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
             msg->add_warning(w);
         }
         co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
+    }
 }
 
 static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
