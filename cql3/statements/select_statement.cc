@@ -2066,6 +2066,41 @@ static std::optional<uint32_t> detect_similarity_function_in_selectors(
     return std::nullopt;
 }
 
+uint32_t add_similarity_function_to_selectors(
+        std::vector<selection::prepared_selector>& prepared_selectors,
+        const ann_ordering_info& ann_ordering_info,
+        data_dictionary::database db,
+        schema_ptr schema) {
+    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
+    // Create the function name
+    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
+
+    // Create the function arguments
+    std::vector<expr::expression> args;
+    args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
+    args.push_back(ann_ordering_info._prepared_ann_ordering.second);
+
+    // Get the function object
+    std::vector<shared_ptr<assignment_testable>> provided_args;
+    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
+    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
+
+    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
+
+    // Create the function call expression
+    expr::function_call similarity_func_call{
+        .func = func,
+        .args = std::move(args),
+    };
+
+    // Add the similarity function as a prepared selector (last)
+    prepared_selectors.push_back(selection::prepared_selector{
+        .expr = std::move(similarity_func_call),
+        .alias = nullptr,
+    });
+    return prepared_selectors.size() - 1;
+}
+
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
@@ -2362,21 +2397,31 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
     bool is_ann_query = ann_ordering_info_opt.has_value();
+    if (is_ann_query && prepared_selectors.empty() && secondary_index::vector_index::is_rescoring_enabled(ann_ordering_info_opt->_index.metadata().options())) {
+        // SELECT * ORDER BY ANN ... with rescoring enabled - we will be adding the similarity column, so we need to prepare all columns here
+        prepared_selectors.reserve(schema->all_columns().size());
+        for (const column_definition& column_def : schema->all_columns_in_select_order()) {
+            prepared_selectors.push_back(selection::prepared_selector{
+                .expr = expr::column_value{&column_def},
+            });
+        }
+    }
     
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
 
     select_statement::ordering_comparator_type ordering_comparator;
+    bool hide_last_column = false;
     if (is_ann_query) {
-        std::optional<uint32_t> similarity_column_index;
-        if (!prepared_selectors.empty()) {
-            if (secondary_index::vector_index::is_rescoring_enabled(ann_ordering_info_opt->_index.metadata().options())) {
-                similarity_column_index = detect_similarity_function_in_selectors(prepared_selectors, *ann_ordering_info_opt);
+        if (secondary_index::vector_index::is_rescoring_enabled(ann_ordering_info_opt->_index.metadata().options())) {
+            std::optional<uint32_t> similarity_column_index = detect_similarity_function_in_selectors(prepared_selectors, *ann_ordering_info_opt);
+            if (!similarity_column_index) {
+                similarity_column_index = add_similarity_function_to_selectors(
+                    prepared_selectors, *ann_ordering_info_opt, db, schema);
+                hide_last_column = true;
             }
-        }
                 
-        if (similarity_column_index) {
             auto type = float_type; // similarity_* returns float, but we should extract that from prepared_selectors[*similarity_column_index]
             ordering_comparator = [index = *similarity_column_index, type] (const result_row_type& r1, const result_row_type& r2) {
                 auto& c1 = r1[index];
@@ -2405,6 +2450,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
+
+    if (is_ann_query && hide_last_column) {
+        // Hide the similarity selector from the client by reducing column_count
+        selection->get_result_metadata()->hide_last_column();
+    }
 
     // Cassandra 5.0.2 disallows PER PARTITION LIMIT with aggregate queries
     // but only if GROUP BY is not used.

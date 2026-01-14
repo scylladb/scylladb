@@ -237,8 +237,7 @@ SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
             }));
 }
 
-// Test is failing until rescoring is implemented (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored, *boost::unit_test::expected_failures(12)) {
+SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
@@ -312,8 +311,7 @@ SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
     }
 }
 
-// Test is failing until rescoring is implemented (see https://scylladb.atlassian.net/browse/SCYLLADB-83)
-SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored, *boost::unit_test::expected_failures(12)) {
+SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored) {
     // Another case with slightly different path of processing is "SELECT * ...".
     // We want to confirm that it is handled correctly. 
 
