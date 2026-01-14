@@ -14,24 +14,21 @@ Prerequisites
 Ensure your platform is supported by the ScyllaDB version you want to install. 
 See :doc:`OS Support </getting-started/os-support>` for information about supported Linux distributions and versions.
 
-Note that if you're on CentOS 7, only root offline installation is supported.
-
 Download and Install
 -----------------------
 
 #. Download the latest tar.gz file for ScyllaDB version (x86 or ARM) from ``https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-<version>/``.
 
-   Example for version 6.1: https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-6.1/
+   Example for version 2025.1:
+   
+   - Go to https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/
+   - Download the ``scylla-unified`` file for the patch version you want to
+     install. For example, to install 2025.1.9 (x86), download
+     ``scylla-unified-2025.1.9-0.20251010.6c539463bbda.x86_64.tar.gz``.
 
 #. Uncompress the downloaded package.
 
-   The following example shows the package for ScyllaDB 6.1.1 (x86):
-
-   .. code:: console
-
-    tar xvfz scylla-unified-6.1.1-0.20240814.8d90b817660a.x86_64.tar.gz
-
-#. Install OpenJDK 8 or 11.
+#. Install Java 11.
 
    The following example shows Java installation on a CentOS-like system:
 
@@ -89,11 +86,6 @@ Run cqlsh:
 
     ~/scylladb/share/cassandra/bin/cqlsh 
 
-Run cassandra-stress:
-
-.. code:: console
-
-    ~/scylladb/share/cassandra/bin/cassandra-stress write
 
 .. note::
 
