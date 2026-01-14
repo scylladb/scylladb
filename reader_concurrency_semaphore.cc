@@ -157,7 +157,7 @@ private:
 
     sstring _op_name;
     std::string_view _op_name_view;
-    reader_resources _base_resources;
+    const reader_resources _base_resources;
     bool _base_resources_consumed = false;
     reader_resources _resources;
     reader_permit::state _state = reader_permit::state::active;
@@ -274,9 +274,7 @@ public:
         _semaphore.on_permit_created(*this);
     }
     ~impl() {
-        if (_base_resources_consumed) {
-            signal(_base_resources);
-        }
+        release_base_resources();
 
         if (_resources.non_zero()) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
@@ -346,6 +344,11 @@ public:
     void on_admission() {
         SCYLLA_ASSERT(_state != reader_permit::state::active_await);
         on_permit_active();
+
+        if (_base_resources_consumed) {
+            on_internal_error(rcslog, fmt::format("on_admission(): permit {} already has its base resources consumed", description()));
+        }
+
         consume(_base_resources);
         _base_resources_consumed = true;
     }
@@ -374,10 +377,7 @@ public:
     void on_evicted() {
         SCYLLA_ASSERT(_state == reader_permit::state::inactive);
         _state = reader_permit::state::evicted;
-        if (_base_resources_consumed) {
-            signal(_base_resources);
-            _base_resources_consumed = false;
-        }
+        release_base_resources();
     }
 
     void consume(reader_resources res) {
@@ -407,10 +407,9 @@ public:
 
     void release_base_resources() noexcept {
         if (_base_resources_consumed) {
-            _resources -= _base_resources;
             _base_resources_consumed = false;
+            signal(_base_resources);
         }
-        _semaphore.signal(std::exchange(_base_resources, {}));
     }
 
     sstring description() const {
