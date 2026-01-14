@@ -24,6 +24,7 @@ import xdist
 import yaml
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT
+from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     TestSuite,
@@ -347,6 +348,11 @@ class TestSuiteConfig:
             if suite is None:
                 suite = cls.from_pytest_node(node=node.parent)
         if suite:
+            extra_opts = node.config.getoption("--extra-scylla-cmdline-options")
+            if extra_opts:
+                extra_cmd = suite.cfg.get('extra_scylla_cmdline_options', [])
+                extra_cmd = merge_cmdline_options(extra_cmd, extra_opts.split())
+                suite.cfg['extra_scylla_cmdline_options'] = extra_cmd
             node.stash[TEST_SUITE] = suite
         return suite
 
