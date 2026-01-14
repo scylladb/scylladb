@@ -154,7 +154,7 @@ is holding your keys. You can use the following options:
    * - Local Key Provider
      - ``LocalFileSystemKeyProviderFactory`` (**default**)
      - Stores the key on the same machine as the data.
-   * - Replicated Key Provider
+   * - Replicated Key Provider (**deprecated**)
      - ``ReplicatedKeyProviderFactory``
      - Stores table keys in a ScyllaDB table where the table itself is encrypted
        using the system key.
@@ -183,13 +183,14 @@ Local Key Provider
 
    The Local Key Provider is less safe than other options and as such it is not
    recommended for production use. It is the default key provider for the
-   node-local encryption configuration in ``scylla.yaml`` because it does not
-   require any external resources. In production environments, it is recommended
-   to use an external KMS instead.
+   node-local encryption configuration in ``scylla.yaml`` and table encryption 
+   because it does not require any external resources. 
+   In production environments, it is recommended to use an external KMS instead.
 
 The Local Key Provider is the default key provider for the node-local encryption
 configuration in ScyllaDB (``user_info_encryption`` and ``system_info_encryption``
-in ``scylla.yaml``). It stores the encryption keys locally on disk in a text file.
+in ``scylla.yaml``) as well as table encryption. 
+It stores the encryption keys locally on disk in a text file.
 The location of this file is specified in ``scylla.yaml``, or in the table schema.
 The user has the option to generate the key(s) themselves, or let ScyllaDB
 generate the key(s) for them.
@@ -210,16 +211,18 @@ Replicated Key Provider
 
 .. note::
 
+   **Warning**: The replicated key provider is deprecated and will be removed 
+   in a future ScyllaDB release.
+
    The Replicated Key Provider is not recommended for production use because it
    does not support key rotation. For compatibility with DataStax Cassandra, it
    is the default key provider for per-table encryption setup. In production
    environments, an external KMS should be used instead.
 
-The Replicated Key Provider is the default key provider for per-table encryption
-setup in ScyllaDB (``scylla_encryption_options`` in table schema). It stores and
-distributes the encryption keys across every node in the cluster through a
-special ScyllaDB system table (``system_replicated_keys.encrypted_keys``). The
-Replicated Key Provider requires two additional keys to operate:
+The Replicated Key Provider stores and distributes the encryption keys across 
+every node in the cluster through a special ScyllaDB system table 
+(``system_replicated_keys.encrypted_keys``). The Replicated Key Provider 
+requires two additional keys to operate:
 
 * A system key - used to encrypt the data in the system table. The system key
   can be either a local key, or a KMIP key.
@@ -302,7 +305,7 @@ Depending on your key provider, you will either have the option to allow
 ScyllaDB to generate an encryption key, or you will have to provide one:
 
 * Local Key Provider - you can provide your own keys, otherwise ScyllaDB will generate them for you
-* Replicated Key Provider - you must generate a system key yourself
+* Replicated Key Provider - you must generate a system key yourself (**deprecated**)
 * KMIP Key Provider - you can provide your own keys, otherwise ScyllaDB will generate them for you
 * KMS Key Provider - you must generate a key yourself in AWS
 * GCP Key Provider - you must generate a key yourself in GCP
@@ -431,6 +434,8 @@ desired key provider:
 
          You cannot use the same key for both the system key and the local
          secret key. They must be different keys.
+
+         **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
 
    .. group-tab:: KMIP Key Provider
 
@@ -994,6 +999,8 @@ in the ``scylla.yaml`` file.
       The Replicated Key Provider cannot be used in ``user_info_encryption``.
       You can only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
 
+      **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
+
    .. group-tab:: KMIP Key Provider
 
       * Make sure to :ref:`set up a KMIP Host <encryption-at-rest-set-kmip>`.
@@ -1074,6 +1081,8 @@ in the ``scylla.yaml`` file.
 
          The Replicated Key Provider cannot be used in ``user_info_encryption``.
          You can only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
+
+         **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
 
       .. group-tab:: KMIP Key Provider
 
@@ -1296,6 +1305,8 @@ This procedure demonstrates how to encrypt a new table.
 
    .. group-tab:: Replicated Key Provider
 
+      **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
+
       * Ensure you have a system key. The system key can be either a local key,
         or a KMIP key. If you don't have a system key, create one by following
         the procedure in :ref:`Create Encryption Keys <ear-create-encryption-key>`.
@@ -1397,6 +1408,7 @@ This procedure demonstrates how to encrypt a new table.
             ;
 
       .. group-tab:: Replicated Key Provider
+         **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
 
          .. code-block:: cql
 
@@ -1821,6 +1833,8 @@ Once this encryption is enabled, it is used for all system data.
       The Replicated Key Provider cannot be used for system encryption. You can
       only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
 
+      **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
+
    .. group-tab:: KMIP Key Provider
 
       * Make sure to :ref:`set up a KMIP Host <encryption-at-rest-set-kmip>`.
@@ -1901,6 +1915,8 @@ Once this encryption is enabled, it is used for all system data.
 
          The Replicated Key Provider cannot be used for system encryption. You
          can only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
+
+         **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
 
       .. group-tab:: KMIP Key Provider
 
@@ -2126,6 +2142,8 @@ varies depending on the key provider you are using.
 
       The Replicated Key Provider does not support key rotation. If you need to
       rotate keys, you must migrate to a different key provider.
+
+      **Warning**: The replicated key provider is deprecated and will be removed in a future ScyllaDB release.
 
    .. group-tab:: KMIP Key Provider
 

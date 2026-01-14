@@ -43,6 +43,7 @@
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "locator/everywhere_replication_strategy.hh"
+#include "release.hh"
 
 namespace encryption {
 
@@ -432,6 +433,14 @@ replicated_key_provider_factory::~replicated_key_provider_factory()
 namespace bfs = std::filesystem;
 
 shared_ptr<key_provider> replicated_key_provider_factory::get_provider(encryption_context& ctxt, const options& map) {
+    static bool did_warn = false;
+
+    if (!std::exchange(did_warn, true)) {
+        log.warn("ReplicatedKeyProviderFactory is deprecated and will be removed in a future release.");
+        log.warn("Please consult the Scylla documentation on how to migrate to a supported key provider.");
+        log.warn("For more info see: {}", doc_link("operating-scylla/security/encryption-at-rest.html"));
+    }
+
     opt_wrapper opts(map);
     auto system_key_name = opts(SYSTEM_KEY_FILE).value_or("system_key");
     if (system_key_name.find('/') != sstring::npos) {
