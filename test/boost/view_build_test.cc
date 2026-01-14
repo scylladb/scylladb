@@ -868,7 +868,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 SEASTAR_TEST_CASE(test_load_view_build_progress_with_values_missing) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, format("INSERT INTO system.{} (keyspace_name, view_name, cpu_id) VALUES ('ks', 'v', {})",
-                db::system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
+                db::system_keyspace::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
         auto vb_progress = e.get_system_keyspace().local().load_view_build_progress().get();
         BOOST_REQUIRE(vb_progress.empty() || (vb_progress.size() == 1 && !vb_progress[0].first_token && !vb_progress[0].next_token));
     });

@@ -139,6 +139,10 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr corrupt_data();
+    static schema_ptr batches();
+    static schema_ptr available_ranges();
+    static schema_ptr built_views();
+    static schema_ptr cdc_local();
     future<> force_blocking_flush(sstring cfname);
     // This function is called when the system.peers table is read,
     // and it fixes some types of inconsistencies that can occur
@@ -205,27 +209,18 @@ public:
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
     static constexpr auto CLIENT_ROUTES = "client_routes";
     static constexpr auto VERSIONS = "versions";
+    static constexpr auto BATCHES = "batches";
+    static constexpr auto AVAILABLE_RANGES = "available_ranges";
+    static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
+    static constexpr auto BUILT_VIEWS = "built_views";
+    static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
+    static constexpr auto CDC_LOCAL = "cdc_local";
 
     // auth
     static constexpr auto ROLES = "roles";
     static constexpr auto ROLE_MEMBERS = "role_members";
     static constexpr auto ROLE_ATTRIBUTES = "role_attributes";
     static constexpr auto ROLE_PERMISSIONS = "role_permissions";
-
-    struct v3 {
-        static constexpr auto BATCHES = "batches";
-        static constexpr auto AVAILABLE_RANGES = "available_ranges";
-        static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
-        static constexpr auto BUILT_VIEWS = "built_views";
-        static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
-        static constexpr auto CDC_LOCAL = "cdc_local";
-        static schema_ptr batches();
-        static schema_ptr available_ranges();
-        static schema_ptr views_builds_in_progress();
-        static schema_ptr built_views();
-        static schema_ptr scylla_views_builds_in_progress();
-        static schema_ptr cdc_local();
-    };
 
     // Partition estimates for a given range of tokens.
     struct range_estimates {
@@ -264,6 +259,8 @@ public:
     static schema_ptr dicts();
     static schema_ptr view_building_tasks();
     static schema_ptr client_routes();
+    static schema_ptr views_builds_in_progress();
+    static schema_ptr scylla_views_builds_in_progress();
 
     // auth
     static schema_ptr roles();
