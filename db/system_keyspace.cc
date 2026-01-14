@@ -946,11 +946,6 @@ schema_ptr system_keyspace::v3::batches() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::built_indexes() {
-    // identical to ours, but ours otoh is a mix-in of the 3.x series cassandra one
-    return db::system_keyspace::built_indexes();
-}
-
 schema_ptr system_keyspace::v3::local() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
@@ -1047,46 +1042,6 @@ schema_ptr system_keyspace::v3::commitlog_cleanups() {
         return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
-}
-
-schema_ptr system_keyspace::v3::peers() {
-    // identical
-    return db::system_keyspace::peers();
-}
-
-schema_ptr system_keyspace::v3::peer_events() {
-    // identical
-    return db::system_keyspace::peer_events();
-}
-
-schema_ptr system_keyspace::v3::range_xfers() {
-    // identical
-    return db::system_keyspace::range_xfers();
-}
-
-schema_ptr system_keyspace::v3::compaction_history() {
-    // identical
-    return db::system_keyspace::compaction_history();
-}
-
-schema_ptr system_keyspace::v3::sstable_activity() {
-    // identical
-    return db::system_keyspace::sstable_activity();
-}
-
-schema_ptr system_keyspace::v3::size_estimates() {
-    // identical
-    return db::system_keyspace::size_estimates();
-}
-
-schema_ptr system_keyspace::v3::large_partitions() {
-    // identical
-    return db::system_keyspace::large_partitions();
-}
-
-schema_ptr system_keyspace::v3::scylla_local() {
-    // identical
-    return db::system_keyspace::scylla_local();
 }
 
 schema_ptr system_keyspace::v3::available_ranges() {

@@ -137,7 +137,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr corrupt_data();
-    static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
     // This function is called when the system.peers table is read,
     // and it fixes some types of inconsistencies that can occur
@@ -213,33 +212,15 @@ public:
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
-        static constexpr auto PAXOS = "paxos";
-        static constexpr auto BUILT_INDEXES = "IndexInfo";
-        static constexpr auto LOCAL = "local";
-        static constexpr auto PEERS = "peers";
-        static constexpr auto PEER_EVENTS = "peer_events";
-        static constexpr auto RANGE_XFERS = "range_xfers";
-        static constexpr auto COMPACTION_HISTORY = "compaction_history";
-        static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
-        static constexpr auto SIZE_ESTIMATES = "size_estimates";
         static constexpr auto AVAILABLE_RANGES = "available_ranges";
         static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
         static constexpr auto BUILT_VIEWS = "built_views";
         static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
         static constexpr auto CDC_LOCAL = "cdc_local";
         static schema_ptr batches();
-        static schema_ptr built_indexes();
         static schema_ptr local();
         static schema_ptr truncated();
         static schema_ptr commitlog_cleanups();
-        static schema_ptr peers();
-        static schema_ptr peer_events();
-        static schema_ptr range_xfers();
-        static schema_ptr compaction_history();
-        static schema_ptr sstable_activity();
-        static schema_ptr size_estimates();
-        static schema_ptr large_partitions();
-        static schema_ptr scylla_local();
         static schema_ptr available_ranges();
         static schema_ptr views_builds_in_progress();
         static schema_ptr built_views();
@@ -264,6 +245,7 @@ public:
     static schema_ptr batchlog_v2();
     static schema_ptr paxos();
     static schema_ptr built_indexes(); // TODO (from Cassandra): make private
+    static schema_ptr scylla_local();
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
     static schema_ptr repair_history();
