@@ -119,6 +119,14 @@ float vector_index::get_oversampling(const index_options_map& properties) {
     return 1.0f;
 }
 
+sstring vector_index::get_cql_similarity_function_name(const index_options_map& properties) {
+    auto it = properties.find("similarity_function");
+    if (it != properties.end()) {
+        return "similarity_" + boost::to_lower_copy(it->second);
+    }
+    return "similarity_cosine";
+}
+
 bool vector_index::view_should_exist() const {
     return false;
 }

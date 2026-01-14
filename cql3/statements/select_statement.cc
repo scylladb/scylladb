@@ -25,6 +25,7 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/messages/result_message.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
@@ -1962,6 +1963,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 struct ann_ordering_info {
     secondary_index::index _index;
     raw::select_statement::prepared_ann_ordering_type _prepared_ann_ordering;
+    bool is_rescoring_enabled;
 };
 
 static std::optional<ann_ordering_info> get_ann_ordering_info(
@@ -2010,7 +2012,46 @@ static std::optional<ann_ordering_info> get_ann_ordering_info(
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }
 
-    return ann_ordering_info{*it, std::move(prepared_ann_ordering)};
+    return ann_ordering_info{
+        *it,
+        std::move(prepared_ann_ordering),
+        secondary_index::vector_index::is_rescoring_enabled(it->metadata().options())
+    };
+}
+
+static uint32_t add_similarity_function_to_selectors(
+        std::vector<selection::prepared_selector>& prepared_selectors,
+        const ann_ordering_info& ann_ordering_info,
+        data_dictionary::database db,
+        schema_ptr schema) {
+    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
+    // Create the function name
+    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
+
+    // Create the function arguments
+    std::vector<expr::expression> args;
+    args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
+    args.push_back(ann_ordering_info._prepared_ann_ordering.second);
+
+    // Get the function object
+    std::vector<shared_ptr<assignment_testable>> provided_args;
+    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
+    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
+
+    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
+
+    // Create the function call expression
+    expr::function_call similarity_func_call{
+        .func = func,
+        .args = std::move(args),
+    };
+
+    // Add the similarity function as a prepared selector (last)
+    prepared_selectors.push_back(selection::prepared_selector{
+        .expr = std::move(similarity_func_call),
+        .alias = nullptr,
+    });
+    return prepared_selectors.size() - 1;
 }
 
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
@@ -2265,23 +2306,23 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
     std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
+    bool is_ann_query = ann_ordering_info_opt.has_value();
 
-    if (!_group_by_columns.empty()) {
-        if (prepared_selectors.empty()) {
-            // We have a "SELECT * GROUP BY". If we leave prepared_selectors
-            // empty, below we choose selection::wildcard() for SELECT *, and
-            // forget to do the "levellize" trick needed for the GROUP BY.
-            // So we need to set prepared_selectors. See #16531.
-            auto all_columns = selection::selection::wildcard_columns(schema);
-            std::vector<::shared_ptr<selection::raw_selector>> select_all;
-            select_all.reserve(all_columns.size());
-            for (const column_definition *cdef : all_columns) {
-                auto name = ::make_shared<cql3::column_identifier::raw>(cdef->name_as_text(), true);
-                select_all.push_back(::make_shared<selection::raw_selector>(
-                    expr::unresolved_identifier(std::move(name)), nullptr));
-            }
-            prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
+    if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
+        // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
+        // empty, below we choose selection::wildcard() for SELECT *, and either:
+        //  - forget to do the "levellize" trick needed for the GROUP BY. See #16531.
+        //  - forget to add the similarity function needed for ORDER BY ANN with rescoring. See below.
+        // So we need to set prepared_selectors. 
+        auto all_columns = selection::selection::wildcard_columns(schema);
+        std::vector<::shared_ptr<selection::raw_selector>> select_all;
+        select_all.reserve(all_columns.size());
+        for (const column_definition *cdef : all_columns) {
+            auto name = ::make_shared<cql3::column_identifier::raw>(cdef->name_as_text(), true);
+            select_all.push_back(::make_shared<selection::raw_selector>(
+                expr::unresolved_identifier(std::move(name)), nullptr));
         }
+        prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
     for (auto& ps : prepared_selectors) {
@@ -2290,6 +2331,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
     auto aggregation_depth = _group_by_columns.empty() ? 0u : 1u;
+
+    bool hide_last_column = false;
+    if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
+        add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        hide_last_column = true;
+    }
 
     for (auto& ps : prepared_selectors) {
         aggregation_depth = std::max(aggregation_depth, expr::aggregation_depth(ps.expr));
@@ -2308,14 +2355,17 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
+    if (is_ann_query && hide_last_column) {
+        // Hide the similarity selector from the client by reducing column_count
+        selection->get_result_metadata()->hide_last_column();
+    }
+
     // Cassandra 5.0.2 disallows PER PARTITION LIMIT with aggregate queries
     // but only if GROUP BY is not used.
     // See #9879 for more details.
     if (selection->is_aggregate() && _per_partition_limit && _group_by_columns.empty()) {
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
-
-    bool is_ann_query = ann_ordering_info_opt.has_value();
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));

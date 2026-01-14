@@ -46,6 +46,13 @@ void metadata::add_non_serialized_column(lw_shared_ptr<column_specification> nam
     _column_info->_names.emplace_back(std::move(name));
 }
 
+void metadata::hide_last_column() {
+    if (_column_info->_column_count == 0) {
+        utils::on_internal_error("Trying to hide a column when there are no columns visible.");
+    }
+    _column_info->_column_count--;
+}
+
 void metadata::set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state) {
     _flags.set<flag::HAS_MORE_PAGES>();
     _paging_state = std::move(paging_state);
