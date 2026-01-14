@@ -17,6 +17,7 @@
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "db/view/view_build_status.hh"
+#include "locator/tablets.hh"
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
@@ -1888,18 +1889,19 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
         }
-        if (_proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+        // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
+        // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
+        if (!view_builders.empty() || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
             try {
                 locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
             } catch (const std::invalid_argument& ex) {
-                co_return api_error::validation(fmt::format("The flag `rf_rack_valid_keyspaces` is enabled, but the replication factor of the table "
-                    "does not match the number of racks in the cluster: {}", ex.what()));
+                if (!view_builders.empty()) {
+                    co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the keyspace to be RF-rack-valid: {}", ex.what()));
+                } else {
+                    co_return api_error::validation(fmt::format("The flag `rf_rack_valid_keyspaces` is enabled, but the replication factor of the table "
+                        "does not match the number of racks in the cluster: {}", ex.what()));
+                }
             }
-        }
-        // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
-        // GSI and LSI indexes are based on materialized views which require this option to avoid consistency issues.
-        if (!view_builders.empty() && ksm->uses_tablets() && !_proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-            co_return api_error::validation("GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled.");
         }
         try {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
@@ -2122,9 +2124,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             co_return api_error::validation(fmt::format(
                                 "LSI {} already exists in table {}, can't use same name for GSI", index_name, table_name));
                         }
-                        if (p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy().uses_tablets() &&
-                                !p.local().data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-                            co_return api_error::validation("GlobalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled.");
+                        try {
+                            locator::assert_rf_rack_valid_keyspace(keyspace_name, p.local().local_db().get_token_metadata_ptr(),
+                                    p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy());
+                        } catch (const std::invalid_argument& ex) {
+                            co_return api_error::validation(fmt::format("GlobalSecondaryIndexes with tablets require the keyspace to be RF-rack-valid: {}", ex.what()));
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
