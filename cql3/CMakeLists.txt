@@ -105,6 +105,7 @@ target_sources(cql3
     statements/list_service_level_attachments_statement.cc
     statements/list_effective_service_level_statement.cc
     statements/describe_statement.cc
+    statements/view_prop_defs.cc
     update_parameters.cc
     util.cc
     ut_name.cc

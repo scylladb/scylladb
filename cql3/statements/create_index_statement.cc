@@ -219,18 +219,24 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
         builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
     }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(db.extensions());
+    _view_properties.apply_to_builder(view_prop_defs::op_type::create, builder, exts, db, keyspace(), is_colocated);
+
     return view_ptr{builder.build()};
 }
 
 create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
                                                std::vector<::shared_ptr<index_target::raw>> raw_targets,
-                                               ::shared_ptr<index_prop_defs> properties,
+                                               ::shared_ptr<index_specific_prop_defs> idx_properties,
+                                               view_prop_defs view_properties,
                                                bool if_not_exists)
     : schema_altering_statement(name)
     , _index_name(index_name->get_idx())
     , _raw_targets(raw_targets)
-    , _properties(properties)
+    , _idx_properties(std::move(idx_properties))
+    , _view_properties(std::move(view_properties))
     , _if_not_exists(if_not_exists)
 {
 }
@@ -253,11 +259,47 @@ static sstring target_type_name(index_target::target_type type) {
 void
 create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
-    if (_raw_targets.empty() && !_properties->is_custom) {
+    if (_raw_targets.empty() && !_idx_properties->is_custom) {
         throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
     }
 
-    _properties->validate();
+    _idx_properties->validate();
+
+    // FIXME: This is ugly and can be improved.
+    const bool is_vector_index = _idx_properties->custom_class && *_idx_properties->custom_class == "vector_index";
+    const bool uses_view_properties = _view_properties.properties()->count() > 0
+            || _view_properties.use_compact_storage()
+            || _view_properties.defined_ordering().size() > 0;
+
+    if (is_vector_index && uses_view_properties) {
+        throw exceptions::invalid_request_exception("You cannot use view properties with a vector index");
+    }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
+    _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
+
+    // These keywords are still accepted by other schema entities, but they don't have effect on them.
+    // Since indexes are not bound by any backward compatibility contract in this regard, let's forbid these.
+    static sstring obsolete_keywords[] = {
+        "index_interval",
+        "replicate_on_write",
+        "populate_io_cache_on_flush",
+        "read_repair_chance",
+        "dclocal_read_repair_chance",
+    };
+
+    for (const sstring& keyword : obsolete_keywords) {
+        if (_view_properties.properties()->has_property(keyword)) {
+            // We use the same type of exception and the same error message as would be thrown for
+            // an invalid property via `_view_properties.validate_raw`.
+            throw exceptions::syntax_exception(seastar::format("Unknown property '{}'", keyword));
+        }
+    }
+
+    // FIXME: This is a temporary limitation as it might deserve more attention.
+    if (!_view_properties.defined_ordering().empty()) {
+        throw exceptions::invalid_request_exception("Indexes do not allow for specifying the clustering order");
+    }
 }
 
 std::pair<std::vector<::shared_ptr<index_target>>, cql3::cql_warnings_vec>
@@ -285,7 +327,7 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
 
     // Regular secondary indexes require rf-rack-validity.
     // Custom indexes need to validate this property themselves, if they need it.
-    if (!_properties || !_properties->custom_class) {
+    if (!_idx_properties || !_idx_properties->custom_class) {
         try {
             db::view::validate_view_keyspace(db, keyspace(), tmptr);
         } catch (const std::exception& e) {
@@ -310,14 +352,14 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         targets.emplace_back(raw_target->prepare(*schema));
     }
 
-    if (_properties && _properties->custom_class) {
-        auto custom_index_factory = secondary_index::secondary_index_manager::get_custom_class_factory(*_properties->custom_class);
+    if (_idx_properties && _idx_properties->custom_class) {
+        auto custom_index_factory = secondary_index::secondary_index_manager::get_custom_class_factory(*_idx_properties->custom_class);
         if (!custom_index_factory) {
-            throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
+            throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *_idx_properties->custom_class));
         }
         auto custom_index = (*custom_index_factory)();
-        custom_index->validate(*schema, *_properties, targets, db.features(), db);
-        _properties->index_version = custom_index->index_version(*schema);
+        custom_index->validate(*schema, *_idx_properties, targets, db.features(), db);
+        _idx_properties->index_version = custom_index->index_version(*schema);
     }
 
     if (targets.size() > 1) {
@@ -536,7 +578,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
 
 void create_index_statement::validate_targets_for_multi_column_index(std::vector<::shared_ptr<index_target>> targets) const
 {
-    if (!_properties->is_custom) {
+    if (!_idx_properties->is_custom) {
         if (targets.size() > 2 || (targets.size() == 2 && std::holds_alternative<index_target::single_column>(targets.front()->value))) {
             throw exceptions::invalid_request_exception("Only CUSTOM indexes support multiple columns");
         }
@@ -568,8 +610,8 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
     }
     index_metadata_kind kind;
     index_options_map index_options;
-    if (_properties->custom_class) {
-        index_options = _properties->get_options();
+    if (_idx_properties->custom_class) {
+        index_options = _idx_properties->get_options();
         kind = index_metadata_kind::custom;
     } else {
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
@@ -584,8 +626,8 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
         }
     }
-    bool existing_vector_index = _properties->custom_class && _properties->custom_class == "vector_index" && secondary_index::vector_index::has_vector_index_on_column(*schema, targets[0]->column_name());
-    bool custom_index_with_same_name = _properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
+    bool existing_vector_index = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index" && secondary_index::vector_index::has_vector_index_on_column(*schema, targets[0]->column_name());
+    bool custom_index_with_same_name = _idx_properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
     if (existing_vector_index || custom_index_with_same_name) {
         if (_if_not_exists) {
             return std::make_pair(std::nullopt, std::move(warnings));
