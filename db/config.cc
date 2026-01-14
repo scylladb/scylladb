@@ -1066,7 +1066,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
-    , maintenance_socket(this, "maintenance_socket", value_status::Used, "ignore",
+    , maintenance_socket(this, "maintenance_socket", value_status::Used, "workdir",
         "The Unix Domain Socket the node uses for maintenance socket.\n"
         "The possible options are:\n"
         "\tignore         the node will not open the maintenance socket.\n"
