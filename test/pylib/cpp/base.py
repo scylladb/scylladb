@@ -116,7 +116,9 @@ class CppFile(pytest.File, ABC):
 
     @cached_property
     def test_args(self) -> list[str]:
-        args = [*DEFAULT_SCYLLA_ARGS, *self.suite_config.get("extra_scylla_cmdline_options", [])]
+        extra_opts = self.suite_config.get("extra_scylla_cmdline_options", "")
+        extra_opts_list = extra_opts.split() if extra_opts else []
+        args = [*DEFAULT_SCYLLA_ARGS, *extra_opts_list]
         if x_log2_compaction_groups := self.config.getoption("--x-log2-compaction-groups"):
             if all_can_run_compaction_groups_except := self.suite_config.get("all_can_run_compaction_groups_except"):
                 if self.test_name not in all_can_run_compaction_groups_except:

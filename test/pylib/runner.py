@@ -347,6 +347,7 @@ class TestSuiteConfig:
             if suite is None:
                 suite = cls.from_pytest_node(node=node.parent)
         if suite:
+            suite.cfg['extra_scylla_cmdline_options'] = node.config.getoption("--extra-scylla-cmdline-options")
             node.stash[TEST_SUITE] = suite
         return suite
 
