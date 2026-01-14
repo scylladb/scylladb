@@ -173,6 +173,16 @@ class view_builder final : public service::migration_listener::only_view_notific
     // Ensures bookkeeping operations are serialized, meaning that while we execute
     // a build step we don't consider newly added or removed views. This simplifies
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
+    // Semaphore usage invariants:
+    // - One unit of _sem serializes all per-shard bookkeeping that mutates view-builder state
+    //   (_base_to_build_step, _built_views, build_status, reader resets).
+    // - The unit is held for the whole operation, including the async chain, until the state
+    //   is stable for the next operation on that shard.
+    // - Cross-shard operations acquire _sem on shard 0 for the duration of the broadcast.
+    //   Other shards acquire their own _sem only around their local handling; shard 0 skips
+    //   the local acquire because it already holds the unit from the dispatcher.
+    // Guard the whole startup routine with a semaphore so that it's not intercepted by
+    // `on_drop_view`, `on_create_view`, or `on_update_view` events.
     seastar::named_semaphore _sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder"}};
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();

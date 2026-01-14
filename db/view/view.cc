@@ -2241,9 +2241,16 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
     try {
         view_builder_init_state vbi;
         auto fail = defer([&barrier] mutable { barrier.abort(); });
-        // Guard the whole startup routine with a semaphore,
-        // so that it's not intercepted by `on_drop_view`, `on_create_view`
-        // or `on_update_view` events.
+        // Semaphore usage invariants:
+        // - One unit of _sem serializes all per-shard bookkeeping that mutates view-builder state
+        //   (_base_to_build_step, _built_views, build_status, reader resets).
+        // - The unit is held for the whole operation, including the async chain, until the state
+        //   is stable for the next operation on that shard.
+        // - Cross-shard operations acquire _sem on shard 0 for the duration of the broadcast.
+        //   Other shards acquire their own _sem only around their local handling; shard 0 skips
+        //   the local acquire because it already holds the unit from the dispatcher.
+        // Guard the whole startup routine with a semaphore so that it's not intercepted by
+        // `on_drop_view`, `on_create_view`, or `on_update_view` events.
         auto units = co_await get_units(_sem, view_builder_semaphore_units);
         // Wait for schema agreement even if we're a seed node.
         co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
