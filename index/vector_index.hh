@@ -38,6 +38,7 @@ public:
 
     static bool is_rescoring_enabled(const index_options_map& properties);
     static float get_oversampling(const index_options_map& properties);
+    static sstring get_cql_similarity_function_name(const index_options_map& properties);
 private:
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
