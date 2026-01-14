@@ -1534,7 +1534,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case locator::tablet_transition_stage::write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            if (_feature_service.tablets_intermediate_fallback_cleanup) {
+                                transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
+                            } else {
+                                transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            }
                             break;
                         }
                     }
@@ -1543,6 +1547,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     } else {
                         transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     }
+                    break;
+                case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:
+                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {
