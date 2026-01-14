@@ -946,7 +946,7 @@ schema_ptr system_keyspace::v3::batches() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::truncated() {
+schema_ptr system_keyspace::truncated() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
         // partition key
@@ -976,7 +976,7 @@ schema_ptr system_keyspace::v3::truncated() {
 
 thread_local data_type replay_position_type = tuple_type_impl::get_instance({long_type, int32_type});
 
-schema_ptr system_keyspace::v3::commitlog_cleanups() {
+schema_ptr system_keyspace::commitlog_cleanups() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, COMMITLOG_CLEANUPS), NAME, COMMITLOG_CLEANUPS,
         // partition key
@@ -2292,8 +2292,8 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     repair_tasks(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
-                    v3::truncated(),
-                    v3::commitlog_cleanups(),
+                    truncated(),
+                    commitlog_cleanups(),
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),

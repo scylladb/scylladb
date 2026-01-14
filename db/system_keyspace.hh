@@ -127,6 +127,8 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
 
     static schema_ptr raft_snapshot_config();
     static schema_ptr local();
+    static schema_ptr truncated();
+    static schema_ptr commitlog_cleanups();
     static schema_ptr peers();
     static schema_ptr peer_events();
     static schema_ptr range_xfers();
@@ -218,8 +220,6 @@ public:
         static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
         static constexpr auto CDC_LOCAL = "cdc_local";
         static schema_ptr batches();
-        static schema_ptr truncated();
-        static schema_ptr commitlog_cleanups();
         static schema_ptr available_ranges();
         static schema_ptr views_builds_in_progress();
         static schema_ptr built_views();
