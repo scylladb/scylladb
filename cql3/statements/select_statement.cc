@@ -2333,10 +2333,26 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
     auto aggregation_depth = _group_by_columns.empty() ? 0u : 1u;
 
+    select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
     if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        uint32_t similarity_column_index = add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
         hide_last_column = true;
+            
+        auto type = expr::type_of(prepared_selectors[similarity_column_index].expr);
+        if (type->get_kind() != abstract_type::kind::float_kind) {
+            seastar::on_internal_error(logger, "Similarity function must return float type.");
+        }
+        ordering_comparator = [similarity_column_index, type] (const result_row_type& r1, const result_row_type& r2) {
+            auto& c1 = r1[similarity_column_index];
+            auto& c2 = r2[similarity_column_index];
+            auto f1 = c1 ? value_cast<float>(type->deserialize(*c1)) : std::numeric_limits<float>::quiet_NaN();
+            auto f2 = c2 ? value_cast<float>(type->deserialize(*c2)) : std::numeric_limits<float>::quiet_NaN();
+            if (std::isfinite(f1) && std::isfinite(f2)) {
+                return f1 > f2;
+            }
+            return std::isfinite(f1);
+        };
     }
 
     for (auto& ps : prepared_selectors) {
@@ -2375,7 +2391,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         validate_distinct_selection(*schema, *selection, *restrictions);
     }
 
-    select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 
     auto orderings = _parameters->orderings();
