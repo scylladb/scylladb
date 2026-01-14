@@ -3980,6 +3980,12 @@ future<> storage_service::raft_decommission() {
             throw std::runtime_error("Cannot decommission the last token-owning node in the cluster");
         }
 
+        auto validation_result = validate_removing_node(_db.local(), locator::host_id(raft_server.id().uuid()));
+        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            throw std::runtime_error(fmt::format("Decommission failed: node decommission rejected: {}",
+                                                 std::get<node_validation_failure>(validation_result).reason));
+        }
+
         rtlogger.info("request decommission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
@@ -4333,6 +4339,12 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
                 id);
             rtlogger.warn("{}", message);
             throw std::runtime_error(message);
+        }
+
+        auto validation_result = validate_removing_node(_db.local(), host_id);
+        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            throw std::runtime_error(fmt::format("Removenode failed: node remove rejected: {}",
+                                                 std::get<node_validation_failure>(validation_result).reason));
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);

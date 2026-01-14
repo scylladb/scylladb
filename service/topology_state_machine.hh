@@ -20,6 +20,8 @@
 #include "utils/UUID.hh"
 #include "service/session.hh"
 #include "mutation/canonical_mutation.hh"
+#include "replica/database_fwd.hh"
+#include "locator/host_id.hh"
 
 namespace db {
     class system_keyspace;
@@ -293,6 +295,13 @@ struct topology_request_state {
     sstring error;
 };
 
+struct node_validation_success {};
+struct node_validation_failure {
+    sstring reason;
+};
+using node_validation_result = std::variant<node_validation_success, node_validation_failure>;
+
+node_validation_result validate_removing_node(replica::database&, locator::host_id);
 topology::transition_state transition_state_from_string(const sstring& s);
 node_state node_state_from_string(const sstring& s);
 std::optional<topology_request> try_topology_request_from_string(const sstring& s);
