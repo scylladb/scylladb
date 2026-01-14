@@ -2674,6 +2674,10 @@ static bool should_ignore_tablet_keyspace(const replica::database& db, const sst
     return db.features().view_building_coordinator && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
 }
 
+future<view_builder::view_builder_units> view_builder::get_or_adopt_view_builder_lock(std::optional<view_builder_units> units) {
+    co_return units ? std::move(*units) : co_await get_units(_sem, view_builder_semaphore_units);
+}
+
 future<> view_builder::dispatch_create_view(sstring ks_name, sstring view_name) {
     if (should_ignore_tablet_keyspace(_db, ks_name)) {
         return make_ready_future<>();
@@ -2687,6 +2691,7 @@ future<> view_builder::dispatch_create_view(sstring ks_name, sstring view_name) 
         });
     });
 }
+
 
 future<> view_builder::handle_seed_view_build_progress(sstring ks_name, sstring view_name) {
     auto view = view_ptr(_db.find_schema(ks_name, view_name));

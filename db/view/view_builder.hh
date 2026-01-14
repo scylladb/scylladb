@@ -104,6 +104,9 @@ class view_update_generator;
  *            redo the missing step, for simplicity.
  */
 class view_builder final : public service::migration_listener::only_view_notifications, public seastar::peering_sharded_service<view_builder> {
+    //aliasing for semaphore units that will be used throughout the class
+    using view_builder_units = semaphore_units<named_semaphore_exception_factory>;
+
     /**
      * Keeps track of the build progress for a particular view.
      * When the view is built, next_token == first_token.
@@ -285,6 +288,7 @@ private:
     future<> handle_create_view_local_impl(sstring ks_name, sstring view_name);
     future<> handle_drop_view_local_impl(sstring ks_name, sstring view_name);
     future<> handle_drop_view_global_cleanup(sstring ks_name, sstring view_name);
+    future<view_builder_units> get_view_builder_units(std::optional<view_builder_units> units);
 
     template <typename Func1, typename Func2>
     future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {
