@@ -62,6 +62,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::previous;
         case tablet_transition_stage::write_both_read_new:
             return write_replica_set_selector::both;
+        case tablet_transition_stage::write_both_read_new_fallback_cleanup:
+            return write_replica_set_selector::both;
         case tablet_transition_stage::use_new:
             return write_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
@@ -94,6 +96,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::end_repair:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::write_both_read_new:
+            return read_replica_set_selector::next;
+        case tablet_transition_stage::write_both_read_new_fallback_cleanup:
             return read_replica_set_selector::next;
         case tablet_transition_stage::use_new:
             return read_replica_set_selector::next;
@@ -701,6 +705,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
     {tablet_transition_stage::write_both_read_old_fallback_cleanup, "write_both_read_old_fallback_cleanup"},
     {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
+    {tablet_transition_stage::write_both_read_new_fallback_cleanup, "write_both_read_new_fallback_cleanup"},
     {tablet_transition_stage::streaming, "streaming"},
     {tablet_transition_stage::rebuild_repair, "rebuild_repair"},
     {tablet_transition_stage::repair, "repair"},

@@ -276,6 +276,7 @@ enum class tablet_transition_stage {
     streaming,
     rebuild_repair,
     write_both_read_new,
+    write_both_read_new_fallback_cleanup,
     use_new,
     cleanup,
     cleanup_target,
