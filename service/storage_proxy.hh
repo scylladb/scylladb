@@ -350,6 +350,7 @@ private:
             coordinator_query_options optional_params);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
+    void remove_response_handler_if_exists(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog);
     void got_failure_response(response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg);
