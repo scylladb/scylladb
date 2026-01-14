@@ -41,11 +41,14 @@ extern logging::logger errinj_logger;
 using error_injection_parameters = std::unordered_map<sstring, sstring>;
 
 // Wraps the argument to breakpoint injection (see the relevant inject() overload
-// in class error_injection below). The only parameter is the timeout after which
-// the pause is aborted
+// in class error_injection below). Parameters:
+// timeout - the timeout after which the pause is aborted
+// as (optional) - abort_source used to abort the pause
 struct wait_for_message {
     std::chrono::milliseconds timeout;
+    abort_source* as = nullptr;
     wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
+    wait_for_message(std::chrono::milliseconds tmo, abort_source* a) noexcept : timeout(tmo), as(a) {}
 };
 
 /**
@@ -203,13 +206,20 @@ public:
 
     public:
         template <typename Clock, typename Duration>
-        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, std::source_location loc = std::source_location::current()) {
+        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, abort_source* as = nullptr, std::source_location loc = std::source_location::current()) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
+            auto abort = as ? as->subscribe([this] () noexcept {
+                _shared_data->received_message_cv.broadcast();
+            }) : optimized_optional<abort_source::subscription>{};
 
             try {
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    if (as) {
+                        as->check();
+                    }
+
                     if (!_share_messages) {
                         bool wakes_up = _shared_data->shared_read_message_count < _shared_data->received_message_count;
                         if (wakes_up) {
@@ -221,6 +231,9 @@ public:
 
                     return _read_messages_counter < _shared_data->received_message_count;
                 });
+            }
+            catch (const abort_requested_exception&) {
+                throw;
             }
             catch (const std::exception& e) {
                 on_internal_error(errinj_logger, fmt::format("Error injection [{}] wait_for_message timeout: Called from `{}` @ {}:{}:{:d}: {}",
@@ -467,7 +480,7 @@ public:
     future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
         co_await inject(name, [name, wfm] (injection_handler& handler) -> future<> {
             errinj_logger.info("{}: waiting for message", name);
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout, wfm.as);
             errinj_logger.info("{}: message received", name);
         });
     }
