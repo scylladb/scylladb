@@ -808,7 +808,7 @@ class abstract_replication_strategy;
 /// * if the keyspace is RF-rack-valid, no side effect,
 /// * if the keyspace is RF-rack-invalid, an exception will be thrown. It will contain information about the reason
 ///   why the keyspace is RF-rack-invalid and will be worded in a way that can be returned directly to the user.
-///   There are NO guarantees about the type of the exception.
+///   The exception type is std::invalid_argument.
 ///
 /// Preconditions:
 /// * Every DC that takes part in replication according to the passed replication strategy MUST be known

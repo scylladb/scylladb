@@ -3454,7 +3454,7 @@ void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces
     for (const auto& [name, info] : keyspaces) {
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
             if (enforce_rf_rack_valid_keyspaces) {
                 throw;
             }

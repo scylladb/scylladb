@@ -2083,7 +2083,7 @@ public:
     // Verify that the existing keyspaces are all RF-rack-valid.
     //
     // Result:
-    // * If `enforce_rf_rack_valid_keyspaces`, throws an exception with a relevant message
+    // * If `enforce_rf_rack_valid_keyspaces`, throws an std::invalid_argument exception with a relevant message
     //   if there is a keyspace that violates RF-rack-validity.
     // * If not `enforce_rf_rack_valid_keyspaces`, a warning will be printed for each keyspace
     //   that is not RF-rack-valid, but no exception should be produced.
