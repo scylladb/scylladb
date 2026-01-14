@@ -30,6 +30,7 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -5567,6 +5568,33 @@ SEASTAR_TEST_CASE(test_cache_tombstone_gc_memtable_overlap_check_elision) {
             .is_rows()
             .is_empty();
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cache_reader_abort) {
+    auto s = make_schema();
+    auto m = make_new_mutation(s);
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(make_source_with(m)), tracker);
+
+    // make sure the data is cached
+    assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
+        .produces(m)
+        .produces_end_of_stream();
+
+    auto permit = semaphore.make_permit();
+
+    auto reader = cache.make_reader(s, permit, query::full_partition_range);
+    auto close_reader = deferred_close(reader);
+
+    permit.set_timeout(db::timeout_clock::now());
+
+    // Wait for timer to fire so the permit is timed out.
+    BOOST_REQUIRE(eventually_true([&] { return bool(permit.get_abort_exception()); }));
+
+    BOOST_REQUIRE_THROW(reader().get(), named_semaphore_timed_out);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

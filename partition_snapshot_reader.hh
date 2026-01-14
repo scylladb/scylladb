@@ -250,6 +250,9 @@ public:
     }
 
     virtual future<> fill_buffer() override {
+        if (const auto& ex = get_abort_exception(); ex) {
+            return make_exception_future<>(ex);
+        }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             _reader.with_reserve([&] {
                 if (!_static_row_done) {

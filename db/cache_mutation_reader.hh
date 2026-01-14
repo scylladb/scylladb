@@ -323,6 +323,9 @@ void cache_mutation_reader::touch_partition() {
 
 inline
 future<> cache_mutation_reader::fill_buffer() {
+    if (const auto& ex = get_abort_exception(); ex) {
+        return make_exception_future<>(ex);
+    }
     if (_state == state::before_static_row) {
         touch_partition();
         auto after_static_row = [this] {
