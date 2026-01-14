@@ -946,47 +946,6 @@ schema_ptr system_keyspace::v3::batches() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::local() {
-    static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
-        // partition key
-        {{"key", utf8_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-                {"bootstrapped", utf8_type},
-                {"broadcast_address", inet_addr_type},
-                {"cluster_name", utf8_type},
-                {"cql_version", utf8_type},
-                {"data_center", utf8_type},
-                {"gossip_generation", int32_type},
-                {"host_id", uuid_type},
-                {"listen_address", inet_addr_type},
-                {"native_protocol_version", utf8_type},
-                {"partitioner", utf8_type},
-                {"rack", utf8_type},
-                {"release_version", utf8_type},
-                {"rpc_address", inet_addr_type},
-                {"schema_version", uuid_type},
-                {"thrift_version", utf8_type},
-                {"tokens", set_type_impl::get_instance(utf8_type, true)},
-                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, true)},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "information about the local node"
-       );
-       builder.set_gc_grace_seconds(0);
-       builder.with_hash_version();
-       return builder.build(schema_builder::compact_storage::no);
-    }();
-    return schema;
-}
-
 schema_ptr system_keyspace::v3::truncated() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
