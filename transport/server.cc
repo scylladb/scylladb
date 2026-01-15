@@ -427,9 +427,9 @@ cql_server::connection::read_frame() {
 // This function intentionally sleeps to the end of the query timeout in CQL server.
 // It was introduced to remove similar waiting in storage_proxy (ref. scylladb#3699),
 // because storage proxy was blocking ERM (thus topology changes).
-future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp) {
     auto time_left = timeout - seastar::lowres_clock::now();
-    return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+    return seastar::sleep_abortable(time_left, _abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
         if (f.failed()) {
             clogger.debug("Got exception {} while waiting for a request timeout.", f.get_exception());
         }
@@ -765,7 +765,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 ++_server._stats.errors[_server.get_error_code(eptr)];
             } catch(...) {}
             if (auto timeout = _server.timeout_for_sleep(eptr)) {
-                return sleep_until_timeout_passes(*timeout, std::move(response));
+                return _server.sleep_until_timeout_passes(*timeout, std::move(response));
             }
             return utils::result_into_future<result_with_foreign_response_ptr>(std::move(response));
         });
