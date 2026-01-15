@@ -724,3 +724,26 @@ def test_forbidden_key_types_getitem(test_table_s):
         # anything in common except the word "match".
         with pytest.raises(ClientError, match='ValidationException.*match'):
             test_table_s.get_item(Key={'p': p})
+
+# Ever since tablets were introduced to Scylla, LWT writes its Paxos log not
+# in a central system table, but in a new table named "...$paxos" in the same
+# keyspace. This test checks that the ListTables operation doesn't list this
+# internal table - just like the test test_streams.py::test_stream_list_tables
+# checks that it doesn't list the internal CDC log table.
+# Reproduces issue #28145.
+def test_list_tables_no_paxos(dynamodb, test_table_s):
+    # The extra "...$paxos" table only appears after a real LWT write is
+    # performed. So let's do a PutItem with ReturnValues, which is a
+    # read-modify-write operation and is guaranteed to use LWT - at least
+    # in always_use_lwt or only_rmw_uses_lwt write isolation modes (one of
+    # which any reasonable test run will use).
+    p = random_string()
+    test_table_s.put_item(Item={'p': p}, ReturnValues='ALL_OLD')
+    # Check that the test table is listed by ListTables, but its long and
+    # unique name (created by unique_table_name()) isn't a proper substring
+    # of any other table's name.
+    tables = list_tables(dynamodb)
+    assert test_table_s.name in tables
+    for listed_name in tables:
+        if test_table_s.name != listed_name:
+            assert test_table_s.name not in listed_name
