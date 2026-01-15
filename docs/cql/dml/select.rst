@@ -280,10 +280,22 @@ For example::
       FROM ImageEmbeddings
       ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
 
+
+Vector queries also support filtering with ``WHERE`` clauses on columns that are part of the primary key.
+
+For example::
+
+    SELECT image_id FROM ImageEmbeddings
+      WHERE user_id = 'user123'
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
+The supported operations are equal relations (``=`` and ``IN``) with restrictions as in regular ``WHERE`` clauses. See :ref:`WHERE <where-clause>`.
+
+Other filtering scenarios are currently not supported.
+
 .. warning:: 
 
-  Currently, vector queries do not support filtering with ``WHERE`` clause,
-  grouping with ``GROUP BY`` and paging. This will be added in the future releases.
+  Currently, vector queries do not support grouping with ``GROUP BY`` and paging. This will be added in the future releases.
 
 
 .. _limit-clause:

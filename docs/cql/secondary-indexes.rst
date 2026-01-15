@@ -98,7 +98,7 @@ Vector Index :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
    
      * is not suitable for production use,
      * does not guarantee backward compatibility between ScyllaDB versions,
-     * does not support all the features of ScyllaDB (e.g., tracing, filtering, TTL).
+     * does not support all the features of ScyllaDB (e.g., tracing, TTL).
 
 ScyllaDB supports creating vector indexes on tables, allowing queries on the table to use those indexes for efficient
 similarity search on vector data. 
