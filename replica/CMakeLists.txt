@@ -9,6 +9,9 @@ target_sources(replica
     memtable.cc
     exceptions.cc
     dirty_memory_manager.cc
+    logstor/segment_manager.cc
+    logstor/logstor.cc
+    logstor/write_buffer.cc
     multishard_query.cc
     mutation_dump.cc
     schema_describe_helper.cc
