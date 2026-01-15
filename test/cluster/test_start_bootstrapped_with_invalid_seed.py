@@ -16,6 +16,7 @@ pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Test is disabled due to scylladb/scylladb#28153")
 async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     """
     Issue https://github.com/scylladb/scylladb/issues/14945.
