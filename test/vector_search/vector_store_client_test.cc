@@ -482,6 +482,34 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
             });
 }
 
+SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_request) {
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto as = abort_source_timeout();
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+                vs.start_background_tasks();
+
+                // correct reply - service should return keys
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5],"pk2":[7],"ck1":[9],"ck2":[2]},"distances":[0.1]})"});
+                auto filter = rjson::parse(R"({"restrictions":[{"type":"==","lhs":"pk1","rhs":5}],"allow_filtering":false})");
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, filter, as.reset());
+                BOOST_REQUIRE(keys);
+                BOOST_REQUIRE_EQUAL(keys->size(), 1);
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     auto cfg = config();
     auto count = 0;
