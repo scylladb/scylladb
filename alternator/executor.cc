@@ -63,6 +63,21 @@
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+<<<<<<< HEAD
+||||||| parent of 286c4d06f2 (alternator: remove internal Paxos tables from ListTables output)
+#include "cql3/statements/index_target.hh"
+#include "index/secondary_index.hh"
+#include "alternator/ttl_tag.hh"
+#include "vector_search/vector_store_client.hh"
+#include "utils/simple_value_with_expiry.hh"
+=======
+#include "cql3/statements/index_target.hh"
+#include "index/secondary_index.hh"
+#include "alternator/ttl_tag.hh"
+#include "vector_search/vector_store_client.hh"
+#include "utils/simple_value_with_expiry.hh"
+#include "service/paxos/paxos_state.hh"
+>>>>>>> 286c4d06f2 (alternator: remove internal Paxos tables from ListTables output)
 
 using namespace std::chrono_literals;
 
@@ -6028,7 +6043,8 @@ future<executor::request_return_type> executor::list_tables(client_state& client
             | std::views::filter([this] (data_dictionary::table t) {
                         return t.schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 &&
                             !t.schema()->is_view() &&
-                            !cdc::is_log_for_some_table(_proxy.local_db(), t.schema()->ks_name(), t.schema()->cf_name());
+                            !cdc::is_log_for_some_table(_proxy.local_db(), t.schema()->ks_name(), t.schema()->cf_name()) &&
+                            !service::paxos::paxos_store::try_get_base_table(t.schema()->cf_name());
                     })
             | std::views::transform([] (data_dictionary::table t) {
                         return t.schema()->cf_name();
