@@ -1018,9 +1018,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
                     tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
-                    if (tables_with_mvs.empty()) {
-                        co_return;
-                    }
+                  if (!tables_with_mvs.empty()) {
                     auto table = tables_with_mvs.front();
                     auto tablet_count = tmptr->tablets().get_tablet_map(table->id()).tablet_count();
                     locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
@@ -1078,13 +1076,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             co_await coroutine::maybe_yield();
                         });
                     }
-                  };
-                    co_await schedule_migrations();
-
+                  }
                     auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                     for (auto& m: schema_muts) {
                         updates.emplace_back(m);
                     }
+                  };
+                    co_await schedule_migrations();
                 } catch (const std::exception& e) {
                     error = e.what();
                     rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, desired new ks opts: {}, error: {}",
