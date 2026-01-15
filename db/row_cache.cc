@@ -850,7 +850,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
                     std::move(permit),
                     e.key(),
                     query::clustering_key_filter_ranges(slice.row_ranges(*schema, e.key().key())),
-                    e.partition().read(_tracker.region(), _tracker.memtable_cleaner(), nullptr, phase_of(pos)),
+                    e.partition().read(_tracker.region(), _tracker.memtable_cleaner(), &_tracker, phase_of(pos)),
                     false,
                     _tracker.region(),
                     _read_section,
