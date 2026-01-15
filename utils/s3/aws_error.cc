@@ -15,7 +15,6 @@
 #include "aws_error.hh"
 #include <seastar/util/log.hh>
 #include <seastar/http/exception.hh>
-#include <gnutls/gnutls.h>
 #include <memory>
 
 namespace aws {
@@ -132,34 +131,14 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
 }
 
 aws_error aws_error::from_system_error(const std::system_error& system_error) {
-    switch (system_error.code().value()) {
-    case static_cast<int>(std::errc::interrupted):
-    case static_cast<int>(std::errc::resource_unavailable_try_again):
-    case static_cast<int>(std::errc::timed_out):
-    case static_cast<int>(std::errc::connection_aborted):
-    case static_cast<int>(std::errc::connection_reset):
-    case static_cast<int>(std::errc::connection_refused):
-    case static_cast<int>(std::errc::broken_pipe):
-    case static_cast<int>(std::errc::network_unreachable):
-    case static_cast<int>(std::errc::host_unreachable):
-    case static_cast<int>(std::errc::network_down):
-    case static_cast<int>(std::errc::network_reset):
-    case static_cast<int>(std::errc::no_buffer_space):
-    // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
-    case GNUTLS_E_PREMATURE_TERMINATION:
-    case GNUTLS_E_AGAIN:
-    case GNUTLS_E_INTERRUPTED:
-    case GNUTLS_E_PUSH_ERROR:
-    case GNUTLS_E_PULL_ERROR:
-    case GNUTLS_E_TIMEDOUT:
-    case GNUTLS_E_SESSION_EOF:
-    case GNUTLS_E_BAD_COOKIE: // as per RFC6347 section-4.2.1 client should retry
-        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
-    default:
-        return {aws_error_type::UNKNOWN,
-                format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
-                retryable::no};
+    auto is_retryable = utils::http::from_system_error(system_error);
+    if (is_retryable == utils::http::retryable::yes) {
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), is_retryable};
     }
+
+    return {aws_error_type::UNKNOWN,
+            format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
+            is_retryable};
 }
 
 aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
