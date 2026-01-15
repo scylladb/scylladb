@@ -293,6 +293,12 @@ public:
             query_options& options);
 
     future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_direct_without_checking_exception_message(
+            std::unique_ptr<statements::prepared_statement> prepared,
+            service::query_state& query_state,
+            query_options& options);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute_direct(
             service::query_state& query_state,
             shared_ptr<cql_statement> statement,
