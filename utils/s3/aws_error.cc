@@ -20,6 +20,8 @@
 
 namespace aws {
 
+using namespace utils::http;
+
 aws_error::aws_error(aws_error_type error_type, retryable is_retryable) : _type(error_type), _is_retryable(is_retryable) {
 }
 
