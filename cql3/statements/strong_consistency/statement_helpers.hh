@@ -10,6 +10,7 @@
 
 #include "cql3/cql_statement.hh"
 #include "locator/tablets.hh"
+#include "locator/host_id.hh"
 
 namespace cql3::statements::strong_consistency {
 

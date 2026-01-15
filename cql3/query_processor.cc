@@ -18,6 +18,7 @@
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
+#include "service/forward_cql_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "cql3/CqlParser.hpp"
@@ -48,9 +49,10 @@ const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono
 struct query_processor::remote {
     remote(service::migration_manager& mm, service::mapreduce_service& fwd,
            service::storage_service& ss, service::raft_group0_client& group0_client,
-           service::strong_consistency::coordinator& _sc_coordinator)
+           service::strong_consistency::coordinator& _sc_coordinator,
+           service::forward_cql_service& fwd_cql)
             : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client)
-            , sc_coordinator(_sc_coordinator)
+            , sc_coordinator(_sc_coordinator), cql_forwarder(fwd_cql)
             , gate("query_processor::remote")
     {}
 
@@ -59,6 +61,7 @@ struct query_processor::remote {
     service::storage_service& ss;
     service::raft_group0_client& group0_client;
     service::strong_consistency::coordinator& sc_coordinator;
+    service::forward_cql_service& cql_forwarder;
 
     seastar::named_gate gate;
 };
@@ -524,8 +527,9 @@ query_processor::acquire_strongly_consistent_coordinator() {
 
 void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer,
                                    service::storage_service& ss, service::raft_group0_client& group0_client,
-                                   service::strong_consistency::coordinator& sc_coordinator) {
-    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client, sc_coordinator);
+                                   service::strong_consistency::coordinator& sc_coordinator,
+                                   service::forward_cql_service& cql_forwarder) {
+    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client, sc_coordinator, cql_forwarder);
 }
 
 future<> query_processor::stop_remote() {
@@ -1068,6 +1072,20 @@ future<query::mapreduce_result>
 query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
     auto [remote_, holder] = remote();
     co_return co_await remote_.get().mapreducer.dispatch(std::move(req), std::move(tr_state));
+}
+
+future<service::forward_cql_result>
+query_processor::execute_forwarding_statement(
+        ::shared_ptr<cql_statement> stmt,
+        cql_prepared_id_type prepared_id,
+        service::query_state& query_state,
+        const query_options& options,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        cql_transport::cql_metadata_id_wrapper metadata_id) {
+    auto [remote_, holder] = remote();
+    return remote_.get().cql_forwarder.forward_cql(std::move(stmt), std::move(prepared_id), query_state, options, stream, version, std::move(metadata_id))
+            .finally([holder = std::move(holder)] {});
 }
 
 future<::shared_ptr<messages::result_message>>

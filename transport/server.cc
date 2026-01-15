@@ -47,6 +47,7 @@
 #include "enum_set.hh"
 #include "service/query_state.hh"
 #include "service/client_state.hh"
+#include "service/forward_cql_service.hh"
 #include "exceptions/exceptions.hh"
 #include "client_data.hh"
 #include "cql3/query_processor.hh"
@@ -1315,13 +1316,46 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
         co_return coroutine::exception(f.get_exception());
     }
     auto msg = std::move(f.get());
-
+    if (auto* forward_msg = std::get_if<result_with_forward>(&msg)) {
+        co_return co_await process_forwarding(_server._query_processor, std::move(forward_msg->statement), std::move(forward_msg->prepared_id),
+                std::move(forward_msg->query_state), stream, _version, trace_state, std::move(forward_msg->metadata_id));
+    }
     while (auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg)) {
         auto shard = (*bounce_msg)->move_to_shard().value();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
         msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
     }
     co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
+}
+
+// Process a CQL execute that needs to be forwarded to a leader.
+// Handles logging and stats updates for error responses.
+future<cql_server::result_with_foreign_response_ptr>
+cql_server::connection::process_forwarding(
+        sharded<cql3::query_processor>& qp,
+        ::shared_ptr<cql3::cql_statement> stmt,
+        cql3::cql_prepared_id_type prepared_id,
+        std::unique_ptr<cql_query_state> q_state,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        tracing::trace_state_ptr trace_state,
+        cql_metadata_id_wrapper metadata_id) {
+    auto& query_state = q_state->query_state;
+    auto& options = *q_state->options;
+    auto result = co_await qp.local().execute_forwarding_statement(stmt, std::move(prepared_id), query_state, options, stream, version, std::move(metadata_id));
+
+    // Handle error logging and stats if this was an error response
+    if (result.error_info) {
+        clogger.debug("{}: {}", _client_state.get_remote_address(), result.error_info->log_message);
+        try { ++_server._stats.errors[static_cast<exceptions::exception_code>(result.error_info->exception_code)]; } catch(...) {}
+
+        // Handle read_failure_exception_with_timeout - sleep until timeout passes
+        if (result.error_info->timeout) {
+            co_return cql_server::result_with_foreign_response_ptr(co_await sleep_until_timeout_passes(*result.error_info->timeout, std::move(result.response)));
+        }
+    }
+
+    co_return cql_server::result_with_foreign_response_ptr(std::move(result.response));
 }
 
 static future<cql_server::process_fn_return_type>
@@ -1366,6 +1400,14 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         throw exceptions::invalid_request_exception(msg);
     }
     options.prepare(prepared->bound_names);
+
+    if (prepared->requires_forwarding) {
+        return qp.local().prepare(stmt->raw_cql_statement, q_state->query_state, dialect).then([stmt, q_state = std::move(q_state)] (auto prep_result) mutable {
+            const auto& prepared_id = cql_transport::messages::result_message::prepared::cql::get_id(prep_result);
+            tracing::trace(q_state->query_state.get_trace_state(), "Forwarding the query to the leader");
+            return make_ready_future<cql_server::process_fn_return_type>(cql_server::result_with_forward(stmt, std::move(q_state), prepared_id));
+        });
+    }
 
     return qp.local().execute_direct_without_checking_exception_message(std::move(prepared), query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
@@ -1486,6 +1528,11 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     if (init_trace) {
         tracing::add_prepared_query_options(trace_state, options);
+    }
+
+    // Check if statement requires forwarding to raft group leader
+    if (prepared->requires_forwarding) {
+        return make_ready_future<cql_server::process_fn_return_type>(cql_server::result_with_forward(stmt, std::move(q_state), std::move(id),  std::move(metadata_id)));
     }
 
     tracing::trace(trace_state, "Processing a statement");
