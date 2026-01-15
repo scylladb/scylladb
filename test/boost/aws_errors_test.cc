@@ -110,6 +110,14 @@ BOOST_AUTO_TEST_CASE(TestErrorsWithoutPrefixParse) {
     BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
 }
 
+BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
+    BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::service_unavailable), utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::unauthorized), utils::http::retryable::no);
+
+    BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(ECONNRESET, std::system_category())), utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(EADDRINUSE, std::system_category())), utils::http::retryable::no);
+}
+
 BOOST_AUTO_TEST_CASE(TestNestedException) {
     // Test nested exceptions where the innermost is a system_error
     try {

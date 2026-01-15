@@ -28,6 +28,7 @@ target_sources(utils
     hashers.cc
     histogram_metrics_helper.cc
     http.cc
+    http_client_error_processing.cc
     human_readable.cc
     i_filter.cc
     io-wrappers.cc
