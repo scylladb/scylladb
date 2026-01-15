@@ -471,6 +471,13 @@ public:
 
 class segment_pool;
 struct reclaim_timer;
+using reclaim_duration = utils::coarse_steady_clock::duration;
+
+struct tracker_stats {
+    reclaim_duration reclaim_time;
+    reclaim_duration evict_time;
+    reclaim_duration compact_time;
+};
 
 class tracker::impl {
     std::unique_ptr<logalloc::segment_pool> _segment_pool;
@@ -482,6 +489,7 @@ class tracker::impl {
     bool _abort_on_bad_alloc = false;
     bool _sanitizer_report_backtrace = false;
     reclaim_timer* _active_timer = nullptr;
+    tracker_stats _stats;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -516,6 +524,9 @@ public:
     }
     logalloc::segment_pool& segment_pool() {
         return *_segment_pool;
+    }
+    tracker_stats& stats() {
+        return _stats;
     }
     void register_region(region::impl*);
     void unregister_region(region::impl*) noexcept;
@@ -1126,7 +1137,7 @@ public:
 
 struct reclaim_timer {
     using extra_logger = noncopyable_function<void(log_level)>;
-private:
+
     // CLOCK_MONOTONIC_COARSE is not quite what we want -- to look for stalls,
     // we want thread time, not wall time. Wall time will give false positives
     // if the process is descheduled.
@@ -1134,6 +1145,7 @@ private:
     // Unfortunately, CLOCK_THREAD_CPUTIME_ID_COARSE does not exist.
     // It's not an important problem, though.
     using clock = utils::coarse_steady_clock;
+private:
     struct stats {
         occupancy_stats region_occupancy;
         tracker::stats pool_stats;
@@ -1162,6 +1174,9 @@ private:
 
     clock::duration _duration_threshold;
 
+    // We will add measured duration to this.
+    clock::duration& _total_duration;
+
     const char* _name;
 
     const is_preemptible _preemptible;
@@ -1182,15 +1197,15 @@ private:
 
     clock::duration _duration;
 
-    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs);
+    inline reclaim_timer(const char* name, clock::duration& total_duration, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs);
 
 public:
-    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, extra_logger extra_logs = [](log_level){})
-        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, tracker, tracker.segment_pool(), std::move(extra_logs))
+    inline reclaim_timer(const char* name, clock::duration& total_duration, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, extra_logger extra_logs = [](log_level){})
+        : reclaim_timer(name, total_duration, preemptible, memory_to_release, segments_to_release, tracker, tracker.segment_pool(), std::move(extra_logs))
     {}
 
-    inline reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, segment_pool& segment_pool, extra_logger extra_logs = [](log_level){})
-        : reclaim_timer(name, preemptible, memory_to_release, segments_to_release, segment_pool.tracker(), segment_pool, std::move(extra_logs))
+    inline reclaim_timer(const char* name, clock::duration& total_duration, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, segment_pool& segment_pool, extra_logger extra_logs = [](log_level){})
+        : reclaim_timer(name, total_duration, preemptible, memory_to_release, segments_to_release, segment_pool.tracker(), segment_pool, std::move(extra_logs))
     {}
 
     inline ~reclaim_timer();
@@ -1235,7 +1250,7 @@ size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclamation. Migrate segments to higher addresses and shrink segment pool.
     size_t reclaimed_segments = 0;
 
-    reclaim_timer timing_guard("reclaim_segments", preempt, target * segment::size, target, *this, [&] (log_level level) {
+    reclaim_timer timing_guard("reclaim_segments", tracker().stats().reclaim_time, preempt, target * segment::size, target, *this, [&] (log_level level) {
         timing_logger.log(level, "- reclaimed {} out of requested {} segments", reclaimed_segments, target);
     });
 
@@ -1474,7 +1489,14 @@ size_t segment_pool::segments_in_use() const noexcept {
     return _segments_in_use;
 }
 
-reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs)
+reclaim_timer::reclaim_timer(const char* name,
+                             reclaim_timer::clock::duration& total_duration,
+                             is_preemptible preemptible,
+                             size_t memory_to_release,
+                             size_t segments_to_release,
+                             tracker::impl& tracker,
+                             segment_pool& segment_pool,
+                             extra_logger extra_logs)
     : _duration_threshold(
             // We only report reclaim stalls when their measured duration is
             // bigger than the threshold by at least one measurement error
@@ -1497,6 +1519,7 @@ reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_
             // but to (blocked_reactor_notify_ms + resolution - 10us) = 7990us,
             // to account for this.
             engine().get_blocked_reactor_notify_ms() + std::max(0ns, clock::get_resolution() - 10us))
+    , _total_duration(total_duration)
     , _name(name)
     , _preemptible(preemptible)
     , _memory_to_release(memory_to_release)
@@ -1522,6 +1545,7 @@ reclaim_timer::~reclaim_timer() {
     }
 
     _duration = clock::now() - _start;
+    _total_duration += _duration;
     _stall_detected = _duration >= _duration_threshold;
     if (_debug_enabled || _stall_detected) {
         sample_stats(_end_stats);
@@ -2635,7 +2659,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard("reclaim", preempt, memory_to_release, 0, *this);
+    reclaim_timer timing_guard("reclaim", _stats.reclaim_time, preempt, memory_to_release, 0, *this);
     return timing_guard.set_memory_released(reclaim_locked(memory_to_release, preempt));
 }
 
@@ -2732,7 +2756,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
 
     {
         int regions = 0, evictable_regions = 0;
-        reclaim_timer timing_guard("compact", preempt, memory_to_release, reserve_segments, *this, [&] (log_level level) {
+        reclaim_timer timing_guard("compact", _stats.compact_time, preempt, memory_to_release, reserve_segments, *this, [&] (log_level level) {
             timing_logger.log(level, "- processed {} regions: reclaimed from {}, compacted {}",
                               regions, evictable_regions, regions - evictable_regions);
         });
@@ -2769,7 +2793,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
 
     if (_segment_pool->total_memory_in_use() > target_mem) {
         int regions = 0, evictable_regions = 0;
-        reclaim_timer timing_guard("evict", preempt, memory_to_release, reserve_segments, *this, [&] (log_level level) {
+        reclaim_timer timing_guard("evict", _stats.evict_time, preempt, memory_to_release, reserve_segments, *this, [&] (log_level level) {
             timing_logger.log(level, "- processed {} regions, reclaimed from {}", regions, evictable_regions);
         });
         llogger.debug("Considering evictable regions.");
@@ -2820,6 +2844,11 @@ void tracker::impl::unregister_region(region::impl* r) noexcept {
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
+static
+uint64_t count_millis(reclaim_duration d) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+}
+
 tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*this)) {
     namespace sm = seastar::metrics;
 
@@ -2853,6 +2882,15 @@ tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*
 
         sm::make_counter("memory_freed", [this] { return _segment_pool->statistics().memory_freed; },
                         sm::description("Counts number of bytes which were requested to be freed in LSA.")),
+
+        sm::make_counter("reclaim_time_ms", [this] { return count_millis(_stats.reclaim_time); },
+                        sm::description("Total time spent in reclaiming LSA memory back to std allocator.")),
+
+        sm::make_counter("evict_time_ms", [this] { return count_millis(_stats.evict_time); },
+                        sm::description("Total time spent in evicting objects, that was not accounted under reclaim_time_ms")),
+
+        sm::make_counter("compact_time_ms", [this] { return count_millis(_stats.compact_time); },
+                        sm::description("Total time spent in segment compaction, that was not accounted under reclaim_time_ms")),
     });
 }
 
