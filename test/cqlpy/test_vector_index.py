@@ -58,7 +58,7 @@ def test_create_vector_search_index_with_bad_numeric_value(cql, test_keyspace, s
             with pytest.raises(InvalidRequest, match="out of valid range"):
                 cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'maximum_node_connections': '{val}' }}") 
         for val in ['dog', '123dog']:
-            with pytest.raises(InvalidRequest, match="not a valid number"):
+            with pytest.raises(InvalidRequest, match="not an integer"):
                 cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'maximum_node_connections': '{val}' }}") 
         with pytest.raises(InvalidRequest, match="out of valid range"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'construction_beam_width': '5000' }}") 
@@ -66,7 +66,7 @@ def test_create_vector_search_index_with_bad_numeric_value(cql, test_keyspace, s
 def test_create_vector_search_index_with_bad_similarity_value(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p int primary key, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
-        with pytest.raises(InvalidRequest, match="Unsupported similarity function"):
+        with pytest.raises(InvalidRequest, match="Invalid value in option 'similarity_function'"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'similarity_function': 'bad_similarity_function'}}") 
 
 def test_create_vector_search_index_on_nonfloat_vector_column(cql, test_keyspace, scylla_only, skip_without_tablets):
