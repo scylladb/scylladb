@@ -95,7 +95,8 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
-    server = await manager.server_add(config=cfg)
+    cmd = ['--logger-log-level', 's3=trace:http=debug:gcp_storage=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
 
     cql = manager.get_cql()
 
