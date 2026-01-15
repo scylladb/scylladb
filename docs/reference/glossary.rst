@@ -17,7 +17,7 @@ Glossary
       The CAP Theorem is the notion that **C** (Consistency), **A** (Availability) and **P** (Partition Tolerance) of data are mutually dependent in a distributed system. Increasing any 2 of these factors will reduce the third. ScyllaDB chooses availability and partition tolerance over consistency. See :doc:`Fault Tolerance </architecture/architecture-fault-tolerance>`.
  
     Cluster 
-      One or multiple ScyllaDB nodes, acting in concert, which own a single contiguous token range. State is communicated between nodes in the cluster via the Gossip protocol. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
+      One or multiple ScyllaDB nodes, acting in concert, which own a single contiguous token range. State is communicated between nodes in the cluster via :doc:`Raft </architecture/raft>`.
 
     Clustering Key
       A single or multi-column clustering key determines a row’s uniqueness and sort order on disk within a partition. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
@@ -157,14 +157,18 @@ Glossary
     Table
       A collection of columns fetched by row. Columns are ordered by Clustering Key. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
 
+    Tablet
+      The name of a :term:`Token Range` in the `Tablet Model </architecture/tablets>` of assigning ownership of data in a cluster.
+
     Time-window compaction strategy
       TWCS is designed for time series data. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Token
-      A value in a range, used to identify both nodes and partitions. Each node in a ScyllaDB cluster is given an (initial) token, which defines the end of the range a node handles. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
+      A hash value calculated over the partition key of a table. All tokens calculated over any partition key of any table are part the same token domain. This allows unified assignment of partitions to nodes in a ScyllaDB cluster via using :term:`Token Range` as the basis of ownership assignment.
 
     Token Range
-      The total range of potential unique identifiers supported by the partitioner. By default, each ScyllaDB node in the cluster handles 256 token ranges. Each token range corresponds to a Vnode. Each range of hashes in turn is a segment of the total range of a given hash function. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
+      A contiguous range of :term:`Token` values, the basis of ownership assignment in a ScyllaDB cluster. A token range is defined by a start and end token. Each node in a ScyllaDB cluster owns a number of token ranges.
+      There are two models of distributing token ranges in the cluster, the :doc:`VNode Model </architecture/ringarchitecture/index>` and the `Tablet Model </architecture/tablets>`.
 
     Tombstone
       A marker that indicates that data has been deleted. A large number of tombstones may impact read performance and disk usage, so an efficient tombstone garbage collection strategy should be employed. See :ref:`Tombstones GC options <ddl-tombstones-gc>`.
