@@ -363,7 +363,7 @@ future<tasks::is_abortable> global_topology_request_virtual_task::is_abortable(t
 static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requests_entry& entry) {
     return tasks::task_stats{
         .task_id = tasks::task_id{entry.id},
-        .type = fmt::to_string(entry.request_type),
+        .type = fmt::to_string(std::get<service::global_topology_request>(entry.request_type)),
         .kind = tasks::task_kind::cluster,
         .scope = "keyspace",
         .state = get_state(entry),
