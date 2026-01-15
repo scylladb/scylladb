@@ -1785,16 +1785,25 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features(), tablets_mode);
+        locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
+        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
         // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
-                locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
-                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
                     "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
                 }
+            }
+        }
+        if (sp.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+            try {
+                locator::assert_rf_rack_valid_keyspace(keyspace_name, sp.get_token_metadata_ptr(), *rs);
+            } catch (const std::invalid_argument& ex) {
+                co_return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
+                    "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
+                    "that have either 1 or 3 racks", table_name));
             }
         }
         // Creating an index in tablets mode requires the rf_rack_valid_keyspaces option to be enabled.
