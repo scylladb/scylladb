@@ -1316,7 +1316,19 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    tracing::trace(query_state.get_trace_state(), "Parsing a statement");
+    auto prepared = qp.local().get_statement(query.assume_value(), query_state.get_client_state(), dialect);
+    auto stmt = prepared->statement;
+
+    if (stmt->get_bound_terms() != options.get_values_count()) {
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
+                stmt->get_bound_terms(),
+                options.get_values_count());
+        throw exceptions::invalid_request_exception(msg);
+    }
+    options.prepare(prepared->bound_names);
+
+    return qp.local().execute_direct_without_checking_exception_message(std::move(prepared), query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
         } else if (msg->is_exception()) {
