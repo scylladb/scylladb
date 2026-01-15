@@ -654,6 +654,36 @@ async def test_index_requires_rf_rack_valid(manager: ManagerClient):
             ]
         )
 
+@pytest.mark.asyncio
+async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
+    """
+    Verify that the flag `rf_rack_valid_keyspaces` enforces RF-rack-validity.
+    Create a cluster with 4 racks, and try to create a table. By default the
+    table will have RF=3, so the creation should fail with appropriate error.
+    """
+    config = alternator_config | {"rf_rack_valid_keyspaces": True, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+
+    # Add 4 nodes in 4 racks
+    servers_rack1 = await manager.servers_add(4, config=config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack4'},
+    ])
+
+    alternator = get_alternator(servers_rack1[0].ip_addr)
+
+    expected_err = "The flag `rf_rack_valid_keyspaces` is enabled, but the replication factor of the table does not match the number of racks in the cluster"
+
+    # Try to create a table - the default is RF=3, so this should fail due to RF!=#racks
+    with pytest.raises(ClientError, match=expected_err):
+        alternator.create_table(
+            TableName=unique_table_name(),
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]
+        )
+
 # Unfortunately by default a Python thread print the exception that kills
 # it (e.g., pytest assert failures) but it doesn't propagate the exception
 # to the join() - so the overall test doesn't fail. The following ThreadWrapper
