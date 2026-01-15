@@ -5597,4 +5597,45 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_abort) {
     BOOST_REQUIRE_THROW(reader().get(), named_semaphore_timed_out);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_cache_read_concurrent_to_nonpopulating_reader) {
+    simple_schema ss;
+    const auto s = ss.schema();
+
+    const auto key = ss.make_pkeys(1).at(0);
+    const auto pr = dht::partition_range::make_singular(key);
+
+    mutation m(s, key);
+    for (int ck = 0; ck < 100; ++ck) {
+        ss.add_row(m, ss.make_ckey(0), "val");
+    }
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source_from_snapshot(make_source_with(m)), tracker);
+
+    // Populate the partition entry in cache
+    assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
+        .produces(m)
+        .produces_end_of_stream();
+
+    // Create nonpopulating reader for partition
+    auto reader = cache.make_nonpopulating_reader(s, semaphore.make_permit(), pr, s->full_slice(), {});
+    auto close_reader = deferred_close(reader);
+    reader.set_max_buffer_size(1);
+
+    reader.fill_buffer().get();
+
+    // Start read but don't finish, so the reader has more work to do.
+    auto mf = reader.pop_mutation_fragment();
+    BOOST_REQUIRE(mf.is_partition_start());
+    BOOST_REQUIRE(reader.is_buffer_empty());
+    BOOST_REQUIRE(!reader.is_end_of_stream());
+
+    // Start a concurrent read. The test fails if this crashes, by accessing a null cache tracker pointer.
+    assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
+        .produces(m)
+        .produces_end_of_stream();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
