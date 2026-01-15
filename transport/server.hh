@@ -226,7 +226,13 @@ public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     using result_with_bounce_to_shard = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce_to_shard>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard>;
+    struct result_with_forward {
+        ::shared_ptr<cql3::cql_statement> statement;
+        std::unique_ptr<cql_query_state> query_state;
+        cql3::cql_prepared_id_type prepared_id;
+        cql_metadata_id_wrapper metadata_id;
+    };
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard, result_with_forward>;
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
@@ -315,6 +321,18 @@ private:
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
 
         cql3::dialect get_dialect() const;
+
+        // Process a CQL execute that needs to be forwarded to a leader.
+        // Handles logging and stats updates for error responses.
+        future<cql_server::result_with_foreign_response_ptr> process_forwarding(
+            sharded<cql3::query_processor>& qp,
+            ::shared_ptr<cql3::cql_statement> stmt,
+            cql3::cql_prepared_id_type prepared_id,
+            std::unique_ptr<cql_query_state> q_state,
+            uint16_t stream,
+            cql_protocol_version_type version,
+            tracing::trace_state_ptr trace_state,
+            cql_metadata_id_wrapper metadata_id);
 
         // Helper functions to encapsulate bounce_to_shard processing for query, execute and batch verbs
         template <typename Process>
