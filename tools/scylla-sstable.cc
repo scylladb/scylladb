@@ -789,7 +789,7 @@ public:
     virtual compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
     virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
-    virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
+    virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return do_make_sstable(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
@@ -879,7 +879,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto compaction_descriptor = compaction::compaction_descriptor(std::move(sstables));
     compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
-    compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(); };
+    compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(sstables::sstable_state::normal); };
     compaction_descriptor.replacer = [] (compaction::compaction_completion_desc) { };
 
     auto compaction_data = compaction::compaction_data{};

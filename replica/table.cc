@@ -714,7 +714,7 @@ public:
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
-    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override {
+    future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override {
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
     }
     dht::token_range get_token_range_after_split(const dht::token&) const noexcept override { return dht::token_range(); }
@@ -872,7 +872,7 @@ public:
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
-    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override;
+    future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
         return tablet_map().get_token_range_after_split(token);
     }
@@ -1123,7 +1123,8 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 }
 
 future<std::vector<sstables::shared_sstable>>
-tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable& sst) {
+tablet_storage_group_manager::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
+    co_await utils::get_local_injector().inject("maybe_split_new_sstable_wait", utils::wait_for_message(120s));
     if (!tablet_map().needs_split()) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
@@ -1131,8 +1132,7 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
     auto& cg = compaction_group_for_sstable(sst);
     auto holder = cg.async_gate().hold();
     auto& view = cg.view_for_sstable(sst);
-    auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_sstable");
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, view, co_await split_compaction_options());
+    co_return co_await _t.get_compaction_manager().maybe_split_new_sstable(sst, view, co_await split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
@@ -1142,7 +1142,7 @@ future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
 
 future<std::vector<sstables::shared_sstable>> table::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     auto holder = async_gate().hold();
-    co_return co_await _sg_manager->maybe_split_sstable(sst);
+    co_return co_await _sg_manager->maybe_split_new_sstable(sst);
 }
 
 dht::token_range table::get_token_range_after_split(const dht::token& token) const noexcept {
@@ -1323,7 +1323,7 @@ future<utils::chunked_vector<sstables::shared_sstable>> table::take_sstable_set_
 }
 
 future<utils::chunked_vector<sstables::entry_descriptor>>
-table::clone_tablet_storage(locator::tablet_id tid) {
+table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     utils::chunked_vector<sstables::entry_descriptor> ret;
     auto holder = async_gate().hold();
 
@@ -1335,7 +1335,7 @@ table::clone_tablet_storage(locator::tablet_id tid) {
     // by compaction while we are waiting for the lock.
     auto deletion_guard = co_await get_sstable_list_permit();
     co_await sg.make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-        ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed));
     });
     co_return ret;
 }
@@ -1347,10 +1347,10 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
 }
 
 future<>
-table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy offstrategy,
+table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable& sst, sstables::offstrategy offstrategy,
                                        bool trigger_compaction) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
+    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () mutable noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         if (!offstrategy) {
@@ -1362,6 +1362,8 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
+        // Reseting sstable ptr to inform the caller the sstable has been loaded successfully.
+        sst = nullptr;
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
         return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
     });
@@ -1369,12 +1371,10 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    for (auto sst : co_await maybe_split_new_sstable(new_sst)) {
-        auto& cg = compaction_group_for_sstable(sst);
-        // Hold gate to make share compaction group is alive.
-        auto holder = cg.async_gate().hold();
-        co_await do_add_sstable_and_update_cache(cg, std::move(sst), offstrategy, trigger_compaction);
-    }
+    auto& cg = compaction_group_for_sstable(new_sst);
+    // Hold gate to make share compaction group is alive.
+    auto holder = cg.async_gate().hold();
+    co_await do_add_sstable_and_update_cache(cg, new_sst, offstrategy, trigger_compaction);
 }
 
 future<>
@@ -1390,6 +1390,85 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
         co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
     }
     trigger_compaction();
+}
+
+future<std::vector<sstables::shared_sstable>>
+table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
+                                        std::function<future<>(sstables::shared_sstable)> on_add,
+                                        sstables::offstrategy offstrategy) {
+    std::vector<sstables::shared_sstable> ret, ssts;
+    std::exception_ptr ex;
+    try {
+        bool trigger_compaction = offstrategy == sstables::offstrategy::no;
+        auto& cg = compaction_group_for_sstable(new_sst);
+        // This prevents compaction group from being considered empty until the holder is released.
+        // Helpful for tablet split, where split is acked for a table when all pre-split groups are empty.
+        auto sstable_add_holder = cg.sstable_add_gate().hold();
+
+        ret = ssts = co_await maybe_split_new_sstable(new_sst);
+        // on sucessful split, input sstable is unlinked.
+        new_sst = nullptr;
+        for (auto& sst : ssts) {
+            auto& cg = compaction_group_for_sstable(sst);
+            // Hold gate to make sure compaction group is alive.
+            auto holder = cg.async_gate().hold();
+            co_await on_add(sst);
+            // If do_add_sstable_and_update_cache() throws after sstable has been loaded, the pointer
+            // sst passed by reference will be set to nullptr, so it won't be unlinked in the exception
+            // handler below.
+            co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
+            sst = nullptr;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        // on failed split, input sstable is unlinked here.
+        if (new_sst) {
+            tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
+            co_await new_sst->unlink();
+        }
+        // on failure after sucessful split, sstables not attached yet will be unlinked
+        co_await coroutine::parallel_for_each(ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+            if (sst) {
+                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                co_await sst->unlink();
+            }
+        });
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return std::move(ret);
+}
+
+future<std::vector<sstables::shared_sstable>>
+table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> new_ssts,
+                                         std::function<future<>(sstables::shared_sstable)> on_add) {
+    std::exception_ptr ex;
+    std::vector<sstables::shared_sstable> ret;
+
+    // We rely on add_new_sstable_and_update_cache() to unlink the sstable feeded into it,
+    // so the exception handling below will only have to unlink sstables not processed yet.
+    try {
+        for (auto& sst: new_ssts) {
+            auto ssts = co_await add_new_sstable_and_update_cache(std::exchange(sst, nullptr), on_add);
+            std::ranges::move(ssts, std::back_inserter(ret));
+
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        co_await coroutine::parallel_for_each(new_ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+            if (sst) {
+                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                co_await sst->unlink();
+            }
+        });
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return std::move(ret);
 }
 
 future<>
@@ -2597,8 +2676,8 @@ public:
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _t.get_sstables_manager();
     }
-    sstables::shared_sstable make_sstable() const override {
-        return _t.make_sstable();
+    sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
+        return _t.make_sstable(state);
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
@@ -2716,6 +2795,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     auto flush_future = co_await seastar::coroutine::as_future(flush());
 
     co_await _flush_gate.close();
+    co_await _sstable_add_gate.close();
   // FIXME: indentation
   _compaction_disabler_for_views.clear();
   co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
@@ -2729,7 +2809,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
 }
 
 bool compaction_group::empty() const noexcept {
-    return _memtables->empty() && live_sstable_count() == 0;
+    return _memtables->empty() && live_sstable_count() == 0 && _sstable_add_gate.get_count() == 0;
 }
 
 const schema_ptr& compaction_group::schema() const {

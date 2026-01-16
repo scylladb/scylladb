@@ -108,6 +108,7 @@ struct sstable_writer_config {
     size_t promoted_index_auto_scale_threshold;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
+    bool leave_unsealed = false;
     mutation_fragment_stream_validation_level validation_level;
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
@@ -415,8 +416,8 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    component_name get_filename() const {
-        return component_name(*this, component_type::Data);
+    component_name get_filename(component_type f = component_type::Data) const {
+        return component_name(*this, f);
     }
 
     component_name toc_filename() const {
@@ -690,7 +691,7 @@ private:
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
-    future<> read_toc() noexcept;
+    future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
 
     void write_summary() {
@@ -1050,8 +1051,9 @@ public:
     future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
 
     // Clones this sstable with a new generation, under the same location as the original one.
+    // If leave_unsealed is true, the destination sstable is left unsealed.
     // Implementation is underlying storage specific.
-    future<entry_descriptor> clone(generation_type new_generation) const;
+    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false) const;
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager
@@ -1223,13 +1225,18 @@ public:
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.
-    virtual future<shared_sstable> close_and_seal() = 0;
+    virtual future<shared_sstable> close() = 0;
     virtual future<> abort() = 0;
+};
+
+struct sstable_stream_sink_cfg {
+    bool last_component = false;
+    bool leave_unsealed = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, bool last_component);
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, sstable_stream_sink_cfg cfg);
 
 } // namespace sstables
 

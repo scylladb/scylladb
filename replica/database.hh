@@ -603,9 +603,28 @@ public:
 
     data_dictionary::table as_data_dictionary() const;
 
+    // The usage of these functions are restricted to preexisting sstables that aren't being
+    // moved anywhere, so should never be used in the context of file streaming and intra
+    // node migration. The only user today is distributed loader, which populates the
+    // sstables for each column family on boot.
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
+
+    // Restricted to new sstables produced by external processes such as repair.
+    // The sstable might undergo split if table is in split mode.
+    // If no need for split, the input sstable will only be attached to the sstable set.
+    // If split happens, the output sstables will be attached and the input sstable unlinked.
+    // On failure, the input sstable is unlinked and exception propagated to the caller.
+    // The on_add callback will be called on all sstables to be added into the set.
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
+                                     std::function<future<>(sstables::shared_sstable)> on_add,
+                                     sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    [[nodiscard]] future<std::vector<sstables::shared_sstable>>
+    add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> new_ssts,
+                                      std::function<future<>(sstables::shared_sstable)> on_add);
+
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
     void set_truncation_time(db_clock::time_point truncated_at) noexcept {
@@ -723,7 +742,9 @@ private:
         return _config.enable_cache && _schema->caching_options().enabled();
     }
     void update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept;
-    future<> do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy, bool trigger_compaction);
+    // This function can throw even if the sstable was added into the set. When the sstable was successfully
+    // added, the sstable ptr @sst will be set to nullptr. Allowing caller to optionally discard the sstable.
+    future<> do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable& sst, sstables::offstrategy, bool trigger_compaction);
     future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction);
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
@@ -1352,7 +1373,8 @@ public:
 
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
-    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
+    // If leave_unsealead is set, all the destination sstables will be left unsealed.
+    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
     friend class compaction_group;
     friend class compaction::compaction_task_impl;

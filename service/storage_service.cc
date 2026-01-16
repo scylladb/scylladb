@@ -6383,14 +6383,19 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
                                              leaving.host, pending.host));
     }
 
-    auto d = co_await smp::submit_to(leaving.shard, [this, tablet] () -> future<utils::chunked_vector<sstables::entry_descriptor>> {
+    // All sstables cloned locally will be left unsealed, until they're loaded into the table.
+    // This is to guarantee no unsplit sstables will be left sealed on disk, which could
+    // cause problems if unsplit sstables are found after split was ACKed to coordinator.
+    bool leave_unsealed = true;
+
+    auto d = co_await smp::submit_to(leaving.shard, [this, tablet, leave_unsealed] () -> future<utils::chunked_vector<sstables::entry_descriptor>> {
         auto& table = _db.local().find_column_family(tablet.table);
         auto op = table.stream_in_progress();
-        co_return co_await table.clone_tablet_storage(tablet.tablet);
+        co_return co_await table.clone_tablet_storage(tablet.tablet, leave_unsealed);
     });
     rtlogger.debug("Cloned storage of tablet {} from leaving replica {}, {} sstables were found", tablet, leaving, d.size());
 
-    auto load_sstable = [] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
+    auto load_sstable = [leave_unsealed] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
         auto& mng = t.get_sstables_manager();
         auto sst = mng.make_sstable(t.schema(), t.get_storage_options(), d.generation, d.state.value_or(sstables::sstable_state::normal),
                                     d.version, d.format, db_clock::now(), default_io_error_handler_gen());
@@ -6398,7 +6403,8 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
         // will still point to leaving replica at this stage in migration. If node goes down,
         // SSTables will be loaded at pending replica and migration is retried, so correctness
         // wise, we're good.
-        auto cfg = sstables::sstable_open_config{ .current_shard_as_sstable_owner = true };
+        auto cfg = sstables::sstable_open_config{ .current_shard_as_sstable_owner = true,
+                                                  .unsealed_sstable = leave_unsealed };
         co_await sst->load(sharder, cfg);
         co_return sst;
     };
@@ -6406,16 +6412,23 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
     co_await smp::submit_to(pending.shard, [this, tablet, load_sstable, d = std::move(d)] () mutable -> future<> {
         // Loads cloned sstables from leaving replica into pending one.
         auto& table = _db.local().find_column_family(tablet.table);
+        auto& sstm = table.get_sstables_manager();
         auto op = table.stream_in_progress();
         dht::auto_refreshing_sharder sharder(table.shared_from_this());
 
-        std::vector<sstables::shared_sstable> ssts;
-        ssts.reserve(d.size());
+        std::unordered_set<sstables::shared_sstable> ssts;
         for (auto&& sst_desc : d) {
-            ssts.push_back(co_await load_sstable(sharder, table, std::move(sst_desc)));
+            ssts.insert(co_await load_sstable(sharder, table, std::move(sst_desc)));
         }
-        co_await table.add_sstables_and_update_cache(ssts);
-        _view_building_worker.local().load_sstables(tablet.table, ssts);
+        auto on_add = [&ssts, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
+            if (ssts.contains(loading_sst)) {
+                auto cfg = sstm.configure_writer(loading_sst->get_origin());
+                co_await loading_sst->seal_sstable(cfg.backup);
+            }
+            co_return;
+        };
+        auto loaded_ssts = co_await table.add_new_sstables_and_update_cache(std::vector(ssts.begin(), ssts.end()), on_add);
+        _view_building_worker.local().load_sstables(tablet.table, loaded_ssts);
     });
     rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
 }
