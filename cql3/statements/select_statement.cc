@@ -1959,14 +1959,45 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
-::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
-        uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
-        ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs) {
+struct ann_ordering_info {
+    secondary_index::index _index;
+    raw::select_statement::prepared_ann_ordering_type _prepared_ann_ordering;
+};
+
+static std::optional<ann_ordering_info> get_ann_ordering_info(
+        data_dictionary::database db,
+        schema_ptr schema,
+        lw_shared_ptr<const raw::select_statement::parameters> parameters,
+        prepare_context& ctx) {
+
+    if (parameters->orderings().empty()) {
+        return std::nullopt;
+    }
+
+    auto [column_id, ordering] = parameters->orderings().front();
+    const auto& ann_vector = std::get_if<raw::select_statement::ann_vector>(&ordering);
+    if (!ann_vector) {
+        return std::nullopt;
+    }
+
+    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(*schema);
+    const column_definition* def = schema->get_column_definition(column->name());
+    if (!def) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Undefined column name {}", column->text()));
+    }
+
+    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
+        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
+    }
+
+    auto e =  expr::prepare_expression(*ann_vector, db, schema->ks_name(), nullptr, def->column_specification);
+    expr::fill_prepare_context(e, ctx);
+
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(std::move(def), std::move(e));
+
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
-    auto [index_opt, _] = restrictions->find_idx(sim);
 
     auto indexes = sim.list_indexes();
     auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
@@ -1978,18 +2009,21 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }
-    
-    index_opt = *it;
 
-    if (!index_opt) {
-        throw std::runtime_error("No index found.");
-    }
+    return ann_ordering_info{*it, std::move(prepared_ann_ordering)};
+}
+
+::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
+        uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+        ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs) {
 
     auto prepared_filter = vector_search::prepare_filter(*restrictions, parameters->allow_filtering());
 
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
-            std::move(per_partition_limit), stats, *index_opt, std::move(prepared_filter), std::move(attrs));
+            std::move(per_partition_limit), stats, index, std::move(prepared_filter), std::move(attrs));
 }
 
 vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
@@ -2230,11 +2264,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    auto aggregation_depth = 0u;
+    std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
 
-    // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
     if (!_group_by_columns.empty()) {
-        aggregation_depth = std::max(aggregation_depth, 1u);
         if (prepared_selectors.empty()) {
             // We have a "SELECT * GROUP BY". If we leave prepared_selectors
             // empty, below we choose selection::wildcard() for SELECT *, and
@@ -2255,6 +2287,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
+
+    // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
+    auto aggregation_depth = _group_by_columns.empty() ? 0u : 1u;
 
     for (auto& ps : prepared_selectors) {
         aggregation_depth = std::max(aggregation_depth, expr::aggregation_depth(ps.expr));
@@ -2280,7 +2315,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    bool is_ann_query = !_parameters->orderings().empty() && std::holds_alternative<select_statement::ann_vector>(_parameters->orderings().front().second);
+    bool is_ann_query = ann_ordering_info_opt.has_value();
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
@@ -2292,16 +2327,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 
-    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
-
     auto orderings = _parameters->orderings();
 
-    if (!orderings.empty()) {
+    if (!orderings.empty() && !is_ann_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
-            } else {
+            if constexpr (!std::is_same_v<T, select_statement::ann_vector>) {
                 SCYLLA_ASSERT(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2314,7 +2345,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!prepared_ann_ordering.has_value()) {
+    if (!is_ann_query) {
         check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2397,10 +2428,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (prepared_ann_ordering) {
+    } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,
@@ -2620,28 +2651,6 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
             }
         }
     }
-}
-
-select_statement::prepared_ann_ordering_type select_statement::prepare_ann_ordering(const schema& schema, prepare_context& ctx, data_dictionary::database db) const {
-    auto [column_id, ordering] = _parameters->orderings().front();
-    const auto& ann_vector = std::get_if<select_statement::ann_vector>(&ordering);
-    SCYLLA_ASSERT(ann_vector);
-
-    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
-    const column_definition* def = schema.get_column_definition(column->name());
-    if (!def) {
-        throw exceptions::invalid_request_exception(
-                fmt::format("Undefined column name {}", column->text()));
-    }
-
-    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
-        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
-    }
-
-    auto e =  expr::prepare_expression(*ann_vector, db, keyspace(), nullptr, def->column_specification);
-    expr::fill_prepare_context(e, ctx);
-
-    return std::make_pair(std::move(def), std::move(e));
 }
 
 select_statement::ordering_comparator_type select_statement::get_ordering_comparator(const prepared_orderings_type& orderings,
