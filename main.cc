@@ -1820,7 +1820,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting forward cql service");
-            forward_cql_service.start(std::ref(qp)).get();
+            forward_cql_service.start(std::ref(messaging), std::ref(qp), std::ref(proxy)).get();
             auto stop_forward_cql_service = defer_verbose_shutdown("forward cql service", [&forward_cql_service] {
                 forward_cql_service.stop().get();
             });

@@ -956,7 +956,7 @@ private:
                 std::ref(_db), std::ref(_feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
-            _forward_cql_service.start(std::ref(_qp)).get();
+            _forward_cql_service.start(std::ref(_ms), std::ref(_qp), std::ref(_proxy)).get();
             auto stop_forward_cql_service = defer_verbose_shutdown("forward cql service", [this] { _forward_cql_service.stop().get(); });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();

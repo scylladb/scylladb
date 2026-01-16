@@ -58,6 +58,12 @@ struct forward_cql_execute_request {
     bool has_rate_limit_extension;
 };
 
+enum class forward_cql_status : uint8_t {
+    finished = 0,
+    prepared_not_found = 1,
+    not_a_leader = 2,
+};
+
 // Error information returned from forwarded CQL execution.
 // Used by the coordinator to log error messages and update statistics.
 struct forwarded_error_info {
@@ -70,6 +76,16 @@ struct forwarded_error_info {
     std::optional<seastar::lowres_clock::time_point> timeout;
 };
 
+
+struct forward_cql_execute_response {
+    forward_cql_status status;
+    // Raw CQL wire-format response body (includes result, warnings, custom_payload)
+    bytes response_body;
+    uint8_t response_flags;
+    // Error information for logging and stats tracking on the forwarding node
+    std::optional<forwarded_error_info> error_info;
+};
+
 // Result of forward_cql execution, containing both the response and error information
 // for logging and statistics tracking on the coordinator node.
 struct forward_cql_result {
@@ -80,10 +96,12 @@ struct forward_cql_result {
 
 // Service for forwarding CQL statement execution to replicas
 class forward_cql_service : public seastar::peering_sharded_service<forward_cql_service> {
+    netw::messaging_service& _ms;
     cql3::query_processor& _qp;
+    storage_proxy& _proxy;
 
 public:
-    forward_cql_service(cql3::query_processor& qp);
+    forward_cql_service(netw::messaging_service& ms, cql3::query_processor& qp, storage_proxy& proxy);
     ~forward_cql_service();
 
     future<> stop();
@@ -104,7 +122,11 @@ private:
     // Register RPC handlers
     void register_handlers();
 
+    service::query_state make_query_state(service::client_state& cs, const std::optional<tracing::trace_info>& trace_info, locator::host_id src_host_id) const;
+
     cql3::query_options make_query_options(const forward_cql_execute_request& req) const;
+
+    future<forward_cql_execute_response> handle_forward_execute(const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_execute_request req, topology::version_t topology_version);
 
     // Check if we're the leader for this statement and execute locally if so.
     // Returns the response if executed locally, nullopt if we need to forward.

@@ -13,6 +13,8 @@
 #include "cql3/query_processor.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/select_statement.hh"
+#include "cql3/statements/strong_consistency/modification_statement.hh"
+#include "cql3/statements/strong_consistency/select_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "query/query-request.hh"
 #include "replica/database.hh"
@@ -25,6 +27,7 @@
 #include "transport/messages/result_message.hh"
 #include "transport/messages/result_message_base.hh"
 #include "transport/response.hh"
+#include "idl/forward_cql.dist.hh"
 #include "transport/server.hh"
 
 namespace cql_transport {
@@ -51,8 +54,12 @@ namespace service {
 static logging::logger flog("forward_cql_service");
 
 forward_cql_service::forward_cql_service(
-    cql3::query_processor& qp)
-    : _qp(qp)
+    netw::messaging_service& ms,
+    cql3::query_processor& qp,
+    storage_proxy& proxy)
+    : _ms(ms)
+    , _qp(qp)
+    , _proxy(proxy)
 {
     register_handlers();
 }
@@ -61,10 +68,37 @@ forward_cql_service::~forward_cql_service() {
 }
 
 future<> forward_cql_service::stop() {
-    co_return;
+    co_await ser::forward_cql_rpc_verbs::unregister(&_ms);
 }
 
 void forward_cql_service::register_handlers() {
+    ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
+        std::bind_front(&forward_cql_service::handle_forward_execute, this));
+}
+
+static service::client_state make_client_state(const std::optional<sstring>& keyspace, rpc::opt_time_point timeout) {
+    auto now = db::timeout_clock::now();
+    auto d = db::timeout_clock::duration::max();
+    if (timeout) {
+        d = now < *timeout
+            ? *timeout - now
+            : db::timeout_clock::duration::zero();
+    }
+    service::client_state client_state(service::client_state::internal_tag{},
+        timeout_config{d, d, d, d, d, d, d});
+    if (keyspace) {
+        client_state.set_raw_keyspace(*keyspace);
+    }
+    return client_state;
+}
+
+service::query_state forward_cql_service::make_query_state(service::client_state& cs, const std::optional<tracing::trace_info>& trace_info, locator::host_id src_host_id) const {
+    tracing::trace_state_ptr trace_state_ptr;
+    if (trace_info) {
+        trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+        tracing::begin(trace_state_ptr);
+    }
+    return service::query_state(cs, trace_state_ptr, empty_service_permit());
 }
 
 cql3::query_options forward_cql_service::make_query_options(const forward_cql_execute_request& req) const {
@@ -169,6 +203,99 @@ forward_cql_service::execute_on_shard(
             co_return cql_transport::cql_server::process_fn_return_type(make_foreign(make_result(req.stream, *msg, local_trace_state, req.cql_version, make_metadata_id(req), skip_metadata)));
         }
     });
+}
+
+future<forward_cql_execute_response> forward_cql_service::handle_forward_execute(
+    const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_execute_request req, topology::version_t topology_version)
+{
+    auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+
+    auto cs = make_client_state(req.keyspace, timeout);
+    service::query_state qs = make_query_state(cs, req.trace_info, src_host);
+    cql3::query_options opts = make_query_options(req);
+    flog.trace("Handling forwarded CQL execute request from {} for statement {}", src_host, req.prepared_id);
+    tracing::trace(qs.get_trace_state(), "Handling forwarded CQL execute request from {}", src_host);
+
+    // Try to find the prepared statement
+    auto prepared = _qp.get_prepared(cql3::prepared_cache_key_type(req.prepared_id, cql3::internal_dialect()));
+    if (!prepared) {
+        if (req.query_string.empty()) {
+            co_return forward_cql_execute_response{
+                .status = forward_cql_status::prepared_not_found,
+                .response_body = {},
+                .response_flags = 0,
+                .error_info = {},
+            };
+        }
+        // If not found, prepare the statement from query_string
+        flog.trace("Prepared statement {} not found in cache, preparing from query string: {}", req.prepared_id, req.query_string);
+        auto prepared_message = co_await _qp.prepare(req.query_string, qs, cql3::internal_dialect());
+        prepared = prepared_message->get_prepared();
+
+        if (auto id = cql_transport::messages::result_message::prepared::cql::get_id(prepared_message); id != req.prepared_id) {
+            on_internal_error(flog, format("Prepared statement ID mismatch: expected {}, got {} after preparing from query string", req.prepared_id, id));
+        }
+        flog.trace("Prepared statement not found in cache, prepared from query string for statement {}", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Prepared statement not found in cache, prepared from query string");
+    } else {
+        flog.trace("Prepared statement found in cache for statement {}", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Prepared statement found in cache");
+    }
+
+    opts.prepare(prepared->bound_names);
+
+    auto stmt = prepared->statement;
+
+    // Try to execute the statement
+    tracing::trace(qs.get_trace_state(), "Executing statement");
+
+    try {
+        auto msg = co_await stmt->execute(_qp, qs, opts, std::nullopt);
+        std::optional<cql_transport::cql_server::process_fn_return_type> result;
+        if (msg->move_to_shard()) {
+            result = cql_transport::cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<cql_transport::messages::result_message::bounce_to_shard>(msg)));
+        } else {
+            // We don't need to bounce, prepare the final result
+            auto skip_metadata = opts.skip_metadata();
+            result = cql_transport::cql_server::process_fn_return_type(make_foreign(cql_transport::make_result(req.stream, *msg, qs.get_trace_state(), req.cql_version, make_metadata_id(req), skip_metadata)));
+        }
+
+        // Handle shard bouncing - the statement may need to execute on a different shard
+        while (auto* bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce_to_shard>(&result.value())) {
+            auto target_shard = (*bounce_msg)->move_to_shard().value();
+            auto&& cached_fn_calls = (*bounce_msg)->take_cached_pk_function_calls();
+            tracing::trace(qs.get_trace_state(), "Bouncing {} to shard {}", req.prepared_id, target_shard);
+            result = co_await execute_on_shard(target_shard, qs.get_client_state(), qs.get_trace_state(), req, std::move(cached_fn_calls), stmt->raw_cql_statement);
+        }
+        auto* final_result = std::get_if<cql_transport::cql_server::result_with_foreign_response_ptr>(&result.value());
+        auto response = std::move(*final_result).assume_value();
+        flog.trace("Remote statement execution of {} succeeded", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Remote statement execution succeeded");
+
+        co_return forward_cql_execute_response{
+            .status = forward_cql_status::finished,
+            .response_body = response->extract_body(),
+            .response_flags = response->flags(),
+            .error_info = {},
+        };
+    } catch (...) {
+        flog.trace("Remote statement execution of {} failed with an error", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Remote statement execution failed with an error");
+        auto eptr = std::current_exception();
+        auto response = cql_transport::make_error_result(req.stream, eptr, qs.get_trace_state(), req.cql_version, req.has_rate_limit_extension);
+
+        co_return forward_cql_execute_response{
+            .status = forward_cql_status::finished,
+            .response_body = response->extract_body(),
+            .response_flags = response->flags(),
+            .error_info = forwarded_error_info{
+                .exception_code = static_cast<int32_t>(cql_transport::get_error_code(eptr)),
+                .log_message = cql_transport::make_log_message(req.stream, eptr),
+                .timeout = cql_transport::wait_until_timeout(eptr),
+            },
+        };
+    }
+
 }
 
 forward_cql_execute_request forward_cql_service::make_forward_cql_request(
@@ -297,8 +424,84 @@ forward_cql_service::forward_cql(
     if (local_result) {
         co_return std::move(*local_result);
     }
-    // We can only execute locally for now
-    throw std::runtime_error("Cannot execute statement locally, forwarding not implemented");
+
+    // Need to forward to a replica
+    auto req = make_forward_cql_request(stmt, prepared_id, qs, options, stream, version, std::move(metadata_id));
+
+    // Get schema and token according to statement type
+    db::timeout_clock::time_point timeout;
+    dht::token token;
+    schema_ptr schema;
+    if (auto sc_mod_stmt = dynamic_pointer_cast<cql3::statements::strong_consistency::modification_statement>(stmt)) {
+        timeout = db::timeout_clock::now() + sc_mod_stmt->get_timeout(qs.get_client_state(), options);
+        schema = _proxy.get_db().local().find_column_family(sc_mod_stmt->keyspace(), sc_mod_stmt->column_family()).schema();
+        auto keys = sc_mod_stmt->build_partition_keys(options, std::nullopt);
+        if (keys.size() != 1 || !query::is_single_partition(keys.front())) {
+            on_internal_error(flog, "Strongly consistent modification statement must target exactly one partition");
+        }
+        token = keys[0].start()->value().token();
+    } else if (auto sc_sel_stmt = dynamic_pointer_cast<cql3::statements::strong_consistency::select_statement>(stmt)) {
+        timeout = db::timeout_clock::now() + sc_sel_stmt->get_timeout(qs.get_client_state(), options);
+        schema = _proxy.get_db().local().find_column_family(sc_sel_stmt->keyspace(), sc_sel_stmt->column_family()).schema();
+        auto keys = sc_sel_stmt->get_restrictions()->get_partition_key_ranges(options);
+        if (keys.size() != 1 || !query::is_single_partition(keys.front())) {
+            on_internal_error(flog, "Strongly consistent select statement must target exactly one partition");
+        }
+        token =  keys[0].start()->value().token();
+    } else {
+        on_internal_error(flog, "Strongly consistent statement must be either modification or select statement");
+    }
+
+    const auto& tab = schema->table();
+
+    while (db::timeout_clock::now() < timeout) {
+        // Keep the effective replication map for the duration of the RPC
+        locator::effective_replication_map_ptr erm = tab.get_effective_replication_map();
+        auto topology_version = erm->get_token_metadata_ptr()->get_version();
+
+        const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(tab.schema()->id());
+        const auto tablet_id = tablet_map.get_tablet_id(token);
+        const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+        locator::host_id target = tablet_info.replicas.front().host;
+
+        if (!target) {
+            // No replica found, retry with fresh topology
+            flog.trace("No replica found for token {} of statement {}, retrying", token, prepared_id);
+            tracing::trace(qs.get_trace_state(), "No replica found, retrying");
+            // An election is ongoing or a node queried for the leader found out that it's no longer owning the tablet before we did
+            // In both cases we might keep reentering this case for a while, so add a small sleep to avoid busy looping
+            co_await seastar::sleep(std::chrono::milliseconds(5));
+            continue;
+        }
+        flog.trace("Forwarding statement {} to replica {}", prepared_id, target);
+        tracing::trace(qs.get_trace_state(), "Forwarding CQL statement to replica: {}", target);
+
+        auto response = co_await ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, target, timeout, req, topology_version);
+
+        switch (response.status) {
+        case forward_cql_status::finished:
+            // Success, return the response with error info for logging/stats
+            tracing::trace(qs.get_trace_state(), "Forwarded CQL statement executed successfully on replica: {}", target);
+            co_return forward_cql_result{
+                // Don't pass trace_state here - the response_body already contains tracing info if it was traced on the remote node.
+                // Passing trace_state would cause the response constructor to prepend another tracing UUID, corrupting the response.
+                .response = cql_transport::response::make_from_body(stream, !response.error_info ? cql_transport::cql_binary_opcode::RESULT : cql_transport::cql_binary_opcode::ERROR,
+                                                              response.response_flags, std::move(response.response_body)),
+                .error_info = std::move(response.error_info),
+            };
+        case forward_cql_status::prepared_not_found:
+            // Retry with query string
+            req.query_string = stmt->raw_cql_statement;
+            tracing::trace(qs.get_trace_state(), "Prepared statement not found, retrying with query string");
+            continue;
+        case forward_cql_status::not_a_leader:
+            // Target was not the leader, retry and find the current leader
+            tracing::trace(qs.get_trace_state(), "Target is not the leader, retrying");
+            continue;
+        }
+    }
+
+    throw std::runtime_error("Forward CQL request timed out");
 }
 
 } // namespace service
