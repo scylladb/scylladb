@@ -6,10 +6,10 @@ same amount of disk space. This means that the number of tablets located on a no
 proportional to the gross disk capacity of that node. Because the used disk space of
 different tablets can vary greatly, this could create imbalance in disk utilization.
 
-Size based load balancing aims to achieve better disk utilization accross nodes in a
+Size based load balancing aims to achieve better disk utilization across nodes in a
 cluster. The load balancer will continuously gather information about available disk
 space and tablet sizes from all the nodes. It then incrementally computes tablet
-migration plans which equalize disk utilization accross the cluster.
+migration plans which equalize disk utilization across the cluster.
 
 # Basic operation
 
@@ -75,7 +75,7 @@ migrations), and will wait for correct tablet sizes to arrive after the next ``l
 refresh by the topology coordinator.
 
 One exception to this are nodes which have been excluded from the cluster. These nodes
-are down and therefor are not able to send fresh ``load_stats``. But they have to be drained
+are down and therefore are not able to send fresh ``load_stats``. But they have to be drained
 of their tablets (via tablet rebuild), and the balancer must do this even with incomplete
 tablet data. So, only excluded nodes are allowed to have missing tablet sizes.
 
