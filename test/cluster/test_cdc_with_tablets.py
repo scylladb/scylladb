@@ -328,7 +328,7 @@ async def test_cdc_colocation(manager: ManagerClient):
             test_data[i] = i * 10
             await cql.run_async(f"INSERT INTO {ks}.test(pk, v) VALUES({i}, {i * 10})")
 
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
         # create map that maps each stream_id to a list of all partitions it contains
         rows = await cql.run_async(f"SELECT \"cdc$stream_id\" as sid, pk FROM {ks}.test_scylla_cdc_log")

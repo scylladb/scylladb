@@ -391,6 +391,8 @@ async def init_tablet_transfer(manager: ManagerClient,
         LOGGER.info("Cannot perform a tablet migration because rack='%s' has only %i node(s)", target_rack, len(viable_targets))
         return
 
+    await manager.disable_tablet_balancing()
+
     await manager.cql.run_async(
         "CREATE KEYSPACE test"
         " WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND"
@@ -400,8 +402,6 @@ async def init_tablet_transfer(manager: ManagerClient,
     await asyncio.gather(
         *[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k})") for k in range(256)]
     )
-
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(node_ip=s.ip_addr) for s in servers])
 
     replicas = await get_all_tablet_replicas(
         manager=manager,

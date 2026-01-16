@@ -112,7 +112,7 @@ async def test_replace(manager: ManagerClient):
 
     # Disable migrations concurrent with replace since we don't handle nodes going down during migration yet.
     # See https://github.com/scylladb/scylladb/issues/16527
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     finish_writes = await start_writes(cql, ks3, "test2")
 
@@ -195,7 +195,7 @@ async def test_removenode(manager: ManagerClient):
 
     # Disable migrations concurrent with removenode since we don't handle nodes going down during migration yet.
     # See https://github.com/scylladb/scylladb/issues/16527
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info('Removing a node')
     await manager.server_stop(servers[0].server_id)
@@ -244,7 +244,7 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
 
     # Disable migrations concurrent with removenode since we don't handle nodes going down during migration yet.
     # See https://github.com/scylladb/scylladb/issues/16527
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     logger.info('Removing a node with another node down')
     await manager.server_stop(servers[0].server_id) # removed

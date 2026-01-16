@@ -41,7 +41,7 @@ async def test_resurrection_while_file_streaming(manager: ManagerClient):
     servers = [await manager.server_add(config=cfg)]
     servers.append(await manager.server_add(config=cfg))
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     s0_host_id = await manager.get_host_id(servers[0].server_id)
     s1_host_id = await manager.get_host_id(servers[1].server_id)

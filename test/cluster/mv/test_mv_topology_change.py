@@ -105,7 +105,7 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
     cmd = ['--smp', '2']
     servers = [await manager.server_add(config=cfg, cmdline=cmd)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -400,7 +400,7 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
 
     servers = await manager.servers_add(3, cmdline=cmdline)
     cql = manager.get_cql()
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     tablets_enabled = migration_type.startswith("tablets")
     if tablets_enabled:

@@ -56,7 +56,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
 
         # Disable migrations concurrent with replace since we don't handle nodes going down during migration yet.
         # See https://github.com/scylladb/scylladb/issues/16527
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
         base_replicas = await get_tablet_replicas(manager, servers[0], ks, "test", 0)
         logger.info(f'{ks}.test replicas: {base_replicas}')

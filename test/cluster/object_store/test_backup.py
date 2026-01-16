@@ -782,7 +782,7 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
 
     servers, host_ids = await create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, object_storage)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     ks = 'ks'
@@ -953,7 +953,7 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
 
     servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
@@ -1005,7 +1005,7 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
 
     servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
@@ -1049,7 +1049,7 @@ async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, 
 
     servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
@@ -1101,7 +1101,7 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
 
     servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)

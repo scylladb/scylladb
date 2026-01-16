@@ -374,8 +374,7 @@ async def test_hint_to_pending(manager: ManagerClient):
         {"dc": "dc1", "rack": "r1"},
     ])
     cql = await manager.get_cql_exclusive(servers[0])
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
-    await manager.api.disable_tablet_balancing(servers[1].ip_addr)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         table = f"{ks}.t"

@@ -196,9 +196,9 @@ async def prepare_migration_test(manager: ManagerClient):
         s = await manager.server_add(cmdline=extra_scylla_cmdline_options)
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
-        await manager.api.disable_tablet_balancing(s.ip_addr)
 
     await make_server()
+    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -360,7 +360,7 @@ async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerC
     await asyncio.gather(repair_task(), wait_and_check_none())
 
 async def prepare_split(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     insert = cql.prepare(f"INSERT INTO {keyspace}.{table}(pk, c) VALUES(?, ?)")
@@ -371,7 +371,7 @@ async def prepare_split(manager: ManagerClient, server: ServerInfo, keyspace: st
     await manager.api.flush_keyspace(server.ip_addr, keyspace)
 
 async def prepare_merge(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     await asyncio.gather(*[cql.run_async(f"DELETE FROM {keyspace}.{table} WHERE pk={k};") for k in keys])
@@ -382,7 +382,7 @@ async def enable_tablet_balancing_and_wait(manager: ManagerClient, server: Serve
     s1_log = await manager.server_open_log(server.server_id)
     s1_mark = await s1_log.mark()
 
-    await manager.api.enable_tablet_balancing(server.ip_addr)
+    await manager.enable_tablet_balancing()
 
     await s1_log.wait_for(message, from_mark=s1_mark)
 
@@ -400,7 +400,7 @@ async def test_tablet_resize_task(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     table1 = "test1"
@@ -421,7 +421,7 @@ async def test_tablet_resize_task(manager: ManagerClient):
 
         injection = "tablet_split_finalization_postpone"
         await enable_injection(manager, servers, injection)
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         async def wait_and_check_status(server, type, keyspace, table):
             task = (await wait_tasks_created(tm, server, module_name, 1, type, keyspace, table))[0]
@@ -441,7 +441,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     table1 = "test1"
@@ -464,7 +464,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
         await enable_injection(manager, servers, injection)
         await manager.api.enable_injection(servers[0].ip_addr, compaction_injection, one_shot=True)
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
         task0 = (await wait_tasks_created(tm, servers[0], module_name, 1, "split", keyspace, table1))[0]
         task1 = (await wait_tasks_created(tm, servers[1], module_name, 1, "split", keyspace, table1))[0]
 
@@ -501,7 +501,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     table1 = "test1"
@@ -515,7 +515,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
         injection = "tablet_split_finalization_postpone"
         await enable_injection(manager, servers, injection)
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
         task0 = (await wait_tasks_created(tm, servers[0], module_name, 1, "split", keyspace, table1))[0]
 
         log = await manager.server_open_log(servers[0].server_id)

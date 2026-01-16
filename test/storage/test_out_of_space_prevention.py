@@ -284,7 +284,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         }
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
-        await asyncio.gather(*[manager.api.disable_tablet_balancing(server.ip_addr) for server in servers])
+        await manager.disable_tablet_balancing()
 
         cql, _ = await manager.get_ready_cql(servers)
 

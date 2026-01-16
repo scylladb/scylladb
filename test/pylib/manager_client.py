@@ -336,6 +336,29 @@ class ManagerClient:
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
 
+    async def disable_tablet_balancing(self):
+        """
+        Disables background tablet load-balancing.
+        If there are already active migrations, it waits for them to finish before returning.
+        Doesn't block migrations on behalf of node operations like decommission, removenode or replace.
+        :return:
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async def enable_tablet_balancing(self):
+        """
+        Enables background tablet load-balancing.
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.enable_tablet_balancing(servers[0].ip_addr)
+
     async def server_start(self,
                            server_id: ServerNum,
                            expected_error: str | None = None,

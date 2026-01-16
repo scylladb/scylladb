@@ -176,7 +176,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # Disable load balancer on the topology coordinator node so that an ongoing tablet migration doesn't fail one of the
     # check_system_topology_and_cdc_generations_v3_consistency calls below. A tablet migration can suddenly make
     # version or fence_version inconsistent among nodes.
-    await manager.api.disable_tablet_balancing(live_servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql, hosts = await manager.get_ready_cql(live_servers + new_servers)
 

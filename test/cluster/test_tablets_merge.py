@@ -48,7 +48,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -89,7 +89,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         s1_mark = await s1_log.mark()
 
         # Now there's a split and migration need, so they'll potentially run concurrently.
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await check()
         time.sleep(2) # Give load balancer some time to do work
@@ -119,12 +119,12 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         keys = range(total_keys - 1, total_keys)
 
         # To avoid race of major with migration
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
 
         for server in servers:
             await manager.api.flush_keyspace(server.ip_addr, ks)
             await manager.api.keyspace_compaction(server.ip_addr, ks)
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
         # Waits for balancer to co-locate sibling tablets
@@ -214,7 +214,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
         for cycle in range(2):
             logger.info("Running split-merge cycle #{}".format(cycle))
 
-            await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+            await manager.disable_tablet_balancing()
 
             logger.info("Inserting data")
             # Initial average table size of (400k + metadata_overhead). Enough to trigger a few splits.
@@ -248,7 +248,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
             logger.info("Enabling balancing")
             # Now there's a split and migration need, so they'll potentially run concurrently.
-            await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+            await manager.enable_tablet_balancing()
 
             topology_ops_task = asyncio.create_task(perform_topology_ops())
 
@@ -283,13 +283,13 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
 
             # To avoid race of major with migration
-            await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+            await manager.disable_tablet_balancing()
 
             logger.info("Flushing keyspace and performing major")
             for server in servers:
                 await manager.api.flush_keyspace(server.ip_addr, ks)
                 await manager.api.keyspace_compaction(server.ip_addr, ks)
-            await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+            await manager.enable_tablet_balancing()
 
             logger.info("Waiting for merge decision")
             await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
@@ -457,7 +457,7 @@ async def test_migration_running_concurrently_to_merge_completion_handling(manag
     cfg = {'force_capacity_based_balancing': True}
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
@@ -479,7 +479,7 @@ async def test_migration_running_concurrently_to_merge_completion_handling(manag
 
         await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
         await manager.api.enable_injection(servers[0].ip_addr, "replica_merge_completion_wait", one_shot=True)
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
         s1_host_id = await manager.get_host_id(servers[1].server_id)
@@ -490,7 +490,7 @@ async def test_migration_running_concurrently_to_merge_completion_handling(manag
 
         await wait_for(finished_merging, time.time() + 120)
 
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
         await manager.api.enable_injection(servers[0].ip_addr, "take_storage_snapshot", one_shot=True)
 
         await s0_log.wait_for(f"merge_completion_fiber: waiting", from_mark=s0_mark)
@@ -540,7 +540,7 @@ async def test_missing_data(manager: ManagerClient):
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     inital_tablets = 32
 
@@ -560,7 +560,7 @@ async def test_missing_data(manager: ManagerClient):
         expected_tablet_count = inital_tablets // 2
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': {expected_tablet_count}}}")
 
-        await manager.api.enable_tablet_balancing(server.ip_addr)
+        await manager.enable_tablet_balancing()
 
         # wait for merge to complete
         actual_tablet_count = 0
@@ -608,7 +608,7 @@ async def test_merge_with_drop(manager: ManagerClient):
 
     cql = manager.get_cql()
 
-    await manager.api.disable_tablet_balancing(server.ip_addr)
+    await manager.disable_tablet_balancing()
 
     initial_tablets = 32
 
@@ -633,7 +633,7 @@ async def test_merge_with_drop(manager: ManagerClient):
         s0_log = await manager.server_open_log(server.server_id)
         s0_mark = await s0_log.mark()
 
-        await manager.api.enable_tablet_balancing(server.ip_addr)
+        await manager.enable_tablet_balancing()
 
         # wait for merge to complete
         actual_tablet_count = 0

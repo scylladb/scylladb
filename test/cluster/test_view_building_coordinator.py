@@ -78,10 +78,6 @@ async def wait_for_message_on_any_server(manager: ManagerClient, message: str, m
 async def wait_for_some_view_build_tasks_to_get_stuck(manager: ManagerClient, marks: list[int]):
     return await wait_for_message_on_any_server(manager, "do_build_range: paused, waiting for message", marks)
 
-async def disable_tablet_load_balancing_on_all_servers(manager: ManagerClient):
-    servers = await manager.running_servers()
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
-
 async def populate_base_table(cql: Session, ks: str, tbl: str):
     for i in range(ROW_COUNT):
         await cql.run_async(f"INSERT INTO {ks}.{tbl} (key, c, v) VALUES ({i // ROWS_PER_PARTITION}, {i % ROWS_PER_PARTITION}, '{i}')")
@@ -157,7 +153,7 @@ async def test_build_two_views(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"},
     ])
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -187,7 +183,7 @@ async def test_add_view_while_build_in_progress(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"},
     ])
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -217,7 +213,7 @@ async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -246,7 +242,7 @@ async def test_abort_building_by_remove_view(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -274,7 +270,7 @@ async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient,
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -324,7 +320,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
     servers = await manager.servers_add(node_count, config={"enable_tablets": "true"}, cmdline=cmdline_loggers,
                                         property_file=property_file)
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {old_rf}}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -362,7 +358,7 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
                                         property_file=property_file)
 
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -408,7 +404,7 @@ async def test_leader_change_while_building(manager: ManagerClient):
     ])
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -442,7 +438,7 @@ async def test_truncate_while_building(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"},
     ])
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -474,7 +470,7 @@ async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_acti
         {"dc": "dc1", "rack": "r3"},
     ])
     cql, hosts = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async def check_scylla_views_builds_in_progress(expect_zero_rows: bool):
         async def check():
@@ -515,7 +511,7 @@ async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_acti
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient):
     servers = [await manager.server_add(cmdline=cmdline_loggers)]
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
@@ -612,7 +608,7 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
     for property_file in rack_property_files:
         servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
     await pause_view_building_tasks(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1} AND tablets = {'initial': 2}") as ks:
@@ -632,7 +628,7 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
             servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
         assert len(await get_nodes_which_are_tablet_replicas()) == 3
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
 
         # The effect of unpausing the balancer should be that all replicas are distributed evenly between nodes
         # (1 base + 1 view tablet for each node).
@@ -684,7 +680,7 @@ async def test_file_streaming(manager: ManagerClient):
         {"dc": "dc1", "rack": "r2"},
     ])
     cql, hosts = await manager.get_ready_cql(servers)
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'initial': 1}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
@@ -731,7 +727,7 @@ async def test_file_streaming(manager: ManagerClient):
         await manager.server_start(servers[1].server_id)
 
         # Add node3
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
         new_server = await manager.server_add(cmdline=cmdline_loggers + ['--logger-log-level', 'view_update_generator=trace'], property_file={"dc": "dc1", "rack": "r1"})
 
         s0_host_id = await manager.get_host_id(servers[0].server_id)
@@ -819,7 +815,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         'tablet_load_stats_refresh_interval_in_seconds': 1,
     })
     cql, hosts = await manager.get_ready_cql(servers)
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key)) WITH tablets = {{'min_tablet_count': 2}}")
@@ -868,7 +864,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.server_start(servers[1].server_id)
 
         # Add node3
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.disable_tablet_balancing()
         new_server = await manager.server_add(cmdline=cmdline_loggers + ['--logger-log-level', 'view_update_generator=trace'], property_file={"dc": "dc1", "rack": "r1"}, config={
             'tablet_load_stats_refresh_interval_in_seconds': 1,
         })
@@ -898,7 +894,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
             if new_tablet_count == expected_tablet_count:
                 return True
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
         assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
         await cql.run_async(f"ALTER TABLE {ks}.tab WITH tablets = {{'min_tablet_count': 1}}")
         await wait_for(lambda: tablet_count_is(1), time.time() + 60)
@@ -922,7 +918,7 @@ async def test_tablet_migration_during_view_building(manager: ManagerClient):
     node_count = 1
     server = new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
     cql, _ = await manager.get_ready_cql([server])
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c)) WITH tablets = {{'min_tablet_count': 1}}")
@@ -957,7 +953,7 @@ async def test_tablet_merge_during_view_building(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"},
     ])
     cql, _ = await manager.get_ready_cql(servers)
-    await disable_tablet_load_balancing_on_all_servers(manager)
+    await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c)) WITH tablets = {{'min_tablet_count': 2}}")
@@ -976,7 +972,7 @@ async def test_tablet_merge_during_view_building(manager: ManagerClient):
             if new_tablet_count == expected_tablet_count:
                 return True
 
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.enable_tablet_balancing()
         assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
         await cql.run_async(f"ALTER TABLE {ks}.tab WITH tablets = {{'min_tablet_count': 1}}")
         await wait_for(lambda: tablet_count_is(1), time.time() + 60)

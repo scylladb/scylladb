@@ -52,7 +52,7 @@ async def test_file_streaming_respects_encryption(manager: ManagerClient, workdi
     cmdline = ['--smp=1']
     servers = []
     servers.append(await manager.server_add(config=cfg, cmdline=cmdline))
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     cql = manager.cql
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)

@@ -92,7 +92,7 @@ async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
 async def test_view_building_with_tablet_move(manager: ManagerClient, build_mode: str):
     servers = [await manager.server_add()]
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.disable_tablet_balancing()
 
     table = 'test'
 
