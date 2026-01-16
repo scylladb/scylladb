@@ -46,7 +46,10 @@ public:
         }
     }
 
+    virtual bool can_prepare_gently() const override { return true; }
+    virtual future<std::unique_ptr<prepared_statement>> prepare_gently(data_dictionary::database db, cql_stats& stats) override;
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+
 protected:
     virtual audit::statement_category category() const override;
     virtual audit::audit_info_ptr audit_info() const override {
