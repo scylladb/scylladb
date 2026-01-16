@@ -885,6 +885,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                 val_binders_str += ", ?";
             }
 
+            std::vector<mutation> collected;
             // use longer than usual timeout as we scan the whole table
             // but not infinite or very long as we want to fail reasonably fast
             const auto t = 5min;
@@ -892,16 +893,12 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             ::service::client_state cs(::service::client_state::internal_tag{}, tc);
             ::service::query_state qs(cs, empty_service_permit());
 
-                auto rows = co_await qp.execute_internal(
-                        seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
-                        db::consistency_level::ALL,
-                        qs,
-                        {},
-                        cql3::query_processor::cache_internal::no);
-                if (rows->empty()) {
-                    continue;
-                }
-                for (const auto& row : *rows) {
+            co_await qp.query_internal(
+                seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
+                db::consistency_level::ALL,
+                {},
+                1000,
+                [&qp, &cf_name, &col_names, &val_binders_str, &schema, ts, &collected] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
                     std::vector<data_value_or_unset> values;
                     for (const auto& col : schema->all_columns()) {
                         if (row.has(col.name_as_text())) {
@@ -924,8 +921,15 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                         on_internal_error(log,
                                 format("expecting single insert mutation, got {}", muts.size()));
                     }
-                    co_yield std::move(muts[0]);
-                }
+
+                    collected.push_back(std::move(muts[0]));
+                    co_return stop_iteration::no;
+                },
+                std::move(qs));
+
+            for (auto& m : collected) {
+                co_yield std::move(m);
+            }
         }
         co_yield co_await sys_ks.make_auth_version_mutation(ts,
                 db::system_keyspace::auth_version_t::v2);
