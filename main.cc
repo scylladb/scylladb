@@ -101,6 +101,7 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
+#include "service/forward_cql_service.hh"
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
@@ -109,6 +110,8 @@
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
+#include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -736,6 +739,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::mapreduce_service> mapreduce_service;
+    sharded<service::forward_cql_service> forward_cql_service;
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
     sharded<vector_search::vector_store_client> vector_store_client;
@@ -778,7 +782,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client] {
+                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client, &forward_cql_service] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -868,6 +872,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (!unused_features.empty()) {
                 startlog.warn("Ignoring unused features found in config: {}", unused_features);
             }
+
+            // Enable Raft-related columns in system.tablets if the experimental feature is enabled.
+            replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
+            ));
 
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg);
@@ -1802,6 +1811,27 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing strongly consistent groups manager");
+            sharded<service::strong_consistency::groups_manager> groups_manager;
+            groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
+                std::ref(db), std::ref(feature_service)).get();
+            auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
+                groups_manager.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting forward cql service");
+            forward_cql_service.start(std::ref(messaging), std::ref(qp), std::ref(proxy), std::ref(groups_manager)).get();
+            auto stop_forward_cql_service = defer_verbose_shutdown("forward cql service", [&forward_cql_service] {
+                forward_cql_service.stop().get();
+            });
+
+            checkpoint(stop_signal, "initializing strongly consistent coordinator");
+            sharded<service::strong_consistency::coordinator> sc_coordinator;
+            sc_coordinator.start(std::ref(groups_manager), std::ref(db)).get();
+            auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [&] {
+                sc_coordinator.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1813,7 +1843,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(auth_cache), std::ref(client_routes),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*disk_space_monitor_shard0)
+                only_on_shard0(&*disk_space_monitor_shard0),
+                std::ref(groups_manager)
             ).get();
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
@@ -1829,7 +1860,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
             qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(mapreduce_service),
-                             std::ref(ss), std::ref(group0_client)).get();
+                             std::ref(ss), std::ref(group0_client), std::ref(sc_coordinator), std::ref(forward_cql_service)).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
@@ -2177,6 +2208,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+
+            // The call to setup_group0_if_exists() above guarantees that, if group0 is
+            // created and started, the locally persisted group0 state has been applied
+            // before it returns. As a result, tablet Raft groups are started using
+            // tablet metadata that is at least as recent as the locally persisted version.
+            // groups_manager::start() waits for all these Raft groups to start, so when
+            // we begin RPC messaging below, the system is ready to accept proxied requests
+            // from other replicas.
+            groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                return m.start();
+            }).get();
 
             api::set_server_storage_service(ctx, ss, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {

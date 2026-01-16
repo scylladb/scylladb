@@ -26,6 +26,7 @@
 #include "service/migration_listener.hh"
 #include "mutation/timestamp.hh"
 #include "transport/messages/result_message.hh"
+#include "transport/response.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "vector_search/vector_store_client.hh"
@@ -44,9 +45,15 @@ class query_state;
 class mapreduce_service;
 class raft_group0_client;
 
+namespace strong_consistency {
+class coordinator;
+}
+
 namespace broadcast_tables {
 struct query;
 }
+class forward_cql_result;
+class forward_cql_service;
 }
 
 namespace cql3 {
@@ -155,7 +162,9 @@ public:
     ~query_processor();
 
     void start_remote(service::migration_manager&, service::mapreduce_service&,
-                      service::storage_service& ss, service::raft_group0_client&);
+                      service::storage_service& ss, service::raft_group0_client&,
+                      service::strong_consistency::coordinator&,
+                      service::forward_cql_service&);
     future<> stop_remote();
 
     data_dictionary::database db() {
@@ -173,6 +182,9 @@ public:
     service::storage_proxy& proxy() {
         return _proxy;
     }
+
+    std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder>
+    acquire_strongly_consistent_coordinator();
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
@@ -282,6 +294,12 @@ public:
             const std::string_view& query_string,
             service::query_state& query_state,
             dialect d,
+            query_options& options);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_direct_without_checking_exception_message(
+            std::unique_ptr<statements::prepared_statement> prepared,
+            service::query_state& query_state,
             query_options& options);
 
     future<::shared_ptr<cql_transport::messages::result_message>>
@@ -453,6 +471,16 @@ public:
     // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
     future<query::mapreduce_result>
     mapreduce(query::mapreduce_request, tracing::trace_state_ptr);
+
+    future<service::forward_cql_result>
+    execute_forwarding_statement(
+        ::shared_ptr<cql_statement> stmt,
+        cql_prepared_id_type prepared_id,
+        service::query_state& query_state,
+        const query_options& options,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        cql_transport::cql_metadata_id_wrapper metadata_id);
 
     struct retry_statement_execution_error : public std::exception {};
 

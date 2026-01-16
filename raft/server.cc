@@ -300,8 +300,7 @@ private:
     void add_to_rpc_config(server_address srv);
     void remove_from_rpc_config(const server_address& srv);
 
-    // A helper to wait for a leader to get elected
-    future<> wait_for_leader(seastar::abort_source* as);
+    future<> wait_for_leader(seastar::abort_source* as) override;
 
     future<> wait_for_state_change(seastar::abort_source* as) override;
 

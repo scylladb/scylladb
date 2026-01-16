@@ -54,6 +54,7 @@ set(idl_headers
   sstables.idl.hh
   storage_proxy.idl.hh
   storage_service.idl.hh
+  strong_consistency/state_machine.idl.hh
   group0_state_machine.idl.hh
   mapreduce_request.idl.hh
   replica_exception.idl.hh
@@ -67,6 +68,7 @@ set(idl_headers
   migration_manager.idl.hh
   node_ops.idl.hh
   tasks.idl.hh
+  forward_cql.idl.hh
   )
 
 foreach(idl_header ${idl_headers})

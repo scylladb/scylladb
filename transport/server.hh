@@ -226,7 +226,13 @@ public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     using result_with_bounce_to_shard = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce_to_shard>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard>;
+    struct result_with_forward {
+        ::shared_ptr<cql3::cql_statement> statement;
+        std::unique_ptr<cql_query_state> query_state;
+        cql3::cql_prepared_id_type prepared_id;
+        cql_metadata_id_wrapper metadata_id;
+    };
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard, result_with_forward>;
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
@@ -288,7 +294,7 @@ private:
     private:
         friend class process_request_executor;
 
-        future<foreign_ptr<std::unique_ptr<cql_server::response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const;
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp) const;
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
@@ -304,16 +310,6 @@ private:
         future<result_with_foreign_response_ptr> process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state);
         future<std::unique_ptr<cql_server::response>> process_register(uint16_t stream, request_reader in, service::client_state& client_state, tracing::trace_state_ptr trace_state);
 
-        std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_function_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring func_name, std::vector<sstring> args, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_rate_limit_error(int16_t stream, exceptions::exception_code err, sstring msg, db::operation_type op_type, bool rejected_by_coordinator, const tracing::trace_state_ptr& tr_state, const service::client_state& client_state) const;
-        std::unique_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
@@ -325,6 +321,18 @@ private:
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
 
         cql3::dialect get_dialect() const;
+
+        // Process a CQL execute that needs to be forwarded to a leader.
+        // Handles logging and stats updates for error responses.
+        future<cql_server::result_with_foreign_response_ptr> process_forwarding(
+            sharded<cql3::query_processor>& qp,
+            ::shared_ptr<cql3::cql_statement> stmt,
+            cql3::cql_prepared_id_type prepared_id,
+            std::unique_ptr<cql_query_state> q_state,
+            uint16_t stream,
+            cql_protocol_version_type version,
+            tracing::trace_state_ptr trace_state,
+            cql_metadata_id_wrapper metadata_id);
 
         // Helper functions to encapsulate bounce_to_shard processing for query, execute and batch verbs
         template <typename Process>

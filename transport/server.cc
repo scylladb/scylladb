@@ -47,6 +47,7 @@
 #include "enum_set.hh"
 #include "service/query_state.hh"
 #include "service/client_state.hh"
+#include "service/forward_cql_service.hh"
 #include "exceptions/exceptions.hh"
 #include "client_data.hh"
 #include "cql3/query_processor.hh"
@@ -427,7 +428,7 @@ cql_server::connection::read_frame() {
 // This function intentionally sleeps to the end of the query timeout in CQL server.
 // It was introduced to remove similar waiting in storage_proxy (ref. scylladb#3699),
 // because storage proxy was blocking ERM (thus topology changes).
-future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp) const {
     auto time_left = timeout - seastar::lowres_clock::now();
     return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
         if (f.failed()) {
@@ -436,6 +437,255 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connectio
         // Return timeout error no matter if sleep was aborted or not
         return utils::result_into_future<result_with_foreign_response_ptr>(std::move(resp));
     });
+}
+
+static std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(required);
+    response->write_int(alive);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_byte(data_present);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
+{
+    if (version < 4) {
+        return make_read_timeout_error(stream, exceptions::exception_code::READ_TIMEOUT, std::move(msg), cl, received, blockfor, data_present, tr_state);
+    }
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_int(numfailures);
+    response->write_byte(data_present);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_string(format("{}", type));
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
+{
+    if (version < 4) {
+        return make_mutation_write_timeout_error(stream, exceptions::exception_code::WRITE_TIMEOUT, std::move(msg), cl, received, blockfor, type, tr_state);
+    }
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_int(numfailures);
+    response->write_string(format("{}", type));
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_string(ks_name);
+    response->write_string(cf_name);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_short_bytes(id);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_function_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring func_name, std::vector<sstring> args, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_string(ks_name);
+    response->write_string(func_name);
+    response->write_string_list(args);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state)
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    return response;
+}
+
+static std::unique_ptr<cql_server::response> make_rate_limit_error(int16_t stream, exceptions::exception_code err, sstring msg, db::operation_type op_type, bool rejected_by_coordinator, const tracing::trace_state_ptr& tr_state, bool has_rate_limit_extension)
+{
+    if (!has_rate_limit_extension) {
+        return make_error(stream, exceptions::exception_code::CONFIG_ERROR, std::move(msg), tr_state);
+    }
+
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_byte(static_cast<uint8_t>(op_type));
+    response->write_byte(static_cast<uint8_t>(rejected_by_coordinator));
+    return response;
+}
+
+std::unique_ptr<cql_server::response>
+make_error_result(int16_t stream, std::exception_ptr eptr, const tracing::trace_state_ptr& trace_state,
+        cql_protocol_version_type version, bool has_rate_limit_extension)
+{
+    if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
+        return make_unavailable_error(stream, exp->code(), exp->what(), exp->consistency, exp->required, exp->alive, trace_state);
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+        return make_read_timeout_error(stream, exp->_timeout_exception.code(), exp->_timeout_exception.what(), exp->_timeout_exception.consistency, exp->_timeout_exception.received, exp->_timeout_exception.block_for, exp->_timeout_exception.data_present, trace_state);
+    } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
+        return make_read_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->data_present, trace_state);
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
+        return make_read_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->data_present, trace_state, version);
+    } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
+        return make_mutation_write_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->type, trace_state);
+    } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
+        return make_mutation_write_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->type, trace_state, version);
+    } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
+        return make_already_exists_error(stream, exp->code(), exp->what(), exp->ks_name, exp->cf_name, trace_state);
+    } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+        return make_unprepared_error(stream, exp->code(), exp->what(), exp->id, trace_state);
+    } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
+        return make_function_failure_error(stream, exp->code(), exp->what(), exp->ks_name, exp->func_name, exp->args, trace_state);
+    } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
+        return make_rate_limit_error(stream, exp->code(), exp->what(), exp->op_type, exp->rejected_by_coordinator, trace_state, has_rate_limit_extension);
+    } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
+        // Note: the CQL protocol specifies that many types of errors have
+        // mandatory parameters. These cassandra_exception subclasses MUST
+        // be handled above. This default "cassandra_exception" case is
+        // only appropriate for the specific types of errors which do not have
+        // additional information, such as invalid_request_exception.
+        // TODO: consider listing those types explicitly, instead of the
+        // catch-all type cassandra_exception.
+        return make_error(stream, exp->code(), exp->what(), trace_state);
+    } else if (auto* exp = try_catch<std::exception>(eptr)) {
+        sstring msg = exp->what();
+        try {
+            std::rethrow_if_nested(*exp);
+        } catch (...) {
+            std::ostringstream ss;
+            ss << msg << ": " << std::current_exception();
+            msg = ss.str();
+        }
+        return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
+    } else {
+        return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
+    }
+}
+
+exceptions::exception_code get_error_code(std::exception_ptr eptr)
+{
+    if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
+        return exp->code();
+    } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
+        return exp->code();
+    } else if (try_catch<std::exception>(eptr)) {
+        return exceptions::exception_code::SERVER_ERROR;
+    } else {
+        return exceptions::exception_code::SERVER_ERROR;
+    }
+}
+
+sstring make_log_message(int16_t stream, std::exception_ptr eptr)
+{
+    if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
+        return format("request resulted in unavailable_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+        return format("request resulted in read_failure_exception_with_timeout, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
+        return format("request resulted in read_timeout_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
+        return format("request resulted in read_failure_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
+        return format("request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
+        return format("request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
+        return format("request resulted in already_exists_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+        return format("request resulted in unprepared_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
+        return format("request resulted in function_failure_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
+        return format("request resulted in rate_limit_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
+        return format("request resulted in cassandra_error, stream {}, code {}, message [{}]",
+            stream, exp->code(), exp->what());
+    } else if (auto* exp = try_catch<std::exception>(eptr)) {
+        return format("request resulted in error, stream {}, message [{}]",
+            stream, exp->what());
+    } else {
+        return format("request resulted in unknown error, stream {}",
+            stream);
+    }
+}
+
+std::optional<seastar::lowres_clock::time_point> wait_until_timeout(std::exception_ptr eptr) {
+    if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+        return exp->_timeout;
+    }
+    return std::nullopt;
 }
 
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
@@ -555,91 +805,15 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             cql_stats.response_size += response->size();
             return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(response));
         }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
-            if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
-                clogger.debug("{}: request resulted in unavailable_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_unavailable_error(stream, exp->code(), exp->what(), exp->consistency, exp->required, exp->alive, trace_state));
-            } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
-                clogger.debug("{}: request resulted in read_failure_exception_with_timeout, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                // Return read timeout exception, as we wait here until the timeout passes
-                return sleep_until_timeout_passes(
-                    exp->_timeout,
-                    make_read_timeout_error(stream, exp->_timeout_exception.code(), exp->_timeout_exception.what(), exp->_timeout_exception.consistency, exp->_timeout_exception.received, exp->_timeout_exception.block_for, exp->_timeout_exception.data_present, trace_state)
-                );
-            } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
-                clogger.debug("{}: request resulted in read_timeout_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_read_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->data_present, trace_state));
-            } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
-                clogger.debug("{}: request resulted in read_failure_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_read_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->data_present, trace_state));
-            } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
-                clogger.debug("{}: request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->type, trace_state));
-            } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
-                clogger.debug("{}: request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->type, trace_state));
-            } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
-                clogger.debug("{}: request resulted in already_exists_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_already_exists_error(stream, exp->code(), exp->what(), exp->ks_name, exp->cf_name, trace_state));
-            } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
-                clogger.debug("{}: request resulted in unprepared_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_unprepared_error(stream, exp->code(), exp->what(), exp->id, trace_state));
-            } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
-                clogger.debug("{}: request resulted in function_failure_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_function_failure_error(stream, exp->code(), exp->what(), exp->ks_name, exp->func_name, exp->args, trace_state));
-            } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
-                clogger.debug("{}: request resulted in rate_limit_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_rate_limit_error(stream, exp->code(), exp->what(), exp->op_type, exp->rejected_by_coordinator, trace_state, client_state));
-            } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
-                clogger.debug("{}: request resulted in cassandra_error, stream {}, code {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
-                // Note: the CQL protocol specifies that many types of errors have
-                // mandatory parameters. These cassandra_exception subclasses MUST
-                // be handled above. This default "cassandra_exception" case is
-                // only appropriate for the specific types of errors which do not have
-                // additional information, such as invalid_request_exception.
-                // TODO: consider listing those types explicitly, instead of the
-                // catch-all type cassandra_exception.
-                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exp->code(), exp->what(), trace_state));
-            } else if (auto* exp = try_catch<std::exception>(eptr)) {
-                clogger.debug("{}: request resulted in error, stream {}, message [{}]",
-                    _client_state.get_remote_address(), stream, exp->what());
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                sstring msg = exp->what();
-                try {
-                    std::rethrow_if_nested(*exp);
-                } catch (...) {
-                    std::ostringstream ss;
-                    ss << msg << ": " << std::current_exception();
-                    msg = ss.str();
-                }
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state));
-            } else {
-                clogger.debug("{}: request resulted in unknown error, stream {}",
-                    _client_state.get_remote_address(), stream);
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state));
+            clogger.debug("{}: {}", _client_state.get_remote_address(), make_log_message(stream, eptr));
+            auto response = make_error_result(stream, eptr, trace_state, _version,
+                client_state.is_protocol_extension_set(cql_protocol_extension::RATE_LIMIT_ERROR));
+            try { ++_server._stats.errors[get_error_code(eptr)]; } catch(...) {}
+            if (auto timeout = wait_until_timeout(eptr)) {
+                // For read_failure_exception_with_timeout, sleep until the timeout passes
+                return sleep_until_timeout_passes(*timeout, std::move(response));
             }
+            return utils::result_into_future<result_with_foreign_response_ptr>(std::move(response));
         });
     });
 }
@@ -1142,13 +1316,46 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
         co_return coroutine::exception(f.get_exception());
     }
     auto msg = std::move(f.get());
-
+    if (auto* forward_msg = std::get_if<result_with_forward>(&msg)) {
+        co_return co_await process_forwarding(_server._query_processor, std::move(forward_msg->statement), std::move(forward_msg->prepared_id),
+                std::move(forward_msg->query_state), stream, _version, trace_state, std::move(forward_msg->metadata_id));
+    }
     while (auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg)) {
         auto shard = (*bounce_msg)->move_to_shard().value();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
         msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
     }
     co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
+}
+
+// Process a CQL execute that needs to be forwarded to a leader.
+// Handles logging and stats updates for error responses.
+future<cql_server::result_with_foreign_response_ptr>
+cql_server::connection::process_forwarding(
+        sharded<cql3::query_processor>& qp,
+        ::shared_ptr<cql3::cql_statement> stmt,
+        cql3::cql_prepared_id_type prepared_id,
+        std::unique_ptr<cql_query_state> q_state,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        tracing::trace_state_ptr trace_state,
+        cql_metadata_id_wrapper metadata_id) {
+    auto& query_state = q_state->query_state;
+    auto& options = *q_state->options;
+    auto result = co_await qp.local().execute_forwarding_statement(stmt, std::move(prepared_id), query_state, options, stream, version, std::move(metadata_id));
+
+    // Handle error logging and stats if this was an error response
+    if (result.error_info) {
+        clogger.debug("{}: {}", _client_state.get_remote_address(), result.error_info->log_message);
+        try { ++_server._stats.errors[static_cast<exceptions::exception_code>(result.error_info->exception_code)]; } catch(...) {}
+
+        // Handle read_failure_exception_with_timeout - sleep until timeout passes
+        if (result.error_info->timeout) {
+            co_return cql_server::result_with_foreign_response_ptr(co_await sleep_until_timeout_passes(*result.error_info->timeout, std::move(result.response)));
+        }
+    }
+
+    co_return cql_server::result_with_foreign_response_ptr(std::move(result.response));
 }
 
 static future<cql_server::process_fn_return_type>
@@ -1182,7 +1389,27 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    tracing::trace(query_state.get_trace_state(), "Parsing a statement");
+    auto prepared = qp.local().get_statement(query.assume_value(), query_state.get_client_state(), dialect);
+    auto stmt = prepared->statement;
+
+    if (stmt->get_bound_terms() != options.get_values_count()) {
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
+                stmt->get_bound_terms(),
+                options.get_values_count());
+        throw exceptions::invalid_request_exception(msg);
+    }
+    options.prepare(prepared->bound_names);
+
+    if (prepared->requires_forwarding) {
+        return qp.local().prepare(stmt->raw_cql_statement, q_state->query_state, dialect).then([stmt, q_state = std::move(q_state)] (auto prep_result) mutable {
+            const auto& prepared_id = cql_transport::messages::result_message::prepared::cql::get_id(prep_result);
+            tracing::trace(q_state->query_state.get_trace_state(), "Forwarding the query to the leader");
+            return make_ready_future<cql_server::process_fn_return_type>(cql_server::result_with_forward(stmt, std::move(q_state), prepared_id));
+        });
+    }
+
+    return qp.local().execute_direct_without_checking_exception_message(std::move(prepared), query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
         } else if (msg->is_exception()) {
@@ -1301,6 +1528,11 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     if (init_trace) {
         tracing::add_prepared_query_options(trace_state, options);
+    }
+
+    // Check if statement requires forwarding to raft group leader
+    if (prepared->requires_forwarding) {
+        return make_ready_future<cql_server::process_fn_return_type>(cql_server::result_with_forward(stmt, std::move(q_state), std::move(id),  std::move(metadata_id)));
     }
 
     tracing::trace(trace_state, "Processing a statement");
@@ -1502,125 +1734,6 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
     _ready = true;
     on_connection_ready();
     return make_ready_future<ret_type>(make_ready(stream, std::move(trace_state)));
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_consistency(cl);
-    response->write_int(required);
-    response->write_int(alive);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_consistency(cl);
-    response->write_int(received);
-    response->write_int(blockfor);
-    response->write_byte(data_present);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state) const
-{
-    if (_version < 4) {
-        return make_read_timeout_error(stream, exceptions::exception_code::READ_TIMEOUT, std::move(msg), cl, received, blockfor, data_present, tr_state);
-    }
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_consistency(cl);
-    response->write_int(received);
-    response->write_int(blockfor);
-    response->write_int(numfailures);
-    response->write_byte(data_present);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_consistency(cl);
-    response->write_int(received);
-    response->write_int(blockfor);
-    response->write_string(format("{}", type));
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state) const
-{
-    if (_version < 4) {
-        return make_mutation_write_timeout_error(stream, exceptions::exception_code::WRITE_TIMEOUT, std::move(msg), cl, received, blockfor, type, tr_state);
-    }
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_consistency(cl);
-    response->write_int(received);
-    response->write_int(blockfor);
-    response->write_int(numfailures);
-    response->write_string(format("{}", type));
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_string(ks_name);
-    response->write_string(cf_name);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_short_bytes(id);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_function_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring func_name, std::vector<sstring> args, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_string(ks_name);
-    response->write_string(func_name);
-    response->write_string_list(args);
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_rate_limit_error(int16_t stream, exceptions::exception_code err, sstring msg, db::operation_type op_type, bool rejected_by_coordinator, const tracing::trace_state_ptr& tr_state, const service::client_state& client_state) const
-{
-    if (!client_state.is_protocol_extension_set(cql_protocol_extension::RATE_LIMIT_ERROR)) {
-        return make_error(stream, exceptions::exception_code::CONFIG_ERROR, std::move(msg), tr_state);
-    }
-
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    response->write_byte(static_cast<uint8_t>(op_type));
-    response->write_byte(static_cast<uint8_t>(rejected_by_coordinator));
-    return response;
-}
-
-std::unique_ptr<cql_server::response> cql_server::connection::make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state) const
-{
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
-    response->write_int(static_cast<int32_t>(err));
-    response->write_string(msg);
-    return response;
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const
