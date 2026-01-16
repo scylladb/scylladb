@@ -54,12 +54,14 @@ public:
         uint64_t applied_mutations = 0;
         uint64_t corrupt_bytes = 0;
         uint64_t truncated_at = 0;
+        uint64_t broken_files = 0;
 
         stats& operator+=(const stats& s) {
             invalid_mutations += s.invalid_mutations;
             skipped_mutations += s.skipped_mutations;
             applied_mutations += s.applied_mutations;
             corrupt_bytes += s.corrupt_bytes;
+            broken_files += s.broken_files;
             return *this;
         }
         stats operator+(const stats& s) const {
@@ -192,6 +194,8 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
             s->corrupt_bytes += e.bytes();
         } catch (commitlog::segment_truncation& e) {
             s->truncated_at = e.position();
+        } catch (commitlog::header_checksum_error&) {
+            ++s->broken_files;
         } catch (...) {
             throw;
         }
@@ -369,6 +373,9 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                     }
                     if (stats.truncated_at != 0) {
                         rlogger.warn("Truncated file: {} at position {}.", f, stats.truncated_at);
+                    }
+                    if (stats.broken_files != 0) {
+                        rlogger.warn("Corrupted file header: {}. Skipped.", f);
                     }
                     rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
                                     , f
