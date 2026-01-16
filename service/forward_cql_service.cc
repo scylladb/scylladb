@@ -26,6 +26,7 @@
 #include "transport/messages/result_message.hh"
 #include "transport/messages/result_message_base.hh"
 #include "transport/response.hh"
+#include "idl/forward_cql.dist.hh"
 #include "transport/server.hh"
 
 namespace cql_transport {
@@ -52,8 +53,10 @@ namespace service {
 static logging::logger flog("forward_cql_service");
 
 forward_cql_service::forward_cql_service(
+    netw::messaging_service& ms,
     cql3::query_processor& qp)
-    : _qp(qp)
+    : _ms(ms)
+    , _qp(qp)
 {
     register_handlers();
 }
@@ -62,10 +65,37 @@ forward_cql_service::~forward_cql_service() {
 }
 
 future<> forward_cql_service::stop() {
-    co_return;
+    co_await ser::forward_cql_rpc_verbs::unregister(&_ms);
 }
 
 void forward_cql_service::register_handlers() {
+    ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
+        std::bind_front(&forward_cql_service::handle_forward_execute, this));
+}
+
+static service::client_state make_client_state(const std::optional<sstring>& keyspace, rpc::opt_time_point timeout) {
+    auto now = db::timeout_clock::now();
+    auto d = db::timeout_clock::duration::max();
+    if (timeout) {
+        d = now < *timeout
+            ? *timeout - now
+            : db::timeout_clock::duration::zero();
+    }
+    service::client_state client_state(service::client_state::internal_tag{},
+        timeout_config{d, d, d, d, d, d, d});
+    if (keyspace) {
+        client_state.set_raw_keyspace(*keyspace);
+    }
+    return client_state;
+}
+
+static service::query_state make_query_state(service::client_state& cs, const std::optional<tracing::trace_info>& trace_info, locator::host_id src_host_id) {
+    tracing::trace_state_ptr trace_state_ptr;
+    if (trace_info) {
+        trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+        tracing::begin(trace_state_ptr);
+    }
+    return service::query_state(cs, trace_state_ptr, empty_service_permit());
 }
 
 cql3::query_options forward_cql_service::make_query_options(const forward_cql_execute_request& req) const {
@@ -168,6 +198,100 @@ forward_cql_service::execute_on_shard(
             co_return cql_transport::cql_server::process_fn_return_type(make_foreign(make_result(req.stream, *msg, local_trace_state, req.cql_version, make_metadata_id(req), skip_metadata)));
         }
     });
+}
+
+future<forward_cql_execute_response> forward_cql_service::handle_forward_execute(
+    const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req)
+{
+    auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+
+    auto cs = make_client_state(req.keyspace, timeout);
+    service::query_state qs = make_query_state(cs, req.trace_info, src_host);
+    flog.trace("Handling forwarded CQL execute request from {} for statement {}", src_host, req.prepared_id);
+    tracing::trace(qs.get_trace_state(), "Handling forwarded CQL execute request from {}", src_host);
+    co_return co_await handle_forward_execute_without_checking_exceptions(qs, timeout, shard, req).then_wrapped([&] (future<forward_cql_execute_response> f) mutable {
+        if (f.failed()) {
+            auto eptr = f.get_exception();
+            auto response = cql_transport::make_error_result(req.stream, eptr, qs.get_trace_state(), req.cql_version, req.has_rate_limit_extension);
+            flog.trace("Execution of forwarded statement {} failed with an error", req.prepared_id);
+            tracing::trace(qs.get_trace_state(), "Execution of forwarded statement failed with an error");
+
+            return forward_cql_execute_response{
+                .status = forward_cql_status::finished,
+                .response_body = response->extract_body(),
+                .response_flags = response->flags(),
+                .error_info = forwarded_error_info{
+                    .exception_code = static_cast<int32_t>(cql_transport::get_error_code(eptr)),
+                    .log_message = cql_transport::make_log_message(req.stream, eptr),
+                    .timeout = cql_transport::timeout_for_sleep(eptr),
+                },
+            };
+        }
+        return f.get();
+    });
+}
+
+future<forward_cql_execute_response> forward_cql_service::handle_forward_execute_without_checking_exceptions(
+    query_state& qs, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request& req) {
+    cql3::query_options opts = make_query_options(req);
+
+    // Try to find the prepared statement
+    auto prepared = _qp.get_prepared(cql3::prepared_cache_key_type(req.prepared_id, cql3::internal_dialect()));
+    if (!prepared) {
+        if (req.query_string.empty()) {
+            co_return forward_cql_execute_response{
+                .status = forward_cql_status::prepared_not_found,
+            };
+        }
+        // If not found, prepare the statement from query_string
+        flog.trace("Prepared statement {} not found in cache, preparing from query string: {}", req.prepared_id, req.query_string);
+        auto prepared_message = co_await _qp.prepare(req.query_string, qs, cql3::internal_dialect());
+        prepared = prepared_message->get_prepared();
+
+        if (auto id = cql_transport::messages::result_message::prepared::cql::get_id(prepared_message); id != req.prepared_id) {
+            on_internal_error(flog, format("Prepared statement ID mismatch: expected {}, got {} after preparing from query string", req.prepared_id, id));
+        }
+        flog.trace("Prepared statement not found in cache, prepared from query string for statement {}", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Prepared statement not found in cache, prepared from query string");
+    } else {
+        flog.trace("Prepared statement found in cache for statement {}", req.prepared_id);
+        tracing::trace(qs.get_trace_state(), "Prepared statement found in cache");
+    }
+
+    opts.prepare(prepared->bound_names);
+
+    auto stmt = prepared->statement;
+
+    // Try to execute the statement
+    tracing::trace(qs.get_trace_state(), "Executing statement");
+
+    auto result = co_await execute_on_shard(shard, qs.get_client_state(), qs.get_trace_state(), req, cql3::computed_function_values{}, stmt->raw_cql_statement);
+    auto* bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
+    while (bounce_msg && db::timeout_clock::now() < timeout) {
+        if (auto target_shard = (*bounce_msg)->move_to_shard()) {
+            auto&& cached_fn_calls = (*bounce_msg)->take_cached_pk_function_calls();
+            tracing::trace(qs.get_trace_state(), "Bouncing {} to shard {}", req.prepared_id, *target_shard);
+            result = co_await execute_on_shard(*target_shard, qs.get_client_state(), qs.get_trace_state(), req, std::move(cached_fn_calls), stmt->raw_cql_statement);
+            bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
+        } else {
+            auto target = (*bounce_msg)->move_to_node();
+            co_return forward_cql_execute_response{
+                .status = forward_cql_status::redirect,
+                .target_host = target.host,
+                .target_shard = target.shard,
+            };
+        }
+    }
+    auto* final_result = std::get_if<cql_transport::cql_server::result_with_foreign_response_ptr>(&result);
+    auto response = std::move(*final_result).assume_value();
+    flog.trace("Execution of forwarded statement {} succeeded", req.prepared_id);
+    tracing::trace(qs.get_trace_state(), "Execution succeeded after forwarding");
+
+    co_return forward_cql_execute_response{
+        .status = forward_cql_status::finished,
+        .response_body = response->extract_body(),
+        .response_flags = response->flags(),
+    };
 }
 
 forward_cql_execute_request forward_cql_service::make_forward_cql_request(
@@ -294,11 +418,33 @@ forward_cql_service::forward_cql_without_checking_exceptions(
             bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
         } else {
             auto target = (*bounce_msg)->move_to_node();
-            const auto my_host_id = _qp.db().real_database().get_token_metadata().get_topology().my_host_id();
-            throw exceptions::invalid_request_exception(format(
-                "Strongly consistent writes can be executed only on the leader node, "
-                "leader id {}, current host id {}",
-                target.host, my_host_id));
+            if (!req) {
+                req = make_forward_cql_request(stmt, prepared_id, qs, options, stream, version, std::move(metadata_id));
+            }
+
+            auto response = co_await ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, target.host, target.timeout, target.shard, *req);
+
+            switch (response.status) {
+            case forward_cql_status::finished:
+                // Success, return the response with error info for logging/stats
+                tracing::trace(qs.get_trace_state(), "Forwarded CQL statement executed successfully on replica: {}", target.host);
+                co_return forward_cql_result{
+                    // Don't pass trace_state here - the response_body already contains tracing info if it was traced on the remote node.
+                    // Passing trace_state would cause the response constructor to prepend another tracing UUID, corrupting the response.
+                    .response = cql_transport::response::make_from_body(stream, !response.error_info ? cql_transport::cql_binary_opcode::RESULT : cql_transport::cql_binary_opcode::ERROR,
+                                                                response.response_flags, std::move(response.response_body)),
+                    .error_info = std::move(response.error_info),
+                };
+            case forward_cql_status::prepared_not_found:
+                // Retry with query string
+                req->query_string = stmt->raw_cql_statement;
+                tracing::trace(qs.get_trace_state(), "Prepared statement not found, retrying with query string");
+                continue;
+            case forward_cql_status::redirect:
+                tracing::trace(qs.get_trace_state(), "Can't execute the statement on the target, redirecting to {}", locator::tablet_replica{response.target_host, response.target_shard});
+                result = cql_transport::cql_server::process_fn_return_type(make_foreign(::make_shared<cql_transport::messages::result_message::bounce>(response.target_host, response.target_shard, target.timeout)));
+                bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
+            }
         }
     }
     auto* final_result = std::get_if<cql_transport::cql_server::result_with_foreign_response_ptr>(&result);

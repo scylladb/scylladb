@@ -58,6 +58,12 @@ struct forward_cql_execute_request {
     bool has_rate_limit_extension;
 };
 
+enum class forward_cql_status : uint8_t {
+    finished = 0,
+    prepared_not_found = 1,
+    redirect = 2,
+};
+
 // Error information returned from forwarded CQL execution.
 // Used by the coordinator to log error messages and update statistics.
 struct forwarded_error_info {
@@ -70,6 +76,20 @@ struct forwarded_error_info {
     std::optional<seastar::lowres_clock::time_point> timeout;
 };
 
+
+struct forward_cql_execute_response {
+    forward_cql_status status;
+    // Raw CQL wire-format response body (includes result, warnings, custom_payload)
+    bytes response_body;
+    uint8_t response_flags;
+    // If status == redirect, we already found the leader to redirect to while
+    // trying to execute the request, so we include it here.
+    locator::host_id target_host;
+    unsigned target_shard;
+    // Error information for logging and stats tracking on the forwarding node
+    std::optional<forwarded_error_info> error_info;
+};
+
 // Result of forward_cql execution, containing both the response and error information
 // for logging and statistics tracking on the coordinator node.
 struct forward_cql_result {
@@ -80,10 +100,11 @@ struct forward_cql_result {
 
 // Service for forwarding CQL statement execution to replicas
 class forward_cql_service : public seastar::peering_sharded_service<forward_cql_service> {
+    netw::messaging_service& _ms;
     cql3::query_processor& _qp;
 
 public:
-    forward_cql_service(cql3::query_processor& qp);
+    forward_cql_service(netw::messaging_service& ms, cql3::query_processor& qp);
     ~forward_cql_service();
 
     future<> stop();
@@ -105,6 +126,9 @@ private:
     void register_handlers();
 
     cql3::query_options make_query_options(const forward_cql_execute_request& req) const;
+
+    future<forward_cql_execute_response> handle_forward_execute(const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req);
+    future<forward_cql_execute_response> handle_forward_execute_without_checking_exceptions(query_state& qs, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request& req);
 
     forward_cql_execute_request make_forward_cql_request(
         ::shared_ptr<cql3::cql_statement> stmt,
