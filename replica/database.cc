@@ -76,6 +76,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
 #include "tombstone_gc.hh"
+#include "logstor/logstor.hh"
 #include "service/qos/service_level_controller.hh"
 
 #include "replica/data_dictionary_impl.hh"
@@ -906,6 +907,25 @@ database::init_commitlog() {
     });
 }
 
+future<>
+database::init_kv_storage() {
+    dblog.info("Initializing key-value storage");
+
+    auto cfg = logstor::logstor_config{
+        .segment_manager_cfg = {
+            .base_dir = std::filesystem::path(_cfg.logstor_directory()),
+            .file_size = _cfg.kv_storage_file_size_in_mb() * 1024ull * 1024ull,
+            .disk_size = _cfg.kv_storage_disk_size_in_mb() * 1024ull * 1024ull,
+            .compaction_sg = _dbcfg.compaction_scheduling_group,
+        },
+        .flush_sg = _dbcfg.commitlog_scheduling_group,
+    };
+    _logstor = std::make_unique<logstor::logstor>(std::move(cfg));
+    co_await _logstor->start();
+
+    dblog.info("key-value storage initialized");
+}
+
 future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
@@ -1126,6 +1146,17 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     if (is_new) {
         cf->mark_ready_for_writes(commitlog_for(schema));
         cf->set_truncation_time(db_clock::time_point::min());
+    }
+
+    if (schema->kv_storage_enabled()) {
+        if (!_cfg.enable_kv_storage()) {
+            throw std::runtime_error(fmt::format("The table {}.{} is using key-value storage but key-value storage is not enabled in the configuration", schema->ks_name(), schema->cf_name()));
+        }
+        if (!_logstor) {
+            on_internal_error(dblog, "Key-value storage is enabled but logstor is not initialized");
+        }
+        cf->set_kv_storage(_logstor.get());
+        dblog.info("Table {}.{} is using key-value storage", schema->ks_name(), schema->cf_name());
     }
 
     auto uuid = schema->id();
@@ -2163,7 +2194,7 @@ static std::exception_ptr wrap_commitlog_add_error(const schema_ptr& s, const fr
 
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
     db::rp_handle h;
-    if (cf.commitlog() != nullptr && cf.durable_writes()) {
+    if (cf.commitlog() != nullptr && cf.durable_writes() && !cf.uses_kv_storage()) {
         auto fm = freeze(m);
         std::exception_ptr ex;
         try {
@@ -2211,6 +2242,10 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
     for (size_t i = 0; i < muts.size(); ++i) {
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
+
+        if (cf.uses_kv_storage()) {
+            continue;
+        }
 
         if (!cl) {
             cl = cf.commitlog();
@@ -2309,7 +2344,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // frames.
     db::rp_handle h;
     auto cl = cf.commitlog();
-    if (cl != nullptr && cf.durable_writes()) {
+    if (cl != nullptr && cf.durable_writes() && !cf.uses_kv_storage()) {
         std::exception_ptr ex;
         try {
             commitlog_entry_writer cew(s, m, sync);
@@ -2635,6 +2670,9 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
         _compaction_manager.enable();
     }
     co_await init_commitlog();
+    if (_cfg.enable_kv_storage()) {
+        co_await init_kv_storage();
+    }
 }
 
 future<> database::shutdown() {
@@ -2674,6 +2712,11 @@ future<> database::stop() {
         dblog.info("Shutting down commitlog");
         co_await _commitlog->shutdown();
         dblog.info("Shutting down commitlog complete");
+    }
+    if (_logstor) {
+        dblog.info("Shutting down key-value storage");
+        co_await _logstor->stop();
+        dblog.info("Shutting down key-value storage complete");
     }
     if (_schema_commitlog) {
         dblog.info("Shutting down schema commitlog");

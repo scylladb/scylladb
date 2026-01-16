@@ -35,6 +35,7 @@
 #include <seastar/core/gate.hh>
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/commitlog_types.hh"
+#include "logstor/logstor.hh"
 #include "schema/schema_fwd.hh"
 #include "db/view/view.hh"
 #include "db/snapshot-ctl.hh"
@@ -544,6 +545,8 @@ private:
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
 
+    logstor::logstor* _logstor = nullptr;
+
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
 
     // Labels used to identify writes and reads for this table in the rate_limiter structure.
@@ -832,6 +835,14 @@ public:
     // to issue disk operations safely.
     void mark_ready_for_writes(db::commitlog* cl);
 
+    void set_kv_storage(logstor::logstor* ls) {
+        _logstor = ls;
+    }
+
+    bool uses_kv_storage() const {
+        return _logstor != nullptr;
+    }
+
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // Note: for data queries use query() instead.
@@ -856,6 +867,14 @@ public:
         auto& full_slice = schema->full_slice();
         return make_mutation_reader(std::move(schema), std::move(permit), range, full_slice);
     }
+
+    mutation_reader make_logstor_mutation_reader(schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) const;
 
     // The streaming mutation reader differs from the regular mutation reader in that:
     //  - Reflects all writes accepted by replica prior to creation of the
@@ -1654,6 +1673,8 @@ private:
     bool _enable_autocompaction_toggle = false;
     querier_cache _querier_cache;
 
+    std::unique_ptr<logstor::logstor> _logstor;
+
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
 
@@ -1695,6 +1716,7 @@ public:
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
     const data_dictionary::user_types_storage& user_types() const noexcept;
     future<> init_commitlog();
+    future<> init_kv_storage();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);

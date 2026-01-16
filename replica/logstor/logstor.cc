@@ -117,6 +117,111 @@ future<std::optional<canonical_mutation>> logstor::read(const schema& s, const d
     });
 }
 
+mutation_reader logstor::make_reader_for_key(schema_ptr schema,
+                                            reader_permit permit,
+                                            const dht::decorated_key& key,
+                                            const query::partition_slice& slice,
+                                            tracing::trace_state_ptr trace_state) {
+
+    // Create a simple reader that reads the mutation and delegates to the existing infrastructure
+    class single_key_reader : public mutation_reader::impl {
+    private:
+        logstor* _logstor;
+        dht::decorated_key _key;
+        query::partition_slice _slice;
+        tracing::trace_state_ptr _trace_state;
+        mutation_reader_opt _delegate_reader;
+
+    public:
+        single_key_reader(schema_ptr schema,
+                         reader_permit permit,
+                         logstor* logstor,
+                         dht::decorated_key key,
+                         query::partition_slice slice,
+                         tracing::trace_state_ptr trace_state)
+            : impl(std::move(schema), std::move(permit))
+            , _logstor(logstor)
+            , _key(std::move(key))
+            , _slice(std::move(slice))
+            , _trace_state(std::move(trace_state)) {
+        }
+
+        virtual future<> fill_buffer() override {
+            if (_end_of_stream) {
+                co_return;
+            }
+
+            // Create delegate reader if not already created
+            if (!_delegate_reader) {
+                // Mark as awaiting I/O during disk read
+                auto await_guard = reader_permit::awaits_guard(_permit);
+
+                auto cmut = co_await _logstor->read(*_schema, _key);
+
+                if (!cmut.has_value()) {
+                    // Key not found - end of stream
+                    _end_of_stream = true;
+                    co_return;
+                }
+
+                tracing::trace(_trace_state, "Retrieved mutation for key {} from key-value storage", _key);
+
+                _delegate_reader = make_mutation_reader_from_mutations(
+                    _schema,
+                    _permit,
+                    cmut->to_mutation(_schema),
+                    _slice,
+                    streamed_mutation::forwarding::no
+                );
+            }
+
+            // Delegate to the mutation reader
+            co_await _delegate_reader->fill_buffer();
+            _delegate_reader->move_buffer_content_to(*this);
+            _end_of_stream = _delegate_reader->is_end_of_stream();
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            _end_of_stream = true;
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            // Single key reader doesn't support range forwarding beyond the current key
+            if (!pr.contains(_key, dht::ring_position_comparator(*_schema))) {
+                _end_of_stream = true;
+            }
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(position_range pr) override {
+            // Delegate position forwarding to the underlying reader if it exists
+            if (_delegate_reader) {
+                clear_buffer();
+                return _delegate_reader->fast_forward_to(std::move(pr));
+            }
+            return make_ready_future<>();
+        }
+
+        virtual future<> close() noexcept override {
+            if (_delegate_reader) {
+                return _delegate_reader->close();
+            }
+            return make_ready_future<>();
+        }
+    };
+
+    return make_mutation_reader<single_key_reader>(
+        schema,
+        std::move(permit),
+        this,
+        key,
+        slice,
+        std::move(trace_state)
+    );
+}
+
 index_key logstor::calculate_key(const schema& s, const dht::decorated_key& key) {
     // hash of (ks name, table name, partition key)
     return index_key {

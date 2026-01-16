@@ -655,6 +655,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory where hints files are stored if hinted handoff is enabled.")
     , view_hints_directory(this, "view_hints_directory", value_status::Used, "",
         "The directory where materialized-view updates are stored while a view replica is unreachable.")
+    , logstor_directory(this, "logstor_directory", value_status::Used, "",
+        "The directory where data files for key-value storage are stored.")
     , saved_caches_directory(this, "saved_caches_directory", value_status::Unused, "",
         "The directory location where table key and row caches are stored.")
     /**
@@ -838,6 +840,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* offheap_objects  Native memory, eliminating NIO buffer heap overhead.")
     , memtable_cleanup_threshold(this, "memtable_cleanup_threshold", value_status::Invalid, .11,
         "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load.")
+    , kv_storage_disk_size_in_mb(this, "kv_storage_disk_size_in_mb", value_status::Used, 2048,
+        "Total size in megabytes allocated for key-value storage on disk.")
+    , kv_storage_file_size_in_mb(this, "kv_storage_file_size_in_mb", value_status::Used, 32,
+        "Total size in megabytes allocated for each key-value storage file on disk.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
@@ -1664,6 +1670,7 @@ void db::config::setup_directories() {
     maybe_in_workdir(data_file_directories, "data");
     maybe_in_workdir(hints_directory, "hints");
     maybe_in_workdir(view_hints_directory, "view_hints");
+    maybe_in_workdir(logstor_directory, "logstor");
     maybe_in_workdir(saved_caches_directory, "saved_caches");
 }
 

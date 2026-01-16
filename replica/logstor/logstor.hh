@@ -11,6 +11,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include <optional>
 #include <seastar/core/scheduling.hh>
+#include "readers/mutation_reader.hh"
 #include "types.hh"
 #include "index.hh"
 #include "segment_manager.hh"
@@ -55,6 +56,13 @@ public:
     future<std::optional<log_record>> read(index_key);
 
     future<std::optional<canonical_mutation>> read(const schema&, const dht::decorated_key&);
+
+    /// Create a mutation reader for a specific key
+    mutation_reader make_reader_for_key(schema_ptr schema,
+                                       reader_permit permit,
+                                       const dht::decorated_key& key,
+                                       const query::partition_slice& slice,
+                                       tracing::trace_state_ptr trace_state = nullptr);
 
 };
 

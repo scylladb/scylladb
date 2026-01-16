@@ -197,6 +197,7 @@ public:
     named_value<uint64_t> data_file_capacity;
     named_value<sstring> hints_directory;
     named_value<sstring> view_hints_directory;
+    named_value<sstring> logstor_directory;
     named_value<sstring> saved_caches_directory;
     named_value<sstring> commit_failure_policy;
     named_value<sstring> disk_failure_policy;
@@ -240,6 +241,8 @@ public:
     named_value<bool> defragment_memory_on_idle;
     named_value<sstring> memtable_allocation_type;
     named_value<double> memtable_cleanup_threshold;
+    named_value<uint32_t> kv_storage_disk_size_in_mb;
+    named_value<uint32_t> kv_storage_file_size_in_mb;
     named_value<uint32_t> file_cache_size_in_mb;
     named_value<uint32_t> memtable_flush_queue_size;
     named_value<uint32_t> memtable_flush_writers;
