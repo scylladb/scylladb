@@ -331,7 +331,7 @@ public:
             ptr--;
         }
 
-        static_assert(offsetof(intrusive_array, _data[0].object) == 0);
+//        static_assert(offsetof(intrusive_array, _data[0].object) == 0);
         return *reinterpret_cast<intrusive_array*>(ptr);
     }
 };

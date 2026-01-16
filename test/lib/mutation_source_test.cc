@@ -361,7 +361,9 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
     // fast_forward_to() over the slices gives the same mutations as using those
     // slices in partition_slice without forwarding.
 
-    random_mutation_generator gen(random_mutation_generator::generate_counters::no, local_shard_only::yes,
+    random_mutation_generator gen(
+            random_mutation_generator::generate_counters::no,
+            local_shard_only::yes,
             random_mutation_generator::generate_uncompactable::yes);
 
     for (int i = 0; i < 10; ++i) {
@@ -1930,7 +1932,10 @@ static mutation_sets generate_mutation_sets() {
 
     {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no, local_shard_only::yes,
-                random_mutation_generator::generate_uncompactable::yes);
+                random_mutation_generator::generate_uncompactable::yes,
+                std::nullopt, "ks", "cf",
+                random_mutation_generator::compress::yes,
+                random_mutation_generator::maybe_without_clustering::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
             result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
@@ -2019,6 +2024,7 @@ private:
     generate_counters _generate_counters;
     local_shard_only _local_shard_only;
     generate_uncompactable _uncompactable;
+    maybe_without_clustering _maybe_without_clustering;
     const size_t _external_blob_size = debuggable ? 4 : 128; // Should be enough to force use of external bytes storage
     const size_t n_blobs = debuggable ? 32 : 1024;
     const column_id column_count = debuggable ? 3 : 64;
@@ -2046,9 +2052,13 @@ private:
 
     schema_ptr do_make_schema(data_type type, const char* ks_name, const char* cf_name) {
         auto builder = schema_builder(ks_name, cf_name)
-                .with_column("pk", bytes_type, column_kind::partition_key)
-                .with_column("ck1", bytes_type, column_kind::clustering_key)
-                .with_column("ck2", bytes_type, column_kind::clustering_key);
+                .with_column("pk", bytes_type, column_kind::partition_key);
+
+        bool with_clustering = !_maybe_without_clustering || _bool_dist(_gen);
+        if (with_clustering) {
+            builder.with_column("ck1", bytes_type, column_kind::clustering_key)
+                   .with_column("ck2", bytes_type, column_kind::clustering_key);
+        }
 
         auto add_column = [&] (const sstring& column_name, column_kind kind) {
             auto col_type = type == counter_type || _bool_dist(_gen) ? type : list_type_impl::get_instance(type, true);
@@ -2056,7 +2066,9 @@ private:
         };
         for (column_id i = 0; i < column_count; ++i) {
             add_column(format("v{:d}", i), column_kind::regular_column);
-            add_column(format("s{:d}", i), column_kind::static_column);
+            if (with_clustering) {
+                add_column(format("s{:d}", i), column_kind::static_column);
+            }
         }
 
         if(!_compress) {
@@ -2090,8 +2102,19 @@ private:
         return tombstone(gen_timestamp(l), new_expiry());
     }
 public:
-    explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes, generate_uncompactable uc = generate_uncompactable::no,
-            std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf", compress c = compress::yes) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc), _compress(c) {
+    explicit impl(generate_counters counters,
+                  local_shard_only lso = local_shard_only::yes,
+                  generate_uncompactable uc = generate_uncompactable::no,
+                  std::optional<uint32_t> seed_opt = std::nullopt,
+                  const char* ks_name="ks",
+                  const char* cf_name="cf",
+                  compress c = compress::yes,
+                  maybe_without_clustering no_clustering = maybe_without_clustering::no)
+              : _generate_counters(counters)
+              , _local_shard_only(lso)
+              , _uncompactable(uc)
+              , _maybe_without_clustering(no_clustering)
+              , _compress(c) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
         auto seed = seed_opt.value_or(tests::random::get_int<uint32_t>());
         std::cout << "random_mutation_generator seed: " << seed << "\n";
@@ -2332,12 +2355,16 @@ public:
             return static_cast<size_t>(std::min(100.0, std::max(0.0, dist(gen))));
         };
 
-        size_t row_count = row_count_dist(_gen);
+        size_t row_count = _schema->clustering_key_size() ? row_count_dist(_gen) : 1;
 
         std::unordered_set<clustering_key, clustering_key::hashing, clustering_key::equality> keys(
                 0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema));
-        while (keys.size() < row_count) {
-            keys.emplace(make_random_key());
+        if (_schema->clustering_key_size()) {
+            while (keys.size() < row_count) {
+                keys.emplace(make_random_key());
+            }
+        } else {
+            keys.emplace(clustering_key::make_empty());
         }
 
         for (auto&& ckey : keys) {
@@ -2374,12 +2401,14 @@ public:
             }
         }
 
-        size_t range_tombstone_count = row_count_dist(_gen);
-        for (size_t i = 0; i < range_tombstone_count; ++i) {
-            m.partition().apply_row_tombstone(*_schema, make_random_range_tombstone());
+        if (_schema->clustering_key_size()) {
+            size_t range_tombstone_count = row_count_dist(_gen);
+            for (size_t i = 0; i < range_tombstone_count; ++i) {
+                m.partition().apply_row_tombstone(*_schema, make_random_range_tombstone());
+            }
         }
 
-        if (_bool_dist(_gen)) {
+        if (_schema->clustering_key_size() && _bool_dist(_gen)) {
             m.partition().ensure_last_dummy(*_schema);
             m.partition().clustered_rows().rbegin()->set_continuous(is_continuous(_bool_dist(_gen)));
         }
@@ -2405,8 +2434,8 @@ public:
 random_mutation_generator::~random_mutation_generator() {}
 
 random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc,
-        std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name, compress c)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name, c))
+        std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name, compress c, maybe_without_clustering no_clustering)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name, c, no_clustering))
 { }
 
 mutation random_mutation_generator::operator()() {
