@@ -182,7 +182,9 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
 
 @pytest.mark.asyncio
 async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
+    cmd = [*global_cmdline,
+           "--logger-log-level", "compaction=debug"]
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -207,8 +209,8 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
                     s2_mark = await s2_log.mark()
                     cql.execute_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': 32}}")
 
-                    s2_log.wait_for(f"compaction .* Split {cf}", from_mark=s2_mark)
-                    assert await s1_log.grep(f"compaction .* Split {cf}", from_mark=s1_mark) == []
+                    await s2_log.wait_for(f"compaction.*Split {cf}", from_mark=s2_mark)
+                    assert await s1_log.grep(f"compaction.*Split {cf}", from_mark=s1_mark) == []
 
 
 @pytest.mark.asyncio
@@ -342,7 +344,9 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    cmd = [*global_cmdline,
+           "--logger-log-level", "compaction=debug"]
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd, config=cfg) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
@@ -383,7 +387,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     coord_log = await manager.server_open_log(coord_serv.server_id)
 
                     await cql.run_async(f"ALTER TABLE {cf} WITH tablets = {{'min_tablet_count': 2}};")
-                    coord_log.wait_for(f"Generating resize decision for table {table_id} of type split")
+                    await coord_log.wait_for(f"Generating resize decision for table {table_id} of type split")
 
                     await manager.server_restart(servers[0].server_id, wait_others=2)
 
@@ -391,7 +395,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     await assert_resize_task_info(table_id, lambda response: len(response) == 1 and response[0].resize_task_info is not None)
 
                     time.sleep(1) # Let the cluster run for a sec to grep for potential errors
-                    assert await log.grep(f"compaction .* Split {cf}", from_mark=mark) == []
+                    assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 for _ in range(2):
