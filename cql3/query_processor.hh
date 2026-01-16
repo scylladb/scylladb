@@ -310,6 +310,7 @@ public:
      * page_size - maximum page size
      * f - a function to be run on each row of the query result,
      *     if the function returns stop_iteration::yes the iteration will stop
+     * qs - optional query state (default: std::nullopt)
      *
      * \note This function is optimized for convenience, not performance.
      */
@@ -318,7 +319,8 @@ public:
             db::consistency_level cl,
             const data_value_list& values,
             int32_t page_size,
-            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
+            std::optional<service::query_state> qs = std::nullopt);
 
     // The page size used by the convenience overload of query_internal below.
     // Callers which need to pass values have to use the overload above, and
@@ -490,7 +492,8 @@ private:
             const sstring& query_string,
             db::consistency_level,
             const data_value_list& values,
-            int32_t page_size);
+            int32_t page_size,
+            std::optional<service::query_state> qs = std::nullopt);
 
     /*!
      * \brief run a query using paging
