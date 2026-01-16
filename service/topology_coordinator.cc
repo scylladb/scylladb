@@ -1511,21 +1511,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             };
 
-            auto check_excluded_replicas = [&] {
+            auto check_excluded_replicas = [&] -> std::optional<sstring> {
                     auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
                     for (auto r : tsi.read_from) {
                         if (is_excluded(raft::server_id(r.host.uuid()))) {
                             rtlogger.debug("Aborting streaming of {} because read-from {} is marked as ignored", gid, r);
-                            return true;
+                            return fmt::format("{} is excluded", r);
                         }
                     }
                     for (auto r : tsi.written_to) {
                         if (is_excluded(raft::server_id(r.host.uuid()))) {
                             rtlogger.debug("Aborting streaming of {} because written-to {} is marked as ignored", gid, r);
-                            return true;
+                            return fmt::format("{} is excluded", r);
                         }
                     }
-                    return false;
+                    return std::nullopt;
             };
 
             switch (trinfo.stage) {
@@ -1617,17 +1617,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
-                        const bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
+                        std::optional<sstring> rollback;
+
+                        if (utils::get_local_injector().enter("stream_tablet_move_to_cleanup")) {
+                            rollback = "error injection";
+                        }
+
                         bool critical_disk_utilization = false;
                         if (auto stats = _tablet_allocator.get_load_stats()) {
                             const auto& util = stats->critical_disk_utilization;
                             auto it = util.find(trinfo.pending_replica->host);
                             critical_disk_utilization = (it != util.end() && it->second);
+                            if (critical_disk_utilization) {
+                                rollback = fmt::format("critical disk utilization on {}", trinfo.pending_replica->host);
+                            }
                         }
 
-                        if (cleanup || check_excluded_replicas() || critical_disk_utilization) {
+                        if (!rollback) {
+                            rollback = check_excluded_replicas();
+                        }
+
+                        if (rollback) {
                             if (do_barrier()) {
-                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                                rtlogger.debug("Will set tablet {} stage to {}: {}", gid, locator::tablet_transition_stage::cleanup_target, *rollback);
                                 updates.emplace_back(get_mutation_builder()
                                         .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
                                         .del_session(last_token)
