@@ -592,9 +592,7 @@ future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::functio
                 auto stmt = e.prepare(fmt::format("insert into {} (p1, c1, c2, r1) values (?, ?, ?, ?)", cf_name)).get();
                 auto make_key = [] (int64_t k) {
                     std::string s = fmt::format("key{}", k);
-                    bytes b(bytes::initialized_later(), sizeof(s.size()));
-                    std::ranges::copy(s, b.begin());
-                    return cql3::raw_value::make_value(b);
+                    return cql3::raw_value::make_value(utf8_type->decompose(s));
                 };
                 auto make_val = [] (int64_t x) {
                     return cql3::raw_value::make_value(int32_type->decompose(int32_t{x}));
