@@ -10,6 +10,7 @@
 #include "idl/consistency_level.idl.hh"
 #include "idl/paging_state.idl.hh"
 #include "idl/storage_service.idl.hh"
+#include "idl/uuid.idl.hh"
 
 
 namespace service {
@@ -66,6 +67,18 @@ struct forward_cql_execute_response {
     std::optional<service::forwarded_error_info> error_info;
 };
 
+// Request to query a raft group member for the leader
+struct query_tablet_leader_request {
+    utils::UUID table_id;
+    int64_t token;  // dht::token serialized as int64
+};
+
+struct query_tablet_leader_response {
+    locator::host_id leader_host_id;
+};
+
 verb [[with_client_info, with_timeout]] forward_cql_execute (service::forward_cql_execute_request req [[ref]], int64_t topology_version) -> service::forward_cql_execute_response;
+
+verb [[with_client_info, with_timeout]] query_tablet_leader (service::query_tablet_leader_request req) -> service::query_tablet_leader_response;
 
 }

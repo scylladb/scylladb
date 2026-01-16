@@ -87,6 +87,16 @@ struct forward_cql_execute_response {
     std::optional<forwarded_error_info> error_info;
 };
 
+// Request to query a raft group member for the current group leader
+struct query_tablet_leader_request {
+    utils::UUID table_id;
+    int64_t token;
+};
+
+struct query_tablet_leader_response {
+    locator::host_id leader_host_id;
+};
+
 // Result of forward_cql execution, containing both the response and error information
 // for logging and statistics tracking on the coordinator node.
 struct forward_cql_result {
@@ -131,6 +141,8 @@ private:
 
     future<forward_cql_execute_response> handle_forward_execute(const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_execute_request req, topology::version_t topology_version);
 
+    future<query_tablet_leader_response> handle_query_tablet_leader(const rpc::client_info& cinfo, rpc::opt_time_point timeout, query_tablet_leader_request req);
+
     future<locator::host_id> get_leader_if_known(table_id id, dht::token token, locator::effective_replication_map_ptr erm, bool wait_for_leader) const;
 
     // Select the replica for the given strongly consistent statement
@@ -141,7 +153,9 @@ private:
     // Returns std::nullopt if no replica can be determined.
     locator::host_id select_replica_for_read(table_id id, dht::token token, locator::effective_replication_map_ptr erm) const;
 
-    // Select a replica for write operations (modifications). Uses local Raft server. Fails if we're not a replica.
+    // Select a replica for write operations (modifications). Uses local Raft server if we're a replica,
+    // otherwise queries a replica via RPC to find the leader.
+    // Returns std::nullopt if leader cannot be determined (caller should retry with fresh topology).
     future<locator::host_id> select_replica_for_write(table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const;
 
     // Check if we're the leader for this statement and execute locally if so.

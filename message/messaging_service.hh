@@ -211,7 +211,8 @@ enum class messaging_verb : int32_t {
     WORK_ON_VIEW_BUILDING_TASKS = 82,
     NOTIFY_BANNED = 83,
     FORWARD_CQL_EXECUTE = 84,
-    LAST = 85,
+    QUERY_TABLET_LEADER = 85,
+    LAST = 86,
 };
 
 } // namespace netw

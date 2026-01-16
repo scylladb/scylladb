@@ -76,6 +76,8 @@ future<> forward_cql_service::stop() {
 void forward_cql_service::register_handlers() {
     ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
         std::bind_front(&forward_cql_service::handle_forward_execute, this));
+    ser::forward_cql_rpc_verbs::register_query_tablet_leader(&_ms,
+        std::bind_front(&forward_cql_service::handle_query_tablet_leader, this));
 }
 
 static service::client_state make_client_state(const std::optional<sstring>& keyspace, rpc::opt_time_point timeout) {
@@ -356,6 +358,22 @@ future<locator::host_id> forward_cql_service::get_leader_if_known(
     });
 }
 
+future<query_tablet_leader_response> forward_cql_service::handle_query_tablet_leader(
+    const rpc::client_info& cinfo, rpc::opt_time_point timeout, query_tablet_leader_request req)
+{
+    auto& db = _proxy.get_db().local();
+    auto tid = table_id(req.table_id);
+    auto& tab = db.find_column_family(tid);
+    auto erm = tab.get_effective_replication_map();
+
+    const auto token = dht::token::from_int64(req.token);
+
+    // If the leader is unknown, retries will be attempted by the RPC sender
+    co_return query_tablet_leader_response{
+        .leader_host_id = co_await get_leader_if_known(tid, token, erm, false),
+    };
+}
+
 // Select closest replica from a tablet replica set, preferring replicas in same rack
 static locator::host_id select_closest_replica(const locator::tablet_replica_set& replicas, const locator::topology& topo) {
     // Convert tablet_replica_set to host_id_vector_replica_set for sort_by_proximity
@@ -391,8 +409,31 @@ future<locator::host_id> forward_cql_service::select_replica_for_write(table_id 
         }
     }
 
-    flog.error("Not a replica for tablet {}, we can't find the leader", tablet_id);
-    throw std::runtime_error(format("Node is not a replica for tablet {}, cannot determine leader", tablet_id));
+    // We're not a replica, query one of the replicas for the leader
+    // Prefer querying a replica in the same rack
+    flog.trace("Not a replica for tablet {}, querying a replica for leader", tablet_id);
+
+    if (tablet_info.replicas.empty()) {
+        flog.trace("No replicas found for tablet {}, cannot determine leader", tablet_id);
+        co_return locator::host_id{};
+    }
+
+    const auto& topo = erm->get_token_metadata().get_topology();
+    auto target_replica = select_closest_replica(tablet_info.replicas, topo);
+
+    query_tablet_leader_request leader_req{
+        .table_id = id.uuid(),
+        .token = token.raw()
+    };
+    auto response = co_await ser::forward_cql_rpc_verbs::send_query_tablet_leader(
+        &_ms, target_replica, timeout, leader_req);
+    if (!response.leader_host_id) {
+        // Replica doesn't know the leader - return nullopt to trigger retry
+        flog.trace("Replica {} of the tablet {} doesn't know the leader, will retry", target_replica, tablet_id);
+        co_return locator::host_id{};
+    }
+    flog.trace("Found leader {} via replica {}", response.leader_host_id, target_replica);
+    co_return response.leader_host_id;
 }
 
 future<locator::host_id> forward_cql_service::select_replica(const cql3::cql_statement& stmt, table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const {
