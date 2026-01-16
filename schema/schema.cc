@@ -591,6 +591,7 @@ bool operator==(const schema::user_properties& lhs, const schema::user_propertie
         && lhs.compaction_strategy == rhs.compaction_strategy
         && lhs.compaction_strategy_options == rhs.compaction_strategy_options
         && lhs.compaction_enabled == rhs.compaction_enabled
+        && lhs.kv_storage_enabled == rhs.kv_storage_enabled
         && lhs.caching_options == rhs.caching_options
         && lhs.tablet_options == rhs.tablet_options
         && lhs.get_paxos_grace_seconds() == rhs.get_paxos_grace_seconds()
@@ -691,6 +692,7 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
     feed_hash(h, r._props.compaction_strategy);
     feed_hash(h, r._props.compaction_strategy_options);
     feed_hash(h, r._props.compaction_enabled);
+    feed_hash(h, r._props.kv_storage_enabled);
     feed_hash(h, r._props.caching_options.to_map());
     feed_hash(h, r._dropped_columns);
     feed_hash(h, r._collections);
@@ -873,6 +875,7 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",minIndexInterval={}", s._raw._props.min_index_interval);
     out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._props.max_index_interval);
     out = fmt::format_to(out, ",speculativeRetry={}", s._raw._props.speculative_retry.to_sstring());
+    out = fmt::format_to(out, ",keyValueStorageEnabled={}", s.kv_storage_enabled());
     out = fmt::format_to(out, ",tablets={{");
     if (s._raw._props.tablet_options) {
         n = 0;
@@ -1203,6 +1206,7 @@ fragmented_ostringstream& schema::schema_properties(const schema_describe_helper
     os << "\n    AND memtable_flush_period_in_ms = " << fmt::to_string(memtable_flush_period());
     os << "\n    AND min_index_interval = " << fmt::to_string(min_index_interval());
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
+    os << "\n    AND kv_storage = " << (kv_storage_enabled() ? "true" : "false");
 
     if (has_tablet_options()) {
         os << "\n    AND tablets = {";

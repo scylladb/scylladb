@@ -288,6 +288,7 @@ schema_ptr tables() {
          // compatible
          {"read_repair_chance", double_type},
          {"speculative_retry", utf8_type},
+         {"kv_storage", int32_type},
         },
         // static columns
         {},
@@ -527,6 +528,7 @@ schema_ptr views() {
          // compatible
          {"read_repair_chance", double_type},
          {"speculative_retry", utf8_type},
+         {"kv_storage", int32_type},
         },
         // static columns
         {},
@@ -1654,6 +1656,9 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
     m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
     m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
     m.set_clustered_cell(ckey, "crc_check_chance", table->crc_check_chance(), timestamp);
+    if (table->kv_storage_enabled()) {
+        m.set_clustered_cell(ckey, "kv_storage", 1, timestamp);
+    }
 
     store_map(m, ckey, "caching", timestamp, table->caching_options().to_map());
 
@@ -2182,6 +2187,10 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
 
     if (auto val = table_row.get<int32_t>("default_time_to_live")) {
         builder.set_default_time_to_live(gc_clock::duration(*val));
+    }
+
+    if (auto val = table_row.get<int>("kv_storage")) {
+        builder.set_kv_storage_enabled(*val != 0);
     }
 
     if (auto val = get_map<sstring, bytes>(table_row, "extensions")) {
