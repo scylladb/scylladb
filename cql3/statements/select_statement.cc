@@ -25,6 +25,7 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/messages/result_message.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
@@ -368,8 +369,9 @@ uint64_t select_statement::get_inner_loop_limit(uint64_t limit, bool is_aggregat
 }
 
 bool select_statement::needs_post_query_ordering() const {
-    // We need post-query ordering only for queries with IN on the partition key and an ORDER BY.
-    return _restrictions->key_is_in_relation() && !_parameters->orderings().empty();
+    // We need post-query ordering for queries with IN on the partition key and an ORDER BY.
+    // and ANN index queries with rescoring.
+    return static_cast<bool>(_ordering_comparator);
 }
 
 struct select_statement_executor {
@@ -1958,6 +1960,147 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
+struct ann_ordering_info {
+    secondary_index::index _index;
+    raw::select_statement::prepared_ann_ordering_type _prepared_ann_ordering;
+};
+
+static std::optional<ann_ordering_info> get_ann_ordering_info(
+        data_dictionary::database db,
+        schema_ptr schema,
+        lw_shared_ptr<const raw::select_statement::parameters> parameters,
+        prepare_context& ctx) {
+    
+    if (parameters->orderings().empty()) {
+        return std::nullopt;
+    }
+
+    auto [column_id, ordering] = parameters->orderings().front();
+    const auto& ann_vector = std::get_if<raw::select_statement::ann_vector>(&ordering);
+    if(!ann_vector) {
+        return std::nullopt;
+    }
+
+    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(*schema);
+    const column_definition* def = schema->get_column_definition(column->name());
+    if (!def) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Undefined column name {}", column->text()));
+    }
+
+    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
+        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
+    }
+
+    auto e =  expr::prepare_expression(*ann_vector, db, schema->ks_name(), nullptr, def->column_specification);
+    expr::fill_prepare_context(e, ctx);
+
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(std::move(def), std::move(e));
+
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+
+    auto indexes = sim.list_indexes();
+    auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
+        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
+                       ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ANN_CUSTOM_INDEX_OPTION) &&
+               (ind.target_column() == prepared_ann_ordering.first->name_as_text());
+    });
+
+    if (it == indexes.end()) {
+        throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
+    }
+
+    return ann_ordering_info{*it, std::move(prepared_ann_ordering)};
+}
+
+// Detects if the SELECT clause contains a similarity function that matches the index's
+// similarity function and operates on the same column/vector as the ANN ORDER BY clause.
+// Returns the column index in the result set if found, std::nullopt otherwise.
+// Only the first matching occurrence is used if multiple exist.
+static std::optional<uint32_t> detect_similarity_function_in_selectors(
+        const std::vector<selection::prepared_selector>& prepared_selectors,
+        const ann_ordering_info& ann_ordering_info) {
+    
+    auto expected_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
+    
+    for (uint32_t selector_idx = 0; selector_idx < prepared_selectors.size(); ++selector_idx) {
+        const auto& selector = prepared_selectors[selector_idx];
+        const expr::function_call* func_call = as_if<expr::function_call>(&selector.expr);
+        if (func_call == nullptr) {
+            continue;
+        }
+        // Check if it's a prepared function (not just a name)
+        const auto* func_ptr = std::get_if<shared_ptr<db::functions::function>>(&func_call->func);
+        if (!func_ptr) {
+            continue;
+        }        
+        // Check if function name matches expected similarity function
+        const auto& func = *func_ptr;
+        if (func->name().name != expected_function_name) {
+            continue;
+        }        
+        // Validate function has exactly 2 arguments
+        if (func_call->args.size() != 2) {
+            continue;
+        }        
+        // Check if first argument is a column_value matching ann_column
+        const expr::column_value* col_val = expr::as_if<expr::column_value>(&func_call->args[0]);
+        if (col_val && col_val->col == ann_ordering_info._prepared_ann_ordering.first) {
+            // Check if second argument expression matches ann_vector_expr
+            if (fmt::format("{}", func_call->args[1]) != fmt::format("{}", ann_ordering_info._prepared_ann_ordering.second)) {
+                continue;
+            }
+            return selector_idx;
+        }
+        // Reversed args case
+        col_val = expr::as_if<expr::column_value>(&func_call->args[1]);
+        if (col_val && col_val->col == ann_ordering_info._prepared_ann_ordering.first) {
+            // Check if second argument expression matches ann_vector_expr
+            if (fmt::format("{}", func_call->args[0]) != fmt::format("{}", ann_ordering_info._prepared_ann_ordering.second)) {
+                continue;
+            }
+            return selector_idx;
+        }    
+    }
+    return std::nullopt;
+}
+
+uint32_t add_similarity_function_to_selectors(
+        std::vector<selection::prepared_selector>& prepared_selectors,
+        const ann_ordering_info& ann_ordering_info,
+        data_dictionary::database db,
+        schema_ptr schema) {
+    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
+    // Create the function name
+    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
+
+    // Create the function arguments
+    std::vector<expr::expression> args;
+    args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
+    args.push_back(ann_ordering_info._prepared_ann_ordering.second);
+
+    // Get the function object
+    std::vector<shared_ptr<assignment_testable>> provided_args;
+    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
+    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
+
+    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
+
+    // Create the function call expression
+    expr::function_call similarity_func_call{
+        .func = func,
+        .args = std::move(args),
+    };
+
+    // Add the similarity function as a prepared selector (last)
+    prepared_selectors.push_back(selection::prepared_selector{
+        .expr = std::move(similarity_func_call),
+        .alias = nullptr,
+    });
+    return prepared_selectors.size() - 1;
+}
+
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
@@ -2032,11 +2175,16 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
+        uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
         auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+        }
+
+        if (pkeys->size() > limit && !secondary_index::vector_index::is_rescoring_enabled(_index.metadata().options())) {
+            pkeys->erase(pkeys->begin() + limit, pkeys->end());
         }
 
         co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
@@ -2055,11 +2203,11 @@ void vector_indexed_table_select_statement::update_stats() const {
 }
 
 lw_shared_ptr<query::read_command> vector_indexed_table_select_statement::prepare_command_for_base_query(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
+        query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const {
     auto slice = make_partition_slice(options);
     return ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(slice), qp.proxy().get_max_result_size(slice),
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())), query::partition_limit(query::max_partitions),
+            query::row_limit(get_inner_loop_limit(fetch_limit, _selection->is_aggregate())), query::partition_limit(query::max_partitions),
             _query_start_time_point, tracing::make_trace_info(state.get_trace_state()), query_id::create_null_id(), query::is_first_page::no,
             options.get_timestamp(state));
 }
@@ -2077,7 +2225,7 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
         lowres_clock::time_point timeout) const {
-    auto command = prepare_command_for_base_query(qp, state, options);
+    auto command = prepare_command_for_base_query(qp, state, options, pkeys.size());
 
     // For tables without clustering columns, we can optimize by querying
     // partition ranges instead of individual primary keys, since the
@@ -2116,6 +2264,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
             query::result_merger{command->get_row_limit(), query::max_partitions});
 
     co_return co_await wrap_result_to_error_message([this, &command, &options](auto result) {
+        command->set_row_limit(get_limit(options, _limit));
         return process_results(std::move(result), command, options, _query_start_time_point);
     })(std::move(result));
 }
@@ -2129,6 +2278,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
                     {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
                     std::nullopt)
             .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
+                command->set_row_limit(get_limit(options, _limit));
                 return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
             }));
 }
@@ -2245,8 +2395,43 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         }
     }
 
+    std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
+    bool is_ann_query = ann_ordering_info_opt.has_value();
+    if (is_ann_query && prepared_selectors.empty() && secondary_index::vector_index::is_rescoring_enabled(ann_ordering_info_opt->_index.metadata().options())) {
+        // SELECT * ORDER BY ANN ... with rescoring enabled - we will be adding the similarity column, so we need to prepare all columns here
+        prepared_selectors.reserve(schema->all_columns().size());
+        for (const column_definition& column_def : schema->all_columns_in_select_order()) {
+            prepared_selectors.push_back(selection::prepared_selector{
+                .expr = expr::column_value{&column_def},
+            });
+        }
+    }
+    
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
+    }
+
+    select_statement::ordering_comparator_type ordering_comparator;
+    bool hide_last_column = false;
+    if (is_ann_query) {
+        if (secondary_index::vector_index::is_rescoring_enabled(ann_ordering_info_opt->_index.metadata().options())) {
+            std::optional<uint32_t> similarity_column_index = detect_similarity_function_in_selectors(prepared_selectors, *ann_ordering_info_opt);
+            if (!similarity_column_index) {
+                similarity_column_index = add_similarity_function_to_selectors(
+                    prepared_selectors, *ann_ordering_info_opt, db, schema);
+                hide_last_column = true;
+            }
+                
+            auto type = float_type; // similarity_* returns float, but we should extract that from prepared_selectors[*similarity_column_index]
+            ordering_comparator = [index = *similarity_column_index, type] (const result_row_type& r1, const result_row_type& r2) {
+                auto& c1 = r1[index];
+                auto& c2 = r2[index];
+                if (bool(c1) != bool(c2)) {
+                    return bool(c2);
+                }
+                return bool(c1) && type->compare(*c1, *c2) > 0;
+            };
+        }
     }
 
     for (auto& ps : prepared_selectors) {
@@ -2266,14 +2451,17 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
+    if (is_ann_query && hide_last_column) {
+        // Hide the similarity selector from the client by reducing column_count
+        selection->get_result_metadata()->hide_last_column();
+    }
+
     // Cassandra 5.0.2 disallows PER PARTITION LIMIT with aggregate queries
     // but only if GROUP BY is not used.
     // See #9879 for more details.
     if (selection->is_aggregate() && _per_partition_limit && _group_by_columns.empty()) {
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
-
-    bool is_ann_query = !_parameters->orderings().empty() && std::holds_alternative<select_statement::ann_vector>(_parameters->orderings().front().second);
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
@@ -2282,19 +2470,14 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         validate_distinct_selection(*schema, *selection, *restrictions);
     }
 
-    select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
-
-    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
 
     auto orderings = _parameters->orderings();
 
-    if (!orderings.empty()) {
+    if (!orderings.empty() && !is_ann_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
-            } else {
+            if constexpr (!std::is_same_v<T, select_statement::ann_vector>) {
                 SCYLLA_ASSERT(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2307,7 +2490,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!prepared_ann_ordering.has_value()) {
+    if (!is_ann_query) {
         check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2390,9 +2573,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (prepared_ann_ordering) {
+    } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
@@ -2613,28 +2796,6 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
             }
         }
     }
-}
-
-select_statement::prepared_ann_ordering_type select_statement::prepare_ann_ordering(const schema& schema, prepare_context& ctx, data_dictionary::database db) const {
-    auto [column_id, ordering] = _parameters->orderings().front();
-    const auto& ann_vector = std::get_if<select_statement::ann_vector>(&ordering);
-    SCYLLA_ASSERT(ann_vector);
-
-    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
-    const column_definition* def = schema.get_column_definition(column->name());
-    if (!def) {
-        throw exceptions::invalid_request_exception(
-                fmt::format("Undefined column name {}", column->text()));
-    }
-
-    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
-        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
-    }
-
-    auto e =  expr::prepare_expression(*ann_vector, db, keyspace(), nullptr, def->column_specification);
-    expr::fill_prepare_context(e, ctx);
-
-    return std::make_pair(std::move(def), std::move(e));
 }
 
 select_statement::ordering_comparator_type select_statement::get_ordering_comparator(const prepared_orderings_type& orderings,
