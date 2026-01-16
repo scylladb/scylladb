@@ -9,6 +9,7 @@
  */
 
 
+#include "cql3/statements/cf_prop_defs.hh"
 #include "utils/assert.hh"
 #include <inttypes.h>
 #include <boost/regex.hpp>
@@ -252,6 +253,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception("Support for the deprecated feature of 'CREATE TABLE WITH COMPACT STORAGE' is disabled and will eventually be removed in a future version.  To enable, set the 'enable_create_table_with_compact_storage' config option to 'true'.");
         }
         stmt_warning("CREATE TABLE WITH COMPACT STORAGE is deprecated and will eventually be removed in a future version.");
+    }
+
+    if (_properties.properties()->has_property(cf_prop_defs::KW_KV_STORAGE) && !_column_aliases.empty()) {
+        throw exceptions::configuration_exception("The property 'kv_storage' cannot be used with tables that have clustering columns");
     }
 
     auto& key_aliases = _key_aliases[0];

@@ -64,6 +64,8 @@ public:
 
     static const sstring KW_TABLETS;
 
+    static const sstring KW_KV_STORAGE;
+
     // FIXME: In origin the following consts are in CFMetaData.
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
