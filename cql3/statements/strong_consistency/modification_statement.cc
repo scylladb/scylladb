@@ -13,6 +13,8 @@
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "exceptions/exceptions.hh"
+#include "utils/error_injection.hh"
 
 namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
@@ -76,6 +78,9 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         }
         co_return co_await redirect_statement(qp, options, redirect->target, timeout);
     }
+    utils::get_local_injector().inject("sc_modification_statement_timeout", [&] {
+        throw exceptions::mutation_write_timeout_exception{"", "", options.get_consistency(), 0, 0, db::write_type::SIMPLE};
+    });
 
     co_return seastar::make_shared<result_message::void_message>();
 }
