@@ -56,10 +56,12 @@ static logging::logger flog("forward_cql_service");
 forward_cql_service::forward_cql_service(
     netw::messaging_service& ms,
     cql3::query_processor& qp,
-    storage_proxy& proxy)
+    storage_proxy& proxy,
+    seastar::sharded<strong_consistency::groups_manager>& groups_manager)
     : _ms(ms)
     , _qp(qp)
     , _proxy(proxy)
+    , _groups_manager(groups_manager)
 {
     register_handlers();
 }
@@ -246,7 +248,8 @@ future<forward_cql_execute_response> forward_cql_service::handle_forward_execute
 
     auto stmt = prepared->statement;
 
-    // Try to execute the statement
+    // Try to execute the statement - if we're not the leader, statement execution will
+    // throw not_a_leader_exception and the coordinator will retry
     tracing::trace(qs.get_trace_state(), "Executing statement");
 
     try {
@@ -278,6 +281,15 @@ future<forward_cql_execute_response> forward_cql_service::handle_forward_execute
             .response_flags = response->flags(),
             .error_info = {},
         };
+    } catch (const cql3::statements::strong_consistency::not_a_leader_exception&) {
+        flog.debug("Can't handle the forwarded request: not the leader");
+        tracing::trace(qs.get_trace_state(), "Can't handle the forwarded request: not the leader");
+        co_return forward_cql_execute_response{
+            .status = forward_cql_status::not_a_leader,
+            .response_body = {},
+            .response_flags = 0,
+            .error_info = {},
+        };
     } catch (...) {
         flog.trace("Remote statement execution of {} failed with an error", req.prepared_id);
         tracing::trace(qs.get_trace_state(), "Remote statement execution failed with an error");
@@ -296,6 +308,103 @@ future<forward_cql_execute_response> forward_cql_service::handle_forward_execute
         };
     }
 
+}
+
+future<locator::host_id> forward_cql_service::get_leader_if_known(
+    table_id id, dht::token token, locator::effective_replication_map_ptr erm, bool should_wait_for_leader) const
+{
+    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(id);
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
+    const auto group_id = raft_info.group_id;
+
+    // Check if we have this raft group locally
+    auto my_host_id = erm->get_token_metadata().get_my_id();
+    auto shard = -1;
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+    for (const auto& replica : tablet_info.replicas) {
+        if (replica.host == my_host_id) {
+            shard = replica.shard;
+            break;
+        }
+    }
+    if (shard == -1) {
+        // This node doesn't have this raft group
+        co_return locator::host_id{};
+    }
+
+    co_return co_await _groups_manager.invoke_on(shard, [group_id, my_host_id, should_wait_for_leader] (strong_consistency::groups_manager& gm) -> future<locator::host_id> {
+        if (!gm.has_raft_group(group_id)) {
+            // This node doesn't have this raft group, the tablet replica set must be stale
+            co_return locator::host_id{};
+        }
+        auto raft_server = co_await gm.acquire_server(group_id);
+
+        // Use begin_mutate to get leader info
+        auto disposition = raft_server.begin_mutate();
+        if (auto nal = std::get_if<raft::not_a_leader>(&disposition)) {
+            co_return locator::host_id{nal->leader.uuid()};
+        } else if (std::get_if<strong_consistency::raft_server::timestamp_with_term>(&disposition)) {
+            co_return my_host_id;
+        } else if (auto wait_for_leader = std::get_if<strong_consistency::raft_server::need_wait_for_leader>(&disposition)) {
+            if (should_wait_for_leader) {
+                co_await std::move(wait_for_leader->future);
+            }
+            co_return locator::host_id{};
+        }
+        co_return locator::host_id{};
+    });
+}
+
+// Select closest replica from a tablet replica set, preferring replicas in same rack
+static locator::host_id select_closest_replica(const locator::tablet_replica_set& replicas, const locator::topology& topo) {
+    // Convert tablet_replica_set to host_id_vector_replica_set for sort_by_proximity
+    host_id_vector_replica_set hosts;
+    hosts.reserve(replicas.size());
+    for (const auto& replica : replicas) {
+        hosts.push_back(replica.host);
+    }
+    topo.sort_by_proximity(topo.my_host_id(), hosts);
+    return hosts.front();
+}
+
+locator::host_id forward_cql_service::select_replica_for_read(table_id id, dht::token token, locator::effective_replication_map_ptr erm) const {
+    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(id);
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+    const auto& topo = erm->get_token_metadata().get_topology();
+    return select_closest_replica(tablet_info.replicas, topo);
+}
+
+future<locator::host_id> forward_cql_service::select_replica_for_write(table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const {
+    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(id);
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+    const auto this_host = erm->get_token_metadata().get_my_id();
+
+
+    // Check if we're a replica of this tablet and get our shard if so
+    for (const auto& replica : tablet_info.replicas) {
+        if (replica.host == this_host) {
+            flog.trace("Node is a replica for tablet {}, checking local Raft server", tablet_id);
+            co_return co_await get_leader_if_known(id, token, erm, true);
+        }
+    }
+
+    flog.error("Not a replica for tablet {}, we can't find the leader", tablet_id);
+    throw std::runtime_error(format("Node is not a replica for tablet {}, cannot determine leader", tablet_id));
+}
+
+future<locator::host_id> forward_cql_service::select_replica(const cql3::cql_statement& stmt, table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const {
+    // For selects, we can forward to any replica (prefer closest).
+    // For modifications, we need to forward to the leader.
+    if (dynamic_cast<const cql3::statements::strong_consistency::modification_statement*>(&stmt)) {
+        co_return co_await select_replica_for_write(id, token, erm, timeout);
+    } else if (dynamic_cast<const cql3::statements::strong_consistency::select_statement*>(&stmt)) {
+        co_return select_replica_for_read(id, token, erm);
+    } else {
+        on_internal_error(flog, "Strongly consistent statement must be either modification or select statement");
+    }
 }
 
 forward_cql_execute_request forward_cql_service::make_forward_cql_request(
@@ -365,7 +474,7 @@ forward_cql_service::try_execute(
 {
     flog.trace("Trying to execute statement {} locally. Query string: {}", prepared_id, stmt->raw_cql_statement);
     tracing::trace(qs.get_trace_state(), "Trying to execute statement locally");
-    // Try to execute the statement
+    // Try to execute the statement - it will throw not_a_leader_exception if we need to forward the statement to another node
     try {
         auto msg = co_await stmt->execute(_qp, qs, options, std::nullopt);
         std::optional<cql_transport::cql_server::process_fn_return_type> result;
@@ -392,6 +501,10 @@ forward_cql_service::try_execute(
             .response = std::move(response),
             .error_info = {},
         };
+    } catch (const cql3::statements::strong_consistency::not_a_leader_exception&) {
+        flog.trace("Local statement execution of {} failed: not the leader", prepared_id);
+        tracing::trace(qs.get_trace_state(), "Local statement execution failed: not the leader");
+        co_return std::nullopt;
     } catch (...) {
         auto eptr = std::current_exception();
         auto response = cql_transport::make_error_result(stream, eptr, qs.get_trace_state(), version, qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::RATE_LIMIT_ERROR));
@@ -459,10 +572,7 @@ forward_cql_service::forward_cql(
         locator::effective_replication_map_ptr erm = tab.get_effective_replication_map();
         auto topology_version = erm->get_token_metadata_ptr()->get_version();
 
-        const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(tab.schema()->id());
-        const auto tablet_id = tablet_map.get_tablet_id(token);
-        const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
-        locator::host_id target = tablet_info.replicas.front().host;
+        locator::host_id target = co_await select_replica(*stmt, schema->id(), token, erm, timeout);
 
         if (!target) {
             // No replica found, retry with fresh topology

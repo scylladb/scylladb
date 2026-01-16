@@ -17,6 +17,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "db/consistency_level_type.hh"
+#include "service/strong_consistency/groups_manager.hh"
 #include "tracing/tracing.hh"
 #include "transport/response.hh"
 #include "transport/server.hh"
@@ -99,9 +100,11 @@ class forward_cql_service : public seastar::peering_sharded_service<forward_cql_
     netw::messaging_service& _ms;
     cql3::query_processor& _qp;
     storage_proxy& _proxy;
+    seastar::sharded<strong_consistency::groups_manager>& _groups_manager;
 
 public:
-    forward_cql_service(netw::messaging_service& ms, cql3::query_processor& qp, storage_proxy& proxy);
+    forward_cql_service(netw::messaging_service& ms, cql3::query_processor& qp, storage_proxy& proxy,
+                        seastar::sharded<strong_consistency::groups_manager>& groups_manager);
     ~forward_cql_service();
 
     future<> stop();
@@ -127,6 +130,19 @@ private:
     cql3::query_options make_query_options(const forward_cql_execute_request& req) const;
 
     future<forward_cql_execute_response> handle_forward_execute(const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_execute_request req, topology::version_t topology_version);
+
+    future<locator::host_id> get_leader_if_known(table_id id, dht::token token, locator::effective_replication_map_ptr erm, bool wait_for_leader) const;
+
+    // Select the replica for the given strongly consistent statement
+    future<locator::host_id> select_replica(const cql3::cql_statement& stmt, table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const;
+
+    // Select a replica for read operations (selects). Any replica can serve reads.
+    // Prefers local node if it's a replica, otherwise selects closest replica (same rack preferred).
+    // Returns std::nullopt if no replica can be determined.
+    locator::host_id select_replica_for_read(table_id id, dht::token token, locator::effective_replication_map_ptr erm) const;
+
+    // Select a replica for write operations (modifications). Uses local Raft server. Fails if we're not a replica.
+    future<locator::host_id> select_replica_for_write(table_id id, dht::token token, locator::effective_replication_map_ptr erm, db::timeout_clock::time_point timeout) const;
 
     // Check if we're the leader for this statement and execute locally if so.
     // Returns the response if executed locally, nullopt if we need to forward.
