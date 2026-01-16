@@ -227,6 +227,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 	    auto msg = cquery_nofail(e, format("SELECT timeout FROM {}", sl_is_v2 ? "system.service_levels_v2" : "system_distributed.service_levels"));
         assert_that(msg).is_rows().with_rows({
             {duration_type->from_string("5ms")},
+            {{}}, // `sl:default_batch`
             {{}}, // `sl:driver`
         });
 
@@ -315,6 +316,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
 	    auto msg = cquery_nofail(e, format("SELECT workload_type FROM {}", sl_is_v2 ? "system.service_levels_v2" : "system_distributed.service_levels"));
         assert_that(msg).is_rows().with_rows({
             {{}},
+            {"batch"}, // `sl:default_batch`
             {"batch"}, // `sl:driver`
         });
 

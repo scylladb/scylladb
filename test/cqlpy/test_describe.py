@@ -49,12 +49,13 @@ def filter_grant_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[Desc
 def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "grant_permission", desc_result_iter)
 
-def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True) -> Iterable[DescRowType]:
-    # Filter out driver service level, which is created by the system automatically
-    f = lambda result: result.type == "service_level"
-    if filter_driver:
-        f = (lambda result: result.type == "service_level" and result.name != "driver")
-    return filter(f, desc_result_iter)
+def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True, filter_default_batch: bool = True) -> Iterable[DescRowType]:
+    # If needed, filter out driver and default_batch service levels, which are created by the system automatically
+    def filter_func(result):
+        return result.type == "service_level" and \
+               (not filter_driver or result.name != "driver") and \
+               (not filter_default_batch or result.name != "default_batch")
+    return filter(filter_func, desc_result_iter)
 
 def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
@@ -1825,6 +1826,7 @@ class AuthSLContext:
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
         self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
+        self.default_batch_sl = self.cql.execute("LIST SERVICE LEVEL default_batch").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -1844,6 +1846,7 @@ class AuthSLContext:
                 self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
             # Restore driver service level if it was removed by the test
             self.cql.execute(f"CREATE SERVICE LEVEL {self.driver_sl.service_level} WITH WORKLOAD_TYPE = '{self.driver_sl.workload_type}' AND SHARES = {self.driver_sl.shares}")
+            self.cql.execute(f"CREATE SERVICE LEVEL {self.default_batch_sl.service_level} WITH WORKLOAD_TYPE = '{self.default_batch_sl.workload_type}' AND SHARES = {self.default_batch_sl.shares}")
 
 
 class ServiceLevel:
@@ -3167,6 +3170,46 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
         cql.execute("CREATE SERVICE LEVEL driver WITH shares=200 AND workload_type='batch'")
         for recreate_statement in desc_iter:
             cql.execute(recreate_statement.create_statement)
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that `sl:default_batch` is described similarly to `sl:driver` -
+    with `CREATE SERVICE LEVEL IF NOT EXISTS ...` and `ALTER SERVICE LEVEL ...` statements.
+    """
+    with AuthSLContext(cql):
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_default_batch=False)
+
+        [create, alter] = list(desc_iter)
+
+        assert create.type == "service_level"
+        assert create.name == "default_batch"
+        assert create.create_statement.startswith("CREATE SERVICE LEVEL IF NOT EXISTS default_batch")
+
+        assert alter.type == "service_level"
+        assert alter.name == "default_batch"
+        assert alter.create_statement.startswith("ALTER SERVICE LEVEL default_batch")
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_removed_default_batch_service_level(cql, scylla_only):
+    """
+    Verify that if `sl:default_batch` is removed, `DESC SCHEMA WITH INTERNALS`
+    emits `DROP SERVICE LEVEL IF EXISTS default_batch;`.
+    """
+    with AuthSLContext(cql):
+        cql.execute("DROP SERVICE LEVEL default_batch")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_default_batch=False)
+
+        [drop] = list(desc_iter)
+
+        assert drop.type == "service_level"
+        assert drop.name == "default_batch"
+        assert drop.create_statement == "DROP SERVICE LEVEL IF EXISTS default_batch;"
 
 def test_desc_restore(cql):
     """
