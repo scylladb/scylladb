@@ -300,43 +300,32 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
-# The IS NOT NULL operator was first added to Cassandra and Scylla for use
-# just in key columns in materialized views. It was not supported in general
-# filters in SELECT (see issue #8517), and in particular cannot be used in
-# a materialized-view definition as a filter on non-key columns. However,
-# if this usage is not allowed, we expect to see a clear error and not silently
-# ignoring the IS NOT NULL condition as happens in issue #10365.
-#
-# NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
-# replace this test by a test that checks that the filter works as expected,
-# both in ordinary base-table SELECT and in materialized-view definition.
-def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
+# The IS NOT NULL and IS NULL operators are now supported in WHERE clauses
+# for regular SELECT queries (issue #8517). This test verifies that they work
+# correctly in both ordinary base-table SELECT and in materialized-view definitions.
+# Note: IS NULL is not allowed in materialized view definitions (only IS NOT NULL),
+# but both should work in regular WHERE clauses.
+def test_is_null_and_is_not_null_in_filter(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
-        # Check that "IS NOT NULL" is not supported in a regular (base table)
-        # SELECT filter. Cassandra reports an InvalidRequest: "Unsupported
-        # restriction: xyz IS NOT NULL". In Scylla the message is different:
-        # "restriction '(xyz) IS NOT { null }' is only supported in materialized
-        # view creation".
-        #
-        with pytest.raises(InvalidRequest, match="xyz"):
-            cql.execute(f'SELECT * FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING')
-        # Check that "xyz IS NOT NULL" is also not supported in a
-        # materialized-view definition (where xyz is not a key column)
-        # Reproduces #8517
+        # Insert test data
+        cql.execute(f"INSERT INTO {table} (p, xyz) VALUES (123, 456)")
+        cql.execute(f"INSERT INTO {table} (p) VALUES (124)")  # xyz is null
+        cql.execute(f"INSERT INTO {table} (p, xyz) VALUES (125, 789)")
+        
+        # Test IS NOT NULL in regular SELECT - should return rows where xyz is not null
+        result = list(cql.execute(f'SELECT p FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING'))
+        assert sorted(result) == [(123,), (125,)]
+        
+        # Test IS NULL in regular SELECT - should return rows where xyz is null
+        result = list(cql.execute(f'SELECT p FROM {table} WHERE xyz IS NULL ALLOW FILTERING'))
+        assert sorted(result) == [(124,)]
+        
+        # Test that IS NOT NULL on non-key columns in materialized views is still
+        # not supported (only primary key columns can have IS NOT NULL in view definitions)
         mv = unique_name()
         try:
-            with pytest.raises(InvalidRequest, match="xyz"):
+            with pytest.raises(InvalidRequest):
                 cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND xyz IS NOT NULL PRIMARY KEY (p)")
-                # There is no need to continue the test - if the CREATE
-                # MATERIALIZED VIEW above succeeded, it is already not what we
-                # expect without #8517. However, let's demonstrate that it's
-                # even worse - not only does the "xyz IS NOT NULL" not generate
-                # an error, it is outright ignored and not used in the filter.
-                # If it weren't ignored, it should filter out partition 124
-                # in the following example:
-                cql.execute(f"INSERT INTO {table} (p,xyz) VALUES (123, 456)")
-                cql.execute(f"INSERT INTO {table} (p) VALUES (124)")
-                assert sorted(list(cql.execute(f"SELECT p FROM {test_keyspace}.{mv}")))==[(123,)]
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
