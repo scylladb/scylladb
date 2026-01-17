@@ -415,17 +415,6 @@ void workload_main(const test_config& c) {
     std::cout << aggregated_perf_results(results) << std::endl;
 }
 
-std::tuple<int,char**> cut_arg(int ac, char** av, std::string name, int num_args = 2) {
-    for (int i = 1 ; i < ac - 1; i++) {
-        if (std::string(av[i]) == name) {
-            std::shift_left(av + i, av + ac, num_args);
-            ac -= num_args;
-            break;
-        }
-    }
-    return std::make_tuple(ac, av);
-}
-
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config> cfg)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
