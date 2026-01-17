@@ -178,8 +178,8 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
 
     async def create_fail(rfs: Union[List[int], int], failed_dc: int, rf: int, rack_count: int):
         ks = unique_name()
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
+        err = rf"The keyspace '{ks}' is required to be RF-rack-valid. " \
+              f"That condition is violated for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
         with pytest.raises(InvalidRequest, match=err):
             await create_aux(ks, rfs)
 
@@ -189,8 +189,8 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
 
     async def alter_fail(ks: str, rfs: List[int], failed_dc: int, rack_count: int) -> None:
         rf = rfs[failed_dc - 1]
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
+        err = rf"The keyspace '{ks}' is required to be RF-rack-valid. " \
+              f"That condition is violated for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
 
         with pytest.raises(InvalidRequest, match=err):
             await alter_ok(ks, rfs)
@@ -341,8 +341,8 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
 
     async def create_fail(rfs: Union[List[int], int], failed_dc: int, rf: int, rack_count: int):
         ks = unique_name()
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
+        err = f"The keyspace '{ks}' is required to be RF-rack-valid. " \
+              f"That condition is violated for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
         with pytest.raises(InvalidRequest, match=err):
             await create_aux(ks, rfs)
 
@@ -441,8 +441,8 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
 
     async def try_fail(rfs: List[int], dc: str, rf: int, rack_count: int):
         ks = await create_keyspace(rfs, True)
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC '{dc}': RF={rf} vs. rack count={rack_count}."
+        err = f"The keyspace '{ks}' is required to be RF-rack-valid. " \
+              f"That condition is violated for DC '{dc}': RF={rf} vs. rack count={rack_count}."
         _ = await manager.server_start(s1.server_id, expected_error=err)
         await cql.run_async(f"DROP KEYSPACE {ks}")
 

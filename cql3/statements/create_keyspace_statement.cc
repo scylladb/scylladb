@@ -21,6 +21,7 @@
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
+#include "replica/database.hh"
 #include "gms/feature_service.hh"
 
 #include <boost/regex.hpp>
@@ -120,21 +121,21 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
             }
         }
 
-        // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.
-        // Verify that it's RF-rack-valid.
+        // If RF-rack-validity must be enforced for the keyspace according to `enforce_rf_rack_validity_for_keyspace`,
+        // it's forbidden to create an RF-rack-invalid keyspace. Verify that it's RF-rack-valid.
         // For more context, see: scylladb/scylladb#23071.
         try {
             // We hold a group0_guard, so it's correct to check this here.
             // The topology or schema cannot change while we're performing this query.
             locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
         } catch (const std::exception& e) {
-            if (cfg.rf_rack_valid_keyspaces()) {
+            if (replica::database::enforce_rf_rack_validity_for_keyspace(cfg, *ksm)) {
                 // There's no guarantee what the type of the exception will be, so we need to
                 // wrap it manually here in a type that can be passed to the user.
                 throw exceptions::invalid_request_exception(e.what());
             } else {
-                // Even when the configuration option `rf_rack_valid_keyspaces` is set to false,
-                // we'd like to inform the user that the keyspace they're creating does not
+                // Even when RF-rack-validity is not enforced for the keyspace, we'd
+                // like to inform the user that the keyspace they're creating does not
                 // satisfy the restriction--but just as a warning.
                 // For more context, see issue: scylladb/scylladb#23330.
                 warnings.push_back(seastar::format(

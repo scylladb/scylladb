@@ -105,7 +105,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(data_dictionary::database db) const {
+std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(data_dictionary::database db, locator::token_metadata_ptr tmptr) const {
     // We need to make sure that:
     //  - materialized view name is valid
     //  - primary key includes all columns in base table's primary key
@@ -153,10 +153,19 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
 
     try {
-        db::view::validate_view_keyspace(db, keyspace());
+        db::view::validate_view_keyspace(db, keyspace(), tmptr);
     } catch (const std::exception& e) {
         // The type of the thrown exception is not specified, so we need to wrap it here.
         throw exceptions::invalid_request_exception(e.what());
+    }
+
+    if (db.find_keyspace(keyspace()).uses_tablets()) {
+        warnings.emplace_back(
+            "Creating a materialized view in a keyspaces that uses tablets requires "
+            "the keyspace to remain RF-rack-valid while the materialized view exists. "
+            "Some operations will be restricted to enforce this: altering the keyspace's replication "
+            "factor, adding a node in a new rack, and removing or decommissioning a node that would "
+            "eliminate a rack.");
     }
 
     if (schema->is_counter()) {
@@ -414,7 +423,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_view_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     utils::chunked_vector<mutation> m;
-    auto [definition, warnings] = prepare_view(qp.db());
+    auto [definition, warnings] = prepare_view(qp.db(), qp.proxy().get_token_metadata_ptr());
     try {
         m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);
     } catch (const exceptions::already_exists_exception& e) {

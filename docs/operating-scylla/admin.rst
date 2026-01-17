@@ -267,13 +267,15 @@ Use ``scylla --help`` to get the list of experimental features.
 Views with Tablets
 ------------------
 
-Materialized Views (MV) and Secondary Indexes (SI) are enabled in keyspaces that use tablets
-only when :term:`RF-rack-valid keyspaces <RF-rack-valid keyspace>` are enforced. That can be
-done in the ``scylla.yaml`` configuration file by specifying
+Materialized Views (MV) and Secondary Indexes (SI) are supported in keyspaces that use tablets
+only when the keyspaces are :term:`RF-rack-valid <RF-rack-valid keyspace>`.
 
-.. code-block:: yaml
+When a keyspace contains a Materialized View or Secondary Index, some operations are restricted to maintain
+the RF-rack condition. The following actions are not allowed while the view or index is present:
 
-   rf_rack_valid_keyspaces: true
+* Altering the keyspace's replication factor to a value that would violate the RF-rack-valid property
+* Adding a node in a new rack in an existing datacenter
+* Removing the last node in a rack
 
 
 Monitoring

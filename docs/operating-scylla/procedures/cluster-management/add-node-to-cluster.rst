@@ -49,6 +49,13 @@ Procedure
 
     * **seeds** - Specifies the IP address of an existing node in the cluster. The new node will use this IP to connect to the cluster and learn the cluster topology and state.
 
+.. warning::
+
+    Adding a node in a new rack in an existing datacenter may violate the :term:`RF-rack-valid <RF-rack-valid keyspace>` constraints of some keyspace.
+
+    If a keyspace uses tablets and contains a Materialized View or Secondary Index, or if the `rf_rack_valid_keyspaces` option is set,
+    the invariant is enforced for the keyspace, and the new node will be rejected if adding it would violate the invariant.
+
 #. Start the nodes with the following command:
 
     .. include:: /rst_include/scylla-commands-start-index.rst
