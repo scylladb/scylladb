@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement # type: ignore
 from cassandra.pool import Host # type: ignore
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.log_browsing import ScyllaLogFile
 from test.cluster.util import reconnect_driver, wait_until_upgrade_finishes, \
         enter_recovery_state, delete_raft_data_and_upgrade_state, new_test_keyspace
@@ -53,12 +53,16 @@ async def get_scylla_tables_version(cql: Session, h: Host, keyspace_name: str, t
 
 
 async def verify_local_schema_versions_synced(cql: Session, hs: list[Host]) -> None:
-    versions = {h: await get_local_schema_version(cql, h) for h in hs}
-    logger.info(f"system.local schema_versions: {versions}")
-    h1, v1 = next(iter(versions.items()))
-    for h, v in versions.items():
-        if v != v1:
-            pytest.fail(f"{h1}'s system.local schema_version {v1} is different than {h}'s version {v}")
+    async def check():
+        versions = {h: await get_local_schema_version(cql, h) for h in hs}
+        logger.info(f"system.local schema_versions: {versions}")
+        h1, v1 = next(iter(versions.items()))
+        for h, v in versions.items():
+            if v != v1:
+                logger.info(f"{h1}'s system.local schema_version {v1} is different than {h}'s version {v}; retrying")
+                return None
+        return True
+    await wait_for(check, deadline=time.time() + 5.0, period=1.0)
 
 
 async def verify_group0_schema_versions_synced(cql: Session, hs: list[Host]) -> None:
