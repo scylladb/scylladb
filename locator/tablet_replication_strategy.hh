@@ -26,6 +26,7 @@ class tablet_aware_replication_strategy : public per_table_replication_strategy 
 private:
     size_t _initial_tablets = 0;
     db::tablet_options _tablet_options;
+    data_dictionary::consistency_config_option _consistency;
 protected:
     void validate_tablet_options(const abstract_replication_strategy&, const gms::feature_service&, const replication_strategy_config_options&) const;
     void process_tablet_options(abstract_replication_strategy&, replication_strategy_config_options&, replication_strategy_params);
@@ -36,6 +37,8 @@ protected:
 
 public:
     size_t get_initial_tablets() const { return _initial_tablets; }
+
+    data_dictionary::consistency_config_option get_consistency() const { return _consistency; }
 
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
