@@ -28,6 +28,7 @@ class Metric:
     time_taken: float = None
     usage_sec: float = None
     user_sec: float = None
+    worker_id: str = None
 
 
 @define
@@ -42,7 +43,8 @@ class SystemResourceMetric:
 class Test:
     host_id: str
     architecture: str
-    directory: str
+    path: str
+    file: str
     mode: str
     run_id: int
     test_name: str

@@ -20,7 +20,7 @@ from test.cluster.util import get_topology_coordinator, find_server_by_host_id, 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count
 from test.pylib.util import Host
-from test.storage.conftest import space_limited_servers
+from test.cluster.storage.conftest import space_limited_servers
 
 logger = logging.getLogger(__name__)
 

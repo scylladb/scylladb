@@ -10,6 +10,7 @@ import pytest
 import asyncio
 import logging
 
+from test import path_to
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.pylib.manager_client import ManagerClient, ScyllaVersionDescription
 
@@ -93,7 +94,7 @@ async def test_crc_check_chance_out_of_bounds(manager: ManagerClient, cfg_source
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
 @pytest.mark.asyncio
-async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
+async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, build_mode: str):
     """
     Check that the default SSTable compression algorithm is:
     * LZ4Compressor if SSTABLE_COMPRESSION_DICTS is disabled.
@@ -120,7 +121,7 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
         assert actual_compression == expected_compression, \
             f"Expected {expected_compression} for {table_name} ({context}), got: {actual_compression}"
 
-    new_exe = os.getenv("SCYLLA")
+    new_exe = path_to(build_mode, "scylla")
     assert new_exe
 
     logger.info("Starting servers with version 2025.1")

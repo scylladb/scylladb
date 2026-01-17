@@ -293,5 +293,5 @@ def compact_storage(cql):
 # Otherwise, use the provided minio server to run all S3 related tests
 @pytest.fixture
 def skip_s3_tests(request):
-    if request.config.getoption("--no-minio"):
+    if request.config.getoption("--no-minio", default=None):
         pytest.skip("Skipping S3 related tests being run from test/cqlpy/run")
