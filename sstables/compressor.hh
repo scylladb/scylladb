@@ -113,12 +113,26 @@ public:
     bool compression_enabled() const { 
         return _algorithm != algorithm::none;
     }
+    bool uses_dictionary_compressor() const {
+        return _algorithm == algorithm::lz4_with_dicts
+            || _algorithm == algorithm::zstd_with_dicts;
+    }
     static compression_parameters no_compression() {
         return compression_parameters(algorithm::none);
     }
     bool operator==(const compression_parameters&) const = default;
     static std::string_view algorithm_to_name(algorithm);
     static std::string algorithm_to_qualified_name(algorithm);
+    static algorithm non_dict_equivalent(algorithm algo) {
+        switch (algo) {
+        case algorithm::lz4_with_dicts:
+            return algorithm::lz4;
+        case algorithm::zstd_with_dicts:
+            return algorithm::zstd;
+        default:
+            return algo;
+        }
+    }
 private:
     static void validate_options(const std::map<sstring, sstring>&);
     static algorithm name_to_algorithm(std::string_view name);

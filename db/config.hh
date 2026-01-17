@@ -419,7 +419,13 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
+
+    // NOTE: Do not use this option directly.
+    // Use get_sstable_compression_user_table_options() instead.
     named_value<compression_parameters> sstable_compression_user_table_options;
+
+    compression_parameters get_sstable_compression_user_table_options(bool dicts_feature_enabled) const;
+
     named_value<bool> sstable_compression_dictionaries_allow_in_ddl;
     named_value<bool> sstable_compression_dictionaries_enable_writing;
     named_value<float> sstable_compression_dictionaries_memory_budget_fraction;

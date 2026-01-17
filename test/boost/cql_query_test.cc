@@ -2015,7 +2015,8 @@ SEASTAR_TEST_CASE(test_table_compression) {
 
         e.execute_cql("create table tb6 (foo text PRIMARY KEY, bar text);").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tb6"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb6")->get_compressor_params().get_algorithm() == e.local_db().get_config().sstable_compression_user_table_options().get_algorithm());
+        const auto dicts_feature_enabled = bool(e.local_db().features().sstable_compression_dicts);
+        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb6")->get_compressor_params().get_algorithm() == e.local_db().get_config().get_sstable_compression_user_table_options(dicts_feature_enabled).get_algorithm());
     });
 }
 
