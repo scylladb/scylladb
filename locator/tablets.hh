@@ -238,23 +238,31 @@ struct tablet_task_info {
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
-    db_clock::time_point repair_time;
-    locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
-    int64_t sstables_repaired_at;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
+    tablet_info(tablet_replica_set, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
+};
+
+struct tablet_repair_info {
+    db_clock::time_point repair_time;
+    locator::tablet_task_info repair_task_info;
+    int64_t sstables_repaired_at;
+
+    tablet_repair_info() = default;
+    tablet_repair_info(db_clock::time_point, locator::tablet_task_info, int64_t);
+
+    bool operator==(const tablet_repair_info&) const = default;
 };
 
 // Merges tablet_info b into a, but with following constraints:
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
+std::optional<std::pair<tablet_info, tablet_repair_info>> merge_tablet_info(tablet_info a, tablet_repair_info ar, tablet_info b, tablet_repair_info br);
 
 /// Represents states of the tablet migration state machine.
 ///
@@ -526,12 +534,29 @@ using load_stats_ptr = lw_shared_ptr<const load_stats>;
 struct tablet_desc {
     tablet_id tid;
     const tablet_info* info; // cannot be null.
+    const tablet_repair_info* repair_info; // cannot be null.
     const tablet_transition_info* transition; // null if there's no transition.
 };
 
 class no_such_tablet_map : public std::runtime_error {
 public:
     no_such_tablet_map(const table_id& id);
+};
+
+struct table_resize_info {
+    resize_decision decision;
+    tablet_task_info task_info;
+
+    bool operator==(const table_resize_info&) const = default;
+};
+
+struct repair_info {
+    std::unordered_map<tablet_id, tablet_repair_info> tablets_info;
+    std::optional<repair_scheduler_config> scheduler_config;
+
+    bool operator==(const repair_info&) const = default;
+
+    void set_tablet(tablet_id id, tablet_repair_info tri);
 };
 
 /// Stores information about tablets of a single table.
@@ -554,26 +579,34 @@ public:
     using tablet_container = utils::chunked_vector<tablet_info>;
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
+    using repair_map = std::unordered_map<tablet_id, tablet_repair_info>;
     // The implementation assumes that _tablets.size() is a power of 2:
     //
     //   _tablets.size() == 1 << _log2_tablets
     //
-    tablet_container _tablets;
+    lw_shared_ptr<tablet_container> _tablets;
     size_t _log2_tablets; // log_2(_tablets.size())
-    transitions_map _transitions;
-    resize_decision _resize_decision;
-    tablet_task_info _resize_task_info;
-    std::optional<repair_scheduler_config> _repair_scheduler_config;
+    lw_shared_ptr<transitions_map> _transitions;
+    lw_shared_ptr<table_resize_info> _resize_info;
+    lw_shared_ptr<repair_info> _repair_info;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info, std::optional<repair_scheduler_config> repair_scheduler_config)
-        : _tablets(std::move(tablets))
+            table_resize_info resize_info, repair_info rinfo)
+        : _tablets(make_lw_shared<tablet_container>(std::move(tablets)))
         , _log2_tablets(log2_tablets)
-        , _transitions(std::move(transitions))
-        , _resize_decision(resize_decision)
-        , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
+        , _transitions(make_lw_shared<transitions_map>(std::move(transitions)))
+        , _resize_info(make_lw_shared<table_resize_info>(resize_info))
+        , _repair_info(make_lw_shared<repair_info>(std::move(rinfo)))
+    {}
+
+    // Internal constructor, used to construct a tablet map of a colocated table from a base tablet map.
+    tablet_map(const tablet_map& base, lw_shared_ptr<repair_info> rinfo)
+        : _tablets(base._tablets)
+        , _log2_tablets(base._log2_tablets)
+        , _transitions(base._transitions)
+        , _resize_info(base._resize_info)
+        , _repair_info(std::move(rinfo))
     {}
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
@@ -597,6 +630,9 @@ public:
     tablet_map clone() const;
     future<tablet_map> clone_gently() const;
 
+    static tablet_map construct_colocated_tablet_map(const tablet_map& base_map, const tablet_map& prev_colocated_map);
+    static tablet_map construct_colocated_tablet_map(const tablet_map& base_map, repair_info rinfo);
+
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
 
@@ -606,6 +642,10 @@ public:
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
     const tablet_info& get_tablet_info(tablet_id) const;
+
+    /// Returns tablet_repair_info associated with a given tablet.
+    /// The given id must belong to this instance.
+    const tablet_repair_info& get_tablet_repair_info(tablet_id id) const;
 
     /// Returns a pointer to tablet_transition_info associated with a given tablet.
     /// If there is no transition for a given tablet, returns nullptr.
@@ -666,22 +706,22 @@ public:
     bool has_replica(tablet_id, tablet_replica) const;
 
     const tablet_container& tablets() const {
-        return _tablets;
+        return *_tablets;
     }
 
     /// Calls a given function for each tablet in the map in token ownership order.
-    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
+    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&, const tablet_repair_info&)> func) const;
 
     /// Calls a given function for each sibling tablet in the map in token ownership order.
     /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
     future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {
-        return _transitions;
+        return *_transitions;
     }
 
     bool has_transitions() const {
-        return !_transitions.empty();
+        return !_transitions->empty();
     }
 
     /// Returns an iterable range over tablet_id:s which includes all tablets in token ring order.
@@ -692,7 +732,7 @@ public:
     }
 
     size_t tablet_count() const {
-        return _tablets.size();
+        return _tablets->size();
     }
 
     /// Returns tablet_info associated with the tablet which owns a given token.
@@ -700,9 +740,13 @@ public:
         return get_tablet_info(get_tablet_id(t));
     }
 
+    const tablet_repair_info& get_tablet_repair_info(token t) const {
+        return get_tablet_repair_info(get_tablet_id(t));
+    }
+
     size_t external_memory_usage() const;
 
-    bool operator==(const tablet_map&) const = default;
+    bool operator==(const tablet_map&) const;
 
     bool needs_split() const;
     bool needs_merge() const;
@@ -715,6 +759,8 @@ public:
     const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
+    void set_tablet_repair_info(tablet_id, tablet_repair_info);
+    void set_tablet(tablet_id, tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
