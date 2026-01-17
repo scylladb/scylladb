@@ -88,10 +88,16 @@ static const class_registrator<
 
 ldap_role_manager::ldap_role_manager(
         std::string_view query_template, std::string_view target_attr, std::string_view bind_name, std::string_view bind_password,
+        uint32_t permissions_update_interval_in_ms,
+        utils::observer<uint32_t>  permissions_update_interval_in_ms_observer,
         cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
         : _std_mgr(qp, rg0c, mm, cache), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
         , _bind_password(bind_password)
-        , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this))) {
+        , _permissions_update_interval_in_ms(permissions_update_interval_in_ms)
+        , _permissions_update_interval_in_ms_observer(std::move(permissions_update_interval_in_ms_observer))
+        , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this)))
+        , _cache(cache)
+        , _cache_pruner(make_ready_future<>()) {
 }
 
 ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
@@ -100,6 +106,8 @@ ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_
             qp.db().get_config().ldap_attr_role(),
             qp.db().get_config().ldap_bind_dn(),
             qp.db().get_config().ldap_bind_passwd(),
+            qp.db().get_config().permissions_update_interval_in_ms(),
+            qp.db().get_config().permissions_update_interval_in_ms.observe([this] (const uint32_t& v) { _permissions_update_interval_in_ms = v; }),
             qp,
             rg0c,
             mm,
@@ -119,6 +127,18 @@ future<> ldap_role_manager::start() {
         return make_exception_future(
                 std::runtime_error(fmt::format("error getting LDAP server address from template {}", _query_template)));
     }
+    _cache_pruner = futurize_invoke([this] () -> future<> {
+        while (true) {
+            co_await seastar::sleep_abortable(std::chrono::milliseconds(_permissions_update_interval_in_ms), _as);
+            co_await _cache.container().invoke_on_all([] (cache& c) -> future<> {
+                try {
+                    co_await c.prune_all_permissions();
+                } catch (...) {
+                    mylog.warn("Cache prune all permissions failed: {}", std::current_exception());
+                }
+            });
+        }
+    });
     return _std_mgr.start();
 }
 

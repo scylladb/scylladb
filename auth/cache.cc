@@ -18,6 +18,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/metrics.hh>
 
 namespace auth {
 
@@ -27,7 +28,20 @@ cache::cache(cql3::query_processor& qp, abort_source& as) noexcept
     : _current_version(0)
     , _qp(qp)
     , _loading_sem(1)
-    , _as(as) {
+    , _as(as)
+    , _permission_loader(nullptr) {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("auth_cache", {
+        sm::make_gauge("roles", [this] { return _roles.size(); },
+                sm::description("Number of roles currently cached")),
+        sm::make_gauge("permissions", [this] {
+            return _cached_permissions_count;
+        }, sm::description("Total number of permission sets currently cached across all roles"))
+    });
+}
+
+void cache::set_permission_loader(permission_loader_func loader) {
+    _permission_loader = std::move(loader);
 }
 
 lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) const noexcept {
@@ -36,6 +50,51 @@ lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) cons
         return {};
     }
     return it->second;
+}
+
+future<permission_set> cache::get_permissions(const role_or_anonymous& role, const resource& r) {
+    SCYLLA_ASSERT(_permission_loader);
+
+    auto get_or_load = [this, &role, &r](std::unordered_map<resource, permission_set>& perms_cache) -> future<permission_set> {
+        if (auto it = perms_cache.find(r); it != perms_cache.end()) {
+            co_return it->second;
+        }
+        auto perms = co_await _permission_loader(role, r);
+        if (perms_cache.emplace(r, perms).second) {
+            ++_cached_permissions_count;
+        }
+        co_return perms;
+    };
+
+    if (is_anonymous(role)) {
+        co_return co_await get_or_load(_anonymous_permissions);
+    }
+    const auto& role_name = *role.name;
+    auto role_it = _roles.find(role_name);
+    if (role_it == _roles.end()) {
+        logger.error("Incoherent cache for role {}, missing role", role_name);
+        co_return permissions::NONE;
+    }
+    co_return co_await get_or_load(role_it->second->cached_permissions);
+}
+
+future<> cache::prune(const resource& r) {
+    _cached_permissions_count -= _anonymous_permissions.erase(r);
+    for (auto& it : _roles) {
+        // Prunning can run concurrently with other functions but it
+        // can only cause cached_permissions extra reload via get_permissions.
+        _cached_permissions_count -= it.second->cached_permissions.erase(r);
+        co_await coroutine::maybe_yield();
+    }
+}
+
+future<> cache::prune_all_permissions() noexcept {
+    _cached_permissions_count = 0;
+    _anonymous_permissions.clear();
+    for (auto& it : _roles) {
+        it.second->cached_permissions.clear();
+        co_await coroutine::maybe_yield();
+    }
 }
 
 future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& role) const {
@@ -105,6 +164,7 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
 future<> cache::prune_all() noexcept {
     for (auto it = _roles.begin(); it != _roles.end(); ) {
         if (it->second->version != _current_version) {
+            _cached_permissions_count -= it->second->cached_permissions.size();
             _roles.erase(it++);
             co_await coroutine::maybe_yield();
         } else {
@@ -129,6 +189,9 @@ future<> cache::load_all() {
         const auto name = r.get_as<sstring>("role");
         auto role = co_await fetch_role(name);
         if (role) {
+            if (auto it = _roles.find(name); it != _roles.end()) {
+                _cached_permissions_count -= it->second->cached_permissions.size();
+            }
             _roles[name] = role;
         }
         co_return stop_iteration::no;
@@ -147,6 +210,26 @@ future<> cache::load_all() {
     });
 }
 
+future<> cache::gather_inheriting_roles(std::unordered_set<role_name_t>& roles, lw_shared_ptr<cache::role_record> role, const role_name_t& name) {
+    if (roles.contains(name)) {
+        co_return; // Already processed.
+    }
+    if (!role) {
+        // Role might have been removed or not yet added, either way
+        // their members will be handled by another top call to this function.
+        co_return;
+    }
+    for (const auto& member_name : role->members) {
+        roles.insert(member_name);
+        lw_shared_ptr<cache::role_record> member_role;
+        auto r = _roles.find(member_name);
+        if (r != _roles.end()) {
+            member_role = r->second;
+        }
+        co_await gather_inheriting_roles(roles, member_role, member_name);
+    }
+}
+
 future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
     if (legacy_mode(_qp)) {
         co_return;
@@ -154,26 +237,50 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto units = co_await get_units(_loading_sem, 1, _as);
 
+    std::unordered_set<role_name_t> roles_to_clear_perms;
     for (const auto& name : roles) {
         logger.info("Loading role {}", name);
         auto role = co_await fetch_role(name);
          if (role) {
+            if (auto it = _roles.find(name); it != _roles.end()) {
+                _cached_permissions_count -= it->second->cached_permissions.size();
+            }
             _roles[name] = role;
+            co_await gather_inheriting_roles(roles_to_clear_perms, role, name);
         } else {
-            _roles.erase(name);
+            auto deleted = _roles.extract(name);
+            if (deleted) {
+                _cached_permissions_count -= deleted.mapped()->cached_permissions.size();
+                co_await gather_inheriting_roles(roles_to_clear_perms, deleted.mapped(), name);
+            }
         }
         co_await distribute_role(name, role);
     }
+
+    co_await container().invoke_on_all([&roles_to_clear_perms] (cache& c) -> future<> {
+        for (const auto& name : roles_to_clear_perms) {
+            if (auto it = c._roles.find(name); it != c._roles.end()) {
+                c._cached_permissions_count -= it->second->cached_permissions.size();
+                it->second->cached_permissions.clear();
+            }
+            co_await coroutine::maybe_yield();
+        }
+    });
 }
 
 future<> cache::distribute_role(const role_name_t& name, lw_shared_ptr<role_record> role) {
     auto role_ptr = role.get();
     co_await container().invoke_on_others([&name, role_ptr](cache& c) {
-        if (!role_ptr) {
-            c._roles.erase(name);
-            return;
+        auto it = c._roles.find(name);
+        if (it != c._roles.end()) {
+            c._cached_permissions_count -= it->second->cached_permissions.size();
+            if (!role_ptr) {
+                c._roles.erase(it);
+                return;
+            }
         }
         auto role_copy = make_lw_shared<role_record>(*role_ptr);
+        c._cached_permissions_count += role_copy->cached_permissions.size();
         c._roles[name] = std::move(role_copy);
     });
 }
