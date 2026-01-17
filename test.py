@@ -376,6 +376,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'-k={" and ".join([f"not {pattern}" for pattern in options.skip_patterns])}')
     if options.k:
         args.append(f'-k={options.k}')
+    if options.extra_scylla_cmdline_options:
+        args.append(f'--extra-scylla-cmdline-options={options.extra_scylla_cmdline_options}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:
