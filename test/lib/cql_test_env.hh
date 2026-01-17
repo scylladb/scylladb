@@ -18,6 +18,7 @@
 
 #include "db/view/view_building_worker.hh"
 #include "db/view/view_update_generator.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "service/qos/service_level_controller.hh"
 #include "replica/database.hh"
 #include "transport/messages/result_message_base.hh"
@@ -188,6 +189,8 @@ public:
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() = 0;
+
+    virtual sharded<db::system_distributed_tablets_keyspace>& get_system_distributed_tablets_keyspace() = 0;
 
     virtual sharded<service::tablet_allocator>& get_tablet_allocator() = 0;
 
