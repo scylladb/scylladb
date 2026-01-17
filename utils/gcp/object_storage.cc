@@ -9,6 +9,7 @@
 
 #include "object_storage.hh"
 #include "gcp_credentials.hh"
+#include "object_storage_retry_strategy.hh"
 
 #include <algorithm>
 #include <numeric>
@@ -20,12 +21,14 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
 #include <seastar/util/short_streams.hh>
 
 #include "utils/rest/client.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/http.hh"
+#include "utils/http_client_error_processing.hh"
 #include "utils/overloaded_functor.hh"
 
 static logger gcp_storage("gcp_storage");
@@ -248,7 +251,7 @@ utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::o
     , _credentials(std::move(c))
     , _unlimited(std::numeric_limits<ssize_t>::max())
     , _limits(memory ? *memory : _unlimited)
-    , _client(std::make_unique<utils::http::dns_connection_factory>(url.host, url.port, url.is_https(), gcp_storage, certs), 100, seastar::http::experimental::client::retry_requests::yes)
+    , _client(std::make_unique<utils::http::dns_connection_factory>(url.host, url.port, url.is_https(), gcp_storage, certs), 100, 128_KiB, std::make_unique<object_storage_retry_strategy>())
 {}
 
 utils::gcp::storage::client::impl::impl(std::string_view endpoint, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
@@ -289,6 +292,35 @@ utils::gcp::storage::storage_error::storage_error(int status, const std::string&
 
 using namespace seastar::http;
 using namespace std::chrono_literals;
+
+static handler_func_ex wrap_handler(handler_func_ex handler) {
+    return [handler = std::move(handler)](const reply& rep, input_stream<char>& in) -> future<> {
+        auto _in = std::move(in);
+        auto status_class = reply::classify_status(rep._status);
+        /*
+         * Surprisingly Google Cloud Storage (GCS) commonly returns HTTP 308 during resumable uploads, including when you use PUT. This is expected behavior and
+         * not an error. The 308 tells the client to continue the upload at the same URL without changing the method or body, which is exactly how GCS’s
+         * resumable upload protocol works.
+         */
+        if (status_class != reply::status_class::informational && status_class != reply::status_class::success && rep._status != status_type::permanent_redirect) {
+            auto content = co_await util::read_entire_stream_contiguous(_in);
+            auto error_msg = get_gcp_error_message(std::string_view(content));
+            gcp_storage.debug("Got unexpected response status: {}, content: {}", rep._status, content);
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(
+                storage::object_storage_error{utils::http::from_http_code(rep._status), std::make_exception_ptr(storage::storage_error(error_msg))}));
+        }
+
+        std::exception_ptr eptr;
+        try {
+            co_await handler(rep, _in);
+        } catch (...) {
+            eptr = std::current_exception();
+        }
+        if (eptr) {
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(storage::object_storage_error(std::move(eptr))));
+        }
+    };
+}
 
 /**
  * Performs a REST post/put/get with credential refresh/retry.
@@ -354,41 +386,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
             bearer_filter()
         });
 
-        try {
-            co_await rest::simple_send(_client, req, [&handler](const seastar::http::reply& res, seastar::input_stream<char>& in) -> future<> {
-                gcp_storage.trace("Result: {}", res);
-                if (res._status == status_type::unauthorized) {
-                    throw permission_error(int(res._status), co_await get_gcp_error_message(in));
-                } else if (res._status == status_type::request_timeout || reply::classify_status(res._status) == reply::status_class::server_error) {
-                    throw storage_error(int(res._status), co_await get_gcp_error_message(in));
-                }
-                co_await handler(res, in);
-            }, as);
-            break;
-        } catch (storage_error& e) {
-            gcp_storage.debug("{}: Got unexpected response: {}", _endpoint, e.what());
-            auto s = status_type(e.status());
-            switch (s) {
-            default:
-                if (reply::classify_status(s) != reply::status_class::server_error) {
-                    break;
-                }
-                [[fallthrough]];
-            case status_type::request_timeout:
-                do_backoff = true;
-                [[fallthrough]];
-            case status_type::unauthorized:
-                if (retry < max_retries) {
-                    continue; // retry loop. 
-                }
-                break;
-            }
-            throw;
-        } catch (...) {
-            // network, whatnot. maybe add retries here as well, but should really 
-            // be on seastar level
-            throw;
-        }
+        co_return co_await rest::simple_send(_client, req, wrap_handler(std::move(handler)), as);
     }
 }
 
