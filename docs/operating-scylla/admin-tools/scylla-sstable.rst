@@ -601,11 +601,7 @@ Scrub has several modes:
 * **segregate** - Fixes partition/row/mutation-fragment out-of-order errors by segregating the output into as many SStables as required so that the content of each output SStable is properly ordered.
 * **validate** - Validates the content of the SStable, reporting any corruptions found. Writes no output SStables. In this mode, scrub has the same outcome as the `validate operation <scylla-sstable-validate-operation_>`_ - and the validate operation is recommended over scrub.
 
-Output SStables are written to the directory specified via ``--output-directory``. They will be written with the ``BIG`` format and the highest supported SStable format, with generations chosen by scylla-sstable. Generations are chosen such
-that they are unique among the SStables written by the current scrub.
-
-The output directory must be empty; otherwise, scylla-sstable will abort scrub. You can allow writing to a non-empty directory by setting the ``--unsafe-accept-nonempty-output-dir`` command line flag.
-Note that scrub will be aborted if an SStable cannot be written because its generation clashes with a pre-existing SStable in the output directory.
+Output SStables are written to the directory specified via ``--output-dir``. They will be written with the ``BIG`` format and the highest supported SStable format, with random generation.
 
 validate-checksums
 ^^^^^^^^^^^^^^^^^^
@@ -870,7 +866,7 @@ The SSTable version to be used can be overridden with the ``--version`` flag, al
 SSTables which are already on the designated version are skipped. To force rewriting *all* SSTables, use the ``--all`` flag. 
 
 Output SSTables are written to the path provided by the ``--output-dir`` flag, or to the current directory if not specified.
-This directory is expected to exist and be empty. If not empty the tool will refuse to run. This can be overridden with the ``--unsafe-accept-nonempty-output-dir`` flag.
+This directory is expected to exist.
 
 It is strongly recommended to use the system schema tables as the schema source for this command, see the :ref:`schema options <scylla-sstable-schema>` for more details.
 A schema which is good enough to read the SSTable and dump its content, may not be good enough to write its content back verbatim.
@@ -882,6 +878,25 @@ But even an altered schema which changed only the table options can lead to data
 
 The mapping of input SSTables to output SSTables is printed to ``stdout``.
 
+filter
+^^^^^^
+
+Filter the SSTable(s), including/excluding specified partitions.
+
+Similar to ``scylla sstable dump-data --partition|--partition-file``, with some notable differences:
+
+* Instead of dumping the content to stdout, the filtered content is written back to SSTable(s) on disk.
+* Also supports negative filters (keep all partitions except the those specified).
+
+The partition list can be provided either via the ``--partition`` command line argument, or via a file path passed to the the ``--partitions-file`` argument. The file should contain one partition key per line.
+Partition keys should be provided in the hex format, as produced by `scylla types serialize </operating-scylla/admin-tools/scylla-types/>`_.
+
+With ``--include``, only the specified partitions are kept from the input SSTable(s). With ``--exclude``, the specified partitions are discarded and won't be written to the output SSTable(s).
+It is possible that certain input SSTable(s) won't have any content left after the filtering. These input SSTable(s) will not have a matching output SSTable.
+
+By default, each input sstable is filtered individually. Use ``--merge`` to filter the combined content of all input sstables, producing a single output SSTable.
+
+Output sstables use the latest supported sstable format (can be changed with ``--sstable-version``).
 
 Examples
 --------
