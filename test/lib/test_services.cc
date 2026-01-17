@@ -94,8 +94,8 @@ public:
     sstables::shared_sstable make_sstable(sstables::sstable_state) const override {
         return table().make_sstable();
     }
-    sstables::sstable_writer_config configure_writer(sstring origin) const override {
-        return _sstables_manager.configure_writer(std::move(origin));
+    sstables::sstable_writer_config configure_writer(sstring origin, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash = std::nullopt) const override {
+        return _sstables_manager.configure_writer(std::move(origin), std::move(owned_ranges_hash));
     }
 
     api::timestamp_type min_memtable_timestamp() const override {

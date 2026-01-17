@@ -11,6 +11,7 @@
 #include "bytes_fwd.hh"
 #include "types/types.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/hashing.hh"
 
 #include <limits>
 #include <seastar/net/byteorder.hh>
@@ -326,6 +327,15 @@ struct fmt::formatter<dht::token> : fmt::formatter<string_view> {
         } else {
             return fmt::format_to(ctx.out(), "{}", dht::token::to_int64(t));
         }
+    }
+};
+
+template<>
+struct appending_hash<dht::token> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const dht::token& value) const noexcept {
+        feed_hash(h, dht::token::to_int64(value));
     }
 };
 

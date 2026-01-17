@@ -19,6 +19,4 @@ class compaction_group_view;
 class strategy_control;
 struct compaction_state;
 
-using owned_ranges_ptr = seastar::lw_shared_ptr<const dht::token_range_vector>;
-
 } // namespace compaction
