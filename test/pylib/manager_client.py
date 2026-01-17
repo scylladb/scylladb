@@ -408,7 +408,7 @@ class ManagerClient:
         await self.server_stop_gracefully(server_id)
         await self.server_start(server_id=server_id, wait_others=wait_others, wait_interval=wait_interval)
 
-    async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None, wait_for_cql = True):
+    async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None, wait_for_cql = True, cmdline_options_override: list[str] | None = None):
         # `servers` might not include all the running servers, but we want to check against all of them
         servers_running = await self.running_servers()
 
@@ -428,7 +428,7 @@ class ManagerClient:
                     await wait_for_cql_and_get_hosts(self.cql, up_servers, time() + 60)
                 await with_down(s)
 
-            await self.server_start(s.server_id, connect_driver=wait_for_cql)
+            await self.server_start(s.server_id, connect_driver=wait_for_cql, cmdline_options_override=cmdline_options_override)
 
             # Wait for other servers to see the restarted server.
             # Otherwise, the next server we are going to restart may not yet see "s" as restarted

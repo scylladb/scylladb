@@ -599,6 +599,7 @@ public:
     named_value<bool> enable_create_table_with_compact_storage;
 
     named_value<bool> rf_rack_valid_keyspaces;
+    named_value<bool> enforce_rack_list;
 
     named_value<uint32_t> tablet_load_stats_refresh_interval_in_seconds;
     named_value<bool> force_capacity_based_balancing;
