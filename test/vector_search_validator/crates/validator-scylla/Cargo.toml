@@ -4,5 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-backtrace.workspace = true
+httpclient.workspace = true
+scylla.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 vector-search-validator-tests.workspace = true
+vector-store.workspace = true
