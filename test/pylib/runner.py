@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 import platform
+import random
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
@@ -264,6 +265,7 @@ def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
 
+    os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
     repeat = int(config.getoption("--repeat"))
 

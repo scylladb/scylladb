@@ -30,17 +30,12 @@ logger = logging.getLogger(__name__)
 def pytest_addoption(parser: Parser) -> None:
     parser.addoption("--use-vnodes", action="store_true", default=True, help="Determines wither or not to setup clusters using vnodes for tests")
     parser.addoption("--num-tokens", action="store", default=256, help="Number of tokens to set num_tokens yaml setting to when creating instances with vnodes enabled")
-    parser.addoption("--experimental-features", type=lambda s: s.split(","), action="store", help="Pass experimental features <feature>,<feature> to enable")
+    parser.addoption("--experimental-features", type=lambda s: s.split(","), action="store", help="Pass experimental features <feature>,<feature> to enable", default=None)
     parser.addoption("--tablets", action=argparse.BooleanOptionalAction, default=False, help="Whether to enable tablets support (default: %(default)s)")
     parser.addoption("--force-gossip-topology-changes", action="store_true", default=False, help="force gossip topology changes in a fresh cluster")
 
 
 def pytest_configure(config: Config) -> None:
-    logging.getLogger("cassandra").setLevel(logging.INFO)
-    logging.getLogger("boto3").setLevel(logging.INFO)
-    logging.getLogger("botocore").setLevel(logging.INFO)
-    logging.getLogger("s3transfer").setLevel(logging.INFO)
-
     features = {"cdc", "raft", "consistent-cluster-management", "consistent-topology-changes"}
     if experimental_features := config.getoption("--experimental-features"):
         features.update(experimental_features)
