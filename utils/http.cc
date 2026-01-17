@@ -23,38 +23,103 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_crede
     co_return system_trust_credentials;
 }
 
-utils::http::dns_connection_factory::state::state(shared_ptr<tls::certificate_credentials> cin) 
-    : creds(std::move(cin))
-{}
-
-future<> utils::http::dns_connection_factory::initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
-    co_await coroutine::all(
-        [state, host, port] () -> future<> {
-            auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-            state->addr = socket_address(hent.addr_list.front(), port);
-        },
-        [state, use_https] () -> future<> {
-            if (use_https && !state->creds) {
-                state->creds = co_await system_trust_credentials();
-            }
-            if (!use_https) {
-                state->creds = {};
-            }
-        }
-    );
-
-    state->initialized = true;
-    logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+utils::http::dns_connection_factory::connection_resources::connection_resources(const std::string& host,
+                                                                        bool use_https,
+                                                                        shared_ptr<tls::certificate_credentials> creds,
+                                                                        logging::logger& logger)
+    : _creds(std::move(creds)), _host(host), _use_https(use_https), _logger(logger), _addr_update_gate("address_provider"), _addr_update_timer([this] {
+        auto gh = _addr_update_gate.hold();
+        // Can safely ignore the future here, as the gate will ensure the instance is held
+        std::ignore = [this]() -> future<> {
+            _logger.debug("Host resolution expired, re-resolving host {}", _host);
+            co_await renew_addresses();
+        }();
+    }) {
+    _addr_update_timer.arm(lowres_clock::now());
 }
 
-utils::http::dns_connection_factory::dns_connection_factory(dns_connection_factory&&) = default;
+future<> utils::http::dns_connection_factory::connection_resources::init_addresses() {
+    auto units = co_await get_units(_addr_sem, 1);
+    auto hent = co_await net::dns::get_host_by_name(_host, net::inet_address::family::INET);
+    _address_ttl = std::chrono::seconds(*std::ranges::min_element(hent.addr_ttls));
+    _addr_list = std::move(hent.addr_list);
+    _logger.debug("Initialized addresses={}", _addr_list);
+
+    if (_address_ttl.count() != 0) {
+        // Zero values are interpreted to mean that the Resource
+        // Record can only be used for the transaction in progress,
+        // and should not be cached.
+        // https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.1
+        _addr_update_timer.rearm(lowres_clock::now() + _address_ttl);
+    }
+}
+
+future<> utils::http::dns_connection_factory::connection_resources::init_credentials() {
+    if (_use_https && !_creds) {
+        _creds = co_await system_trust_credentials();
+    }
+    if (!_use_https) {
+        _creds = {};
+    }
+    _logger.debug("Initialized credentials, tls={}", _creds == nullptr ? "no" : "yes");
+}
+
+future<net::inet_address> utils::http::dns_connection_factory::connection_resources::get_address() {
+    if (!_addr_init) [[unlikely]] {
+        auto units = co_await get_units(_init_semaphore, 1);
+        if (!_addr_init) {
+            co_await init_addresses();
+            _addr_init = true;
+        }
+    }
+
+    // Re-initialize addresses if the timer is not armed, meaning the TTL is 0
+    // So the record can only be used for the transaction in progress,
+    // and should not be cached.
+    if (!_addr_update_timer.armed()) {
+        co_await init_addresses();
+    }
+    co_return _addr_list[_addr_pos++ % _addr_list.size()];
+}
+
+future<shared_ptr<tls::certificate_credentials>> utils::http::dns_connection_factory::connection_resources::get_creds() {
+    if (!_creds_init) [[unlikely]] {
+        auto units = co_await get_units(_init_semaphore, 1);
+        if (!_creds_init) {
+            co_await init_credentials();
+            _creds_init = true;
+        }
+    }
+    co_return _creds;
+}
+
+future<> utils::http::dns_connection_factory::connection_resources::renew_addresses() {
+    co_await init_addresses();
+}
+
+future<> utils::http::dns_connection_factory::connection_resources::close() {
+    _addr_update_timer.cancel();
+    if (!_addr_update_gate.is_closed()) {
+        return _addr_update_gate.close();
+    }
+    return make_ready_future<>();
+}
+
+future<connected_socket> utils::http::dns_connection_factory::connect() {
+    auto socket_addr = socket_address(co_await _provider.get_address(), _port);
+    if (auto creds = co_await _provider.get_creds()) {
+        _logger.debug("Making new HTTPS connection addr={} host={}", socket_addr, _host);
+        co_return co_await tls::connect(creds, socket_addr, tls::tls_options{.server_name = _host});
+    }
+    _logger.debug("Making new HTTP connection addr={} host={}", socket_addr, _host);
+    co_return co_await seastar::connect(socket_addr, {}, transport::TCP);
+}
 
 utils::http::dns_connection_factory::dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs)
     : _host(std::move(host))
     , _port(port)
     , _logger(logger)
-    , _state(make_lw_shared<state>(std::move(certs)))
-    , _done(initialize(_state, _host, _port, use_https, _logger))
+    , _provider(_host, use_https, std::move(certs), _logger)
 {}
 
 utils::http::dns_connection_factory::dns_connection_factory(std::string uri, logging::logger& logger, shared_ptr<tls::certificate_credentials> certs) 
@@ -68,18 +133,17 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
 {}
 
 future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
-    if (!_state->initialized) {
-        _logger.debug("Waiting for factory to initialize");
-        co_await _done.get_future();
+    try {
+        co_return co_await connect();
+    } catch (...) {
+        // On failure, forcefully renew address resolution and try again
+        _logger.debug("Connection failed, resetting address provider and retrying: {}", std::current_exception());
     }
-
-    if (_state->creds) {
-        _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-        co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
-    } else {
-        _logger.debug("Making new HTTP connection addr={} host={}", _state->addr, _host);
-        co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
-    }
+    co_await _provider.renew_addresses();
+    co_return co_await connect();
+}
+future<> utils::http::dns_connection_factory::close() {
+    return _provider.close();
 }
 
 static const char HTTPS[] = "https";
