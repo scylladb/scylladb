@@ -31,6 +31,7 @@
 #include "auth/common.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "db/view/view_update_checks.hh"
+#include "ent/encryption/replicated_key_provider.hh"
 #include <unordered_map>
 #include "db/view/view_builder.hh"
 
@@ -50,7 +51,8 @@ static const std::unordered_set<std::string_view> internal_keyspaces = {
         db::system_keyspace::NAME,
         db::schema_tables::NAME,
         auth::meta::legacy::AUTH_KS,
-        tracing::trace_keyspace_helper::KEYSPACE_NAME
+        tracing::trace_keyspace_helper::KEYSPACE_NAME,
+        encryption::replicated_key_provider_factory::KSNAME
 };
 
 bool is_internal_keyspace(std::string_view name) {
