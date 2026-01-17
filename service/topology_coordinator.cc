@@ -1514,7 +1514,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 case locator::tablet_transition_stage::allow_write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(locator::tablet_transition_stage::cleanup_target);
                             break;
                         }
                     }
@@ -1535,7 +1535,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 case locator::tablet_transition_stage::write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            if (_feature_service.tablets_intermediate_fallback_cleanup) {
+                                transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
+                            } else {
+                                transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            }
                             break;
                         }
                     }
@@ -1544,6 +1548,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     } else {
                         transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     }
+                    break;
+                case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:
+                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {
@@ -1651,7 +1658,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         _exit(1);
                     });
 
-                    auto next_stage = locator::tablet_transition_stage::use_new;
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         unsigned excluded_old = 0;
@@ -1673,11 +1679,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // than excluded_old for intra-node migration.
                         if (excluded_new > excluded_old && trinfo.transition != locator::tablet_transition_kind::intranode_migration) {
                             rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
-                            next_stage = locator::tablet_transition_stage::cleanup_target;
+                            if (_feature_service.tablets_intermediate_fallback_cleanup) {
+                                transition_to(locator::tablet_transition_stage::write_both_read_new_fallback_cleanup);
+                            } else {
+                                transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            }
+                            break;
                         }
                     }
-                    transition_to_with_barrier(next_stage);
+                    transition_to_with_barrier(locator::tablet_transition_stage::use_new);
                 }
+                    break;
+                case locator::tablet_transition_stage::write_both_read_new_fallback_cleanup:
+                    transition_to_with_barrier(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
                     break;
                 case locator::tablet_transition_stage::use_new:
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);

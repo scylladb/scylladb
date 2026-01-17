@@ -905,6 +905,8 @@ private:
                 return true;
             case tablet_transition_stage::write_both_read_old:
                 return true;
+            case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+                return false;
             case tablet_transition_stage::streaming:
                 return true;
             case tablet_transition_stage::rebuild_repair:
@@ -914,6 +916,8 @@ private:
             case tablet_transition_stage::end_repair:
                 return false;
             case tablet_transition_stage::write_both_read_new:
+                return false;
+            case tablet_transition_stage::write_both_read_new_fallback_cleanup:
                 return false;
             case tablet_transition_stage::use_new:
                 return false;
