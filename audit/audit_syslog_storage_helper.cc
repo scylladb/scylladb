@@ -53,10 +53,10 @@ static std::string json_escape(std::string_view str) {
 
 }
 
-future<> audit_syslog_storage_helper::syslog_send_helper(const sstring& msg) {
+future<> audit_syslog_storage_helper::syslog_send_helper(temporary_buffer<char> msg) {
     try {
         auto lock = co_await get_units(_semaphore, 1, std::chrono::hours(1));
-        co_await _sender.send(_syslog_address, net::packet{msg.data(), msg.size()});
+        co_await _sender.send(_syslog_address, std::span(&msg, 1));
     }
     catch (const std::exception& e) {
         auto error_msg = seastar::format(
@@ -90,7 +90,7 @@ future<> audit_syslog_storage_helper::start(const db::config& cfg) {
         co_return;
     }
 
-    co_await syslog_send_helper("Initializing syslog audit backend.");
+    co_await syslog_send_helper(temporary_buffer<char>::copy_of("Initializing syslog audit backend."));
 }
 
 future<> audit_syslog_storage_helper::stop() {
@@ -120,7 +120,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                     audit_info->table(),
                                     username);
 
-    co_await syslog_send_helper(msg);
+    co_await syslog_send_helper(std::move(msg).release());
 }
 
 future<> audit_syslog_storage_helper::write_login(const sstring& username,
@@ -139,7 +139,7 @@ future<> audit_syslog_storage_helper::write_login(const sstring& username,
                                     client_ip,
                                     username);
 
-    co_await syslog_send_helper(msg.c_str());
+    co_await syslog_send_helper(std::move(msg).release());
 }
 
 }
