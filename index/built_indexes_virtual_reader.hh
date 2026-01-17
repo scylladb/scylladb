@@ -227,7 +227,7 @@ public:
                 _db,
                 s,
                 std::move(permit),
-                _db.find_column_family(s->ks_name(), system_keyspace::v3::BUILT_VIEWS),
+                _db.find_column_family(s->ks_name(), system_keyspace::BUILT_VIEWS),
                 range,
                 slice,
                 std::move(trace_state),

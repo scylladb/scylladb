@@ -256,7 +256,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             co_await _ss.compression_dictionary_updated_callback(name_string);
         } else if (get_view_building_state_tables().contains(m.table)) {
             make_view_building_state_transition = true;
-        } else if (m.table == db::system_keyspace::v3::scylla_local()->id()) {
+        } else if (m.table == db::system_keyspace::scylla_local()->id()) {
             make_view_building_state_transition = true;
         } else if (m.table == db::system_keyspace::cdc_streams_state()->id()) {
             const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_state());
