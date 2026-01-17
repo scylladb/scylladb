@@ -68,6 +68,8 @@ public:
             .with_column("peer", inet_addr_type, column_kind::partition_key)
             .with_column("dc", utf8_type)
             .with_column("up", boolean_type)
+            .with_column("draining", boolean_type)
+            .with_column("excluded", boolean_type)
             .with_column("status", utf8_type)
             .with_column("load", utf8_type)
             .with_column("tokens", int32_type)
@@ -107,8 +109,11 @@ public:
 
                 if (tm.get_topology().has_node(hostid)) {
                     // Not all entries in gossiper are present in the topology
-                    sstring dc = tm.get_topology().get_location(hostid).dc;
+                    auto& node = tm.get_topology().get_node(hostid);
+                    sstring dc = node.dc_rack().dc;
                     set_cell(cr, "dc", dc);
+                    set_cell(cr, "draining", node.is_draining());
+                    set_cell(cr, "excluded", node.is_excluded());
                 }
 
                 if (ownership.contains(eps.get_ip())) {
@@ -1134,6 +1139,8 @@ public:
             set_cell(r.cells(), "dc", node.dc());
             set_cell(r.cells(), "rack", node.rack());
             set_cell(r.cells(), "up", _gossiper.local().is_alive(host));
+            set_cell(r.cells(), "draining", node.is_draining());
+            set_cell(r.cells(), "excluded", node.is_excluded());
             if (auto ip = _gossiper.local().get_address_map().find(host)) {
                 set_cell(r.cells(), "ip", data_value(inet_address(*ip)));
             }
@@ -1168,6 +1175,8 @@ private:
             .with_column("rack", utf8_type)
             .with_column("ip", inet_addr_type)
             .with_column("up", boolean_type)
+            .with_column("draining", boolean_type)
+            .with_column("excluded", boolean_type)
             .with_column("tablets_allocated", long_type)
             .with_column("tablets_allocated_per_shard", double_type)
             .with_column("storage_capacity", long_type)

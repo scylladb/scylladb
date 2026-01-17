@@ -82,6 +82,8 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bo
     async def remove_node(server_id: str, expected_error: str = None):
         if op == "remove":
             await manager.server_stop_gracefully(server_id)
+            # If remove_node fails, the node may be left not excluded, blocking later remove_node.
+            await manager.api.exclude_node(servers[0].ip_addr, [await manager.get_host_id(server_id)])
             await manager.remove_node(servers[0].server_id, server_id, expected_error=expected_error)
         elif op == "decommission":
             await manager.decommission_node(server_id, expected_error=expected_error)
@@ -316,6 +318,8 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
     async def remove_node(server_id: str, expected_error: str = None):
         if op == "remove":
             await manager.server_stop_gracefully(server_id)
+            # If remove_node fails, the node may be left not excluded, blocking later remove_node.
+            await manager.api.exclude_node(servers[0].ip_addr, [await manager.get_host_id(server_id)])
             await manager.remove_node(servers[0].server_id, server_id, expected_error=expected_error)
         elif op == "decommission":
             await manager.decommission_node(server_id, expected_error=expected_error)
