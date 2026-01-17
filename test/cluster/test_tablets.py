@@ -7,6 +7,7 @@ import uuid
 
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.test_tablets2 import safe_rolling_restart
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
@@ -17,7 +18,7 @@ from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -508,6 +509,68 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
     assert repl['dc1'] == '2'
     assert len(repl['dc2']) == 1
     assert repl['dc2'][0] == 'rack2a'
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    async def get_replication_options(ks: str):
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+        repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
+        return repl
+
+    numeric_injection = "create_with_numeric"
+    colocation_injection = "wait_with_rack_list_colocation"
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [numeric_injection, colocation_injection]}
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--smp=2',
+    ]
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'})]
+
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key);")
+    repl = await get_replication_options("ks1")
+    assert repl['dc1'] == '1'
+
+    [await manager.api.disable_injection(s.ip_addr, numeric_injection) for s in servers]
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    s1_log = await manager.server_open_log(coord_serv.server_id)
+    s1_mark = await s1_log.mark()
+
+    async def alter_keyspace():
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']};")
+
+    alter_task = asyncio.create_task(alter_keyspace())
+
+    await s1_log.wait_for('In make_rack_list_colocation_plan', from_mark=s1_mark)
+
+    task_manager_client = TaskManagerClient(manager.api)
+    tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    assert len(rf_change_tasks) == 1
+    task_id = rf_change_tasks[0].task_id
+    await task_manager_client.abort_task(servers[0].ip_addr, task_id)
+
+    task = await task_manager_client.wait_for_task(servers[0].ip_addr, task_id)
+    assert task.state == "failed"
+
+    failed = False
+    try:
+        await alter_task
+    except Exception as e:
+        failed = True
+    assert failed
+
+    repl = await get_replication_options("ks1")
+    assert repl['dc1'] == '1'
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
