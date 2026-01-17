@@ -571,17 +571,122 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     # repeating of the tests in test/alternator/test_cql_rbac.py.
 
 @pytest.mark.asyncio
-async def test_index_requires_rf_rack_valid(manager: ManagerClient):
+async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(manager: ManagerClient):
     """
-    Verify that creating a table with GSI or LSI fails with an appropriate error if
-    it's tablets based and rf_rack_valid_keyspaces is disabled.
-    Adding a GSI to an existing table with tablets should fail as well.
+    Verify that creating a table with GSI or LSI and adding GSI to an existing table works
+    when the keyspace is RF-rack-valid, even if rf_rack_valid_keyspaces=False.
     """
-    servers = await manager.servers_add(1, config=alternator_config | {"rf_rack_valid_keyspaces": False})
+    config = alternator_config | {"rf_rack_valid_keyspaces": False}
+    # Single node in single rack, RF=1, therefore RF-rack-valid
+    servers = await manager.servers_add(1, config=config, property_file={'dc': 'dc1', 'rack': 'rack1'})
     alternator = get_alternator(servers[0].ip_addr)
 
-    expected_err_create = "GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled."
-    expected_err_update_add_gsi = "GlobalSecondaryIndexes with tablets require the rf_rack_valid_keyspaces option to be enabled."
+    table_name_gsi = unique_table_name()
+    table_name_lsi = unique_table_name()
+    table_name_add_gsi = unique_table_name()
+
+    # Create table with GSI
+    alternator.create_table(
+        TableName=table_name_gsi,
+        BillingMode='PAY_PER_REQUEST',
+        Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'}
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'}
+        ],
+        GlobalSecondaryIndexes=[
+            {
+                'IndexName': 'gsi1',
+                'KeySchema': [
+                    {'AttributeName': 'c', 'KeyType': 'HASH'},
+                    {'AttributeName': 'p', 'KeyType': 'RANGE'},
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ]
+    )
+
+    # Create table with LSI
+    alternator.create_table(
+        TableName=table_name_lsi,
+        BillingMode='PAY_PER_REQUEST',
+        Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'}
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'}
+        ],
+        LocalSecondaryIndexes=[
+            {
+                'IndexName': 'lsi1',
+                'KeySchema': [
+                    {'AttributeName': 'p', 'KeyType': 'HASH'},
+                    {'AttributeName': 'c', 'KeyType': 'RANGE'},
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ]
+    )
+
+    # Create table without indexes, then add GSI
+    alternator.create_table(
+        TableName=table_name_add_gsi,
+        BillingMode='PAY_PER_REQUEST',
+        Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'}
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'}
+        ]
+    )
+    alternator.meta.client.update_table(
+        TableName=table_name_add_gsi,
+        AttributeDefinitions=[
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+        ],
+        GlobalSecondaryIndexUpdates=[
+            {
+                'Create': {
+                    'IndexName': 'gsi1',
+                    'KeySchema': [
+                        {'AttributeName': 'c', 'KeyType': 'HASH'},
+                        {'AttributeName': 'p', 'KeyType': 'RANGE'},
+                    ],
+                    'Projection': {'ProjectionType': 'ALL'}
+                }
+            }
+        ]
+    )
+
+@pytest.mark.asyncio
+async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
+    """
+    Verify that creating a table with GSI or LSI and adding GSI to an existing table fails if
+    the keyspace is not RF-rack-valid.
+    """
+    config = alternator_config | {"rf_rack_valid_keyspaces": False, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+    # 4 nodes in 4 racks, default RF=3, therefore not RF-rack-valid
+    servers = await manager.servers_add(4, config=config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack4'},
+    ])
+    alternator = get_alternator(servers[0].ip_addr)
+
+    expected_err_create = "GlobalSecondaryIndexes and LocalSecondaryIndexes with tablets require the keyspace to be RF-rack-valid"
+    expected_err_update_add_gsi = "GlobalSecondaryIndexes with tablets require the keyspace to be RF-rack-valid"
 
     def create_table_with_index(alternator, table_name, index_type, initial_tablets):
         create_table_args = dict(
@@ -621,7 +726,7 @@ async def test_index_requires_rf_rack_valid(manager: ManagerClient):
             ]
         alternator.create_table(**create_table_args)
 
-    # Create a table with tablets and GSI or LSI - should fail because rf_rack_valid_keyspaces is disabled
+    # Create a table with tablets and GSI or LSI - should fail because the keyspace is not RF-rack-valid
     for index_type in ["GSI", "LSI"]:
         with pytest.raises(ClientError, match=expected_err_create):
             create_table_with_index(alternator, unique_table_name(), index_type, initial_tablets='1')
@@ -652,6 +757,36 @@ async def test_index_requires_rf_rack_valid(manager: ManagerClient):
                     }
                 }
             ]
+        )
+
+@pytest.mark.asyncio
+async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
+    """
+    Verify that the flag `rf_rack_valid_keyspaces` enforces RF-rack-validity.
+    Create a cluster with 4 racks, and try to create a table. By default the
+    table will have RF=3, so the creation should fail with appropriate error.
+    """
+    config = alternator_config | {"rf_rack_valid_keyspaces": True, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+
+    # Add 4 nodes in 4 racks
+    servers_rack1 = await manager.servers_add(4, config=config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack4'},
+    ])
+
+    alternator = get_alternator(servers_rack1[0].ip_addr)
+
+    expected_err = "The flag `rf_rack_valid_keyspaces` is enabled, but the replication factor of the table does not match the number of racks in the cluster"
+
+    # Try to create a table - the default is RF=3, so this should fail due to RF!=#racks
+    with pytest.raises(ClientError, match=expected_err):
+        alternator.create_table(
+            TableName=unique_table_name(),
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]
         )
 
 # Unfortunately by default a Python thread print the exception that kills

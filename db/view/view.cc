@@ -3707,7 +3707,7 @@ void validate_view_keyspace(const data_dictionary::database& db, std::string_vie
 
     try {
         locator::assert_rf_rack_valid_keyspace(keyspace_name, tmptr, rs);
-    } catch (const std::exception& e) {
+    } catch (const std::invalid_argument& e) {
         throw std::logic_error(fmt::format(
             "Materialized views and secondary indexes are not supported on the keyspace '{}': {}",
             keyspace_name, e.what()));
