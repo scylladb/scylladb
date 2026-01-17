@@ -33,9 +33,11 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
         size_t begin = 0;
         size_t next = 0;
         sstring seeds_str = seed_provider.parameters.find("seeds")->second;
+        startlog.info("Configured seeds: {}", seeds_str);
         while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
             auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
             try {
+                startlog.debug("Resolving seed host: {}", seed);
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {
                 if (fail_on_lookup_error) {
