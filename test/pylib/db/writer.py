@@ -29,7 +29,8 @@ create_table = [
         id INTEGER PRIMARY KEY,
         host_id VARCHAR(5) NOT NULL,
         architecture VARCHAR(15) NOT NULL,
-        directory VARCHAR(255),
+        path TEXT NOT NULL,
+        file VARCHAR(255) NOT NULL,
         mode VARCHAR(15) NOT NULL,
         run_id INTEGER,
         test_name VARCHAR(255) NOT NULL
@@ -49,6 +50,7 @@ create_table = [
         time_start DATETIME,
         time_end DATETIME,
         success BOOLEAN,
+        worker_id VARCHAR(15),
         FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
     );
     ''',

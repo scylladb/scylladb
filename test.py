@@ -49,7 +49,6 @@ from test.pylib.suite.base import (
     palette,
     prepare_environment,
 )
-from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 if TYPE_CHECKING:
@@ -559,7 +558,6 @@ async def main() -> int:
 
     signaled = asyncio.Event()
     stop_event = asyncio.Event()
-    resource_watcher = run_resource_watcher(options.gather_metrics, signaled, stop_event, options.tmpdir)
 
     setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
@@ -568,8 +566,6 @@ async def main() -> int:
         total_tests_pytest, failed_pytest_tests = await run_all_tests(signaled, options)
         logging.info('after running all tests')
         stop_event.set()
-        async with asyncio.timeout(5):
-            await resource_watcher
     except asyncio.CancelledError:
         print('\ntests cancelled by signal')
         return 1

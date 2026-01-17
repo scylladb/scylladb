@@ -22,6 +22,7 @@ from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
 from test.pylib.resource_gather import get_resource_gather
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
+from test.pylib.util import get_xdist_worker_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -174,17 +175,22 @@ class CppTestCase(pytest.Item):
             id=self.parent.run_id,
             mode=self.parent.build_mode,
             success=False,
-            shortname=self.name,
+            path=str(self.path),
+            shortname=self.test_case_name,
             suite=SimpleNamespace(
                 log_dir=self.parent.log_dir,
-                name=self.parent.test_name,
+                name=self.path.parent.name,
+                suite_path=self.path.parent,
+                test_file_name=f"{self.parent.test_name}.cc",
             ),
         )
 
     def run_exe(self, test_args: list[str], output_file: pathlib.Path) -> subprocess.Popen[str]:
         resource_gather = get_resource_gather(
+            temp_dir=pathlib.Path(self.config.getoption("--tmpdir")),
             is_switched_on=self.config.getoption("--gather-metrics"),
             test=self.make_testpy_test_object_mock(),
+            worker_id=get_xdist_worker_id(),
         )
         resource_gather.make_cgroup()
         process = resource_gather.run_process(

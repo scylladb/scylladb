@@ -19,7 +19,7 @@ from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, path_to
-from test.pylib.runner import testpy_test_fixture_scope
+from test.pylib.runner import testpy_test_fixture_scope, PHASE_REPORT_KEY
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
@@ -83,26 +83,6 @@ def pytest_addoption(parser):
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
-
-
-# This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
-# in a stash which can then be accessed from fixtures to print the stacktrace for the failed test
-PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
-
-
-@pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item, call):
-    """This is a post-test hook executed by the pytest library.
-    Use it to access the test result and store a flag indicating failure
-    so we can later retrieve it in our fixtures like `manager`.
-
-    `item.stash` is the same stash as `request.node.stash` (in the `request`
-    fixture provided by pytest).
-    """
-    outcome = yield
-    report = outcome.get_result()
-
-    item.stash[PHASE_REPORT_KEY] = report
 
 
 conn_logger = logging.getLogger("conn_messages")

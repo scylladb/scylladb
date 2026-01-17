@@ -13,11 +13,16 @@ import pathlib
 import platform
 import random
 import sys
+import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
+from concurrent.futures import Future
+from concurrent.futures.thread import ThreadPoolExecutor
 from itertools import chain, count, product
 from functools import cache, cached_property
 from random import randint
+from threading import Event
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,6 +30,8 @@ import xdist
 import yaml
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT
+from test.pylib.resource_gather import setup_worker_cgroup, get_resource_gather, run_resource_watcher
+from test.pylib.util import get_xdist_worker_id
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     TestSuite,
@@ -55,6 +62,9 @@ logger = logging.getLogger(__name__)
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
 
+_thread_pool_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
+_stop_event = Event()
+_future: Future | None = None
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -133,6 +143,92 @@ def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> _pyte
 testpy_test_fixture_scope.__test__ = False
 
 
+# This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
+# in a stash which can then be accessed from fixtures to print the stacktrace for the failed test
+PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """This is a post-test hook executed by the pytest library.
+    Use it to access the test result and store a flag indicating failure
+    so we can later retrieve it in our fixtures like `manager`.
+
+    `item.stash` is the same stash as `request.node.stash` (in the `request`
+    fixture provided by pytest).
+    """
+    outcome = yield
+    report = outcome.get_result()
+
+    item.stash[PHASE_REPORT_KEY] = report
+
+
+@pytest.fixture(scope='function', autouse=True)
+def run_gather_metrics(request: pytest.FixtureRequest, build_mode: str):
+    temp_dir = pathlib.Path(request.config.getoption("--tmpdir")).absolute()
+
+    # Get run_id from stash (set during collection) - it's the proper run ID
+    params_stash = get_params_stash(node=request.node)
+    run_id = params_stash[RUN_ID] if params_stash else request.config.getoption("--run_id")
+
+    # Get the original test name (without .mode.run_id suffix)
+    # Test name format is: "original_name.mode.run_id"
+    test_name = request.node.name
+    suffix = f".{build_mode}.{run_id}"
+    if test_name.endswith(suffix):
+        original_test_name = test_name[:-len(suffix)]
+    else:
+        original_test_name = test_name
+
+    # Get file path and derive suite info
+    file_path = request.node.path
+    suite_path = file_path.parent  # Directory containing the test file
+    file_name = file_path.name  # The actual file name with extension
+
+    test = SimpleNamespace(
+        time_end=0,
+        time_start=time.time(),
+        id=run_id,
+        mode=build_mode,
+        success=False,
+        path=file_path,
+        shortname=original_test_name,
+        suite=SimpleNamespace(
+            log_dir=temp_dir / build_mode,  # log_dir should be testlog/<mode>
+            name=suite_path.name,  # Suite name is the directory name
+            suite_path=suite_path,  # Suite path is the directory containing the test
+            test_file_name=file_name,  # Actual file name with extension
+        ),
+    )
+    resource_gather = get_resource_gather(
+        temp_dir=pathlib.Path(request.config.getoption("--tmpdir")),
+        is_switched_on=request.config.getoption("--gather-metrics"),
+        test=test,
+        worker_id=get_xdist_worker_id(),
+    )
+
+    # Create test cgroup and move processes to it
+    resource_gather.make_cgroup()
+    resource_gather.cgroup_monitor()
+
+    yield
+    test.time_end = time.time()
+    resource_gather.stop_monitoring()
+
+    # Get test result and timing
+    # test.time_end = time.time()
+    report = request.node.stash[PHASE_REPORT_KEY]
+    success = report.when == "call" and not report.failed
+
+    # Write metrics to database
+    resource_gather.write_metrics_to_db(
+        metrics=resource_gather.get_test_metrics(),
+        success=success
+    )
+
+    # Move processes back to worker cgroup and remove test cgroup
+    resource_gather.remove_cgroup()
+
 @pytest.fixture(scope=testpy_test_fixture_scope, autouse=True)
 def build_mode(request: pytest.FixtureRequest) -> str:
     params_stash = get_params_stash(node=request.node)
@@ -166,10 +262,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def pytest_sessionstart(session: pytest.Session) -> None:
     # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
     # we don't need this stuff.
-    if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
+    global _future, _stop_event, _thread_pool_executor
+    gather_metrics = session.config.getoption("--gather-metrics")
+    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+    save_log_on_success = session.config.getoption("--save-log-on-success")
+    toxiproxy_byte_limit = session.config.getoption("--byte-limit")
+    collect_only = session.config.getoption("--collect-only")
+    testpy_init = session.config.getoption("--test-py-init")
+    if TEST_RUNNER != "pytest" or collect_only:
         return
 
-    if not session.config.getoption("--test-py-init"):
+    if not testpy_init:
         return
 
     # Check if this is an xdist worker
@@ -184,15 +287,18 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the main pytest process (not in xdist workers).
     # Only prepare the environment if it hasn't been prepared by test.py
     if not is_xdist_worker and TESTPY_PREPARED_ENVIRONMENT not in os.environ:
-        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
 
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
-            gather_metrics=session.config.getoption("--gather-metrics"),
-            save_log_on_success=session.config.getoption("--save-log-on-success"),
-            toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
+            gather_metrics=gather_metrics,
+            save_log_on_success=save_log_on_success,
+            toxiproxy_byte_limit=toxiproxy_byte_limit,
         )
+    if gather_metrics:
+        setup_worker_cgroup()
+        _future = _thread_pool_executor.submit( run_resource_watcher, gather_metrics, _stop_event,temp_dir)
+
 
 
 @pytest.hookimpl(trylast=True)
@@ -245,6 +351,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
 
+    if _future:
+        _stop_event.set()
+        _future.result()
+
     # Check if this is an xdist worker - workers should not clean up (only the main process should)
     # Check if test.py has already prepared the environment, so it should clean up
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
@@ -259,7 +369,6 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
     if 0 < maxfail <= session.testsfailed:
         session.exitstatus = EXIT_MAXFAIL_REACHED
-
 
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
