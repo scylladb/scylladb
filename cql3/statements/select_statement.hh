@@ -162,7 +162,7 @@ protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
-    bool needs_post_query_ordering() const;
+    virtual bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
     }
@@ -363,6 +363,12 @@ class vector_indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     prepared_ann_ordering_type _prepared_ann_ordering;
     mutable gc_clock::time_point _query_start_time_point;
+
+    // Vector ANN queries don't need post-query ordering because the vector store
+    // service returns results already sorted by distance to the query vector.
+    bool needs_post_query_ordering() const override {
+        return false;
+    }
 
 public:
     static constexpr size_t max_ann_query_limit = 1000;
