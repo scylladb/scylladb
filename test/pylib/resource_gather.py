@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import getpass
 import logging
 import os
@@ -15,15 +14,18 @@ import shlex
 import subprocess
 import time
 from abc import ABC
+from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from time import sleep
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import psutil
 
-from test import HOST_ID
+from threading import Event
+from test import HOST_ID, TOP_SRC_DIR
 from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
@@ -35,25 +37,32 @@ from test.pylib.db.writer import (
 )
 
 if TYPE_CHECKING:
-    from asyncio import Task, Event
-    from typing import TextIO
+    from typing import IO, TextIO
 
     from test.pylib.suite.base import Test as TestPyTest
 
 logger = logging.getLogger(__name__)
 
+
+def get_current_cgroup() -> Path:
+    """Get the current cgroup path for this process."""
+    with open("/proc/self/cgroup", 'r') as f:
+        cgroup_info = f.readlines()
+    return Path(f"/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}")
+
+SCYLLA_TEST_CGROUP_BASE_ENV = 'SCYLLA_TEST_CGROUP_BASE'
+
+
 @lru_cache(maxsize=None)
 def get_cgroup() -> Path:
-    cgroup_path = f"/proc/{os.getpid()}/cgroup"
-    with open(cgroup_path, 'r') as f:
-        cgroup_info = f.readlines()
-    # Extract the relative cgroup for the process and make it absolute and add where the test.py process should be
-    # placed in.
-    # This can be used to manipulate the cgroup's controllers
-    cgroup_name = Path(f"/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}")
-    if cgroup_name.stem != 'resource_gather':
-        cgroup_name = cgroup_name / 'resource_gather'
-    return cgroup_name
+    # Use the env var when set so that xdist worker subprocesses (which are spawned
+    # after the master has moved itself to tests/master/default) still compute the
+    # correct top-level cgroup path rather than one nested inside the master's cgroup.
+    env_val = os.environ.get(SCYLLA_TEST_CGROUP_BASE_ENV)
+    base = Path(env_val) if env_val else get_current_cgroup()
+    if base.stem != 'resource_gather':
+        base = base / 'resource_gather'
+    return base
 
 
 CGROUP_INITIAL = get_cgroup()
@@ -61,62 +70,8 @@ CGROUP_TESTS = CGROUP_INITIAL.parent / 'tests'
 
 
 class ResourceGather(ABC):
-    def __init__(self, test: TestPyTest):
-        # get the event loop for the current thread or create a new one if there's none
-        try:
-            self.loop = asyncio.get_running_loop()
-            self.own_loop = False
-        except RuntimeError:
-            self.loop = asyncio.new_event_loop()
-            self.own_loop = True
-        self.test = test
-        self.db_path = self.test.suite.log_dir.parent / DEFAULT_DB_NAME
-        standardized_name = self.test.shortname.replace("/", "_")
-        self.cgroup_path = Path(
-            f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.mode}.{self.test.id}"
-        )
-        self.logger = logging.getLogger(__name__)
 
-    def __del__(self):
-        if self.own_loop:
-            self.loop.close()
-
-    def run_process(self,
-                    args: list[str],
-                    timeout: float,
-                    output_file: Path,
-                    cwd: Path | None = None,
-                    env: dict | None = None) -> subprocess.Popen[str]:
-
-        args = shlex.split(subprocess.list2cmdline(args))
-        if env:
-            env.update(os.environ)
-        else:
-            env = os.environ.copy()
-        with output_file.open(mode="w", encoding="utf-8") as output_handle:
-            p = subprocess.Popen(
-                args=args,
-                bufsize=1,
-                stdout=output_handle,
-                stderr=subprocess.STDOUT,
-                preexec_fn=self.put_process_to_cgroup,
-                close_fds=True,
-                cwd=cwd,
-                env=env,
-                text=True,
-            )
-            try:
-                p.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                logger.critical(f"Process {args} timed out")
-                p.kill()
-                p.communicate()
-            except KeyboardInterrupt:
-                p.kill()
-                raise
-        return p
-
-    def make_cgroup(self) -> None:
+    def setup_test_tracking(self) -> None:
         pass
 
     def put_process_to_cgroup(self) -> None:
@@ -128,141 +83,201 @@ class ResourceGather(ABC):
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         pass
 
-    def cgroup_monitor(self, test_event: Event) -> Task:
+    def teardown_test_tracking(self) -> None:
         pass
 
-    def remove_cgroup(self) -> None:
+    def stop_monitoring(self) -> None:
+        pass
+
+    def cgroup_monitor(self) -> None:
         pass
 
 
-class ResourceGatherOff(ResourceGather):
-    def cgroup_monitor(self, test_event: Event) -> Task:
-        return self.loop.create_task(no_monitor())
+class ResourceGatherRecord(ResourceGather):
+    """Writes test records and timing metrics to the DB, but performs no cgroup operations.
 
+    Used when --gather-metrics is OFF so all tests still appear in the tests table.
+    """
 
-class ResourceGatherOn(ResourceGather):
-    def __init__(self, test: TestPyTest):
-        super().__init__(test)
+    def __init__(self, temp_dir: Path, test: TestPyTest | SimpleNamespace, worker_id: str | None = None):
+        self.test = test
+        self.worker_id = worker_id or "master"
+        self.db_path = temp_dir / DEFAULT_DB_NAME
         self.sqlite_writer = SQLiteWriter(self.db_path)
+        self.logger = logging.getLogger(__name__)
+
+        directory_path = str(test.suite.suite_path.relative_to(TOP_SRC_DIR))
+
         self.test_id: int = self.sqlite_writer.write_row_if_not_exist(
             Test(
                 host_id=HOST_ID,
                 architecture=platform.machine(),
-                directory=test.suite.name,
+                path=directory_path,
+                file=test.suite.test_file_name,
                 mode=test.mode,
                 run_id=test.id,
                 test_name=test.shortname,
             ),
             TESTS_TABLE)
 
-    def make_cgroup(self) -> None:
-        os.makedirs(self.cgroup_path, exist_ok=True)
-
     def get_test_metrics(self) -> Metric:
-        test_metrics: Metric = Metric(test_id=self.test_id, host_id=HOST_ID)
+        test_metrics = Metric(test_id=self.test_id, host_id=HOST_ID, worker_id=self.worker_id)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
         test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
         test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
         test_metrics.success = self.test.success
-        memory_peak = self.cgroup_path / 'memory.peak'
-        if memory_peak.exists():
-            with open(memory_peak, 'r') as file:
-                test_metrics.memory_peak = file.read()
-
-        cpu_stat = self.cgroup_path / 'cpu.stat'
-        if cpu_stat.exists():
-            with open(cpu_stat, 'r', ) as file:
-                self._parse_cpu_stat(file, test_metrics)
         return test_metrics
-
-    def run_process(self,
-                    args: list[str],
-                    timeout: float,
-                    output_file: Path,
-                    cwd: Path | None = None,
-                    env: dict | None = None) -> subprocess.Popen[str]:
-        stop_monitoring = asyncio.Event()
-
-        self.test.time_start = time.time()
-        test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
-        try:
-            p = super().run_process(args=args, timeout=timeout, output_file=output_file, cwd=cwd, env=env)
-        finally:
-            stop_monitoring.set()
-            self.test.time_end = time.time()
-            self.loop.run_until_complete(asyncio.gather(test_resource_watcher))
-        return p
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
-    def put_process_to_cgroup(self) -> None:
-        try:
-            pid = os.getpid()
-            with open(self.cgroup_path / 'cgroup.procs', "a") as cgroup:
-                cgroup.write(str(pid))
-        except Exception as e:
-            logger.warning('Test %s is not moved to cgroup: %s', self.test, e)
+    def teardown_test_tracking(self) -> None:
+        self.sqlite_writer.close()
 
-    def remove_cgroup(self) -> None:
-        try:
-            os.rmdir(self.cgroup_path)
-        except OSError as e:
-            logger.warning(f'Can\'t delete cgroup directory: {e.strerror}' )
 
-    def cgroup_monitor(self, test_event: Event) -> Task:
-        return self.loop.create_task(self._monitor_cgroup(test_event))
+class ResourceGatherOn(ResourceGatherRecord):
+    """Resource gatherer that tracks worker-level cgroup memory and CPU metrics.
 
-    async def _monitor_cgroup(self, test_event: Event) -> None:
-        """Continuously monitors CPU and memory utilization."""
+    Uses the worker's cgroup (CGROUP_TESTS/{worker_id}) which hierarchically includes
+    all Scylla node processes running under that worker, giving accurate memory readings.
+    """
+
+    def __init__(self, temp_dir: Path, test: TestPyTest | SimpleNamespace, worker_id: str | None = None):
+        super().__init__(temp_dir, test, worker_id)
+        self.pool = ThreadPoolExecutor(max_workers=1)
+        self.future = None
+        self.stop_event = Event()
+        self.cgroup_path = CGROUP_TESTS / self.worker_id
+        self._memory_peak_fd: IO | None = None
+        self._cpu_stat_start: dict[str, float] | None = None
+
+    def stop_monitoring(self) -> None:
+        self.stop_event.set()
+        if self.future is not None:
+            self.future.result()
+            self.pool.shutdown(wait=True)
+
+    def cgroup_monitor(self) -> None:
+        self.future = self.pool.submit(self._monitor_cgroup)
+
+    def _monitor_cgroup(self) -> None:
+        """Continuously monitors cgroup memory utilization every second."""
+        memory_current = self.cgroup_path / 'memory.current'
+        sqlite_writer = SQLiteWriter(self.db_path)
         try:
-            while not test_event.is_set():
-                with  open(self.cgroup_path / 'memory.current', 'r') as memory_current:
+            while not self.stop_event.is_set():
+                try:
                     timeline_record = CgroupMetric(
                         test_id=self.test_id,
                         host_id=HOST_ID,
-                        memory=int(memory_current.read()),
+                        memory=int(memory_current.read_text().strip()),
                         timestamp=datetime.now()
                     )
+                    sqlite_writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
+                except Exception as e:
+                    self.logger.debug(f"Could not read cgroup memory for {self.cgroup_path}: {e}")
+                self.stop_event.wait(1)
+        finally:
+            sqlite_writer.close()
 
-                    self.sqlite_writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
+    def setup_test_tracking(self) -> None:
+        # Open a fresh FD on memory.peak so the kernel resets its per-FD peak tracker
+        # to the current memory. Reading this FD later returns the peak memory since it
+        # was opened, i.e., the peak during this test only.
+        memory_peak_path = self.cgroup_path / 'memory.peak'
+        if memory_peak_path.exists():
+            self._memory_peak_fd = open(memory_peak_path, 'r')
 
-                # Control the frequency of updates, for example, every 2 seconds
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            self.logger.info(f'cgroup monitoring job was cancelled')
+        # Snapshot cpu.stat at the start of the test. Unlike memory.peak, cpu.stat
+        # has no per-FD reset mechanism — values are cumulative for the cgroup's
+        # lifetime. We subtract this snapshot from the end-of-test reading to get
+        # per-test CPU usage.
+        cpu_stat_path = self.cgroup_path / 'cpu.stat'
+        if cpu_stat_path.exists():
+            with open(cpu_stat_path, 'r') as f:
+                self._cpu_stat_start = self._read_cpu_stat(f)
+
+    def get_test_metrics(self) -> Metric:
+        test_metrics = super().get_test_metrics()
+        if self._memory_peak_fd is not None:
+            try:
+                self._memory_peak_fd.seek(0)
+                test_metrics.memory_peak = int(self._memory_peak_fd.read().strip())
+            except Exception as e:
+                self.logger.warning(f"Could not read memory.peak for {self.cgroup_path}: {e}")
+
+        cpu_stat_path = self.cgroup_path / 'cpu.stat'
+        if cpu_stat_path.exists() and self._cpu_stat_start is not None:
+            with open(cpu_stat_path, 'r') as f:
+                cpu_stat_end = self._read_cpu_stat(f)
+            for stat, attr in self._CPU_STAT_FIELDS.items():
+                start_val = self._cpu_stat_start.get(stat, 0.0)
+                end_val = cpu_stat_end.get(stat, 0.0)
+                setattr(test_metrics, attr, end_val - start_val)
+
+        return test_metrics
+
+    def teardown_test_tracking(self) -> None:
+        if self._memory_peak_fd is not None:
+            self._memory_peak_fd.close()
+            self._memory_peak_fd = None
+        self._cpu_stat_start = None
+        super().teardown_test_tracking()
+
+    # Maps cpu.stat keys to Metric attribute names. Values in cpu.stat are in
+    # microseconds; we convert to seconds when assigning to the Metric.
+    _CPU_STAT_FIELDS = {
+        'user_usec': 'user_sec',
+        'system_usec': 'system_sec',
+        'usage_usec': 'usage_sec',
+    }
 
     @staticmethod
-    def _parse_cpu_stat(file: TextIO, metrics: Metric) -> None:
-        # Map the values from cpu.state to the model. Keys are values from cpu.stat
-        stats = {'user_usec': 'user_sec', 'system_usec': 'system_sec', 'usage_usec': 'usage_sec'}
+    def _read_cpu_stat(file: TextIO) -> dict[str, float]:
+        """Read cpu.stat and return the relevant counters converted to seconds."""
+        result: dict[str, float] = {}
         for line in file.readlines():
-            stat, value = line.split(' ')
-            if stat in stats.keys():
-                setattr(metrics, stats[stat], float(value) / 1_000_000)
+            parts = line.split(' ', 1)
+            if len(parts) == 2 and parts[0] in ResourceGatherOn._CPU_STAT_FIELDS:
+                result[parts[0]] = float(parts[1]) / 1_000_000
+        return result
 
 
-def get_resource_gather(is_switched_on: bool, test: TestPyTest | SimpleNamespace) -> ResourceGather:
+def get_resource_gather(temp_dir: Path, is_switched_on: bool, test: TestPyTest | SimpleNamespace, worker_id: str | None = None) -> ResourceGather:
+    """Return a resource gatherer for the given test. Always creates a test record in the DB."""
     if is_switched_on:
-        return ResourceGatherOn(test)
+        return ResourceGatherOn(temp_dir, test, worker_id)
     else:
-        return ResourceGatherOff(test)
+        return ResourceGatherRecord(temp_dir, test, worker_id)
 
 
 def _is_cgroup_rw() -> bool:
     with open('/proc/mounts', 'r') as f:
         for line in f.readlines():
-            if 'cgroup2' in line :
+            if 'cgroup2' in line:
                 options = line.split(' ')[3].split(',')
-                if 'rw' in options:
-                    return True
-                else:
-                    return False
+                return 'rw' in options
+    return False
+
+def propagate_subtree_controls(group: Path):
+    with open(group / 'cgroup.controllers', 'r') as f:
+        controllers = f.readline().strip()
+    if not controllers:
+        return
+    controllers = " ".join(map(lambda x: f"+{x}", controllers.split(" ")))
+    with open(group / 'cgroup.subtree_control', 'w') as f:
+        f.write(controllers)
 
 
 def setup_cgroup(is_required: bool) -> None:
     if is_required:
+        # Export the cgroup base path as an env var so that xdist worker subprocesses
+        # inherit it. Workers are spawned after the master has already moved itself into
+        # tests/master/default, so without this env var they would compute CGROUP_INITIAL
+        # relative to that nested cgroup instead of the original top-level scope.
+        os.environ[SCYLLA_TEST_CGROUP_BASE_ENV] = str(CGROUP_INITIAL.parent)
+
         # check where the process is executed in podman or in docker
         is_podman = os.access("/run/.containerenv", os.F_OK)
         is_docker = os.access("/.dockerenv", os.F_OK)
@@ -290,7 +305,6 @@ def setup_cgroup(is_required: bool) -> None:
             else:
                 configured = True
 
-
         if not configured:
             with open(CGROUP_INITIAL.parent / 'cgroup.procs') as f:
                 processes = [line.strip() for line in f.readlines()]
@@ -299,39 +313,72 @@ def setup_cgroup(is_required: bool) -> None:
                 with open(CGROUP_INITIAL / 'cgroup.procs', "w") as f:
                     f.write(str(process))
 
-            with open(CGROUP_INITIAL.parent / 'cgroup.controllers', "r") as f:
-                controllers = f.readline()
-            controllers = " ".join(map(lambda x: f"+{x}", controllers.split(" ")))
+            propagate_subtree_controls(CGROUP_INITIAL.parent)
 
-            with open(CGROUP_INITIAL.parent / 'cgroup.subtree_control', "w") as f:
-                f.write(controllers)
-
-            with open(CGROUP_TESTS / 'cgroup.subtree_control', "w") as f:
-                f.write(controllers)
+        # Always ensure CGROUP_TESTS has subtree controls enabled so that worker
+        # sub-cgroups and per-test cgroups can use memory tracking.
+        propagate_subtree_controls(CGROUP_TESTS)
 
 
-async def monitor_resources(cancel_event: Event, stop_event: Event, tmpdir: Path) -> None:
+def setup_worker_cgroup() -> None:
+    from test.pylib.util import get_xdist_worker_id
+    worker_id = get_xdist_worker_id() or "master"
+    # this method is creating the worker cgroup, but the main cgroup is created in the master thread, so this is just to
+    # avoid race conditions
+    for i in range(10):
+        if CGROUP_TESTS.exists():
+            break
+        time.sleep(0.5)
+    worker_cgroup_path = CGROUP_TESTS / worker_id
+    worker_cgroup_path_default = worker_cgroup_path / 'default'
+    for group in [worker_cgroup_path, worker_cgroup_path_default]:
+        if not group.exists():
+            group.mkdir()
+    propagate_subtree_controls(worker_cgroup_path)
+    # Move the current worker process into the worker's default leaf cgroup.
+    # Scylla processes spawned by the test (via ScyllaClusterManager) will inherit
+    # this cgroup. The worker-level cgroup (CGROUP_TESTS/{worker_id}) is used for
+    # hierarchical memory monitoring and captures all descendant processes.
+    try:
+        with open(worker_cgroup_path_default / 'cgroup.procs', 'w') as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        logger.warning(f"Could not move worker process to cgroup {worker_cgroup_path_default}: {e}")
+
+
+class SystemResourceMonitor:
     """Continuously monitors CPU and memory utilization."""
-    sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
-    while not cancel_event.is_set() and not stop_event.is_set():
-        timeline_record = SystemResourceMetric(
-            host_id=HOST_ID,
-            cpu=psutil.cpu_percent(interval=0.1),
-            memory=psutil.virtual_memory().percent,
-            timestamp=datetime.now(),
-        )
+    def __init__(self, tmpdir: Path):
+        self.tmpdir = tmpdir
+        self.stop_event = Event()
+        self.thread = ThreadPoolExecutor(max_workers=1)
 
-        sqlite_writer.write_row(timeline_record, SYSTEM_RESOURCE_METRICS_TABLE)
+    def start(self) -> None:
+        self.thread.submit(self._monitor_resources, self.tmpdir)
 
-        # Control the frequency of updates, for example, every 2 seconds
-        await asyncio.sleep(2)
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.shutdown(wait=True)
 
+    def _monitor_resources(self, tmpdir: Path) -> None:
+        sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
+        try:
+            while not self.stop_event.is_set():
+                vm = psutil.virtual_memory()
+                timeline_record = SystemResourceMetric(
+                    host_id=HOST_ID,
+                    cpu=psutil.cpu_percent(interval=0.1),
+                    memory_free=vm.free,
+                    memory_available=vm.available,
+                    memory_used=vm.used,
+                    memory_active=vm.active,
+                    memory_inactive=vm.inactive,
+                    memory_buffers=vm.buffers,
+                    timestamp=datetime.now(),
+                )
+                sqlite_writer.write_row(timeline_record, SYSTEM_RESOURCE_METRICS_TABLE)
 
-async def no_monitor() -> None:
-    pass
-
-
-def run_resource_watcher(is_required: bool, cancel_event: Event, stop_event:Event, tmpdir: str) -> Task:
-    if is_required:
-        return asyncio.create_task(monitor_resources(cancel_event, stop_event, Path(tmpdir)))
-    return asyncio.create_task(no_monitor())
+                # Control the frequency of updates, for example, every 2 seconds
+                sleep(2)
+        finally:
+            sqlite_writer.close()
