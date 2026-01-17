@@ -2217,6 +2217,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             db.local().check_rf_rack_validity(token_metadata.local().get());
 
+            // Start audit service after join_cluster so that the table-based audit backend
+            // can properly create its keyspace and table.
+            checkpoint(stop_signal, "starting audit service");
+            audit::audit::start_audit(*cfg, token_metadata, qp, mm).handle_exception([&] (auto&& e) {
+                startlog.error("audit start failed: {}", e);
+            }).get();
+            auto audit_stop = defer([] {
+                audit::audit::stop_audit().get();
+            });
+
             // Semantic validation of sstable compression parameters from config.
             // Adding here (i.e., after `join_cluster`) to ensure that the
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
@@ -2505,13 +2515,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             notify_set.notify_all(configurable::system_state::started).get();
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
-
-            audit::audit::start_audit(*cfg, token_metadata, qp, mm).handle_exception([&] (auto&& e) {
-                startlog.error("audit start failed: {}", e);
-            }).get();
-            auto audit_stop = defer([] {
-                audit::audit::stop_audit().get();
-            });
 
             // Create controllers before drain_on_shutdown() below, so that it destructs
             // after drain stops them in stop_transport()
