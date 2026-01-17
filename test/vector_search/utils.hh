@@ -9,6 +9,7 @@
 #pragma once
 
 #include "test/lib/cql_test_env.hh"
+#include "db/config.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sstring.hh>
@@ -173,6 +174,13 @@ inline seastar::future<unreachable_socket> make_unreachable_socket() {
     ret.connections.push_back(co_await seastar::connect(seastar::socket_address(seastar::net::inet_address(ret.host), ret.port)));
     ret.connections.push_back(co_await seastar::connect(seastar::socket_address(seastar::net::inet_address(ret.host), ret.port)));
     co_return std::move(ret);
+}
+
+inline cql_test_config make_config(const seastar::sstring& primary_uri = "") {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    cfg.db_config->vector_store_primary_uri.set(primary_uri.c_str());
+    return cfg;
 }
 
 } // namespace test::vector_search
