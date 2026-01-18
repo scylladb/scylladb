@@ -36,6 +36,7 @@ class query_processor;
 
 namespace selection {
     class selection;
+    struct prepared_selector;
 } // namespace selection
 
 namespace restrictions {
@@ -364,6 +365,10 @@ class vector_indexed_table_select_statement : public select_statement {
     prepared_ann_ordering_type _prepared_ann_ordering;
     mutable gc_clock::time_point _query_start_time_point;
 
+    /// Indices of similarity functions in the selection that match the ANN ordering.
+    /// These functions' results will be substituted with the pre-computed distance.
+    std::vector<size_t> _similarity_column_indices;
+
 public:
     static constexpr size_t max_ann_query_limit = 1000;
 
@@ -371,15 +376,34 @@ public:
             lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
             ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
             ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-            std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs);
+            std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs,
+            std::vector<size_t> similarity_column_indices);
 
     vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
             prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
-            cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs);
+            cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs,
+            std::vector<size_t> similarity_column_indices);
+
+    /// Optimizes similarity function calls in prepared_selectors for ANN queries.
+    /// Finds the vector index, checks for matching similarity functions, and replaces them with null constants.
+    /// Returns the indices of the substituted selectors (empty if no optimization was performed).
+    static std::vector<size_t> optimize_similarity_function(
+            data_dictionary::database db,
+            schema_ptr schema,
+            const prepared_ann_ordering_type& ann_ordering,
+            std::vector<selection::prepared_selector>& prepared_selectors);
 
 private:
+    /// Find all similarity functions in prepared_selectors that match the ANN ordering
+    /// and the index's similarity function.
+    /// Returns the indices of all matching selectors.
+    static std::vector<size_t> find_matching_similarity_functions(
+            const std::vector<selection::prepared_selector>& prepared_selectors,
+            const prepared_ann_ordering_type& ann_ordering,
+            const sstring& index_similarity_function);
+
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
 
@@ -390,15 +414,20 @@ private:
     std::vector<float> get_ann_ordering_vector(const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, const std::vector<vector_search::primary_key>& pkeys, lowres_clock::time_point timeout) const;
+            const query_options& options, const vector_search::vector_store_client::ann_results& ann_results, lowres_clock::time_point timeout) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            const std::vector<vector_search::primary_key>& pkeys) const;
+            const vector_search::vector_store_client::ann_results& ann_results) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            std::vector<dht::partition_range> partition_ranges) const;
+            std::vector<dht::partition_range> partition_ranges, const vector_search::vector_store_client::ann_results& ann_results) const;
+
+    /// Add the vector similarity to the result set.
+    ::shared_ptr<cql_transport::messages::result_message> add_similarity_column(
+            ::shared_ptr<cql_transport::messages::result_message> result,
+            const vector_search::vector_store_client::ann_results& ann_results) const;
 };
 
 }

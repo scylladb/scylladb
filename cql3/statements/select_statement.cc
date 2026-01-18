@@ -29,6 +29,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/selection/selector.hh"
 #include "index/secondary_index.hh"
 #include "types/vector.hh"
 #include "validation.hh"
@@ -47,6 +48,8 @@
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/result_set.hh"
+#include "cql3/column_identifier.hh"
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -1958,11 +1961,114 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
+std::vector<size_t> vector_indexed_table_select_statement::find_matching_similarity_functions(
+        const std::vector<selection::prepared_selector>& prepared_selectors,
+        const prepared_ann_ordering_type& ann_ordering,
+        const sstring& index_similarity_function) {
+    // Build the expected function name from the index similarity function option
+    // Index options use: "cosine", "euclidean", "dot_product"
+    // Function names are: "similarity_cosine", "similarity_euclidean", "similarity_dot_product"
+    auto expected_func_name = functions::function_name::native_function("similarity_" + index_similarity_function);
+
+    std::vector<size_t> matching_indices;
+
+    for (size_t i = 0; i < prepared_selectors.size(); ++i) {
+        const auto& selector = prepared_selectors[i];
+        const auto* func_call = expr::as_if<expr::function_call>(&selector.expr);
+        if (!func_call) {
+            continue;
+        }
+
+        // Check if it's a similarity function (after preparation, func is shared_ptr<function>)
+        functions::function_name actual_func_name;
+        const auto* func_ptr = std::get_if<shared_ptr<db::functions::function>>(&func_call->func);
+        if (!func_ptr || !*func_ptr) {
+            // Check if it's still a function_name (before full preparation)
+            const auto* func_name_ptr = std::get_if<functions::function_name>(&func_call->func);
+            if (!func_name_ptr) {
+                continue;
+            }
+            actual_func_name = *func_name_ptr;
+        } else {
+            actual_func_name = (*func_ptr)->name();
+        }
+
+        // Check if the function matches the index's similarity function (not just any similarity function)
+        if (actual_func_name != expected_func_name) {
+            continue;
+        }
+
+        // Check that it has exactly 2 arguments
+        if (func_call->args.size() != 2) {
+            continue;
+        }
+
+        // Check if the first argument is the same column as the ANN ordering column
+        const auto* col_val = expr::as_if<expr::column_value>(&func_call->args[0]);
+        if (!col_val || col_val->col != ann_ordering.first) {
+            continue;
+        }
+
+        // Check if the second argument matches the ANN ordering expression
+        if (func_call->args[1] == ann_ordering.second) {
+            matching_indices.push_back(i);
+        }
+    }
+    return matching_indices;
+}
+
+std::vector<size_t> vector_indexed_table_select_statement::optimize_similarity_function(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const prepared_ann_ordering_type& ann_ordering,
+        std::vector<selection::prepared_selector>& prepared_selectors) {
+    // Find the vector index to get the similarity function type
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+    auto indexes = sim.list_indexes();
+    auto it = std::find_if(indexes.begin(), indexes.end(), [&ann_ordering](const auto& ind) {
+        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
+                ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == "vector_index") &&
+               (ind.target_column() == ann_ordering.first->name_as_text());
+    });
+
+    if (it == indexes.end()) {
+        return {};
+    }
+
+    // Get the similarity function from the index options
+    sstring index_similarity_function = "cosine";
+    auto sim_func_it = it->metadata().options().find("similarity_function");
+    if (sim_func_it != it->metadata().options().end()) {
+        index_similarity_function = sim_func_it->second;
+        std::transform(index_similarity_function.begin(), index_similarity_function.end(),
+                       index_similarity_function.begin(), ::tolower);
+    }
+
+    // Find all matching similarity functions
+    auto similarity_column_indices = find_matching_similarity_functions(prepared_selectors, ann_ordering, index_similarity_function);
+
+    // Replace each matching similarity function with a null constant placeholder
+    for (size_t idx : similarity_column_indices) {
+        auto& selector = prepared_selectors[idx];
+        // Preserve the original column name by setting an alias if not already present
+        if (!selector.alias) {
+            selector.alias = ::make_shared<column_identifier>(expr::to_string(selector.expr), true);
+        }
+        // Replace the similarity function call with a null constant placeholder
+        // The actual value will be substituted during result processing
+        selector.expr = expr::constant::make_null(float_type);
+    }
+
+    return similarity_column_indices;
+}
+
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs) {
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs,
+        std::vector<size_t> similarity_column_indices) {
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     auto [index_opt, _] = restrictions->find_idx(sim);
@@ -1986,18 +2092,20 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
-            std::move(per_partition_limit), stats, *index_opt, std::move(attrs));
+            std::move(per_partition_limit), stats, *index_opt, std::move(attrs), std::move(similarity_column_indices));
 }
 
 vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs)
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs,
+        std::vector<size_t> similarity_column_indices)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}
-    , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
+    , _prepared_ann_ordering(std::move(prepared_ann_ordering))
+    , _similarity_column_indices(std::move(similarity_column_indices)) {
 
     if (!limit.has_value()) {
         throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
@@ -2032,14 +2140,15 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
-        auto pkeys = co_await qp.vector_store_client().ann(
+        auto ann_results_opt = co_await qp.vector_store_client().ann(
                 _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, aoe.abort_source());
-        if (!pkeys.has_value()) {
+        if (!ann_results_opt.has_value()) {
             co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, ann_results_opt.error())));
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+        auto ann_results = std::move(ann_results_opt).value();
+        co_return co_await query_base_table(qp, state, options, ann_results, timeout);
     });
 
     auto page_size = options.get_page_size();
@@ -2075,7 +2184,7 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
+        service::query_state& state, const query_options& options, const vector_search::vector_store_client::ann_results& ann_results,
         lowres_clock::time_point timeout) const {
     auto command = prepare_command_for_base_query(qp, state, options);
 
@@ -2083,30 +2192,30 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
     // partition ranges instead of individual primary keys, since the
     // partition key alone uniquely identifies each row.
     if (_schema->clustering_key_size() == 0) {
-        auto to_partition_ranges = [](const std::vector<vector_search::primary_key>& pkeys) -> std::vector<dht::partition_range> {
+        auto to_partition_ranges = [](const vector_search::vector_store_client::ann_results& ann_results) -> std::vector<dht::partition_range> {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
-                return dht::partition_range::make_singular(pkey.partition);
+            std::ranges::transform(ann_results, std::back_inserter(partition_ranges), [](const auto& ann_result) {
+                return dht::partition_range::make_singular(ann_result.pk.partition);
             });
 
             return partition_ranges;
         };
-        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(pkeys));
+        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(ann_results), ann_results);
     }
-    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, pkeys);
+    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, ann_results);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        const std::vector<vector_search::primary_key>& pkeys) const {
+        const vector_search::vector_store_client::ann_results& ann_results) const {
 
     coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> result = co_await utils::result_map_reduce(
-            pkeys.begin(), pkeys.end(),
-            [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+            ann_results.begin(), ann_results.end(),
+            [&](this auto, auto& ann_result) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};
+                cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(ann_result.pk.clustering)};
                 coordinator_result<service::storage_proxy::coordinator_query_result> rqr =
-                        co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(),
+                        co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(ann_result.pk.partition)}, options.get_consistency(),
                                 {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
                 if (!rqr) {
                     co_return std::move(rqr).as_failure();
@@ -2115,22 +2224,84 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
             },
             query::result_merger{command->get_row_limit(), query::max_partitions});
 
-    co_return co_await wrap_result_to_error_message([this, &command, &options](auto result) {
-        return process_results(std::move(result), command, options, _query_start_time_point);
+    co_return co_await wrap_result_to_error_message([this, &command, &options, &ann_results](foreign_ptr<lw_shared_ptr<query::result>> result) {
+        return this->process_results(std::move(result), command, options, _query_start_time_point)
+            .then([this, &ann_results](auto msg) {
+                return add_similarity_column(std::move(msg), ann_results);
+            });
     })(std::move(result));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        std::vector<dht::partition_range> partition_ranges) const {
+        std::vector<dht::partition_range> partition_ranges, const vector_search::vector_store_client::ann_results& ann_results) const {
 
     co_return co_await qp.proxy()
             .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
                     {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
                     std::nullopt)
-            .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
-                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
+            .then(wrap_result_to_error_message([this, &options, command, &ann_results](service::storage_proxy::coordinator_query_result qr) {
+                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point)
+                    .then([this, &ann_results](auto msg) {
+                        return add_similarity_column(std::move(msg), ann_results);
+                    });
             }));
+}
+
+::shared_ptr<cql_transport::messages::result_message> vector_indexed_table_select_statement::add_similarity_column(
+        ::shared_ptr<cql_transport::messages::result_message> result,
+        const vector_search::vector_store_client::ann_results& ann_results) const {
+
+    // Only process if matching similarity functions were found in the selection
+    if (_similarity_column_indices.empty()) {
+        return result;
+    }
+
+    auto rows_result = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(result);
+    if (!rows_result) {
+        // Not a rows result, return as-is
+        return result;
+    }
+
+    // Extract distances from ann_results
+    std::vector<float> similarity_scores;
+    similarity_scores.reserve(ann_results.size());
+    for (const auto& ann_result : ann_results) {
+        similarity_scores.push_back(ann_result.similarity);
+    }
+
+    // Get the result set and create a new one with substituted similarity values
+    const auto& original_result = rows_result->rs();
+    const auto& original_metadata = original_result.get_metadata();
+    const auto& original_rows = original_result.result_set().rows();
+
+    // Create new result set with substituted similarity values
+    auto new_result_set = std::make_unique<cql3::result_set>(original_metadata.get_names());
+
+    size_t row_idx = 0;
+    for (const auto& row : original_rows) {
+        std::vector<managed_bytes_opt> new_row;
+        new_row.reserve(row.size());
+
+        for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
+            // Check if this column is one of the similarity function indices
+            bool is_sim_col = std::find(_similarity_column_indices.begin(), 
+                                         _similarity_column_indices.end(), 
+                                         col_idx) != _similarity_column_indices.end();
+            if (is_sim_col && row_idx < similarity_scores.size()) {
+                // Substitute the similarity function result with the pre-computed distance
+                auto similarity_bytes = float_type->decompose(similarity_scores[row_idx]);
+                new_row.push_back(managed_bytes(similarity_bytes));
+            } else {
+                new_row.push_back(row[col_idx]);
+            }
+        }
+
+        new_result_set->add_row(std::move(new_row));
+        ++row_idx;
+    }
+
+    return ::make_shared<cql_transport::messages::result_message::rows>(cql3::result(std::move(new_result_set)));
 }
 
 namespace raw {
@@ -2262,6 +2433,24 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         ps.expr = levellize_aggregation_depth(ps.expr, aggregation_depth);
     }
 
+    // Detect ANN ordering early (before creating selection) so we can optimize similarity function calls
+    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
+    std::vector<size_t> similarity_column_indices;
+    auto orderings = _parameters->orderings();
+
+    if (!orderings.empty()) {
+        const auto* ann_vector = std::get_if<select_statement::ann_vector>(&orderings.front().second);
+        if (ann_vector) {
+            // This is an ANN query - prepare the ordering and check for similarity function optimization
+            prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
+
+            // Optimize similarity function calls by replacing them with null placeholders
+            // The actual values will be substituted during result processing
+            similarity_column_indices = vector_indexed_table_select_statement::optimize_similarity_function(
+                    db, schema, *prepared_ann_ordering, levellized_prepared_selectors);
+        }
+    }
+
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
@@ -2285,16 +2474,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 
-    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
-
-    auto orderings = _parameters->orderings();
-
-    if (!orderings.empty()) {
+    // Handle non-ANN orderings (ANN ordering was already handled above)
+    if (!orderings.empty() && !prepared_ann_ordering.has_value()) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
-            } else {
+            if constexpr (!std::is_same_v<T, select_statement::ann_vector>) {
                 SCYLLA_ASSERT(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2393,7 +2577,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     } else if (prepared_ann_ordering) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs), std::move(similarity_column_indices));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,
