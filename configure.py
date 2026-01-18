@@ -725,7 +725,8 @@ raft_tests = set([
 vector_search_tests = set([
     'test/vector_search/vector_store_client_test',
     'test/vector_search/load_balancer_test',
-    'test/vector_search/client_test'
+    'test/vector_search/client_test',
+    'test/vector_search/filter_test'
 ])
 
 vector_search_validator_bin = 'vector-search-validator/bin/vector-search-validator'
@@ -1380,6 +1381,7 @@ scylla_core = (['message/messaging_service.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
+                'vector_search/filter.cc',
                 'vector_search/truststore.cc'
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
@@ -1784,6 +1786,7 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
 deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/filter_test'] = ['test/vector_search/filter_test.cc'] + scylla_tests_dependencies
 
 boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
 
