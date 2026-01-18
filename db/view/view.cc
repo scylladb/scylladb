@@ -12,6 +12,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -2689,29 +2690,28 @@ future<> view_builder::dispatch_create_view(sstring ks_name, sstring view_name) 
 
     co_await coroutine::all(
         [this, ks_name, view_name, units = std::move(units)] mutable -> future<> {
-            co_await handle_create_view_local(std::move(ks_name), std::move(view_name), std::move(units)); },
+            co_await handle_create_view_local(ks_name, view_name, std::move(units)); },
         [this, ks_name, view_name] mutable -> future<> {
             co_await container().invoke_on_others([ks_name = std::move(ks_name), view_name = std::move(view_name)] (view_builder& vb) mutable -> future<> {
-                return vb.handle_create_view_local(std::move(ks_name), std::move(view_name), std::nullopt); }); });
+                return vb.handle_create_view_local(ks_name, view_name, std::nullopt); }); });
 }
 
-future<> view_builder::handle_seed_view_build_progress(sstring ks_name, sstring view_name) {
+future<> view_builder::handle_seed_view_build_progress(const sstring& ks_name, const sstring& view_name) {
     auto view = view_ptr(_db.find_schema(ks_name, view_name));
     auto& step = get_or_create_build_step(view->view_info()->base_id());
     return _sys_ks.register_view_for_building_for_all_shards(view->ks_name(), view->cf_name(), step.current_token());
 }
 
-future<> view_builder::handle_create_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units) {
+future<> view_builder::handle_create_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units) {
     [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::move(units));
     auto view = view_ptr(_db.find_schema(ks_name, view_name));
     auto& step = get_or_create_build_step(view->view_info()->base_id());
-
     co_await coroutine::all(
         [&step] -> future<> {
             co_await step.base->await_pending_writes(); },
         [&step] -> future<> {
             co_await step.base->await_pending_streams(); });
-    co_await flush_base(step.base, _as);
+        co_await flush_base(step.base, _as);
     try {
         // This resets the build step to the current token. It may result in views currently
         // being built to receive duplicate updates, but it simplifies things as we don't have
@@ -2773,15 +2773,14 @@ future<> view_builder::dispatch_drop_view(sstring ks_name, sstring view_name) {
 
     co_await coroutine::all(
         [this, ks_name, view_name, units = std::move(units)] mutable -> future<> {
-            co_await handle_drop_view_local(std::move(ks_name), std::move(view_name), std::move(units)); },
+            co_await handle_drop_view_local(ks_name, view_name, std::move(units)); },
         [this, ks_name, view_name] mutable -> future<> {
             co_await container().invoke_on_others([ks_name = std::move(ks_name), view_name = std::move(view_name)] (view_builder& vb) mutable -> future<> {
-                return vb.handle_drop_view_local(std::move(ks_name), std::move(view_name), std::nullopt); });});
-
+                return vb.handle_drop_view_local(ks_name, view_name, std::nullopt); });});
     co_await handle_drop_view_global_cleanup(ks_name, view_name);
 }
 
-future<> view_builder::handle_drop_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units) {
+future<> view_builder::handle_drop_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units) {
     [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::move(units));
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
 
@@ -2799,7 +2798,7 @@ future<> view_builder::handle_drop_view_local(sstring ks_name, sstring view_name
     }
 }
 
-future<> view_builder::handle_drop_view_global_cleanup(sstring ks_name, sstring view_name) {
+future<> view_builder::handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name) {
     if (this_shard_id() != 0) {
         co_return;
     }

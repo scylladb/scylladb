@@ -285,10 +285,10 @@ private:
     void setup_metrics();
     future<> dispatch_create_view(sstring ks_name, sstring view_name);
     future<> dispatch_drop_view(sstring ks_name, sstring view_name);
-    future<> handle_seed_view_build_progress(sstring ks_name, sstring view_name);
-    future<> handle_create_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units);
-    future<> handle_drop_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units);
-    future<> handle_drop_view_global_cleanup(sstring ks_name, sstring view_name);
+    future<> handle_seed_view_build_progress(const sstring& ks_name, const sstring& view_name);
+    future<> handle_create_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units);
+    future<> handle_drop_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units);
+    future<> handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name);
     future<view_builder_units> get_or_adopt_view_builder_lock(view_builder_units_opt units);
 
     template <typename Func1, typename Func2>
