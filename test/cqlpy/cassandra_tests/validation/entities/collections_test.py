@@ -4,6 +4,9 @@
 # The original Apache Cassandra license:
 #
 # SPDX-License-Identifier: Apache-2.0
+#
+# Modifications: Copyright 2020-present ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 from ...porting import  *
 from cassandra.query import UNSET_VALUE
