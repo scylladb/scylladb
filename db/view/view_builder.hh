@@ -107,6 +107,9 @@ class view_builder final : public service::migration_listener::only_view_notific
     //aliasing for semaphore units that will be used throughout the class
     using view_builder_units = semaphore_units<named_semaphore_exception_factory>;
 
+    //aliasing for optional semaphore units that will be used throughout the class
+    using view_builder_units_opt = std::optional<view_builder_units>;
+
     /**
      * Keeps track of the build progress for a particular view.
      * When the view is built, next_token == first_token.
@@ -283,12 +286,10 @@ private:
     future<> dispatch_create_view(sstring ks_name, sstring view_name);
     future<> dispatch_drop_view(sstring ks_name, sstring view_name);
     future<> handle_seed_view_build_progress(sstring ks_name, sstring view_name);
-    future<> handle_create_view_local(sstring ks_name, sstring view_name);
-    future<> handle_drop_view_local(sstring ks_name, sstring view_name);
-    future<> handle_create_view_local_impl(sstring ks_name, sstring view_name);
-    future<> handle_drop_view_local_impl(sstring ks_name, sstring view_name);
+    future<> handle_create_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units);
+    future<> handle_drop_view_local(sstring ks_name, sstring view_name, view_builder_units_opt units);
     future<> handle_drop_view_global_cleanup(sstring ks_name, sstring view_name);
-    future<view_builder_units> get_view_builder_units(std::optional<view_builder_units> units);
+    future<view_builder_units> get_or_adopt_view_builder_lock(view_builder_units_opt units);
 
     template <typename Func1, typename Func2>
     future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {
