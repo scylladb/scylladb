@@ -1144,6 +1144,9 @@ public:
             if (stats && stats->capacity.contains(host)) {
                 auto capacity = stats->capacity.at(host);
                 set_cell(r.cells(), "storage_capacity", data_value(int64_t(capacity)));
+                if (auto ts_iter = stats->tablet_stats.find(host); ts_iter != stats->tablet_stats.end()) {
+                    set_cell(r.cells(), "effective_capacity", data_value(int64_t(ts_iter->second.effective_capacity)));
+                }
 
                 if (auto utilization = load.get_allocated_utilization(host)) {
                     set_cell(r.cells(), "storage_allocated_utilization", data_value(double(*utilization)));
@@ -1171,6 +1174,7 @@ private:
             .with_column("tablets_allocated", long_type)
             .with_column("tablets_allocated_per_shard", double_type)
             .with_column("storage_capacity", long_type)
+            .with_column("effective_capacity", long_type)
             .with_column("storage_allocated_load", long_type)
             .with_column("storage_allocated_utilization", double_type)
             .with_column("storage_load", long_type)
