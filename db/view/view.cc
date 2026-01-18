@@ -12,7 +12,6 @@
 #include <deque>
 #include <exception>
 #include <functional>
-#include <iterator>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -2706,13 +2705,14 @@ future<> view_builder::handle_create_view_local(const sstring& ks_name, const ss
     [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::move(units));
     auto view = view_ptr(_db.find_schema(ks_name, view_name));
     auto& step = get_or_create_build_step(view->view_info()->base_id());
-    co_await coroutine::all(
-        [&step] -> future<> {
-            co_await step.base->await_pending_writes(); },
-        [&step] -> future<> {
-            co_await step.base->await_pending_streams(); });
-        co_await flush_base(step.base, _as);
     try {
+        co_await coroutine::all(
+            [&step] -> future<> {
+                co_await step.base->await_pending_writes(); },
+            [&step] -> future<> {
+                co_await step.base->await_pending_streams(); });
+        co_await flush_base(step.base, _as);
+    
         // This resets the build step to the current token. It may result in views currently
         // being built to receive duplicate updates, but it simplifies things as we don't have
         // to keep around a list of new views to build the next time the reader crosses a token
@@ -2730,7 +2730,6 @@ future<> view_builder::handle_create_view_local(const sstring& ks_name, const ss
     // Waited on indirectly in stop().
     static_cast<void>(_build_step.trigger());
 }
-
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
     if (this_shard_id() != 0) {
