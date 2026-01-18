@@ -357,6 +357,7 @@ Schema:
 CREATE TABLE system.load_per_node (
     node uuid PRIMARY KEY,
     dc text,
+    effective_capacity bigint,
     rack text,
     storage_allocated_load bigint,
     storage_allocated_utilization double,
@@ -372,6 +373,7 @@ Columns:
 * `storage_allocated_load` - Disk space allocated for tablets, assuming each tablet has a fixed size (target_tablet_size).
 * `storage_allocated_utilization` - Fraction of node's disk capacity taken for `storage_allocated_load`, where 1.0 means full utilization.
 * `storage_capacity` - Total disk capacity in bytes. Used to compute `storage_allocated_utilization`. By default equal to file system's capacity.
+* `effective_capacity` - Sum of available disk space and tablet sizes on a node. Used to compute load on a node for size based balancing.
 * `storage_load` - Disk space allocated for tablets, computed with actual tablet sizes. Can be null if some of the tablet sizes are not known.
 * `storage_utilization` - Fraction of node's disk capacity taken for `storage_load` (with actual tablet sizes), where 1.0 means full utilization. Can be null if some of the tablet sizes are not known.
 * `tablets_allocated` - Number of tablet replicas on the node. Migrating tablets are accounted as if migration already finished.
