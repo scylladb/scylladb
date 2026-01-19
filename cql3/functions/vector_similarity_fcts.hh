@@ -39,7 +39,7 @@ namespace detail {
 // Extract float vector directly from serialized bytes, bypassing data_value overhead.
 // This is an internal API exposed for testing purposes.
 // Vector<float, N> wire format: N floats as big-endian uint32_t values, 4 bytes each.
-std::vector<float> extract_float_vector(const bytes_opt& param, size_t dimension);
+std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension_t dimension);
 
 } // namespace detail
 

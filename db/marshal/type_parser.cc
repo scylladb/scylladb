@@ -16,6 +16,7 @@
 #include <string>
 #include <tuple>
 
+#include "cql3/cql3_type.hh"
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -113,7 +114,7 @@ std::vector<data_type> type_parser::get_type_parameters(bool multicell)
     throw parse_exception(_str, _idx, "unexpected end of string");
 }
 
-std::tuple<data_type, size_t> type_parser::get_vector_parameters()
+std::tuple<data_type, vector_dimension_t> type_parser::get_vector_parameters()
 {
     if (is_eos() || _str[_idx] != '(') {
         throw std::logic_error("internal error");
@@ -128,7 +129,7 @@ std::tuple<data_type, size_t> type_parser::get_vector_parameters()
     }
 
     data_type type = do_parse(true);
-    size_t size = 0;
+    vector_dimension_t size = 0;
     if (_str[_idx] == ',') {
         ++_idx;
         skip_blank();
@@ -142,7 +143,20 @@ std::tuple<data_type, size_t> type_parser::get_vector_parameters()
             throw parse_exception(_str, _idx, "expected digit or ')'");
         }
 
-        size = std::stoul(_str.substr(i, _idx - i));
+        unsigned long parsed_size;
+        try {
+            parsed_size = std::stoul(_str.substr(i, _idx - i));
+        } catch (const std::exception& e) {
+            throw parse_exception(_str, i, format("Invalid vector dimension: {}", e.what()));
+        }
+        static_assert(sizeof(unsigned long) >= sizeof(vector_dimension_t));
+        if (parsed_size == 0) {
+            throw parse_exception(_str, _idx, "Vectors must have a dimension greater than 0");
+        }
+        if (parsed_size > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
+            throw parse_exception(_str, _idx, format("Vectors must have a dimension less than or equal to {}", cql3::cql3_type::MAX_VECTOR_DIMENSION));
+        }
+        size = static_cast<vector_dimension_t>(parsed_size);
 
         ++_idx; // skipping ')'
         return std::make_tuple(type, size);
