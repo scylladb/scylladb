@@ -273,6 +273,23 @@ public:
             return;
         }
 
+        // If the suite doesn't have any children, that indicates one of
+        // the following:
+        //
+        // * This suite represents an actual test suite that doesn't contain
+        //   any tests.
+        // * This suite corresponds to a test file that was compiled into
+        //   the `test/boost/combined_tests` binary. In that case, the test
+        //   file was empty, i.e. it didn't contain any suites or tests.
+        //
+        // In either situation, we still want to record the information that
+        // the file/suite exists (e.g. to be able to tell if the file the user
+        // wants to run even exists).
+        if (ts.size() == 0) {
+            const std::string_view filename = {ts.p_file_name.begin(), ts.p_file_name.end()};
+            (void) get_active_suite(filename);
+        }
+
         drop_active_suite();
     }
 
