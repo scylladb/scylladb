@@ -780,14 +780,14 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 
     tombstone_gc_state gc_state = tombstone_gc_enabled ? table.get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
 
-    // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
-        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, gc_state, std::move(result_builder_factory));
-    }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
+    // Use nested coroutine so each step can fail without exceptions using try_future.
+    auto f = co_await coroutine::as_future(std::invoke([&] -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
+        co_await coroutine::try_future(ctx->lookup_readers(timeout));
+        page_consume_result<ResultBuilder> r = co_await coroutine::try_future(read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, gc_state, std::move(result_builder_factory)));
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.
             auto last_pos = *r.compaction_state->current_full_position();
-            co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(last_pos));
+            co_await coroutine::try_future(ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(last_pos)));
         }
         co_return make_foreign(make_lw_shared<typename ResultBuilder::result_type>(std::move(r.result)));
     }));
