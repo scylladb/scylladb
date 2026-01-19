@@ -11,7 +11,7 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int, new_test_table
 
 from cassandra.protocol import FunctionFailure
 from cassandra.util import Date, Time
@@ -603,3 +603,24 @@ def test_select_json_with_alias(cql, table1):
     }
     for input, output in input_and_output.items():
         assert list(cql.execute(f"SELECT JSON {input} from {table1} where p = {p}")) == [(EquivalentJson(output),)]
+
+# The grammar around DISTINCT and JSON is hairy. Test the combination.
+def test_select_distinct_json(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        p1 = unique_key_int()
+        p2 = unique_key_int()
+        # Insert two rows per partition
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p1}, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p1}, 2, 20)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p2}, 1, 30)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p2}, 2, 40)")
+        # DISTINCT can only select partition key columns (p)
+        # Should return exactly 2 rows (one per partition)
+        result = list(cql.execute(f"SELECT JSON DISTINCT p FROM {table} WHERE p IN ({p1}, {p2})"))
+        # Check that the results are valid JSON with the expected structure
+        json_values = sorted([json.loads(row[0])["p"] for row in result])
+        assert json_values == sorted([p1, p2])
+        # Without DISTINCT, should return all 4 rows
+        result = list(cql.execute(f"SELECT JSON p FROM {table} WHERE p IN ({p1}, {p2})"))
+        json_values = [json.loads(row[0])["p"] for row in result]
+        assert sorted(json_values) == sorted([p1, p1, p2, p2])

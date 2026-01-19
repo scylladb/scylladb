@@ -389,8 +389,10 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool is_ann_ordering = false;
     }
     : K_SELECT (
-                ( K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; } )?
-                ( K_DISTINCT { is_distinct = true; } )?
+                ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
+                | (K_JSON selectClause K_FROM)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
+                )?
+                ( (K_DISTINCT selectClause K_FROM)=> K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
       K_FROM (
@@ -425,6 +427,7 @@ selector returns [shared_ptr<raw_selector> s]
 
 unaliasedSelector returns [uexpression tmp]
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
+       | v=value                                   { tmp = std::move(v); }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               unresolved_identifier{std::move(c)}}; }
@@ -455,14 +458,11 @@ vectorSimilarityArgs returns [std::vector<expression> a]
 
 vectorSimilarityArg returns [uexpression a]
     : s=unaliasedSelector { a = std::move(s); }
-    | v=value             { a = std::move(v); }
     ;
 
 countArgument
     : '*'
-    | i=INTEGER { if (i->getText() != "1") {
-                    add_recognition_error("Only COUNT(1) is supported, got COUNT(" + i->getText() + ")");
-                } }
+    /* COUNT(1) is also allowed, it is recognized via the general function(args) path */
     ;
 
 whereClause returns [uexpression clause]
