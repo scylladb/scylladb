@@ -8,7 +8,6 @@ Troubleshooting ScyllaDB
    
    support/index   
    startup/index
-   upgrade/index
    cluster/index
    modeling/index
    storage/index
@@ -29,7 +28,6 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   * :doc:`Errors and ScyllaDB Customer Support <support/index>`
   * :doc:`ScyllaDB Startup <startup/index>`
   * :doc:`ScyllaDB Cluster and Node <cluster/index>`
-  * :doc:`ScyllaDB Upgrade <upgrade/index>`
   * :doc:`Data Modeling <modeling/index>`
   * :doc:`Data Storage and SSTables <storage/index>`
   * :doc:`CQL errors <CQL/index>`
