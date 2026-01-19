@@ -24,6 +24,7 @@
 #include "replica/database.hh"
 #include <memory>
 #include <seastar/core/future-util.hh>
+#include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -2109,7 +2110,7 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
     m.upgrade(cf.schema());
 
     tracing::trace(trace_state, "Applying counter update");
-    auto f = co_await coroutine::as_future(update_write_metrics(seastar::futurize_invoke([&] {
+    co_await coroutine::try_future(update_write_metrics(seastar::futurize_invoke([&] {
         if (!s->is_synced()) {
             throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
                                             s->ks_name(), s->cf_name(), s->version()));
@@ -2121,9 +2122,6 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
             throw;
         }
     })));
-    if (f.failed()) {
-        co_await coroutine::return_exception_ptr(f.get_exception());
-    }
 
     if (utils::get_local_injector().enter("apply_counter_update_delay_5s")) {
         co_await seastar::sleep(std::chrono::seconds(5));
