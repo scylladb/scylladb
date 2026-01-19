@@ -224,10 +224,12 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types,
-             storage_options storage_opts)
+             storage_options storage_opts,
+             std::optional<locator::replication_strategy_config_options> next_options)
     : _name{name}
     , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
     , _strategy_options{std::move(strategy_options)}
+    , _next_strategy_options{std::move(next_options)}
     , _initial_tablets(initial_tablets)
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
@@ -273,14 +275,15 @@ keyspace_metadata::new_keyspace(std::string_view name,
                                 std::optional<consistency_config_option> consistency_option,
                                 bool durables_writes,
                                 storage_options storage_opts,
-                                std::vector<schema_ptr> cf_defs)
+                                std::vector<schema_ptr> cf_defs,
+                                std::optional<locator::replication_strategy_config_options> next_options)
 {
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, consistency_option, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, consistency_option, durables_writes, cf_defs, user_types_metadata{}, storage_opts, next_options);
 }
 
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(const keyspace_metadata& ksm) {
-    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(), ksm.get_storage_options());
+    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(), ksm.get_storage_options(), {}, ksm.next_strategy_options_opt());
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
@@ -649,8 +652,8 @@ struct fmt::formatter<data_dictionary::user_types_metadata> {
 };
 
 auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dictionary::keyspace_metadata& m, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, tablets=",
-            m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes());
+    fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, nextStrategyOptions={}, cfMetaData={}, durable_writes={}, tablets=",
+            m.name(), m.strategy_name(), m.strategy_options(), m.next_strategy_options_opt(), m.cf_meta_data(), m.durable_writes());
     if (m.initial_tablets()) {
         if (auto initial_tablets = m.initial_tablets().value()) {
             fmt::format_to(ctx.out(), "{{\"initial\":{}}}", initial_tablets);
