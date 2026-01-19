@@ -65,6 +65,7 @@ struct raw_cql_test_config {
     bool connection_per_request = false; // create and tear down a connection for every request
     bool use_prepared = true;
     bool create_non_superuser = false;
+    unsigned tables = 1;
 
     sharded<abort_source>* as = nullptr;
 };
@@ -75,8 +76,8 @@ template <>
 struct fmt::formatter<perf::raw_cql_test_config> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const perf::raw_cql_test_config& c, format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{{workload={}, partitions={}, concurrency={}, connections={}, duration={}, ops_per_shard={}{}{}{}{}}}",
-            c.workload, c.partitions, c.concurrency_per_connection, c.connections_per_shard, c.duration_in_seconds, c.operations_per_shard,
+        return fmt::format_to(ctx.out(), "{{workload={}, partitions={}, concurrency={}, connections={}, tables={}, duration={}, ops_per_shard={}{}{}{}{}}}",
+            c.workload, c.partitions, c.concurrency_per_connection, c.connections_per_shard, c.tables, c.duration_in_seconds, c.operations_per_shard,
             (c.username.empty() ? "" : ", auth"),
             (c.connection_per_request ? ", connection_per_request" : ""),
             (c.use_prepared ? ", use_prepared" : ""),
@@ -170,8 +171,8 @@ class raw_cql_connection {
     sstring _username;
     sstring _password;
     bool _use_prepared = false;
-    sstring _read_stmt_id;
-    sstring _write_stmt_id;
+    std::vector<sstring> _read_stmt_ids;
+    std::vector<sstring> _write_stmt_ids;
 
     struct frame {
         cql_binary_opcode opcode;
@@ -409,45 +410,53 @@ public:
         }
     }
 
-    future<> prepare_statements() {
+    future<> prepare_statements(unsigned tables) {
         if (!_use_prepared) {
             co_return;
         }
-        _write_stmt_id = co_await prepare_query("INSERT INTO ks.cf(pk,c0,c1,c2,c3,c4) VALUES (?,0x01,0x02,0x03,0x04,0x05)");
-        _read_stmt_id = co_await prepare_query("SELECT * FROM ks.cf WHERE pk=?");
-    }
-
-    future<> write_one(uint64_t seq) {
-        auto key = make_key(seq);
-        if (_use_prepared) {
-            co_await execute_prepared(_write_stmt_id, key);
-        } else {
-            auto key_hex = to_hex(key);
-            co_await query_simple(fmt::format("INSERT INTO ks.cf(pk,c0,c1,c2,c3,c4) VALUES (0x{},0x01,0x02,0x03,0x04,0x05)", key_hex));
+        for (unsigned i = 0; i < tables; ++i) {
+            _write_stmt_ids.push_back(co_await prepare_query(fmt::format("INSERT INTO ks.cf{}(pk,c0,c1,c2,c3,c4) VALUES (?,0x01,0x02,0x03,0x04,0x05)", i)));
+            _read_stmt_ids.push_back(co_await prepare_query(fmt::format("SELECT * FROM ks.cf{} WHERE pk=?", i)));
         }
     }
 
-    future<> read_one(uint64_t seq) {
+    future<> write_one(unsigned table_idx, uint64_t seq) {
         auto key = make_key(seq);
         if (_use_prepared) {
-            co_await execute_prepared(_read_stmt_id, key);
+            co_await execute_prepared(_write_stmt_ids[table_idx], key);
         } else {
             auto key_hex = to_hex(key);
-            co_await query_simple(fmt::format("SELECT * FROM ks.cf WHERE pk=0x{}", key_hex));
+            co_await query_simple(fmt::format("INSERT INTO ks.cf{}(pk,c0,c1,c2,c3,c4) VALUES (0x{},0x01,0x02,0x03,0x04,0x05)", table_idx, key_hex));
+        }
+    }
+
+    future<> read_one(unsigned table_idx, uint64_t seq) {
+        auto key = make_key(seq);
+        if (_use_prepared) {
+            co_await execute_prepared(_read_stmt_ids[table_idx], key);
+        } else {
+            auto key_hex = to_hex(key);
+            co_await query_simple(fmt::format("SELECT * FROM ks.cf{} WHERE pk=0x{}", table_idx, key_hex));
         }
     }
 };
 
-static future<> ensure_schema(raw_cql_connection& conn) {
+static future<> ensure_schema(raw_cql_connection& conn, unsigned tables) {
     co_await conn.query_simple("CREATE KEYSPACE IF NOT EXISTS ks WITH replication={'class': 'NetworkTopologyStrategy'}");
-    co_await conn.query_simple("CREATE TABLE IF NOT EXISTS ks.cf (pk blob primary key, c0 blob, c1 blob, c2 blob, c3 blob, c4 blob)");
+    for (unsigned i = 0; i < tables; ++i) {
+        if (tables > 100 && (i+1) % 100 == 0) {
+             std::cout << "Creating schema in progress [" << i+1 << "/" << tables << "]" << std::endl;
+        }
+        co_await conn.query_simple(fmt::format("CREATE TABLE IF NOT EXISTS ks.cf{} (pk blob primary key, c0 blob, c1 blob, c2 blob, c3 blob, c4 blob)", i));
+    }
 }
 
-static future<> create_role_with_permissions(raw_cql_connection& conn, std::string_view username, std::string_view password) {
+static future<> create_role_with_permissions(raw_cql_connection& conn, std::string_view username, std::string_view password, unsigned tables) {
     co_await conn.query_simple(fmt::format("CREATE ROLE IF NOT EXISTS '{}' WITH PASSWORD = '{}' AND LOGIN = true", username, password));
-    co_await conn.query_simple(fmt::format("GRANT CREATE ON ALL KEYSPACES TO {}", username));
-    co_await conn.query_simple(fmt::format("GRANT SELECT ON ALL KEYSPACES TO {}", username));
-    co_await conn.query_simple(fmt::format("GRANT MODIFY ON ALL KEYSPACES TO {}", username));
+    for (unsigned i = 0; i < tables; ++i) {
+        co_await conn.query_simple(fmt::format("GRANT SELECT ON ks.cf{} TO {}", i, username));
+        co_await conn.query_simple(fmt::format("GRANT MODIFY ON ks.cf{} TO {}", i, username));
+    }
 }
 
 static constexpr std::string_view non_superuser_name = "perf_test_user";
@@ -462,10 +471,12 @@ static std::unique_ptr<raw_cql_connection> make_connection(connected_socket cs, 
 // Perform one logical operation (write or read) using an existing connection.
 static future<> do_request(raw_cql_connection& c, const raw_cql_test_config& cfg) {
     auto seq = tests::random::get_int<uint64_t>(cfg.partitions - 1);
+    static thread_local unsigned table_idx = 0;
+    unsigned t = table_idx++ % cfg.tables;
     if (cfg.workload == "write") {
-        co_await c.write_one(seq);
+        co_await c.write_one(t, seq);
     } else {
-        co_await c.read_one(seq);
+        co_await c.read_one(t, seq);
     }
 }
 
@@ -485,7 +496,7 @@ static future<> run_one_with_new_connection(const raw_cql_test_config& cfg) {
     try {
         co_await c->startup();
         if (cfg.workload != "connect") {
-            co_await c->prepare_statements();
+            co_await c->prepare_statements(cfg.tables);
             co_await do_request(*c, cfg);
         }
     } catch (...) {
@@ -567,7 +578,7 @@ static future<> prepare_thread_connections(const raw_cql_test_config cfg) {
         }
         auto c = make_connection(std::move(cs), cfg);
         co_await c->startup();
-        co_await c->prepare_statements();
+        co_await c->prepare_statements(cfg.tables);
         tl_conns.push_back(std::move(c));
     }
 }
@@ -593,14 +604,14 @@ static void prepopulate(const raw_cql_test_config& cfg) {
             raw_cql_connection superuser_conn(std::move(superuser_cs), sstring(cfg.username), sstring(cfg.password), false);
             try {
                 superuser_conn.startup().get();
-                create_role_with_permissions(superuser_conn, non_superuser_name, non_superuser_password).get();
-                ensure_schema(superuser_conn).get();
+                ensure_schema(superuser_conn, cfg.tables).get();
+                create_role_with_permissions(superuser_conn, non_superuser_name, non_superuser_password, cfg.tables).get();
             } catch (...) {
                 superuser_conn.stop().get();
                 throw;
             }
             superuser_conn.stop().get();
-            std::cout << "Created role '" << non_superuser_name << "' with CREATE, SELECT, MODIFY permissions on all keyspaces" << std::endl;
+            std::cout << "Created role '" << non_superuser_name << "' with SELECT, MODIFY permissions on all tables" << std::endl;
         }
 
         connected_socket cs;
@@ -622,11 +633,13 @@ static void prepopulate(const raw_cql_test_config& cfg) {
         try {
             conn->startup().get();
             if (!cfg.create_non_superuser) {
-                ensure_schema(*conn).get();
+                ensure_schema(*conn, cfg.tables).get();
             }
-            conn->prepare_statements().get();
-            for (uint64_t seq = 0; seq < cfg.partitions; ++seq) {
-                conn->write_one(seq).get();
+            conn->prepare_statements(cfg.tables).get();
+            for (unsigned t = 0; t < cfg.tables; ++t) {
+                for (uint64_t seq = 0; seq < cfg.partitions; ++seq) {
+                    conn->write_one(t, seq).get();
+                }
             }
         } catch (...) {
             conn->stop().get();
@@ -724,6 +737,7 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
         opts_desc.add_options()
             ("workload", bpo::value<std::string>()->default_value("read"), "workload type: read|write|connect")
             ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
+            ("tables", bpo::value<unsigned>()->default_value(1), "number of tables")
             ("duration", bpo::value<unsigned>()->default_value(5), "test duration seconds")
             ("operations-per-shard", bpo::value<unsigned>()->default_value(0), "fixed op count per shard")
             ("concurrency-per-shard", bpo::value<unsigned>()->default_value(10), "concurrent requests per connection")
@@ -740,6 +754,7 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
 
         c.workload = vm["workload"].as<std::string>();
         c.partitions = vm["partitions"].as<unsigned>();
+        c.tables = vm["tables"].as<unsigned>();
         c.duration_in_seconds = vm["duration"].as<unsigned>();
         c.operations_per_shard = vm["operations-per-shard"].as<unsigned>();
         c.concurrency_per_connection = vm["concurrency-per-shard"].as<unsigned>();
