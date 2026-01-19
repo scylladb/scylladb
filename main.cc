@@ -2186,12 +2186,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all([&] (auto& ms) {
                         return ms.start_listen(token_metadata.local(), [&gossiper] (gms::inet_address ip)  {
-                            if (ip == gossiper.local().get_broadcast_address()) {
+                            // #27429. When running with broadcast_address != rpc_address, topology gets
+                            // confused if we can't resolve rpc/cql address as self.
+                            if (ip == gossiper.local().get_broadcast_address() || ip == gossiper.local().get_cql_address()) {
                                 return gossiper.local().my_host_id();
                             }
                             try {
                                 return gossiper.local().get_host_id(ip);
                             } catch (...) {
+                                startlog.debug("Could not resolve host id: {}, {}", ip, std::current_exception());
                                 return locator::host_id{};
                             }
                         });
