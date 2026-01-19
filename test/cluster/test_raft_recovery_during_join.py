@@ -74,6 +74,8 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     logging.info(f'Waiting until the topology coordinator blocks in write_both_read_new on node server {coordinator}')
     await coordinator_log.wait_for("delay_node_bootstrap: waiting for message")
 
+    failed_server_host_id = await manager.get_host_id(failed_server.server_id)
+
     logging.info(f'Crashing {failed_server}')
     await manager.api.message_injection(failed_server.ip_addr, 'crash_before_topology_request_completion')
     await task
@@ -83,7 +85,7 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     # Host of the failed server because it crashes during boot and never starts the CQL server. Below is the workaround
     # that relies on check_system_topology_and_cdc_generations_v3_consistency looking only at Host.host_id.
     MockHost = namedtuple('MockHost', 'host_id')
-    failed_server_host = MockHost(host_id=UUID(await manager.get_host_id(failed_server.server_id)))
+    failed_server_host = MockHost(host_id=UUID(failed_server_host_id))
     dead_hosts.append(failed_server_host)
 
     logging.info(f'Killing {dead_servers}')
