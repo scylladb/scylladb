@@ -82,7 +82,7 @@ int main(int ac, char ** av) {
             sharded<abort_source> as;
             as.start().get();
             auto stop_as = defer([&as] { as.stop().get(); });
-            sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, default_scheduling_group).get();
+            sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, scheduling_supergroup(), default_scheduling_group).get();
             compressor_tracker.start([] { return netw::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);
 
