@@ -713,6 +713,8 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
+        table_id = await manager.get_table_id(ks, "test")
+
         async def check():
             logger.info("Checking table")
             cql = manager.get_cql()
@@ -737,7 +739,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for('Finalizing resize decision for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Finalizing resize decision for table {table_id}', from_mark=s1_mark)
 
         # Delays refresh of tablet stats, so balancer works with whichever it got last.
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing")
@@ -753,7 +755,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count > 2
