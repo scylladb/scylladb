@@ -15,6 +15,10 @@ def test_gossiper_live_endpoints(cql, rest_api):
     live_endpoints = set(resp.json())
     all_hosts_endpoints = set([host.address for host in cql.cluster.metadata.all_hosts()])
     assert live_endpoints == all_hosts_endpoints
+    for ep in live_endpoints:
+        resp = rest_api.send("GET", f"gossiper/downtime/{ep}")
+        resp.raise_for_status()
+        assert int(resp.json()) == 0
 
 def test_gossiper_unreachable_endpoints(cql, rest_api):
     resp = rest_api.send("GET", f"gossiper/endpoint/down")
@@ -24,11 +28,3 @@ def test_gossiper_unreachable_endpoints(cql, rest_api):
         resp = rest_api.send("GET", f"gossiper/downtime/{ep}")
         resp.raise_for_status()
         assert int(resp.json()) > 0
-
-    resp = rest_api.send("GET", f"gossiper/endpoint/live")
-    resp.raise_for_status()
-    live_endpoints = set(resp.json())
-    for ep in live_endpoints:
-        resp = rest_api.send("GET", f"gossiper/downtime/{ep}")
-        resp.raise_for_status()
-        assert int(resp.json()) == 0
