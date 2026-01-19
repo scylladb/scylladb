@@ -11,6 +11,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <fmt/ranges.h>
 
+#include <flat_set>
 #include <memory>
 #include <ranges>
 
@@ -232,7 +233,13 @@ public:
         test_file_info& test_file = get_file_info(filename);
 
         std::string test_name = tc.p_name;
-        std::vector<label_info> labels = tc.p_labels.get();
+
+        // Boost.Test duplicates the labels for some reason when we
+        // traverse the tree from within a global fixture. This
+        // is an ugly workaround until we find out a cleaner solution.
+        auto labels = tc.p_labels.get()
+                | std::ranges::to<std::flat_set<label_info>>()
+                | std::ranges::to<std::vector<label_info>>();
 
         test_case_info test_info {.name = std::move(test_name), .labels = std::move(labels)};
 
