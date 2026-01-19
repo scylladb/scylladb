@@ -268,7 +268,7 @@ async def manager(request: pytest.FixtureRequest,
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name
+        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(str.maketrans('[]', '()'))
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
         await manager_client.gather_related_logs(
             failed_test_dir_path,
