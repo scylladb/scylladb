@@ -1889,6 +1889,8 @@ relation returns [uexpression e]
         }
     | name=cident K_IS K_NOT K_NULL {
           $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
+    | name=cident K_IS K_NULL {
+          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS, make_untyped_null()); }
     | name=cident K_IN marker1=marker
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
     | name=cident K_IN in_values=singleColumnInValues
