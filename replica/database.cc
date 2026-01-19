@@ -948,7 +948,7 @@ future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto& ks = db.find_keyspace(ksm.name());
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(),
-                ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), ks.metadata()->user_types(), ksm.get_storage_options());
+                ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), ks.metadata()->user_types(), ksm.get_storage_options(), ksm.previous_strategy_options_opt(), ksm.next_strategy_options_opt());
 
         auto change = co_await db.prepare_update_keyspace(ks, new_ksm, pending_token_metadata.local());
         changes[this_shard_id()] = make_foreign(std::make_unique<keyspace_change>(std::move(change)));
