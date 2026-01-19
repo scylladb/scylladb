@@ -2071,7 +2071,21 @@ vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
         {
             if ($d.text[0] == '-')
                 throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
-            $pt = cql3::cql3_type::raw::vector(t, std::stoul($d.text));
+            unsigned long parsed_dimension;
+            try {
+                parsed_dimension = std::stoul($d.text);
+            } catch (const std::exception& e) {
+                throw exceptions::invalid_request_exception(format("Invalid vector dimension: {}", $d.text));
+            }
+            static_assert(sizeof(unsigned long) >= sizeof(vector_dimension_t));
+            if (parsed_dimension == 0) {
+                throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
+            }
+            if (parsed_dimension > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
+                throw exceptions::invalid_request_exception(
+                        format("Vectors must have a dimension less than or equal to {}", cql3::cql3_type::MAX_VECTOR_DIMENSION));
+            }
+            $pt = cql3::cql3_type::raw::vector(t, static_cast<vector_dimension_t>(parsed_dimension));
         }
     ;
 

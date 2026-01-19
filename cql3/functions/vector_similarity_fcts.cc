@@ -18,7 +18,7 @@ namespace functions {
 
 namespace detail {
 
-std::vector<float> extract_float_vector(const bytes_opt& param, size_t dimension) {
+std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension_t dimension) {
     if (!param) {
         throw exceptions::invalid_request_exception("Cannot extract float vector from null parameter");
     }
@@ -156,7 +156,7 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
         }
     }
 
-    size_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
+    vector_dimension_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
     auto type = vector_type_impl::get_instance(float_type, dimension);
     return {type, type};
 }
@@ -170,7 +170,7 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
 
     // Extract dimension from the vector type
     const auto& type = static_cast<const vector_type_impl&>(*arg_types()[0]);
-    size_t dimension = type.get_dimension();
+    vector_dimension_t dimension = type.get_dimension();
 
     // Optimized path: extract floats directly from bytes, bypassing data_value overhead
     std::vector<float> v1 = detail::extract_float_vector(parameters[0], dimension);
