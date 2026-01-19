@@ -198,6 +198,7 @@ private:
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
         abort_source group0_aborter;
+        scheduling_supergroup user_ssg;
         scheduling_group default_sg;
         bool destroy_default_sg;
         // a counter for making unique temp scheduling groups names
@@ -232,7 +233,7 @@ private:
     void do_abort() noexcept;
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
-            scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
+            scheduling_supergroup user_supergroup, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
 
     /**
      * this function must be called *once* from any shard before any other functions are called.

@@ -1119,12 +1119,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 #endif
 
+            seastar::scheduling_supergroup user_ssg = create_scheduling_supergroup(1000).get();
+
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
             dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000).get();
+            dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000, user_ssg).get();
             dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
             dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
             dbcfg.gossip_scheduling_group = create_scheduling_group("gossip", "gms", 1000).get();
@@ -1212,7 +1214,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting service level controller");
             qos::service_level_options default_service_level_configuration;
             default_service_level_configuration.shares = 1000;
-            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, dbcfg.statement_scheduling_group).get();
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, user_ssg, dbcfg.statement_scheduling_group).get();
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
             auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
                 sl_controller.stop().get();

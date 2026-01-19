@@ -57,7 +57,8 @@ void service_level_controller::auth_integration::clear_cache() {
     _cache.clear();
 }
 
-service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain)
+service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
+            scheduling_supergroup user_ssg, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain)
         : _sl_data_accessor(nullptr)
         , _auth_service(auth_service)
         , _token_metadata(tm)
@@ -70,6 +71,7 @@ service_level_controller::service_level_controller(sharded<auth::service>& auth_
     if (this_shard_id() == global_controller) {
         _global_controller_db = std::make_unique<global_controller_data>();
         _global_controller_db->default_service_level_config = default_service_level_config;
+        _global_controller_db->user_ssg = user_ssg;
         _global_controller_db->default_sg = default_scheduling_group;
         _global_controller_db->destroy_default_sg = destroy_default_sg_on_drain;
         // since the first thing that is being done is adding the default service level, we only
@@ -800,7 +802,7 @@ future<bool> service_level_controller::validate_before_service_level_add() {
     } else if (_global_controller_db->scheduling_groups_exhausted) {
         return make_ready_future<bool>(false);
     } else {
-        return create_scheduling_group(seastar::format(temp_scheduling_group_name_pattern, _global_controller_db->unique_group_counter++), 1).then_wrapped([this] (future<scheduling_group> new_sg_f) {
+        return create_scheduling_group(seastar::format(temp_scheduling_group_name_pattern, _global_controller_db->unique_group_counter++), "", 1, _global_controller_db->user_ssg).then_wrapped([this] (future<scheduling_group> new_sg_f) {
             if (new_sg_f.failed()) {
                 new_sg_f.ignore_ready_future();
                 _global_controller_db->scheduling_groups_exhausted = true;
@@ -885,7 +887,7 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
                 } else if (_global_controller_db->scheduling_groups_exhausted) {
                     return make_exception_future<>(service_level_scheduling_groups_exhausted(name));
                 } else {
-                   return create_scheduling_group(seastar::format(scheduling_group_name_pattern, name), share_count).then_wrapped([this, name, &sl] (future<scheduling_group> sg_fut) {
+                   return create_scheduling_group(seastar::format(scheduling_group_name_pattern, name), "", share_count, _global_controller_db->user_ssg).then_wrapped([this, name, &sl] (future<scheduling_group> sg_fut) {
                        if (sg_fut.failed()) {
                            sg_fut.ignore_ready_future();
                            _global_controller_db->scheduling_groups_exhausted = true;

@@ -113,7 +113,7 @@ SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<abort_source> as;
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });
-    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group).get();
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group).get();
     qos_configuration_change_suscriber_simple ccss;
     sl_controller.local().register_subscriber(&ccss);
     sl_controller.local().add_service_level("sl1", sl_options).get();
@@ -190,7 +190,7 @@ SEASTAR_THREAD_TEST_CASE(too_many_service_levels) {
     sharded<abort_source> as;
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });
-    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group, true).get();
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group, true).get();
     sl_controller.local().set_distributed_data_accessor(test_accessor);
     int service_level_id = 0;
     unsigned service_level_count = 0;
@@ -242,7 +242,7 @@ SEASTAR_THREAD_TEST_CASE(too_many_service_levels) {
     // the current configuration.
     sharded<service_level_controller> new_sl_controller;
     default_scheduling_group = create_scheduling_group("sl_default_sg2", 1.0).get();
-    new_sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group, true).get();
+    new_sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group, true).get();
     new_sl_controller.local().set_distributed_data_accessor(test_accessor);
     try {
         new_sl_controller.local().update_service_levels_cache().get();
@@ -267,7 +267,7 @@ SEASTAR_THREAD_TEST_CASE(add_remove_bad_sequence) {
     sharded<abort_source> as;
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });
-    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group, true).get();
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group, true).get();
     service_level_options slo;
     slo.shares.emplace<int32_t>(500);
     slo.workload = service_level_options::workload_type::interactive;
@@ -295,7 +295,7 @@ SEASTAR_THREAD_TEST_CASE(verify_unset_shares_in_cache_when_service_level_created
 
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });
-    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group).get();
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group).get();
 
     using timeout_duration = typename seastar::lowres_clock::duration;
     using workload_type = typename service_level_options::workload_type;
