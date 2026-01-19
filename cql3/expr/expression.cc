@@ -326,7 +326,8 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
             case oper_t::CONTAINS:
             case oper_t::CONTAINS_KEY:
             case oper_t::LIKE:
-            case oper_t::IS_NOT: // IS_NOT doesn't really belong here, luckily this is never reached.
+            case oper_t::IS:
+            case oper_t::IS_NOT: // IS and IS_NOT operators are handled separately in their dedicated evaluation functions
                 throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
             case oper_t::EQ:
                 return !sides_bytes.first == !sides_bytes.second;
@@ -555,6 +556,15 @@ bool is_not_null(const expression& lhs, const expression& rhs, const evaluation_
         throw exceptions::invalid_request_exception("IS NOT operator accepts only NULL as its right side");
     }
     return !lhs_val.is_null();
+}
+
+bool is_null(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    cql3::raw_value lhs_val = evaluate(lhs, inputs);
+    cql3::raw_value rhs_val = evaluate(rhs, inputs);
+    if (!rhs_val.is_null()) {
+        throw exceptions::invalid_request_exception("IS operator accepts only NULL as its right side");
+    }
+    return lhs_val.is_null();
 }
 
 } // anonymous namespace
@@ -1127,6 +1137,9 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
             break;
         case oper_t::NOT_IN:
             binop_result = is_none_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
+            break;
+        case oper_t::IS:
+            binop_result = is_null(binop.lhs, binop.rhs, inputs);
             break;
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
@@ -2526,6 +2539,8 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return "CONTAINS";
     case oper_t::CONTAINS_KEY:
         return "CONTAINS KEY";
+    case oper_t::IS:
+        return "IS";
     case oper_t::IS_NOT:
         return "IS NOT";
     case oper_t::LIKE:

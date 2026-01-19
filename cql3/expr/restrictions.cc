@@ -121,11 +121,11 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
         throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {:user}", binop));
     }
 
-    if (binop.op == oper_t::IS_NOT) {
+    if (binop.op == oper_t::IS || binop.op == oper_t::IS_NOT) {
         bool rhs_is_null = (is<untyped_constant>(binop.rhs) && as<untyped_constant>(binop.rhs).partial_type == untyped_constant::type_class::null)
                            || (is<constant>(binop.rhs) && as<constant>(binop.rhs).is_null());
         if (!rhs_is_null) {
-            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {:user}", binop));
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS\" or \"IS NOT\" relation: {:user}", binop));
         }
     }
 
