@@ -1274,7 +1274,7 @@ public:
 
         migration_plan plan;
         tablet_rack_list_colocation_plan rack_list_plan;
-        if (!ongoing_rack_list_colocation()) {
+        if (!ongoing_rack_list_colocation() || utils::get_local_injector().enter("wait_with_rack_list_colocation")) {
             co_return plan;
         }
 
