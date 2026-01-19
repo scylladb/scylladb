@@ -5,6 +5,10 @@
 
 /stable/kb/perftune-modes-sync.html: /stable/kb/index.html
 
+# Remove the troubleshooting page relevant for Open Source only
+
+/stable/troubleshooting/missing-dotmount-files.html: /troubleshooting/index.html
+
 # Move the diver information to another project
 
 /stable/using-scylla/drivers/index.html: https://docs.scylladb.com/stable/drivers/index.html
