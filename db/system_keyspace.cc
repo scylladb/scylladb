@@ -108,7 +108,7 @@ namespace {
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
             system_keyspace::ROLE_PERMISSIONS,
-            system_keyspace::v3::CDC_LOCAL,
+            system_keyspace::CDC_LOCAL,
             system_keyspace::DICTS,
             system_keyspace::VIEW_BUILDING_TASKS,
             system_keyspace::CLIENT_ROUTES,
@@ -918,7 +918,7 @@ schema_ptr system_keyspace::corrupt_data() {
     return scylla_local;
 }
 
-schema_ptr system_keyspace::v3::batches() {
+schema_ptr system_keyspace::batches() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
         // partition key
@@ -946,53 +946,7 @@ schema_ptr system_keyspace::v3::batches() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::built_indexes() {
-    // identical to ours, but ours otoh is a mix-in of the 3.x series cassandra one
-    return db::system_keyspace::built_indexes();
-}
-
-schema_ptr system_keyspace::v3::local() {
-    static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
-        // partition key
-        {{"key", utf8_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-                {"bootstrapped", utf8_type},
-                {"broadcast_address", inet_addr_type},
-                {"cluster_name", utf8_type},
-                {"cql_version", utf8_type},
-                {"data_center", utf8_type},
-                {"gossip_generation", int32_type},
-                {"host_id", uuid_type},
-                {"listen_address", inet_addr_type},
-                {"native_protocol_version", utf8_type},
-                {"partitioner", utf8_type},
-                {"rack", utf8_type},
-                {"release_version", utf8_type},
-                {"rpc_address", inet_addr_type},
-                {"schema_version", uuid_type},
-                {"thrift_version", utf8_type},
-                {"tokens", set_type_impl::get_instance(utf8_type, true)},
-                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, true)},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "information about the local node"
-       );
-       builder.set_gc_grace_seconds(0);
-       builder.with_hash_version();
-       return builder.build(schema_builder::compact_storage::no);
-    }();
-    return schema;
-}
-
-schema_ptr system_keyspace::v3::truncated() {
+schema_ptr system_keyspace::truncated() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
         // partition key
@@ -1022,7 +976,7 @@ schema_ptr system_keyspace::v3::truncated() {
 
 thread_local data_type replay_position_type = tuple_type_impl::get_instance({long_type, int32_type});
 
-schema_ptr system_keyspace::v3::commitlog_cleanups() {
+schema_ptr system_keyspace::commitlog_cleanups() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, COMMITLOG_CLEANUPS), NAME, COMMITLOG_CLEANUPS,
         // partition key
@@ -1049,47 +1003,7 @@ schema_ptr system_keyspace::v3::commitlog_cleanups() {
     return local;
 }
 
-schema_ptr system_keyspace::v3::peers() {
-    // identical
-    return db::system_keyspace::peers();
-}
-
-schema_ptr system_keyspace::v3::peer_events() {
-    // identical
-    return db::system_keyspace::peer_events();
-}
-
-schema_ptr system_keyspace::v3::range_xfers() {
-    // identical
-    return db::system_keyspace::range_xfers();
-}
-
-schema_ptr system_keyspace::v3::compaction_history() {
-    // identical
-    return db::system_keyspace::compaction_history();
-}
-
-schema_ptr system_keyspace::v3::sstable_activity() {
-    // identical
-    return db::system_keyspace::sstable_activity();
-}
-
-schema_ptr system_keyspace::v3::size_estimates() {
-    // identical
-    return db::system_keyspace::size_estimates();
-}
-
-schema_ptr system_keyspace::v3::large_partitions() {
-    // identical
-    return db::system_keyspace::large_partitions();
-}
-
-schema_ptr system_keyspace::v3::scylla_local() {
-    // identical
-    return db::system_keyspace::scylla_local();
-}
-
-schema_ptr system_keyspace::v3::available_ranges() {
+schema_ptr system_keyspace::available_ranges() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
         // partition key
@@ -1112,7 +1026,7 @@ schema_ptr system_keyspace::v3::available_ranges() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::views_builds_in_progress() {
+schema_ptr system_keyspace::views_builds_in_progress() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
         // partition key
@@ -1135,7 +1049,7 @@ schema_ptr system_keyspace::v3::views_builds_in_progress() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::built_views() {
+schema_ptr system_keyspace::built_views() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
         // partition key
@@ -1158,7 +1072,7 @@ schema_ptr system_keyspace::v3::built_views() {
     return schema;
 }
 
-schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
+schema_ptr system_keyspace::scylla_views_builds_in_progress() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
         return schema_builder(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS, std::make_optional(id))
@@ -1174,7 +1088,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
     return schema;
 }
 
-/*static*/ schema_ptr system_keyspace::v3::cdc_local() {
+/*static*/ schema_ptr system_keyspace::cdc_local() {
     static thread_local auto cdc_local = [] {
         schema_builder builder(generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
         // partition key
@@ -2180,21 +2094,21 @@ future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
     co_await std::visit(make_visitor(
     [this] (cdc::generation_id_v1 id) -> future<> {
         co_await execute_cql(
-                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
-                sstring(v3::CDC_LOCAL), id.ts);
+                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", CDC_LOCAL),
+                sstring(CDC_LOCAL), id.ts);
     },
     [this] (cdc::generation_id_v2 id) -> future<> {
         co_await execute_cql(
-                format("INSERT INTO system.{} (key, streams_timestamp, uuid) VALUES (?, ?, ?)", v3::CDC_LOCAL),
-                sstring(v3::CDC_LOCAL), id.ts, id.id);
+                format("INSERT INTO system.{} (key, streams_timestamp, uuid) VALUES (?, ?, ?)", CDC_LOCAL),
+                sstring(CDC_LOCAL), id.ts, id.id);
     }
     ), gen_id);
 }
 
 future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id() {
     auto msg = co_await execute_cql(
-            format("SELECT streams_timestamp, uuid FROM system.{} WHERE key = ?", v3::CDC_LOCAL),
-            sstring(v3::CDC_LOCAL));
+            format("SELECT streams_timestamp, uuid FROM system.{} WHERE key = ?", CDC_LOCAL),
+            sstring(CDC_LOCAL));
 
     if (msg->empty()) {
         co_return std::nullopt;
@@ -2220,19 +2134,19 @@ static const sstring CDC_REWRITTEN_KEY = "rewritten";
 future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1> gen_id) {
     if (gen_id) {
         return execute_cql(
-                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
+                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", CDC_LOCAL),
                 CDC_REWRITTEN_KEY, gen_id->ts).discard_result();
     } else {
         // Insert just the row marker.
         return execute_cql(
-                format("INSERT INTO system.{} (key) VALUES (?)", v3::CDC_LOCAL),
+                format("INSERT INTO system.{} (key) VALUES (?)", CDC_LOCAL),
                 CDC_REWRITTEN_KEY).discard_result();
     }
 }
 
 future<bool> system_keyspace::cdc_is_rewritten() {
     // We don't care about the actual timestamp; it's additional information for debugging purposes.
-    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
+    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", CDC_LOCAL), CDC_REWRITTEN_KEY)
             .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         return !msg->empty();
     });
@@ -2376,11 +2290,11 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
                     repair_tasks(),
-                    v3::views_builds_in_progress(), v3::built_views(),
-                    v3::scylla_views_builds_in_progress(),
-                    v3::truncated(),
-                    v3::commitlog_cleanups(),
-                    v3::cdc_local(),
+                    views_builds_in_progress(), built_views(),
+                    scylla_views_builds_in_progress(),
+                    truncated(),
+                    commitlog_cleanups(),
+                    cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
                     dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
@@ -2403,7 +2317,7 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
     return (s.get() == system_keyspace::batchlog().get())
             || (s.get() == system_keyspace::batchlog_v2().get())
             || (s.get() == system_keyspace::paxos().get())
-            || s == system_keyspace::v3::scylla_views_builds_in_progress();
+            || s == system_keyspace::scylla_views_builds_in_progress();
 }
 
 future<> system_keyspace::make(
@@ -2689,7 +2603,7 @@ mutation system_keyspace::make_size_estimates_mutation(const sstring& ks, std::v
 
 future<> system_keyspace::register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, generation_number, cpu_id, first_token) VALUES (?, ?, ?, ?, ?)",
-            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
+            SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
     return execute_cql(
             std::move(req),
             std::move(ks_name),
@@ -2705,7 +2619,7 @@ future<> system_keyspace::register_view_for_building_for_all_shards(sstring ks_n
     // before all shards are registered.
     // if another shard has already registered, this won't overwrite its status. if it hasn't registered, we insert
     // a status with first_token=null and next_token=null, indicating it hasn't made progress.
-    auto&& schema = db::system_keyspace::v3::scylla_views_builds_in_progress();
+    auto&& schema = db::system_keyspace::scylla_views_builds_in_progress();
     auto timestamp = api::new_timestamp();
     mutation m{schema, partition_key::from_single_value(*schema, utf8_type->decompose(ks_name))};
 
@@ -2723,7 +2637,7 @@ future<> system_keyspace::register_view_for_building_for_all_shards(sstring ks_n
 
 future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
-            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
+            SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
     return execute_cql(
             std::move(req),
             std::move(ks_name),
@@ -2734,14 +2648,14 @@ future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring vi
 
 future<> system_keyspace::remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name) {
     return execute_cql(
-            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
+            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring view_name) {
     return execute_cql(
-            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ? AND cpu_id = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
+            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ? AND cpu_id = ?", SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
             std::move(ks_name),
             std::move(view_name),
             int32_t(this_shard_id())).discard_result();
@@ -2749,20 +2663,20 @@ future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring vi
 
 future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name) {
     return execute_cql(
-            format("INSERT INTO system.{} (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),
+            format("INSERT INTO system.{} (keyspace_name, view_name) VALUES (?, ?)", BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<> system_keyspace::remove_built_view(sstring ks_name, sstring view_name) {
     return execute_cql(
-            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::BUILT_VIEWS),
+            format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views() {
-    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    return execute_cql(format("SELECT * FROM system.{}", BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return *cql_result
                 | std::views::transform([] (const cql3::untyped_result_set::row& row) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
@@ -2774,7 +2688,7 @@ future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_view
 
 future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_view_build_progress() {
     return execute_cql(format("SELECT keyspace_name, view_name, first_token, next_token, cpu_id FROM system.{}",
-            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+            SCYLLA_VIEWS_BUILDS_IN_PROGRESS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::vector<view_build_progress> progress;
         for (auto& row : *cql_result) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
