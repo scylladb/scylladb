@@ -262,7 +262,9 @@ class TestSuite(ABC):
             # Check opt-in list
             if options.name:
                 for p in options.name:
-                    pn = p.split('::', 2)
+                    # only allow one split, otherwise something like <file>::<class>::method
+                    # does not work here. The pytest matcher wants the full pattern eventually
+                    pn = p.split('::', 1)
                     if len(pn) == 1 and p in testname:
                         break
                     if len(pn) == 2 and pn[0] == testname:

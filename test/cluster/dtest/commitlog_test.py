@@ -26,7 +26,6 @@ from tools.assertions import (
     assert_row_count_in_select_less,
 )
 from tools.data import insert_c1c2, rows_to_list
-from tools.files import corrupt_file
 from tools.metrics import get_node_metrics
 
 
@@ -678,6 +677,12 @@ class TestCommitLog(Tester):
         node1.stop(gently=False)
 
         # corrupt the commitlogs
+        def corrupt_file(file_path: str):
+            print(f"Writing junk into file header:  {file_path}")
+            with open(file_path, "r+b") as f:
+                f.seek(18)
+                f.write(os.urandom(474))
+
         for commitlog in self._get_commitlog_files():
             corrupt_file(commitlog)
 
@@ -687,7 +692,7 @@ class TestCommitLog(Tester):
         # check the data and the logs
         in_table = rows_to_list(session.execute(f"SELECT * FROM {self.ks}.{self.cf};"))
         assert not node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}")
-        assert node1.grep_log("commitlog_replayer - Corrupted file:")
+        assert node1.grep_log("commitlog_replayer - Corrupted file")
         assert in_table == []
 
     def test_one_big_mutation_rollback_on_startup(self):
