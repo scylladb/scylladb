@@ -1643,22 +1643,22 @@ static void validate_aux(const tuple_type_impl& t, View v) {
     }
 }
 
-sstring vector_type_impl::make_name(data_type type, size_t dimension) {
+sstring vector_type_impl::make_name(data_type type, vector_dimension_t dimension) {
     // To keep format compatibility with Origin we never wrap
     // vector name into
     // "org.apache.cassandra.db.marshal.FrozenType(...)".
     return seastar::format("org.apache.cassandra.db.marshal.VectorType({}, {})", type->name(), dimension);
 }
 
-vector_type_impl::vector_type_impl(data_type elements, size_t dimension)
+vector_type_impl::vector_type_impl(data_type elements, vector_dimension_t dimension)
         : concrete_type(kind::vector, make_name(elements, dimension),
-        elements->value_length_if_fixed() ? std::optional(elements->value_length_if_fixed().value()*dimension):std::nullopt),
+        elements->value_length_if_fixed() ? std::optional(elements->value_length_if_fixed().value() * static_cast<size_t>(dimension)) : std::nullopt),
         _elements_type(elements), _dimension(dimension) {
     _contains_set_or_map = _elements_type->contains_set_or_map();
 }
 
 shared_ptr<const vector_type_impl>
-vector_type_impl::get_instance(data_type elements, size_t dimension) {
+vector_type_impl::get_instance(data_type elements, vector_dimension_t dimension) {
     return intern::get_instance(elements, dimension);
 }
 
@@ -1681,14 +1681,14 @@ static void serialize_vector(const vector_type_impl& type, const vector_type_imp
 }
 
 std::strong_ordering
-vector_type_impl::compare_vectors(data_type elements, size_t dimension, managed_bytes_view o1, managed_bytes_view o2) {
+vector_type_impl::compare_vectors(data_type elements, vector_dimension_t dimension, managed_bytes_view o1, managed_bytes_view o2) {
     if (o1.empty()) {
         return o2.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
     } else if (o2.empty()) {
         return std::strong_ordering::greater;
     }
 
-    for (size_t i = 0; i < dimension; i++) {
+    for (size_t i = 0; i < static_cast<size_t>(dimension); i++) {
         auto v1 = read_vector_element(o1, elements->value_length_if_fixed());
         auto v2 = read_vector_element(o2, elements->value_length_if_fixed());
         auto cmp = elements->compare(v1, v2);
@@ -1704,11 +1704,11 @@ template <FragmentedView View>
 data_value
 deserialize_vector(const vector_type_impl& t, View v){
     vector_type_impl::native_type ret;
-    ret.reserve(t.get_dimension());
+    ret.reserve(static_cast<size_t>(t.get_dimension()));
 
     auto value_length = t.get_elements_type()->value_length_if_fixed();
 
-    for (size_t i = 0; i < t.get_dimension(); i++) {
+    for (size_t i = 0; i < static_cast<size_t>(t.get_dimension()); i++) {
         ret.push_back(t.get_elements_type()->deserialize(read_vector_element(v, value_length)));
     }
 
@@ -1737,7 +1737,7 @@ static size_t vector_serialized_size(const vector_type_impl::native_type* v) {
 
 template <FragmentedView View>
 static void validate_aux(const vector_type_impl& t, View v) {
-    for (size_t i = 0; i < t.get_dimension(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(t.get_dimension()); ++i) {
         auto val = read_vector_element(v, t.get_elements_type()->value_length_if_fixed());
         t.get_elements_type()->validate(val);
     }

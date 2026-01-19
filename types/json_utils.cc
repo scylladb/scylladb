@@ -236,12 +236,12 @@ static bytes from_json_object_aux(const vector_type_impl& t, const rjson::value&
         throw marshal_exception("vector_type must be represented as JSON Array");
     }
     
-    if (value.Size() > t.get_dimension()) {
+    if (value.Size() > static_cast<size_t>(t.get_dimension())) {
         throw marshal_exception(
                 format("Too many values ({}) for vector with size {}", value.Size(), t.get_dimension()));
     }
     
-    if (value.Size() < t.get_dimension()) {
+    if (value.Size() < static_cast<size_t>(t.get_dimension())) {
         throw marshal_exception(
                 format("Too few values ({}) for vector with size {}", value.Size(), t.get_dimension()));
     }

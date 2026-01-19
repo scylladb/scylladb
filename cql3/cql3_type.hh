@@ -64,7 +64,7 @@ public:
         static shared_ptr<raw> list(shared_ptr<raw> t);
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
-        static shared_ptr<raw> vector(shared_ptr<raw> t, size_t dimension);
+        static shared_ptr<raw> vector(shared_ptr<raw> t, vector_dimension_t dimension);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
         friend sstring format_as(const raw& r) {
             return r.to_string();

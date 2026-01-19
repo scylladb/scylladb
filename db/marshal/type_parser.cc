@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <limits>
 
 #include "types/user.hh"
 #include "types/map.hh"
@@ -113,7 +114,7 @@ std::vector<data_type> type_parser::get_type_parameters(bool multicell)
     throw parse_exception(_str, _idx, "unexpected end of string");
 }
 
-std::tuple<data_type, size_t> type_parser::get_vector_parameters()
+std::tuple<data_type, vector_dimension_t> type_parser::get_vector_parameters()
 {
     if (is_eos() || _str[_idx] != '(') {
         throw std::logic_error("internal error");
@@ -128,7 +129,7 @@ std::tuple<data_type, size_t> type_parser::get_vector_parameters()
     }
 
     data_type type = do_parse(true);
-    size_t size = 0;
+    vector_dimension_t size = 0;
     if (_str[_idx] == ',') {
         ++_idx;
         skip_blank();
@@ -142,7 +143,11 @@ std::tuple<data_type, size_t> type_parser::get_vector_parameters()
             throw parse_exception(_str, _idx, "expected digit or ')'");
         }
 
-        size = std::stoul(_str.substr(i, _idx - i));
+        auto parsed_size = std::stoul(_str.substr(i, _idx - i));
+        if (parsed_size > std::numeric_limits<vector_dimension_t>::max()) {
+            throw parse_exception(_str, _idx, "vector dimension out of range");
+        }
+        size = static_cast<vector_dimension_t>(parsed_size);
 
         ++_idx; // skipping ')'
         return std::make_tuple(type, size);

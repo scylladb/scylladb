@@ -9,6 +9,7 @@
 #pragma once
 
 #include <optional>
+#include <cstdint>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
 #include <initializer_list>
@@ -175,6 +176,8 @@ struct timeuuid_native_type {
 };
 
 using data_type = shared_ptr<const abstract_type>;
+
+using vector_dimension_t = uint16_t;
 
 template <typename T>
 const T& value_cast(const data_value& value);

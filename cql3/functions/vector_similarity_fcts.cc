@@ -124,7 +124,7 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
         }
     }
 
-    size_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
+    vector_dimension_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
     auto type = vector_type_impl::get_instance(float_type, dimension);
     return {type, type};
 }

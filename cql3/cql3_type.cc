@@ -307,17 +307,17 @@ public:
 
 class cql3_type::raw_vector : public raw {
     shared_ptr<raw> _type;
-    size_t _dimension;
+    vector_dimension_t _dimension;
 
     // This limitation is acquired from the maximum number of dimensions in OpenSearch. 
-    static constexpr size_t MAX_VECTOR_DIMENSION = 16000;
+    static constexpr vector_dimension_t MAX_VECTOR_DIMENSION = 16000;
 
     virtual sstring to_string() const override {
         return seastar::format("vector<{}, {}>", _type, _dimension);
     }
 
 public:
-    raw_vector(shared_ptr<raw> type, size_t dimension)
+    raw_vector(shared_ptr<raw> type, vector_dimension_t dimension)
             : _type(std::move(type)), _dimension(dimension) {
     }
 
@@ -417,7 +417,7 @@ cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
 }
 
 shared_ptr<cql3_type::raw>
-cql3_type::raw::vector(shared_ptr<raw> t, size_t dimension) {
+cql3_type::raw::vector(shared_ptr<raw> t, vector_dimension_t dimension) {
     return ::make_shared<raw_vector>(std::move(t), dimension);
 }
 

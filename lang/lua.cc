@@ -740,7 +740,7 @@ struct from_lua_visitor {
         }
 
         const data_type& elements_type = t.get_elements_type();
-        size_t num_elements = t.get_dimension();
+        size_t num_elements = static_cast<size_t>(t.get_dimension());
 
         using table_pair = std::pair<utils::multiprecision_int, data_value>;
         std::vector<table_pair> pairs;

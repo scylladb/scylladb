@@ -392,7 +392,7 @@ tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::
                              .type = tuple_type_impl::get_instance(std::move(element_types))};
 }
 
-collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, size_t dimension) {
+collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, vector_dimension_t dimension) {
     return collection_constructor{.style = collection_constructor::style_type::vector,
                                   .elements = std::move(elements),
                                   .type = vector_type_impl::get_instance(elements_type, dimension)};
