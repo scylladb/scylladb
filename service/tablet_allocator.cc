@@ -291,6 +291,12 @@ struct rack_list_colocation_state {
     }
 };
 
+/// Formattable wrapper for migration_plan, whose formatter prints a short summary of the plan.
+struct plan_summary {
+    migration_plan& plan;
+    explicit plan_summary(migration_plan& plan) : plan(plan) {}
+};
+
 future<rack_list_colocation_state> find_required_rack_list_colocations(
         replica::database& db,
         token_metadata_ptr tmptr,
@@ -453,6 +459,35 @@ struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
     auto format(const service::repair_plan& p, FormatContext& ctx) const {
         auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
 		fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
+        return ctx.out();
+    }
+};
+
+template<>
+struct fmt::formatter<service::plan_summary> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::plan_summary& p, FormatContext& ctx) const {
+        auto& plan = p.plan;
+        std::string_view delim = "";
+        auto get_delim = [&] { return std::exchange(delim, ", "); };
+        if (plan.migrations().size()) {
+            fmt::format_to(ctx.out(), "{}migrations: {}", get_delim(), plan.migrations().size());
+        }
+        if (plan.repair_plan().repairs().size()) {
+            fmt::format_to(ctx.out(), "{}repairs: {}", get_delim(), plan.repair_plan().repairs().size());
+        }
+        if (plan.resize_plan().resize.size()) {
+            fmt::format_to(ctx.out(), "{}resize: {}", get_delim(), plan.resize_plan().resize.size());
+        }
+        if (plan.resize_plan().finalize_resize.size()) {
+            fmt::format_to(ctx.out(), "{}resize-ready: {}", get_delim(), plan.resize_plan().finalize_resize.size());
+        }
+        if (plan.rack_list_colocation_plan().size()) {
+            fmt::format_to(ctx.out(), "{}rack-list colocation ready: {}", get_delim(), plan.rack_list_colocation_plan().request_to_resume());
+        }
+        if (delim.empty()) {
+            fmt::format_to(ctx.out(), "empty");
+        }
         return ctx.out();
     }
 };
@@ -1002,13 +1037,13 @@ public:
                 for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
                     auto rack_plan = co_await make_plan(dc, rack);
                     auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-                    lblogger.log(level, "Prepared {} migrations in rack {} in DC {}", rack_plan.size(), rack, dc);
+                    lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
                     plan.merge(std::move(rack_plan));
                 }
             } else {
                 auto dc_plan = co_await make_plan(dc);
                 auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-                lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
+                lblogger.log(level, "Plan for {}: {}", dc, plan_summary(dc_plan));
                 plan.merge(std::move(dc_plan));
             }
         }
@@ -1027,8 +1062,7 @@ public:
         }
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s) and {} rack-list colocation(s)",
-                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count(), plan.tablet_rack_list_colocation_count());
+        lblogger.log(level, "Prepared plan: {}", plan_summary(plan));
         co_return std::move(plan);
     }
 
