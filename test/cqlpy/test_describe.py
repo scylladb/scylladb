@@ -3376,3 +3376,46 @@ def test_desc_table_tombstone_gc(cql, test_keyspace, scylla_only):
             # ignore spaces in comparison, as different versions of Scylla
             # add spaces in different places
             assert with_clause.replace(' ','') in desc.create_statement.replace(' ','')
+
+# Ever since tablets were introduced to Scylla, LWT writes its Paxos log not
+# in a central system table, but in a new table named "...$paxos" in the same
+# keyspace. This test checks that these internal tables aren't listed,
+# similarly to how test_hide_cdc_table() above checks that CDC's internal
+# log tables are hidden. However, currently the CDC log tables are listed
+# in some of these commands, and we expect the paxos tables (which have
+# names that are not valid CQL) to be hidden from all of them.
+# Reproduces issue #28183
+@pytest.mark.xfail(reason="#28183")
+def test_hide_paxos_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, x int") as table:
+        # The extra "...$paxos" table only appears after a real LWT write is
+        # performed. So let's do an LWT operation that will cause it to be
+        # created.
+        cql.execute(f'INSERT INTO {table}(p,x) values (1,2) IF NOT EXISTS')
+
+        # DESC TABLES
+        # Look at the tables in test_keyspace, check that the test table is
+        # in this list, but its long and unique name (by unique_table_name())
+        # isn't a proper substring of any other table's name.
+        tables = [r.name for r in cql.execute('DESC TABLES') if r.keyspace_name == test_keyspace]
+        _, table_name = table.split('.')
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
+
+        #  DESC SCHEMA
+        tables = [r.name for r in cql.execute('DESC SCHEMA') if r.keyspace_name == test_keyspace]
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
+
+        # DESC KEYSPACE of the test keyspace
+        # Again, the test table should be in the list, but no other table
+        # that contains that name.
+        tables = [r.name for r in cql.execute(f'DESC KEYSPACE {test_keyspace}').all()]
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
