@@ -36,7 +36,7 @@ restrictions::statement_restrictions make_restrictions(
 
 /// Helper to get JSON string from restrictions
 sstring get_restrictions_json(const restrictions::statement_restrictions& restr, bool allow_filtering = false) {
-    return rjson::print(vector_search::to_json(restr, query_options({}), allow_filtering));
+    return rjson::print(vector_search::prepare_filter(restr, allow_filtering).to_json(query_options({})));
 }
 
 } // anonymous namespace
@@ -47,7 +47,7 @@ SEASTAR_TEST_CASE(to_json_empty_restrictions) {
 
         auto schema = e.local_db().find_schema("ks", "t");
         restrictions::statement_restrictions restr(schema, false);
-        auto json = rjson::print(vector_search::to_json(restr, query_options({}), false));
+        auto json = rjson::print(vector_search::prepare_filter(restr, false).to_json(query_options({})));
 
         BOOST_CHECK_EQUAL(json, "{}");
     });

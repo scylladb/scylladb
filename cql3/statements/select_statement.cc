@@ -1985,20 +1985,24 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
         throw std::runtime_error("No index found.");
     }
 
+    auto prepared_filter = vector_search::prepare_filter(*restrictions, parameters->allow_filtering());
+
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
-            std::move(per_partition_limit), stats, *index_opt, std::move(attrs));
+            std::move(per_partition_limit), stats, *index_opt, std::move(prepared_filter), std::move(attrs));
 }
 
 vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs)
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index,
+        vector_search::prepared_filter prepared_filter, std::unique_ptr<attributes> attrs)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}
-    , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
+    , _prepared_ann_ordering(std::move(prepared_ann_ordering))
+    , _prepared_filter(std::move(prepared_filter)) {
 
     if (!limit.has_value()) {
         throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
@@ -2033,7 +2037,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
-        auto filter_json = vector_search::to_json(*_restrictions, options, _parameters->allow_filtering());
+        auto filter_json = _prepared_filter.to_json(options);
         uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
         auto pkeys = co_await qp.vector_store_client().ann(
                 _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, aoe.abort_source());
