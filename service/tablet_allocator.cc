@@ -1038,13 +1038,13 @@ public:
             if (_db.get_config().rf_rack_valid_keyspaces() || _db.get_config().enforce_rack_list() || rack_list_colocation) {
                 for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
                     auto rack_plan = co_await make_plan(dc, rack);
-                    auto level = rack_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                    auto level = rack_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
                     lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
                     plan.merge(std::move(rack_plan));
                 }
             } else {
                 auto dc_plan = co_await make_plan(dc);
-                auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+                auto level = dc_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
                 lblogger.log(level, "Plan for {}: {}", dc, plan_summary(dc_plan));
                 plan.merge(std::move(dc_plan));
             }
@@ -1063,7 +1063,7 @@ public:
             plan.set_repair_plan(co_await make_repair_plan(plan));
         }
 
-        auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+        auto level = plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
         lblogger.log(level, "Prepared plan: {}", plan_summary(plan));
         co_return std::move(plan);
     }
