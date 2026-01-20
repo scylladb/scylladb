@@ -2086,7 +2086,7 @@ public:
     virtual void visit(const cql_transport::messages::result_message::set_keyspace&) override { throw_on_unexpected_message("set_keyspace"); }
     virtual void visit(const cql_transport::messages::result_message::prepared::cql&) override { throw_on_unexpected_message("prepared::cql"); }
     virtual void visit(const cql_transport::messages::result_message::schema_change&) override { throw_on_unexpected_message("schema_change"); }
-    virtual void visit(const cql_transport::messages::result_message::bounce_to_shard&) override { throw_on_unexpected_message("bounce_to_shard"); }
+    virtual void visit(const cql_transport::messages::result_message::bounce&) override { throw_on_unexpected_message("bounce"); }
     virtual void visit(const cql_transport::messages::result_message::exception&) override { throw_on_unexpected_message("exception"); }
 
     virtual void visit(const cql_transport::messages::result_message::rows& rows) override {

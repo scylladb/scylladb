@@ -65,7 +65,7 @@ evaluate_prepared(
 future<::shared_ptr<cql_transport::messages::result_message>>
 broadcast_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     if (this_shard_id() != 0) {
-        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
+        co_return ::make_shared<cql_transport::messages::result_message::bounce>(0, cql3::computed_function_values{});
     }
 
     auto result = co_await qp.execute_broadcast_table_query(

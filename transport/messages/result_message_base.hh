@@ -78,7 +78,7 @@ public:
     class prepared;
     class schema_change;
     class rows;
-    class bounce_to_shard;
+    class bounce;
     class exception;
 };
 

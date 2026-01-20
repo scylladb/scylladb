@@ -225,8 +225,8 @@ public:
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
-    using result_with_bounce_to_shard = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce_to_shard>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard>;
+    using result_with_bounce = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce>>;
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce>;
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;

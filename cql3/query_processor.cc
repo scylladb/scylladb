@@ -506,6 +506,12 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.replication_strategy_fail_list_violations,
                             sm::description("Counts the number of replication_strategy_fail_list guardrail violations, "
                                             "i.e. attempts to set a forbidden replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")).set_skip_when_empty(),
+
+                    sm::make_counter(
+                            "forwarded_requests",
+                            _cql_stats.forwarded_requests,
+                            sm::description("Counts the total number of attempts to forward strongly consistent CQL requests to other nodes."
+                                            "One request may be forwarded multiple times if the forwarding is attempted during tablet Raft group changes.")).set_skip_when_empty(),
             });
 
     _mnotifier.register_listener(_migration_subscriber.get());
@@ -549,7 +555,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     // execute all statements that need group0 guard on shard0
     if (this_shard_id() != 0) {
-        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
+        co_return ::make_shared<cql_transport::messages::result_message::bounce>(0,
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
@@ -1230,7 +1236,12 @@ future<> query_processor::query_internal(
 
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     _proxy.get_stats().replica_cross_shard_ops++;
-    return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+    return ::make_shared<cql_transport::messages::result_message::bounce>(shard, std::move(cached_fn_calls));
+}
+
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(locator::tablet_replica replica, seastar::lowres_clock::time_point timeout, cql3::computed_function_values cached_fn_calls) {
+    get_cql_stats().forwarded_requests++;
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, timeout, std::move(cached_fn_calls));
 }
 
 void query_processor::update_authorized_prepared_cache_config() {

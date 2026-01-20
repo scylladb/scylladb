@@ -478,6 +478,7 @@ public:
     friend class migration_subscriber;
 
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+    shared_ptr<cql_transport::messages::result_message> bounce_to_node(locator::tablet_replica replica, seastar::lowres_clock::time_point timeout, cql3::computed_function_values cached_fn_calls);
 
     void update_authorized_prepared_cache_config();
 
