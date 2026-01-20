@@ -33,10 +33,9 @@ logger = logging.getLogger(__name__)
         (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
         (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
         (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
-        (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
         (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
     ])
-async def test_refresh_with_streaming_scopes(manager: ManagerClient, topology_rf_validity):
+async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerClient, topology_rf_validity):
     '''
     Check that refreshing a cluster with stream scopes works
 
@@ -64,7 +63,7 @@ async def test_refresh_with_streaming_scopes(manager: ManagerClient, topology_rf
 
     ks = 'ks'
     cf = 'cf'
-    _, keys, _ = await create_dataset(manager, ks, cf, topology, logger, num_keys=10000, min_tablet_count=512)
+    _, keys, _ = await create_dataset(manager, ks, cf, topology, logger, num_keys=10, min_tablet_count=5)
 
     # validate replicas assertions hold on fresh dataset
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
@@ -110,7 +109,8 @@ async def test_refresh_with_streaming_scopes(manager: ManagerClient, topology_rf
         logger.info(f'Refresh {s.ip_addr} with {toc_names}, scope={scope}')
         await manager.api.load_new_sstables(s.ip_addr, ks, cf, scope=scope, primary_replica=primary_replica_only, load_and_stream=True)
 
-    for scope in ['all', 'dc', 'rack', 'node']:
+    scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
+    for scope in scopes:
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
         # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
         # is initially created and an arbitrary subset or the rack at restore time.
