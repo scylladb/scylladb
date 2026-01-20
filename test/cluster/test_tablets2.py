@@ -922,8 +922,13 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.mytable1 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
         await cql.run_async(f"CREATE TABLE {ks}.mytable2 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
 
+        # Find all tables that use tablets (may include system tables as well)
+        tables = dict[str, list[str]]()
+        tablet_keyspaces = await manager.api.client.get_json(f"/storage_service/keyspaces", host=servers[0].ip_addr, params={"replication": "tablets"})
+        for tablet_ks in tablet_keyspaces:
+            tables[tablet_ks] = [row.table_name for row in list(await cql.run_async(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name='{tablet_ks}'"))]
+
         # Then tablet count metric for each shard depicts the actual state
-        tables = { ks: ["mytable1", "mytable2"] }
         expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
         await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
@@ -934,7 +939,7 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.mytable3 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
 
         # Then tablet count metric for each shard depicts the actual state
-        tables = { ks: ["mytable1", "mytable2", "mytable3"] }
+        tables[ks].append("mytable3")
         expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
         await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
@@ -945,7 +950,7 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
         await cql.run_async(f"DROP TABLE {ks}.mytable2;")
 
         # Then tablet count metric for each shard depicts the actual state
-        tables = { ks: ["mytable1", "mytable3"] }
+        tables[ks].remove("mytable2")
         expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
         await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
@@ -968,16 +973,17 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
 
 
         tokens_on_shard_to_move = {
-            "mytable1" : await get_tablet_tokens_from_host_on_shard(manager, src_server, ks, "mytable1", shard_id_to_move),
-            "mytable3" : await get_tablet_tokens_from_host_on_shard(manager, src_server, ks, "mytable3", shard_id_to_move)
+            (ks, table): await get_tablet_tokens_from_host_on_shard(manager, src_server, ks, table, shard_id_to_move)
+            for ks, ks_tables in tables.items()
+            for table in ks_tables
         }
 
-        count_of_tokens_on_src_shard_to_move = len(tokens_on_shard_to_move["mytable1"]) + len(tokens_on_shard_to_move["mytable3"])
+        count_of_tokens_on_src_shard_to_move = sum(len(tokens) for tokens in tokens_on_shard_to_move.values())
         assert count_of_tokens_on_src_shard_to_move > 0
 
         src_host_id = await manager.get_host_id(src_server.server_id)
         dest_host_id = await manager.get_host_id(dest_server.server_id)
-        for table_name, tokens in tokens_on_shard_to_move.items():
+        for (ks, table_name), tokens in tokens_on_shard_to_move.items():
             for token in tokens:
                 await manager.api.move_tablet(node_ip=src_server.ip_addr, ks=ks, table=table_name, src_host=src_host_id, src_shard=shard_id_to_move, dst_host=dest_host_id, dst_shard=3, token=token)
 
