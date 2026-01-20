@@ -986,6 +986,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", certs.server_cert_cn(), server->port()));
     cfg.db_config->vector_store_encryption_options.set({{"truststore", broken_cert.get_path().string()}});
+    cfg.db_config->request_timeout_in_ms.set(1000); // 1 seconds
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 co_await create_test_table(env, "ks", "idx");
