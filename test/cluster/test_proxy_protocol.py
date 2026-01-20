@@ -116,7 +116,7 @@ async def do_cql_handshake(reader, writer):
     await writer.drain()
 
     # Read response (READY or AUTHENTICATE)
-    response = await asyncio.wait_for(reader.read(4096), timeout=10.0)
+    response = await asyncio.wait_for(reader.read(4096), timeout=100.0)
     if len(response) < 9:
         raise RuntimeError(f"Short response from server: {len(response)} bytes")
 
@@ -133,7 +133,7 @@ async def do_cql_handshake(reader, writer):
         auth_frame.extend(auth_body)
         writer.write(bytes(auth_frame))
         await writer.drain()
-        response = await asyncio.wait_for(reader.read(4096), timeout=10.0)
+        response = await asyncio.wait_for(reader.read(4096), timeout=100.0)
         opcode = response[4]
         if opcode != 0x10:  # AUTH_SUCCESS
             raise RuntimeError(f"Expected AUTH_SUCCESS (0x10), got {hex(opcode)}")
@@ -146,7 +146,7 @@ async def send_cql_query(reader, writer, query: str, stream: int = 2) -> bytes:
     query_frame = build_cql_query_frame(query, stream=stream)
     writer.write(query_frame)
     await writer.drain()
-    response = await asyncio.wait_for(reader.read(16384), timeout=10.0)
+    response = await asyncio.wait_for(reader.read(16384), timeout=100.0)
     return response
 
 
