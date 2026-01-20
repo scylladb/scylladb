@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_replication, get_replica_count
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -1393,7 +1393,41 @@ def verify_tablet_replica_distribution(desc: str, actual_replicas_per_rack: dict
     assert total == total_replicas, f"Total replicas: expected {total_replicas}, got {total}"
 
 
+async def verify_system_keyspaces_allow_rack_removal(manager: ManagerClient, server: ServerInfo, decommissioning_rack: str, available_racks: int, dc: str, user_keyspaces: str | list[str] = []):
+    user_keyspaces = [user_keyspaces] if isinstance(user_keyspaces, str) else user_keyspaces
+    cql = manager.get_cql()
+
+    tablet_keyspaces = await manager.api.client.get_json(
+        "/storage_service/keyspaces",
+        host=server.ip_addr,
+        params={"replication": "tablets"}
+    )
+
+    for ks in tablet_keyspaces:
+        if ks in user_keyspaces:
+            continue
+
+        replication = get_replication(cql, ks)
+        replication.pop('class', None)
+
+        if dc not in replication:
+            continue
+
+        rf = replication[dc]
+
+        if isinstance(rf, list):
+            # rack-list RF: ensure the rack to remove is not in the list
+            assert decommissioning_rack not in rf, f"The decommissioning rack is in use by keyspace {ks} (replication options: {rf}). This would block rack decommission."
+        else:
+            # Numeric RF: ensure there are enough remaining racks
+            rf = get_replica_count(rf)
+            assert available_racks > rf, f"Not enough remaining racks to satisfy RF for keyspace {ks} (replication factor: {rf}, available racks: {available_racks}). This would block rack decommission."
+
+        logger.debug(f"Replication of {ks} keyspace is compatible with removing rack {decommissioning_rack}: {replication}")
+
+
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_basic(manager: ManagerClient):
     """
     Test decommissioning of all nodes in a rack
@@ -1405,19 +1439,30 @@ async def test_decommission_rack_basic(manager: ManagerClient):
     nodes_per_rack = 2
     rf = num_racks - 1
 
-    # We need to disable this option to be able to create a keyspace. This can be ditched
-    # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
+    # We need to disable the `rf_rack_valid_keyspaces` option to be able to
+    # create a keyspace. This can be ditched once we've implemented
+    # scylladb/scylladb#23426 and we can add new racks with the option enabled.
     # Then we can create `rf` nodes, create the keyspace, and add another node.
-    config = {"rf_rack_valid_keyspaces": False}
+    #
+    # We also need to disable auto-RF because system keyspaces might block
+    # decommission if their RFs are auto-expanded to include the decommissioning rack.
+    config = {
+        "rf_rack_valid_keyspaces": False,
+        "error_injections_at_startup": ["skip_auto_rf_change"],
+    }
 
     all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
+        decommision_rack = f"rack{num_racks}"
+
+        server1 = next(iter(all_servers.values()))
+        await verify_system_keyspaces_allow_rack_removal(manager, server1, decommision_rack, num_racks, "dc1", ctx.ks)
+
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
         replicas_per_rack = await get_tablet_count_per_rack(manager, all_servers.values(), tables)
         verify_tablet_replica_distribution("Before decommission", replicas_per_rack, set(), ctx.initial_tablets, ctx.rf, num_racks)
 
-        decommision_rack = f"rack{num_racks}"
         logger.debug(f"Decommissioning rack={decommision_rack}")
         live_servers: dict[ServerNum, ServerInfo] = dict()
         dead_servers: dict[ServerNum, ServerInfo] = dict()
@@ -1434,6 +1479,7 @@ async def test_decommission_rack_basic(manager: ManagerClient):
         verify_tablet_replica_distribution("After decommission", replicas_per_rack, {decommision_rack}, ctx.initial_tablets, ctx.rf, num_racks - 1)
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     """
     Test decommissioning a rack, after a rack with new nodes is added
@@ -1444,12 +1490,23 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     nodes_per_rack = 2
     rf = initial_num_racks
 
-    # We can't add a new rack if we create a keyspace.
-    # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
-    config = {"rf_rack_valid_keyspaces": False}
+    # We can't add a new rack if we create an RF-rack-valid keyspace.
+    # To do that, we need to set `rf_rack_valid_keyspaces` to False.
+    # Once scylladb/scylladb#23426 has been implemented, this option can be ditched.
+    # We aslo need to disable auto-RF because system keyspaces might block
+    # decommission if their RFs are auto-expanded to include the decommissioning rack.
+    config = {
+        "rf_rack_valid_keyspaces": False,
+        "error_injections_at_startup": ["skip_auto_rf_change"],
+    }
 
     initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
+        decommision_rack = f"rack{initial_num_racks}"
+
+        server1 = next(iter(initial_servers.values()))
+        await verify_system_keyspaces_allow_rack_removal(manager, server1, decommision_rack, num_racks, "dc1", ctx.ks)
+
         logger.debug("Temporarily disable tablet load balancing")
         await manager.disable_tablet_balancing()
 
@@ -1470,7 +1527,6 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
 
         live_servers: dict[ServerNum, ServerInfo] = dict()
         dead_servers: dict[ServerNum, ServerInfo] = dict()
-        decommision_rack = f"rack{initial_num_racks}"
         logger.debug(f"Decommissioning rack={decommision_rack}")
         for s in all_servers:
             if s.rack == decommision_rack:
@@ -1485,6 +1541,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
         verify_tablet_replica_distribution("After decommission", replicas_per_rack, {decommision_rack}, ctx.initial_tablets, ctx.rf, initial_num_racks)
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_not_enough_racks(manager: ManagerClient):
     """
     Test that decommissioning a rack fails if the number of rack is
@@ -1497,8 +1554,19 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
     nodes_per_rack = 2
     rf = num_racks
 
-    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    # Disable auto-RF because system keyspaces might block decommission if
+    # their RFs are auto-expanded to include the decommissioning rack.
+    config = {
+        "error_injections_at_startup": ["skip_auto_rf_change"],
+    }
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
+        decommision_rack = f"rack{num_racks}"
+
+        server1 = next(iter(all_servers.values()))
+        await verify_system_keyspaces_allow_rack_removal(manager, server1, decommision_rack, num_racks, "dc1", ctx.ks)
+
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
         replicas_per_rack = await get_tablet_count_per_rack(manager, all_servers.values(), tables)
@@ -1506,7 +1574,6 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
 
         live_servers: dict[ServerNum, ServerInfo] = dict()
         dead_servers: dict[ServerNum, ServerInfo] = dict()
-        decommision_rack = f"rack{num_racks}"
         decommision_count = 0
         for s in all_servers.values():
             if s.rack == decommision_rack:
