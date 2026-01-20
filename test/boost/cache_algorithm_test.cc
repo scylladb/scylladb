@@ -12,6 +12,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "db/config.hh"
+#include "compaction/task_manager_module.hh"
+#include "compaction/compaction_manager.hh"
 
 BOOST_AUTO_TEST_SUITE(cache_algorithm_test)
 
@@ -62,7 +64,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
     // cfg.db_config->index_cache_fraction.set(1.0);
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // We disable compactions because they cause confusing cache mispopulations.
-        e.execute_cql("CREATE TABLE ks.t(pk blob PRIMARY KEY) WITH compaction = { 'class' : 'NullCompactionStrategy' };").get();
+        e.execute_cql("CREATE TABLE ks.t(pk blob PRIMARY KEY) WITH compaction = { 'class' : 'NullCompactionStrategy' } AND compression = {'sstable_compression': ''};").get();
         auto insert_query = e.prepare("INSERT INTO ks.t(pk) VALUES (?)").get();
         auto select_query = e.prepare("SELECT * FROM t WHERE pk = ?").get();
 
@@ -83,8 +85,15 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         for (size_t i = 0; i < pk_number; ++i) {
             e.execute_prepared(insert_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
         }
-        // Flushing makes reasoning easier.
-        e.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+        // Flush and compact the table. An arbitrary number of sstables makes the test too unpredictable.
+        auto task = e.local_db()
+            .get_compaction_manager()
+            .get_task_manager_module()
+            .make_and_start_task<major_keyspace_compaction_task_impl>(
+                {}, "ks", tasks::task_id::create_null_id(),
+                e.db(), std::vector<table_info>{{.name = "t", .id = e.local_db().find_uuid("ks", "t")}},
+                std::optional<flush_mode>(flush_mode::compacted_tables), false).get();
+        task->done().get();
 
         int retries = 0;
         constexpr int max_retries = 100;
