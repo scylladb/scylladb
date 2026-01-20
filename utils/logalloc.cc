@@ -2230,7 +2230,8 @@ public:
         other._sanitizer = region_sanitizer(_tracker.get_impl().sanitizer_report_backtrace());
     }
 
-    std::unordered_map<std::string, uint64_t> collect_stats() const {
+    std::unordered_map<std::string, uint64_t> collect_stats() {
+        close_active();
         std::unordered_map<std::string, uint64_t> sizes;
         for (auto& desc : _segment_descs) {
             const_cast<region_impl&>(*this).for_each_live(segment_pool().segment_from(desc), [&sizes] (const object_descriptor* desc, void* obj, size_t size) {
@@ -2509,7 +2510,7 @@ uint64_t region::id() const noexcept {
     return get_impl().id();
 }
 
-std::unordered_map<std::string, uint64_t> region::collect_stats() const {
+std::unordered_map<std::string, uint64_t> region::collect_stats() {
     return get_impl().collect_stats();
 }
 

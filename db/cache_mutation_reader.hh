@@ -228,6 +228,7 @@ public:
                                dht::decorated_key dk,
                                query::clustering_key_filter_ranges&& crr,
                                read_context& ctx,
+                               std::unique_ptr<read_context> unique_ctx,
                                partition_snapshot_ptr snp,
                                row_cache& cache)
         : mutation_reader::impl(std::move(s), ctx.permit())
@@ -239,7 +240,7 @@ public:
         , _lsa_manager(cache)
         , _lower_bound(position_in_partition::before_all_clustered_rows())
         , _upper_bound(position_in_partition_view::before_all_clustered_rows())
-        , _read_context_holder()
+        , _read_context_holder(std::move(unique_ctx))
         , _read_context(ctx)    // ctx is owned by the caller, who's responsible for closing it.
         , _next_row(*_schema, *_snp, false, _read_context.is_reversed())
         , _read_time(get_read_time())
@@ -252,18 +253,6 @@ public:
                 _read_context.is_reversed(),
                 fmt::ptr(&*_snp));
         push_mutation_fragment(*_schema, _permit, partition_start(_dk, _snp->partition_tombstone()));
-    }
-    cache_mutation_reader(schema_ptr s,
-                               dht::decorated_key dk,
-                               query::clustering_key_filter_ranges&& crr,
-                               std::unique_ptr<read_context> unique_ctx,
-                               partition_snapshot_ptr snp,
-                               row_cache& cache)
-        : cache_mutation_reader(s, std::move(dk), std::move(crr), *unique_ctx, std::move(snp), cache)
-    {
-        // Assume ownership of the read_context.
-        // It is our responsibility to close it now.
-        _read_context_holder = std::move(unique_ctx);
     }
     cache_mutation_reader(const cache_mutation_reader&) = delete;
     cache_mutation_reader(cache_mutation_reader&&) = delete;
@@ -1130,20 +1119,9 @@ inline mutation_reader make_cache_mutation_reader(schema_ptr s,
                                                             query::clustering_key_filter_ranges crr,
                                                             row_cache& cache,
                                                             cache::read_context& ctx,
-                                                            partition_snapshot_ptr snp)
-{
-    return make_mutation_reader<cache::cache_mutation_reader>(
-        std::move(s), std::move(dk), std::move(crr), ctx, std::move(snp), cache);
-}
-
-// transfer ownership of ctx to cache_mutation_reader
-inline mutation_reader make_cache_mutation_reader(schema_ptr s,
-                                                            dht::decorated_key dk,
-                                                            query::clustering_key_filter_ranges crr,
-                                                            row_cache& cache,
                                                             std::unique_ptr<cache::read_context> unique_ctx,
                                                             partition_snapshot_ptr snp)
 {
     return make_mutation_reader<cache::cache_mutation_reader>(
-        std::move(s), std::move(dk), std::move(crr), std::move(unique_ctx), std::move(snp), cache);
+        std::move(s), std::move(dk), std::move(crr), ctx, std::move(unique_ctx), std::move(snp), cache);
 }

@@ -4324,7 +4324,7 @@ SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
         // meaning the input from sstables wasn't compacted and we put
         // unnecessary pressure on the cache.
         cache_entry& entry = t.get_row_cache().lookup(pk);
-        const utils::immutable_collection<mutation_partition::rows_type>& rt = entry.partition().version()->partition().clustered_rows();
+        const utils::immutable_collection<mutation_partition::rows_type>& rt = entry.get_partition_entry().version()->partition().clustered_rows();
         BOOST_ASSERT(rt.calculate_size() == 1);
     });
 }
@@ -4559,7 +4559,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         }).get();
 
         cache_entry& entry = t.get_row_cache().lookup(dk);
-        auto& cp = entry.partition().version()->partition();
+        auto& cp = entry.get_partition_entry().version()->partition();
 
         BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck1).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
         BOOST_REQUIRE(cp.find_row(*s, ck2) == nullptr); // expired tombstone isn't in cache
@@ -4728,7 +4728,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
         cache_entry& entry = cache.lookup(pkey);
-        auto& cp = entry.partition().version()->partition();
+        auto& cp = entry.get_partition_entry().version()->partition();
 
         BOOST_REQUIRE(cp.find_row(*s, ck1) != nullptr); // live row is in cache
         BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck2).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
@@ -4777,7 +4777,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         tombstone_gc_state gc_state(nullptr);
 
         cache_entry& entry = cache.lookup(pk);
-        auto& cp = entry.partition().version()->partition();
+        auto& cp = entry.get_partition_entry().version()->partition();
 
         // check all rows are in cache
         BOOST_REQUIRE(cp.find_row(*s.schema(), ck0) != nullptr);
@@ -5014,7 +5014,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     cache.populate(m);
 
     with_allocator(tracker.allocator(), [&] {
-        auto& e = *cache.lookup(pk).partition().version()->partition().clustered_rows().begin();
+        auto& e = *cache.lookup(pk).get_partition_entry().version()->partition().clustered_rows().begin();
         tracker.get_lru().remove(e);
         e.on_evicted(tracker);
     });
