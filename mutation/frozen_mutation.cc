@@ -178,7 +178,7 @@ class fragmenting_mutation_freezer {
 
     tombstone _partition_tombstone;
     std::optional<static_row> _sr;
-    std::deque<clustering_row> _crs;
+    utils::chunked_vector<clustering_row> _crs;
     range_tombstone_list _rts;
 
     frozen_mutation_consumer_fn _consumer;

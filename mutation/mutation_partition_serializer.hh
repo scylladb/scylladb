@@ -41,4 +41,4 @@ public:
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     std::optional<static_row> sr, range_tombstone_list range_tombstones,
-    std::deque<clustering_row> clustering_rows, ser::writer_of_mutation_partition<bytes_ostream>&&);
+    utils::chunked_vector<clustering_row> clustering_rows, ser::writer_of_mutation_partition<bytes_ostream>&&);

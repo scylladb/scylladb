@@ -226,7 +226,7 @@ future<> mutation_partition_serializer::write_gently(ser::writer_of_mutation_par
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     std::optional<static_row> sr,  range_tombstone_list rts,
-    std::deque<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
+    utils::chunked_vector<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
 {
     auto srow_writer = std::move(wr).write_tomb(partition_tombstone).start_static_row();
     auto row_tombstones = [&] {
@@ -242,10 +242,9 @@ void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone
     rts.clear();
 
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
-    while (!crs.empty()) {
-        auto& cr = crs.front();
+    for (auto& cr : crs) {
         write_row(clustering_rows.add(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb()).end_deletable_row();
-        crs.pop_front();
+        cr = clustering_row(clustering_key_prefix{});
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
