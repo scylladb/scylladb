@@ -46,6 +46,7 @@ class ScyllaSetup:
         self._extra_args = extra_arguments
         self._dc = arguments.dc
         self._rack = arguments.rack
+        self._blocked_reactor_notify_ms = arguments.blocked_reactor_notify_ms
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -205,7 +206,7 @@ class ScyllaSetup:
         elif self._replaceAddressFirstBoot is not None:
             args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
 
-        args += ["--blocked-reactor-notify-ms 999999999"]
+        args += ["--blocked-reactor-notify-ms %s" % self._blocked_reactor_notify_ms]
 
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
             cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))
