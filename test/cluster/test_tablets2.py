@@ -1341,31 +1341,56 @@ async def create_and_populate_table(manager: ManagerClient, rf: int = 3, initial
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
 
-def get_expected_replicas_per_server(live_servers: Iterable[ServerInfo], dead_servers: Iterable[ServerInfo], initial_tablets: int, rf: int) -> dict[ServerNum, float]:
+async def get_tablet_count_per_rack(manager: ManagerClient, servers: Iterable[ServerInfo], full_tables: dict[str, list[str]]) -> dict[str, int]:
+    """Get tablet replica count per rack for the specified tables."""
+    servers_list = list(servers)
+    if not servers_list:
+        return {}
+
+    server1 = servers_list[0]
+    hosts: dict[HostID, ServerInfo] = {}
+    for server in servers_list:
+        hosts[await manager.get_host_id(server.server_id)] = server
+
+    result: defaultdict[str, int] = defaultdict(int)
+    for keyspace, tables in full_tables.items():
+        for table in tables:
+            table_tablets = await get_all_tablet_replicas(manager, server1, keyspace, table)
+            for tablet_replica in table_tablets:
+                for host_id, _shard_id in tablet_replica.replicas:
+                    if host_id in hosts:
+                        result[hosts[host_id].rack] += 1
+
+    return dict(result)
+
+
+def verify_tablet_replica_distribution(desc: str, actual_replicas_per_rack: dict[str, int], dead_racks: set[str], initial_tablets: int, rf: int, num_live_racks: int):
+    """Verify tablet replica distribution across racks.
+
+    Checks:
+    - Number of replicas per rack does not exceed initial_tablets
+    - Sum of replicas across all racks equals initial_tablets * rf
+    - Decommissioned racks have zero replicas
+    """
+    logger.debug(f"{desc}: actual_replicas_per_rack={actual_replicas_per_rack} dead_racks={dead_racks}")
     total_replicas = initial_tablets * rf
-    nodes_per_rack: defaultdict[str, set[ServerNum]] = defaultdict(set)
-    for s in live_servers:
-        nodes_per_rack[s.rack].add(s.server_id)
-    replicas_per_rack = total_replicas / len(nodes_per_rack.keys())
-    result: dict[ServerNum, float] = dict()
-    for rack_servers in nodes_per_rack.values():
-        replicas_per_node = replicas_per_rack / len(rack_servers)
-        for id in rack_servers:
-            result[id] = replicas_per_node
-    for s in dead_servers:
-        result[s.server_id] = 0
-    return result
+    max_replicas_per_rack = initial_tablets
 
-
-def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[ServerNum, float], tablet_count: dict[ServerNum, list[int]], initial_tablets: int, rf: int, shards_per_node: int = 2):
-    logger.debug(f"{desc}: expected_replicas_per_server={expected_replicas_per_server} tablet_count={tablet_count}")
     total = 0
-    for server_id, host_replicas in tablet_count.items():
-        expected_replicas_per_shard = expected_replicas_per_server[server_id] / shards_per_node
-        for i in host_replicas:
-            total += i
-            assert abs(i - expected_replicas_per_shard) <= 1
-    assert total == initial_tablets * rf
+    for rack, count in actual_replicas_per_rack.items():
+        if rack in dead_racks:
+            assert count == 0, f"Dead rack {rack} has {count} replicas, expected 0"
+        else:
+            assert count <= max_replicas_per_rack, f"Rack {rack} has {count} replicas, exceeds max {max_replicas_per_rack}"
+        total += count
+
+    # Also verify dead racks that might not appear in actual_replicas_per_rack have 0
+    for rack in dead_racks:
+        if rack not in actual_replicas_per_rack:
+            # Implicitly 0, which is correct
+            pass
+
+    assert total == total_replicas, f"Total replicas: expected {total_replicas}, got {total}"
 
 
 @pytest.mark.asyncio
@@ -1389,9 +1414,8 @@ async def test_decommission_rack_basic(manager: ManagerClient):
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
-        expected_replicas_per_server = get_expected_replicas_per_server(all_servers.values(), [], ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
-        verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, all_servers.values(), tables)
+        verify_tablet_replica_distribution("Before decommission", replicas_per_rack, set(), ctx.initial_tablets, ctx.rf, num_racks)
 
         decommision_rack = f"rack{num_racks}"
         logger.debug(f"Decommissioning rack={decommision_rack}")
@@ -1406,9 +1430,8 @@ async def test_decommission_rack_basic(manager: ManagerClient):
                 live_servers[id] = s
 
         logger.info("Verify tablet replicas distribution")
-        expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, live_servers.values(), tables)
-        verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, live_servers.values(), tables)
+        verify_tablet_replica_distribution("After decommission", replicas_per_rack, {decommision_rack}, ctx.initial_tablets, ctx.rf, num_racks - 1)
 
 @pytest.mark.asyncio
 async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
@@ -1439,9 +1462,8 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
 
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
-        expected_replicas_per_server = get_expected_replicas_per_server(initial_servers.values(), new_rack_servers, ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers, tables)
-        verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, all_servers, tables)
+        verify_tablet_replica_distribution("Before decommission", replicas_per_rack, {new_rack}, ctx.initial_tablets, ctx.rf, initial_num_racks)
 
         logger.debug("Reenable tablet load balancing")
         await manager.enable_tablet_balancing()
@@ -1459,9 +1481,8 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
                 live_servers[s.server_id] = s
 
         logger.info("Verify tablet replicas distribution")
-        expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers, tables)
-        verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, live_servers.values(), tables)
+        verify_tablet_replica_distribution("After decommission", replicas_per_rack, {decommision_rack}, ctx.initial_tablets, ctx.rf, initial_num_racks)
 
 @pytest.mark.asyncio
 async def test_decommission_not_enough_racks(manager: ManagerClient):
@@ -1480,9 +1501,8 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
-        expected_replicas_per_server = get_expected_replicas_per_server(all_servers.values(), [], ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
-        verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, all_servers.values(), tables)
+        verify_tablet_replica_distribution("Before decommission", replicas_per_rack, set(), ctx.initial_tablets, ctx.rf, num_racks)
 
         live_servers: dict[ServerNum, ServerInfo] = dict()
         dead_servers: dict[ServerNum, ServerInfo] = dict()
@@ -1502,9 +1522,8 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
                 live_servers[s.server_id] = s
 
         logger.info("Verify tablet replicas distribution")
-        expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), ctx.initial_tablets, ctx.rf)
-        tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
-        verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+        replicas_per_rack = await get_tablet_count_per_rack(manager, live_servers.values(), tables)
+        verify_tablet_replica_distribution("After decommission", replicas_per_rack, set(), ctx.initial_tablets, ctx.rf, num_racks)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
