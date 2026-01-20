@@ -1227,7 +1227,7 @@ prepare_column_mutation_attribute(
         throw exceptions::invalid_request_exception(fmt::format("{} expects an atomic column, but {} is a non-frozen collection", cma.kind, column));
     }
     if (cval->col->is_primary_key()) {
-        throw exceptions::invalid_request_exception(fmt::format("{} is not legal on partition key component {}", cma.kind, column));
+        throw exceptions::invalid_request_exception(fmt::format("{} is not legal on primary key component {}", cma.kind, column));
     }
     return column_mutation_attribute{
         .kind = cma.kind,
