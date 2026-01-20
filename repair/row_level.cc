@@ -44,6 +44,7 @@
 #include "utils/to_string.hh"
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
+#include "dht/range_streamer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -3582,6 +3583,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<gms::gossiper>& gossiper,
         netw::messaging_service& ms,
         sharded<replica::database>& db,
+        sharded<streaming::stream_manager>& stream_manager,
         sharded<service::storage_proxy>& sp,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_keyspace>& sys_ks,
@@ -3594,6 +3596,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _gossiper(gossiper)
     , _messaging(ms)
     , _db(db)
+    , _stream_manager(stream_manager)
     , _sp(sp)
     , _bm(bm)
     , _sys_ks(sys_ks)

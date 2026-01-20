@@ -389,6 +389,7 @@ public:
     named_value<uint64_t> repair_multishard_reader_buffer_hint_size;
     named_value<uint64_t> repair_multishard_reader_enable_read_ahead;
     named_value<bool> enable_small_table_optimization_for_rbno;
+    named_value<bool> enable_fast_stream_for_rbno;
     named_value<uint32_t> ring_delay_ms;
     named_value<uint32_t> shadow_round_ms;
     named_value<uint32_t> fd_max_interval_ms;

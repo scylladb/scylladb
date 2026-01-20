@@ -244,23 +244,23 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::stati
   });
 }
 
-future<> range_streamer::stream_async() {
+future<> range_streamer::stream_async(std::function<void(size_t)> progress_updater) {
     _nr_ranges_remaining = nr_ranges_to_stream();
     _nr_total_ranges = _nr_ranges_remaining;
     _token_metadata_ptr = nullptr;
     logger.info("{} starts, nr_ranges_remaining={}", _description, _nr_ranges_remaining);
     auto start = lowres_clock::now();
-    return do_for_each(_to_stream, [this, description = _description] (auto& stream) {
+    return do_for_each(_to_stream, [this, description = _description, progress_updater] (auto& stream) {
         const auto& keyspace = stream.first;
         auto& ip_range_vec = stream.second;
         auto ips = ip_range_vec | std::views::keys | std::ranges::to<std::list>();
         // Fetch from or send to peer node in parallel
         logger.info("{} with {} for keyspace={} started, nodes_to_stream={}", description, ips, keyspace, ip_range_vec.size());
-        return parallel_for_each(ip_range_vec, [this, description, keyspace] (auto& ip_range) {
+        return parallel_for_each(ip_range_vec, [this, description, keyspace, progress_updater] (auto& ip_range) {
           auto& source = ip_range.first;
           auto& range_vec = ip_range.second;
-          return seastar::with_semaphore(_limiter, 1, [this, description, keyspace, source, &range_vec] () mutable {
-            return seastar::async([this, description, keyspace, source, &range_vec] () mutable {
+          return seastar::with_semaphore(_limiter, 1, [this, description, keyspace, source, &range_vec, progress_updater] () mutable {
+            return seastar::async([this, description, keyspace, source, &range_vec, progress_updater] () mutable {
                 // TODO: It is better to use fiber instead of thread here because
                 // creating a thread per peer can be some memory in a large cluster.
                 auto start_time = lowres_clock::now();
@@ -286,7 +286,11 @@ future<> range_streamer::stream_async() {
                     nr_ranges_streamed += ranges_streamed;
                     _nr_ranges_remaining -= ranges_streamed;
                     float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - _nr_ranges_remaining) / (float)_nr_total_ranges;
-                    _stream_manager.local().update_finished_percentage(_reason, percentage);
+                    if (progress_updater) {
+                        progress_updater(ranges_streamed);
+                    } else {
+                        _stream_manager.local().update_finished_percentage(_reason, percentage);
+                    }
                     logger.info("Finished {} out of {} ranges for {}, finished percentage={}",
                             _nr_total_ranges - _nr_ranges_remaining, _nr_total_ranges, _reason, percentage);
                 };
