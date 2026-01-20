@@ -196,7 +196,7 @@ public:
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size() && _drain_failures.empty(); }
+    bool empty() const { return !size(); }
     size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
