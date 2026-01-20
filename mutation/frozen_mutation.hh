@@ -242,7 +242,7 @@ class streamed_mutation_freezer {
 
     tombstone _partition_tombstone;
     std::optional<static_row> _sr;
-    std::deque<clustering_row> _crs;
+    utils::chunked_vector<clustering_row> _crs;
     range_tombstone_list _rts;
 public:
     streamed_mutation_freezer(const schema& s, const partition_key& key)
