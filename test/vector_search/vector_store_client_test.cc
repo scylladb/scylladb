@@ -7,17 +7,21 @@
  */
 
 #include "cql3/expr/expression.hh"
+#include "types/types.hh"
+#include "utils/rjson.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils.hh"
 #include "vs_mock_server.hh"
 #include "unavailable_server.hh"
 #include "certificates.hh"
+#include "configure.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/when_all.hh>
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include <cstdio>
 #include <functional>
@@ -36,6 +40,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/net/tcp.hh>
+#include <tuple>
 #include <variant>
 #include <vector>
 #include <filesystem>
@@ -64,69 +69,6 @@ auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
         return x.mf.name == metric_name;
     });
     return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
-}
-
-class configure {
-    std::reference_wrapper<vector_search::vector_store_client> vs_ref;
-
-public:
-    explicit configure(vector_search::vector_store_client& vs)
-        : vs_ref(vs) {
-        with_dns_refresh_interval(seconds(2));
-        with_wait_for_client_timeout(milliseconds(100));
-        with_dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
-            co_return inet_address("127.0.0.1");
-        });
-    }
-
-    configure& with_dns_refresh_interval(milliseconds interval) {
-        vector_store_client_tester::set_dns_refresh_interval(vs_ref.get(), interval);
-        return *this;
-    }
-
-    configure& with_wait_for_client_timeout(milliseconds timeout) {
-        vector_store_client_tester::set_wait_for_client_timeout(vs_ref.get(), timeout);
-        return *this;
-    }
-
-    configure& with_dns(std::map<std::string, std::optional<std::string>> dns_) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::vector<inet_address>> {
-            auto value = dns.at(host);
-            if (value) {
-                co_return std::vector<inet_address>{inet_address(*value)};
-            }
-            co_return std::vector<inet_address>{};
-        });
-        return *this;
-    }
-
-    configure& with_dns(std::map<std::string, std::vector<std::string>> dns) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<std::vector<inet_address>> {
-            std::vector<inet_address> ret;
-            for (auto const& ip : dns.at(host)) {
-                ret.push_back(inet_address(ip));
-            }
-            co_return ret;
-        });
-        return *this;
-    }
-
-    configure& with_dns_resolver(std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<std::vector<inet_address>> {
-            auto addr = co_await r(host);
-            if (addr) {
-                co_return std::vector<inet_address>{*addr};
-            }
-            co_return std::vector<inet_address>{};
-        });
-        return *this;
-    }
-};
-
-cql_test_config make_config() {
-    cql_test_config cfg;
-    cfg.initial_tablets = 1;
-    return cfg;
 }
 
 timeout_config make_query_timeout(std::chrono::seconds timeout) {
