@@ -15,6 +15,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "auth/resource.hh"
+#include "db/view/view_building_task_mutation_builder.hh"
 #include "locator/host_id.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
@@ -952,27 +953,28 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
     using namespace db::view;
 
     auto& db = sp.local_db();
-    auto& sys_ks = sp.system_keyspace();
 
     auto base_id = view->view_info()->base_id();
     auto& base_cf = db.find_column_family(base_id);
     auto erm = base_cf.get_effective_replication_map();
     auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(base_id);
 
+    db::view::view_building_task_mutation_builder builder(ts);
     co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
         auto last_token = tablet_map.get_last_token(tid);
         for (auto& replica: tablet_info.replicas) {
-            auto id = utils::UUID_gen::get_time_UUID();
+            auto id = builder.new_id();
             view_building_task task {
                 id, view_building_task::task_type::build_range, false,
                 base_id, view->id(), replica, last_token
             };
 
-            auto mut = co_await sys_ks.make_view_building_task_mutation(ts, task);
-            out.push_back(std::move(mut));
+            builder.set_task(task);
             mlogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
         }
+        co_return;
     });
+    out.emplace_back(builder.build());
 }
 
 future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {

@@ -2807,28 +2807,6 @@ future<db::view::building_tasks> system_keyspace::get_view_building_tasks() {
     co_return tasks;
 }
 
-future<mutation> system_keyspace::make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task) {
-    static const sstring stmt = format("INSERT INTO {}.{}(key, id, type, aborted, base_id, view_id, last_token, host_id, shard) VALUES ('{}', ?, ?, ?, ?, ?, ?, ?, ?)", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
-    using namespace db::view;
-
-    data_value_or_unset view_id = unset_value{};
-    if (task.type == db::view::view_building_task::task_type::build_range) {
-        if (!task.view_id) {
-            on_internal_error(slogger, fmt::format("view_id is not set for build_range task with id: {}", task.id));
-        }
-        view_id = data_value(task.view_id->uuid());
-    }
-    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {
-            task.id, task_type_to_sstring(task.type), task.aborted,
-            task.base_id.uuid(), view_id, dht::token::to_int64(task.last_token),
-            task.replica.host.uuid(), int32_t(task.replica.shard)
-    });
-    if (muts.size() != 1) {
-        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
-    }
-    co_return std::move(muts[0]);
-}
-
 future<mutation> system_keyspace::make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id) {
     static const sstring stmt = format("DELETE FROM {}.{} WHERE key = '{}' AND id = ?", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
 
