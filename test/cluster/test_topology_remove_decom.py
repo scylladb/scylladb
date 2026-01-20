@@ -143,7 +143,13 @@ async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables)
 @pytest.mark.asyncio
 async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ManagerClient):
     servers = await manager.running_servers()
-    assert len(servers) >= 3
+    # Note: Add a second node in rack3 to ensure that when we remove a node
+    # from that rack, we do not remove the whole rack. The removal of a rack
+    # may not be possible if there are tablet-enabled system keyspaces that use
+    # that rack and would become RF-rack-invalid.
+    await manager.servers_add(1, property_file=servers[2].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 4
 
     await manager.server_stop_gracefully(servers[2].server_id)
 
@@ -174,7 +180,11 @@ async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: Manag
 
     """
     servers = await manager.running_servers()
-    await manager.servers_add(2, property_file=servers[0].property_file())
+    # Note: Add a second node in rack2 and rack3 to ensure that when we remove
+    # nodes from these racks, we do not remove the whole racks. The removal of
+    # racks may not be possible if there are tablet-enabled system keyspaces
+    # that use these racks and would become RF-rack-invalid.
+    await manager.servers_add(2, property_file=[servers[1].property_file(), servers[2].property_file()])
     servers = await manager.running_servers()
     assert len(servers) >= 5
 
@@ -194,7 +204,11 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
 
     """
     servers = await manager.running_servers()
-    await manager.servers_add(2, property_file=servers[0].property_file())
+    # Note: Add a second node in rack2 and rack3 to ensure that when we remove
+    # nodes from these racks, we do not remove the whole racks. The removal of
+    # racks may not be possible if there are tablet-enabled system keyspaces
+    # that use these racks and would become RF-rack-invalid.
+    await manager.servers_add(2, property_file=[servers[1].property_file(), servers[2].property_file()])
     servers = await manager.running_servers()
     assert len(servers) >= 5
 
