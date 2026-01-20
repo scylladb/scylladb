@@ -100,7 +100,7 @@ class load_balancer_stats_manager {
     using host_id = locator::host_id;
 
     sstring group_name;
-    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
+    std::unordered_map<dc_name, lw_shared_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
     load_balancer_cluster_stats _cluster_stats;
     seastar::metrics::label dc_label{"target_dc"};
@@ -113,7 +113,7 @@ class load_balancer_stats_manager {
 public:
     load_balancer_stats_manager(sstring group_name);
 
-    load_balancer_dc_stats& for_dc(const dc_name& dc);
+    const lw_shared_ptr<load_balancer_dc_stats>& for_dc(const dc_name& dc);
     load_balancer_node_stats& for_node(const dc_name& dc, host_id node);
     load_balancer_cluster_stats& for_cluster();
 
