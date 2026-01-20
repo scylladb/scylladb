@@ -159,7 +159,7 @@ forward_cql_service::execute_on_shard(
         auto stmt = prepared->statement;
         auto msg = co_await stmt->execute(svc._qp, qs, opts, std::nullopt);
 
-        if (auto bounce_msg = dynamic_pointer_cast<cql_transport::messages::result_message::bounce_to_shard>(msg)) {
+        if (auto bounce_msg = dynamic_pointer_cast<cql_transport::messages::result_message::bounce>(msg)) {
             tracing::trace(local_trace_state, "Statement needs to bounce again on shard {}", this_shard_id());
             co_return cql_transport::cql_server::process_fn_return_type(make_foreign(std::move(bounce_msg)));
         } else {
@@ -270,7 +270,7 @@ forward_cql_service::forward_cql_without_checking_exceptions(
     flog.trace("Trying to execute statement {} locally. Query string: {}", prepared_id, stmt->raw_cql_statement);
     tracing::trace(qs.get_trace_state(), "Trying to execute statement locally");
     auto msg = co_await stmt->execute(_qp, qs, options, std::nullopt);
-    auto bounce_result_message = dynamic_pointer_cast<cql_transport::messages::result_message::bounce_to_shard>(msg);
+    auto bounce_result_message = dynamic_pointer_cast<cql_transport::messages::result_message::bounce>(msg);
     if (!bounce_result_message) {
         // No need to bounce, return early on success
         flog.trace("Local statement execution of {} succeeded", prepared_id);
@@ -284,13 +284,22 @@ forward_cql_service::forward_cql_without_checking_exceptions(
     auto result = cql_transport::cql_server::process_fn_return_type(make_foreign(bounce_result_message));
 
     std::optional<forward_cql_execute_request> req;
-    while (auto* bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce_to_shard>(&result)) {
-        auto target_shard = (*bounce_msg)->move_to_shard();
-        auto&& cached_fn_calls = (*bounce_msg)->take_cached_pk_function_calls();
-        auto req = make_forward_cql_request(stmt, prepared_id, qs, options, stream, version, metadata_id);
-        tracing::trace(qs.get_trace_state(), "Bouncing {} to shard {}", prepared_id, *target_shard);
-        result = co_await execute_on_shard(*target_shard, qs.get_client_state(), qs.get_trace_state(), std::move(req), std::move(cached_fn_calls), stmt->raw_cql_statement);
-        bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce_to_shard>(&result);
+    auto* bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
+    while (bounce_msg) {
+        if (auto target_shard = (*bounce_msg)->move_to_shard()) {
+            auto&& cached_fn_calls = (*bounce_msg)->take_cached_pk_function_calls();
+            auto req = make_forward_cql_request(stmt, prepared_id, qs, options, stream, version, metadata_id);
+            tracing::trace(qs.get_trace_state(), "Bouncing {} to shard {}", prepared_id, *target_shard);
+            result = co_await execute_on_shard(*target_shard, qs.get_client_state(), qs.get_trace_state(), std::move(req), std::move(cached_fn_calls), stmt->raw_cql_statement);
+            bounce_msg = std::get_if<cql_transport::cql_server::result_with_bounce>(&result);
+        } else {
+            auto target = (*bounce_msg)->move_to_node();
+            const auto my_host_id = _qp.db().real_database().get_token_metadata().get_topology().my_host_id();
+            throw exceptions::invalid_request_exception(format(
+                "Strongly consistent writes can be executed only on the leader node, "
+                "leader id {}, current host id {}",
+                target.host, my_host_id));
+        }
     }
     auto* final_result = std::get_if<cql_transport::cql_server::result_with_foreign_response_ptr>(&result);
     auto response = std::move(*final_result).assume_value();

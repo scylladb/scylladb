@@ -46,7 +46,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
 
     using namespace service::strong_consistency;
     if (const auto* redirect = get_if<need_redirect>(&query_result)) {
-        co_return co_await redirect_statement(qp, options, redirect->target);
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout);
     }
 
     co_return co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),
