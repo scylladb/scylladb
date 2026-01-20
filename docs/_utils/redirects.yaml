@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove an outdated KB
+
+/stable/kb/perftune-modes-sync.html: /stable/kb/index.html
+
 # Move the diver information to another project
 
 /stable/using-scylla/drivers/index.html: https://docs.scylladb.com/stable/drivers/index.html
