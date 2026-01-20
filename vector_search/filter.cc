@@ -13,42 +13,42 @@
 #include "cql3/expr/evaluate.hh"
 #include "types/json_utils.hh"
 
-namespace cql3::restrictions {
+namespace vector_search {
 
 namespace {
 
-std::optional<sstring> to_single_column_op_string(expr::oper_t op) {
+std::optional<sstring> to_single_column_op_string(cql3::expr::oper_t op) {
     switch (op) {
-    case expr::oper_t::EQ:
+    case cql3::expr::oper_t::EQ:
         return "==";
-    case expr::oper_t::LT:
+    case cql3::expr::oper_t::LT:
         return "<";
-    case expr::oper_t::LTE:
+    case cql3::expr::oper_t::LTE:
         return "<=";
-    case expr::oper_t::GT:
+    case cql3::expr::oper_t::GT:
         return ">";
-    case expr::oper_t::GTE:
+    case cql3::expr::oper_t::GTE:
         return ">=";
-    case expr::oper_t::IN:
+    case cql3::expr::oper_t::IN:
         return "IN";
     default:
         return std::nullopt;
     }
 }
 
-std::optional<sstring> to_multi_column_op_string(expr::oper_t op) {
+std::optional<sstring> to_multi_column_op_string(cql3::expr::oper_t op) {
     switch (op) {
-    case expr::oper_t::EQ:
+    case cql3::expr::oper_t::EQ:
         return "()==()";
-    case expr::oper_t::LT:
+    case cql3::expr::oper_t::LT:
         return "()<()";
-    case expr::oper_t::LTE:
+    case cql3::expr::oper_t::LTE:
         return "()<=()";
-    case expr::oper_t::GT:
+    case cql3::expr::oper_t::GT:
         return "()>()";
-    case expr::oper_t::GTE:
+    case cql3::expr::oper_t::GTE:
         return "()>=()";
-    case expr::oper_t::IN:
+    case cql3::expr::oper_t::IN:
         return "()IN()";
     default:
         return std::nullopt;
@@ -63,8 +63,8 @@ rjson::value value_to_json(const data_type& type, const cql3::raw_value& val) {
     return rjson::parse(json_str);
 }
 
-void process_single_column_restriction(const expr::binary_operator& binop, const expr::column_value& col,
-        const query_options& options, rjson::value& restrictions_arr) {
+void single_column_restriction_to_json(const cql3::expr::binary_operator& binop, const cql3::expr::column_value& col,
+        const cql3::query_options& options, rjson::value& restrictions_arr) {
     auto op_str = to_single_column_op_string(binop.op);
     if (!op_str) {
         throw exceptions::unsupported_operation_exception(
@@ -76,25 +76,25 @@ void process_single_column_restriction(const expr::binary_operator& binop, const
     rjson::add(obj, "type", rjson::from_string(*op_str));
     rjson::add(obj, "lhs", rjson::from_string(col.col->name_as_text()));
 
-    auto rhs_type = expr::type_of(binop.rhs);
-    auto rhs_val = expr::evaluate(binop.rhs, options);
+    auto rhs_type = cql3::expr::type_of(binop.rhs);
+    auto rhs_val = cql3::expr::evaluate(binop.rhs, options);
     rjson::add(obj, "rhs", value_to_json(rhs_type, rhs_val));
 
     rjson::push_back(restrictions_arr, std::move(obj));
 }
 
-rjson::value extract_column_names_json(const expr::tuple_constructor& lhs_tuple) {
+rjson::value column_names_to_json(const cql3::expr::tuple_constructor& lhs_tuple) {
     auto arr = rjson::empty_array();
     for (const auto& elem : lhs_tuple.elements) {
-        if (auto* cv = expr::as_if<expr::column_value>(&elem)) {
+        if (auto* cv = cql3::expr::as_if<cql3::expr::column_value>(&elem)) {
             rjson::push_back(arr, rjson::from_string(cv->col->name_as_text()));
         }
     }
     return arr;
 }
 
-void process_multi_column_restriction(const expr::binary_operator& binop, const expr::tuple_constructor& lhs_tuple,
-        const query_options& options, rjson::value& restrictions_arr) {
+void multi_column_restriction_to_json(const cql3::expr::binary_operator& binop, const cql3::expr::tuple_constructor& lhs_tuple,
+        const cql3::query_options& options, rjson::value& restrictions_arr) {
     auto op_str = to_multi_column_op_string(binop.op);
     if (!op_str) {
         throw exceptions::unsupported_operation_exception(
@@ -104,36 +104,36 @@ void process_multi_column_restriction(const expr::binary_operator& binop, const 
 
     auto obj = rjson::empty_object();
     rjson::add(obj, "type", rjson::from_string(*op_str));
-    rjson::add(obj, "lhs", extract_column_names_json(lhs_tuple));
+    rjson::add(obj, "lhs", column_names_to_json(lhs_tuple));
 
-    auto rhs_type = expr::type_of(binop.rhs);
-    auto rhs_val = expr::evaluate(binop.rhs, options);
+    auto rhs_type = cql3::expr::type_of(binop.rhs);
+    auto rhs_val = cql3::expr::evaluate(binop.rhs, options);
     rjson::add(obj, "rhs", value_to_json(rhs_type, rhs_val));
 
     rjson::push_back(restrictions_arr, std::move(obj));
 }
 
-void process_binary_operator(const expr::binary_operator& binop, const query_options& options, rjson::value& restrictions_arr) {
-    if (auto* cv = expr::as_if<expr::column_value>(&binop.lhs)) {
-        process_single_column_restriction(binop, *cv, options, restrictions_arr);
+void binary_operator_to_json(const cql3::expr::binary_operator& binop, const cql3::query_options& options, rjson::value& restrictions_arr) {
+    if (auto* cv = cql3::expr::as_if<cql3::expr::column_value>(&binop.lhs)) {
+        single_column_restriction_to_json(binop, *cv, options, restrictions_arr);
         return;
     }
 
-    if (auto* tuple = expr::as_if<expr::tuple_constructor>(&binop.lhs)) {
-        process_multi_column_restriction(binop, *tuple, options, restrictions_arr);
+    if (auto* tuple = cql3::expr::as_if<cql3::expr::tuple_constructor>(&binop.lhs)) {
+        multi_column_restriction_to_json(binop, *tuple, options, restrictions_arr);
         return;
     }
 }
 
-void extract_restrictions_from_expression(const expr::expression& expr, const query_options& options, rjson::value& restrictions_arr) {
-    expr::for_each_expression<expr::binary_operator>(expr, [&](const expr::binary_operator& binop) {
-        process_binary_operator(binop, options, restrictions_arr);
+void expression_to_json(const cql3::expr::expression& expr, const cql3::query_options& options, rjson::value& restrictions_arr) {
+    cql3::expr::for_each_expression<cql3::expr::binary_operator>(expr, [&](const cql3::expr::binary_operator& binop) {
+        binary_operator_to_json(binop, options, restrictions_arr);
     });
 }
 
 } // anonymous namespace
 
-rjson::value to_json(const statement_restrictions& restrictions, const query_options& options, bool allow_filtering) {
+rjson::value to_json(const cql3::restrictions::statement_restrictions& restrictions, const cql3::query_options& options, bool allow_filtering) {
     auto result = rjson::empty_object();
 
     if (restrictions.is_empty() && !allow_filtering) {
@@ -141,8 +141,8 @@ rjson::value to_json(const statement_restrictions& restrictions, const query_opt
     }
 
     auto restrictions_arr = rjson::empty_array();
-    extract_restrictions_from_expression(restrictions.get_partition_key_restrictions(), options, restrictions_arr);
-    extract_restrictions_from_expression(restrictions.get_clustering_columns_restrictions(), options, restrictions_arr);
+    expression_to_json(restrictions.get_partition_key_restrictions(), options, restrictions_arr);
+    expression_to_json(restrictions.get_clustering_columns_restrictions(), options, restrictions_arr);
 
     rjson::add(result, "restrictions", std::move(restrictions_arr));
     rjson::add(result, "allow_filtering", rjson::value(allow_filtering));
@@ -150,4 +150,4 @@ rjson::value to_json(const statement_restrictions& restrictions, const query_opt
     return result;
 }
 
-} // namespace cql3::restrictions
+} // namespace vector_search
