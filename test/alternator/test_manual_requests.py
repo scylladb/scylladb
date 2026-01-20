@@ -21,12 +21,16 @@ def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
 
 def get_signed_request(dynamodb, target, payload):
+    # Usually "payload" will be a Python string and we'll write it as UTF-8.
+    # but in some tests we may want to write bytes directly - potentially
+    # bytes which include invalid UTF-8.
+    payload_bytes = payload if isinstance(payload, bytes) else payload.encode(encoding='UTF-8')
     # NOTE: Signing routines use boto3 implementation details and may be prone
     # to unexpected changes
     class Request:
         url=dynamodb.meta.client._endpoint.host
         headers={'X-Amz-Target': 'DynamoDB_20120810.' + target, 'Content-Type': 'application/x-amz-json-1.0'}
-        body=payload.encode(encoding='UTF-8')
+        body=payload_bytes
         method='POST'
         context={}
         params={}
@@ -280,7 +284,78 @@ def test_base64_malformed(dynamodb, test_table_b):
     r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJj??!!")
     assert r.status_code == 400
     r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJj??!!")
+<<<<<<< HEAD
     assert r.status_code == 400
+||||||| parent of ff91027eac (utils, alternator: fix detection of invalid base-64)
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def update_item_binary_data(dynamodb, test_table_b, item_data):
+    payload ='''{
+        "TableName": "%s",
+        "Key": { "p": { "B": "%s" } },
+        "UpdateExpression": "SET a = :val",
+        "ExpressionAttributeValues": {":val": {"B": "%s"} }
+    }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
+    req = get_signed_request(dynamodb, 'UpdateItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# The same tests as above for invalid B (binary) values, just for UpdateItem
+# instead of PutItem, attempting to reproduce issue #17539.
+# An UpdateExpression's SET operation contains the value already in JSON
+# encoding, but it should not be trusted implicitly without verifying it is
+# valid.
+def test_base64_missing_padding_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "fakebase64")
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def test_base64_malformed_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400 and 'SerializationException' in r.text
+=======
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+# The check for valid base64 encoding had a bug (#25701) where it used a
+# 255-byte lookup-table instead of 256 bytes - so sending a byte 255 as part
+# of an invalid base64 string could lead the code to go beyond this lookup
+# table's bounds, and not recognize the invalid string or worse (the out-of-
+# bound read may be detected and crash Scylla).
+# Reproduces issue #25701.
+def test_base64_malformed_255(dynamodb, test_table_b):
+    # No valid UTF-8 can contain the byte we want to use 255 (0xFF), so we
+    # can't use the function put_item_binary_data_in_key() as in other tests
+    # because that function only writes UTF-8. So we need to compose the
+    # payload with the byte 0xFF directly as a Python "bytes" object.
+    # We need to pad the length of that test string to be a multiple of 4 -
+    # e.g., "\xFFdog", so the validation code doesn't fail early.
+    table_name_bytes = test_table_b.name.encode('UTF-8')
+    payload_bytes = b'{"TableName": "' + table_name_bytes + b'", "Item": {"p": {"B": "\xFFdog"}}}'
+    req = get_signed_request(dynamodb, 'PutItem', payload_bytes)
+    r = requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def update_item_binary_data(dynamodb, test_table_b, item_data):
+    payload ='''{
+        "TableName": "%s",
+        "Key": { "p": { "B": "%s" } },
+        "UpdateExpression": "SET a = :val",
+        "ExpressionAttributeValues": {":val": {"B": "%s"} }
+    }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
+    req = get_signed_request(dynamodb, 'UpdateItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# The same tests as above for invalid B (binary) values, just for UpdateItem
+# instead of PutItem, attempting to reproduce issue #17539.
+# An UpdateExpression's SET operation contains the value already in JSON
+# encoding, but it should not be trusted implicitly without verifying it is
+# valid.
+def test_base64_missing_padding_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "fakebase64")
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def test_base64_malformed_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400 and 'SerializationException' in r.text
+>>>>>>> ff91027eac (utils, alternator: fix detection of invalid base-64)
 
 def scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, filter_expr, expr_attr_values):
     payload ='''{
