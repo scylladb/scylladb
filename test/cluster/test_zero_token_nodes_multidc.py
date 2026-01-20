@@ -107,8 +107,11 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
             dc2_result_set = await dc2_cql.run_async(select_queries[1])
             # With CL=ONE we don't have a guarantee that the replicas written to and read from have a non-empty
             # intersection. Hence, reads could miss the written rows.
-            assert cl == ConsistencyLevel.ONE or (dc1_result_set and dc2_result_set)
-            if dc1_result_set:
+            if cl == ConsistencyLevel.ONE:
+                continue
+            # The comment above is also true with CL=LOCAL_ONE, but only for dc1 that has RF=2.
+            if cl != ConsistencyLevel.LOCAL_ONE:
+                assert len(dc1_result_set) == 1
                 assert list(dc1_result_set[0]) == [cl, False, cl]
-            if dc2_result_set:
-                assert list(dc2_result_set[0]) == [cl, True, cl]
+            assert len(dc2_result_set) == 1
+            assert list(dc2_result_set[0]) == [cl, True, cl]
