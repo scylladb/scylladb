@@ -2177,14 +2177,30 @@ def test_index_metrics(cql, test_keyspace, scylla_only):
         current_count = current_metrics.get(f'scylla_index_query_latencies_count', {"idx": index_name, "ks": test_keyspace})
         assert current_count - initial_count == 1
 
+# An aggregation (such as sum()) returns only one row, but needs to use some
+# paging when it is reads data internally. select_internal_page_size controls
+# the page size of this internal paging, and defaults to a high number 10,000.
+# This fixture allows a test to temporarily set a lower internal page size
+# so we can write smaller tests with less data. This fixture sets the internal
+# page size temporarily to 50 - and returns that number 50.
+# In Cassandra, this configuration option is meaningless, so this function
+# returns the same value 50 without changing anything in the configuration,
+# to allow tests using this fixture to continue passing on Cassandra.
+@pytest.fixture(scope="function")
+def small_select_internal_page_size(cql, test_keyspace):
+    select_internal_page_size = 50
+    if not is_scylla(cql):
+        yield select_internal_page_size
+    else:
+        with config_value_context(cql, 'select_internal_page_size', str(select_internal_page_size)):
+            yield select_internal_page_size
+
 # Test combination of indexing, paging and aggregation.
 # Indexed queries used to erroneously return partial per-page results
 # for aggregation queries, as described in issue #4540. This test
 # (originally written in C++ in commit 3d9a37f28fe) reproduced that bug.
-def test_indexing_paging_and_aggregation(cql, test_keyspace):
-    # from cql3/statements/select_statement.cc:
-    DEFAULT_COUNT_PAGE_SIZE = 10000
-    row_count = 2 * DEFAULT_COUNT_PAGE_SIZE + 120
+def test_indexing_paging_and_aggregation(cql, test_keyspace, small_select_internal_page_size):
+    row_count = 2 * small_select_internal_page_size + 42
     with new_test_table(cql, test_keyspace, 'id int primary key, v int') as table:
         cql.execute(f'CREATE INDEX ON {table}(v)')
         stmt = cql.prepare(f'INSERT INTO {table} (id, v) VALUES (?, ?)')
@@ -2196,7 +2212,7 @@ def test_indexing_paging_and_aggregation(cql, test_keyspace):
         # always synchronously updated (they don't use materialized views).
         res = list(cql.execute(f'SELECT sum(id) FROM {table} WHERE v = 1'))
         # Aggregation (like sum(id)) internally pages through the data
-        # DEFAULT_COUNT_PAGE_SIZE (=10,000) rows at a time, but even though
+        # select_internal_page_size rows at a time, but even though
         # we have more rows than that in the table, it must only return a
         # single result row when all the data was aggregated - the CQL API
         # doesn't allow it to return return partial, per-page, results.
@@ -2214,11 +2230,10 @@ def test_indexing_paging_and_aggregation(cql, test_keyspace):
         assert res == [(row_count * row_count // 4 + row_count // 2,)]
         # If we specify a page size ("fetch_size") on the request, it is not
         # expected to change anything, since the output is just one row.
-        # The aggregation doesn't use this page size to control its internal
-        # paging through the data - for that DEFAULT_COUNT_PAGE_SIZE is still
-        # used.
-        # This test doesn't actually check that internally the tiny page
-        # size = 2 doesn't get used, so it doesn't add much...
+        # However, the aggregation may use this page size to control its
+        # internal paging through the data instead of using
+        # select_internal_page_size. This test doesn't actually check
+        # which of those are used, but that whatever is used, should work.
         stmt = SimpleStatement(f'SELECT sum(id) FROM {table} WHERE v = 0', fetch_size=2)
         assert list(cql.execute(stmt)) == [(row_count * row_count // 4,)]
         # Same check as we did for sum(), but for avg()
