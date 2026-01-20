@@ -189,6 +189,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     logging.info(f'Adding {new_servers_num} new servers to dc2')
     new_servers += await manager.servers_add(new_servers_num, config=cfg, property_file=property_file_dc2)
 
+    # Reconnect the driver as a workaround for https://github.com/scylladb/scylladb/issues/27862.
+    await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers + new_servers)
 
     if remove_dead_nodes_with == "remove":
