@@ -1309,6 +1309,9 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
                 }
             }
         }
+        if (intersections.empty()) {
+            throw std::runtime_error("The range specified by startToken and endToken does not intersect with any ranges owned by this node");
+        }
         ranges = std::move(intersections);
     }
 
