@@ -284,6 +284,9 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint, locato
 
 void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, locator::host_id hid)
 {
+    if (_endpoints_pending_joined_notification.erase(endpoint)) {
+        send_join_cluster(endpoint);
+    }
     bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
     _last_status_change[endpoint] = event::status_change::status_type::DOWN;
     if (!was_down) {
