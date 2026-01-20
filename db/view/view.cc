@@ -1121,13 +1121,25 @@ void view_updates::generate_update(
             return;
         }
         // The view key is necessarily the same pre and post update.
-        if (existing && existing->is_live(*_base)) {
-            if (update.is_live(*_base)) {
-                update_entry(db, base_key, update, *existing, now, update.marker());
+        if (existing) {
+            if (existing->is_live(*_base)) {
+                if (update.is_live(*_base)) {
+                    update_entry(db, base_key, update, *existing, now, update.marker());
+                } else {
+                    delete_old_entry(db, base_key, *existing, update, now, api::missing_timestamp);
+                }
             } else {
+                if (update.is_live(*_base)) {
+                    create_entry(db, base_key, update, now, update.marker());
+                    return;
+                }
+                // new here
+                // if existing is marked as tombstone, update is a tombstone, view should also generate
                 delete_old_entry(db, base_key, *existing, update, now, api::missing_timestamp);
             }
-        } else if (update.is_live(*_base)) {
+        } else {
+            // Before, if existing is empty, here is mean to generate view only when update is live
+            // In this new commit no matter update is tomestone or not, view should generate
             create_entry(db, base_key, update, now, update.marker());
         }
         return;
