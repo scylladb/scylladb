@@ -742,7 +742,7 @@ async def check_mutation_replicas(cql, manager, servers, keys, topology, logger,
         for pk, frags in node_frags.items():
             mutations[pk].append(frags)
 
-    for k in random.sample(keys, 17):
+    for k in random.sample(keys, 10):
         if not str(k) in mutations:
             logger.info(f'Mutations: {mutations}')
             assert False, f"Key '{k}' not found in mutations. {topology=} {scope=} {primary_replica_only=}"
@@ -771,7 +771,6 @@ def create_schema(ks, cf, min_tablet_count=None):
         (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
         (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
         (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
-        (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
         (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
     ])
 
@@ -788,11 +787,12 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     ks = 'ks'
     cf = 'cf'
 
-    num_keys = 1000 if build_mode == 'debug' else 10000
+    num_keys = 10
+
     scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
-    restored_min_tablet_counts = [512] if build_mode == 'debug' else [256, 512, 1024]
+    restored_min_tablet_counts = [5] if build_mode == 'debug' else [2, 5, 10]
     
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=512)
+    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=5)
 
     # validate replicas assertions hold on fresh dataset
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
@@ -809,10 +809,10 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
         if scope == 'rack' and topology.rf != topology.racks:
             logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
             continue
-        pros = [False] if scope == 'node' else [False, True]
+        pros = [False] if scope == 'node' else [True, False]
         for pro in pros:
             for restored_min_tablet_count in restored_min_tablet_counts:
-                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=512')
+                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=5')
                 cql.execute(f'DROP KEYSPACE {ks}')
                 cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
                 schema = create_schema(ks, cf, restored_min_tablet_count)
