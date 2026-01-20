@@ -903,6 +903,7 @@ class load_balancer {
     absl::flat_hash_map<table_id, uint64_t> _disk_used_per_table;
     dc_name _dc;
     std::optional<sstring> _rack; // Set when plan making is limited to a single rack.
+    sstring _location; // Name of the current scope of plan making. DC or DC+rack.
     size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
     size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
     uint64_t _total_capacity_storage; // Total storage of non-drained nodes in the balanced node set.
@@ -3396,7 +3397,7 @@ public:
             // If there are 7 tablets and RF=3, each node must have 1 tablet replica.
             // So node3 will have average load of 1, and node1 and node2 will have
             // average shard load of 7.
-            lblogger.info("Not possible to achieve balance.");
+            lblogger.info("Not possible to achieve balance in {}", _location);
         }
 
         co_return std::move(plan);
@@ -3462,6 +3463,7 @@ public:
 
         _dc = dc;
         _rack = rack;
+        _location = fmt::format("{}{}", dc, rack ? fmt::format("/{}", *rack) : "");
 
         auto node_filter = [&] (const locator::node& node) {
             return node.dc_rack().dc == dc && (!rack || node.dc_rack().rack == *rack);
@@ -3631,8 +3633,8 @@ public:
         });
         if (!has_dest_nodes) {
             for (auto host : nodes_to_drain) {
-                plan.add(drain_failure(host, format("No candidate nodes in DC {} to drain {}."
-                                                    " Consider adding new nodes or reducing replication factor.", dc, host)));
+                plan.add(drain_failure(host, format("No candidate nodes in {} to drain {}."
+                                                    " Consider adding new nodes or reducing replication factor.", _location, host)));
             }
             lblogger.debug("No candidate nodes");
             _stats.for_dc(dc).stop_no_candidates++;
@@ -3815,7 +3817,7 @@ public:
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
+            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", dc_merge_plan.tablet_migration_count(), _location);
             plan.merge(std::move(dc_merge_plan));
         }
 
