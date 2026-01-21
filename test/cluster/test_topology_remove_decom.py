@@ -13,6 +13,7 @@ import time
 from test import pylib
 from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import HTTPError
 from test.pylib.random_tables import RandomTables
 from test.pylib.scylla_cluster import gather_safely
 from test.cluster.util import check_token_ring_and_group0_consistency,            \
@@ -146,12 +147,23 @@ async def test_concurrent_removenode_two_initiators_one_dead_node(manager: Manag
 
     await manager.server_stop_gracefully(servers[2].server_id)
 
-    try:
-        await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id),
-                manager.remove_node(servers[1].server_id, servers[2].server_id)])
-    except Exception as e: 
-        logger.info(f"exception raised due to concurrent remove node requests: {e}")
-    else:
+    removenode0_task, removenode1_task = await asyncio.gather(
+        manager.remove_node(servers[0].server_id, servers[2].server_id),
+        manager.remove_node(servers[1].server_id, servers[2].server_id),
+        return_exceptions=True
+    )
+    succeeded_tasks = 0
+    for task in (removenode0_task, removenode1_task):
+        if (isinstance(task, HTTPError)
+                and task.code == 500
+                and task.message.find("Removenode failed. Concurrent request for removal already in progress") != -1):
+            logger.info(f"exception raised due to concurrent remove node requests: {task}")
+        elif isinstance(task, Exception):
+            logger.error(f"unexpected exception raised during remove node: {task}")
+            raise task
+        else:
+            succeeded_tasks += 1
+    if succeeded_tasks == 2:
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
 
 @pytest.mark.asyncio
