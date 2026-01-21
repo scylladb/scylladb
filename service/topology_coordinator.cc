@@ -1560,7 +1560,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 case locator::tablet_transition_stage::write_both_read_old:
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(locator::tablet_transition_stage::cleanup_target);
                             break;
                         }
                     }
