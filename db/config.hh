@@ -507,6 +507,9 @@ public:
     named_value<uint32_t> alternator_describe_table_info_cache_validity_in_seconds;
     named_value<int> alternator_response_gzip_compression_level;
     named_value<uint32_t> alternator_response_compression_threshold_in_bytes;
+    named_value<bool> alternator_http_response_disable_content_type_header;
+    named_value<bool> alternator_http_response_disable_date_header;
+    named_value<sstring> alternator_http_response_server_header;
 
     named_value<bool> abort_on_ebadf;
 

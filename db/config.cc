@@ -1555,6 +1555,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "\t1-9: Compression levels (1 = fastest, 9 = best compression)")
     , alternator_response_compression_threshold_in_bytes(this, "alternator_response_compression_threshold_in_bytes", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
             "When the compression is enabled, this value indicates the minimum size of data to compress. Smaller responses will not be compressed.")
+    , alternator_http_response_disable_content_type_header(this, "alternator_http_response_disable_content_type_header", liveness::LiveUpdate, value_status::Used, false,
+        "Disable the Content-Type header in HTTP responses from Alternator.")
+    , alternator_http_response_disable_date_header(this, "alternator_http_response_disable_date_header", liveness::LiveUpdate, value_status::Used, false,
+        "Disable the Date header in HTTP responses from Alternator.")
+    , alternator_http_response_server_header(this, "alternator_http_response_server_header", liveness::LiveUpdate, value_status::Used, "",
+        "Value for the Server header in HTTP responses from Alternator. An empty string (the default) omits the Server header entirely.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")

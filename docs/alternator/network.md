@@ -90,12 +90,24 @@ The Alternator server sends headers like the following in its responses:
 Content-Length: 2
 Content-Type: application/x-amz-json-1.0
 Date: Tue, 30 Dec 2025 20:00:01 GMT
-Server: Seastar httpd
 ```
 
-This is a bit over 100 bytes. Most of it is necessary, but the `Date`
-and `Server` headers are not strictly necessary and a future version of
-Alternator will most likely make them optional (or remove them altogether).
+Previously, Alternator also sent a `Server: Seastar httpd` header, bringing
+the total to over 100 bytes per response — mostly unnecessary overhead. The
+`Server` header is now removed by default, and Alternator allows suppressing
+`Date` and `Content-Type` as well via the options below.
+
+All three options below support live update — no Alternator restart is needed.
+
+* **`alternator_http_response_server_header`** (string, default `""`):
+  Controls the `Server` header. By default, no `Server` header is sent.
+  Set to a non-empty string to restore it with a custom value.
+  A whitespace-only string is treated as empty (no header).
+* **`alternator_http_response_disable_date_header`** (boolean, default `false`):
+  When `true`, the `Date` header is omitted from all responses.
+* **`alternator_http_response_disable_content_type_header`** (boolean, default `false`):
+  When `true`, the `Content-Type` header is omitted from all responses. Note
+  that some client SDKs may rely on this header being present.
 
 The request headers add significantly larger overhead, and AWS SDKs add
 even more than necessary. Here is an example:
