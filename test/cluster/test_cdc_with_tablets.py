@@ -12,7 +12,6 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_tablet_count, get_base_table, get_tablet_replicas
 from test.cluster.util import new_test_keyspace
-from test.cluster.conftest import skip_mode
 
 import asyncio
 import logging

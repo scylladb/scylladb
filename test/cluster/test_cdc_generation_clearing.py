@@ -8,7 +8,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
-from test.cluster.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module

@@ -13,7 +13,6 @@ import re
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 from test.pylib.manager_client import ManagerClient

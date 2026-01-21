@@ -12,7 +12,6 @@ import time
 import logging
 import re
 
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for_first_completed, gather_safely, wait_for
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica, get_tablet_replicas, get_tablet_count

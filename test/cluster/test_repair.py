@@ -17,7 +17,6 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 

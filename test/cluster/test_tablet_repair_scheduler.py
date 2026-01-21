@@ -7,7 +7,6 @@
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
@@ -107,19 +106,19 @@ async def do_test_tablet_repair_progress_split_merge(manager: ManagerClient, do_
     await inject_error_off(manager, "tablet_repair_skip_sched", servers)
     await wait_task_progress(nr_tablets, nr_tablets)
 
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_tablet_repair_progress(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=False, do_merge=False)
 
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_tablet_repair_progress_split(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26844")
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress_merge(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)
 
@@ -509,7 +508,7 @@ async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, a
         raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
 
@@ -646,7 +645,7 @@ def verify_sort_order(plans):
     return is_sorted
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_user_and_auto_repair_priority(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
 

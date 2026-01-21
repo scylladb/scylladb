@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot

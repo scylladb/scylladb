@@ -11,7 +11,6 @@ import asyncio
 import random
 import time
 from test import pylib
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables

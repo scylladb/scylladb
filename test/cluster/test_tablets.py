@@ -16,7 +16,6 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
-from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
     get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id
 from contextlib import nullcontext as does_not_raise
@@ -1684,7 +1683,7 @@ async def test_moving_replica_within_single_rack(manager: ManagerClient):
         token=tablet_token)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     coord_srv = servers[0]

@@ -15,7 +15,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 from test.cluster.test_tablets2 import inject_error_on
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

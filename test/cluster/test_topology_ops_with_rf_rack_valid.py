@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 
 
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, enforce: bool):
     """
     Test adding a node to a new rack when it would violate RF-rack constraints.
@@ -63,7 +62,7 @@ async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, en
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bool, op: str):
     """
     Test removing a node when it would violate RF-rack constraints.
@@ -122,7 +121,7 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bo
 
 @pytest.mark.parametrize("injection", ["before_bootstrap", "after_bootstrap"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_creation_during_node_join(manager: ManagerClient, injection: str):
     """
     Test keyspace creation behavior during node join at different stages.
@@ -231,7 +230,7 @@ async def test_keyspace_creation_during_node_join(manager: ManagerClient, inject
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: str):
     """
     Test keyspace creation behavior during node removal or decommission.

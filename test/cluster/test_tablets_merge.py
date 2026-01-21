@@ -9,7 +9,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace
 
 import pytest

@@ -9,7 +9,6 @@ import logging
 import time
 import asyncio
 import pytest
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
 from test.pylib.tablets import get_tablet_replica

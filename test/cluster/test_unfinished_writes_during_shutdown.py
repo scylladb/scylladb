@@ -19,7 +19,6 @@ from test.cluster.test_tablets2 import inject_error_on
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.cluster.util import get_topology_coordinator
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

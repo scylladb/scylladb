@@ -15,7 +15,6 @@ from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig

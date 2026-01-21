@@ -12,7 +12,6 @@ from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.pylib.scylla_cluster import ScyllaVersionDescription
 import pytest

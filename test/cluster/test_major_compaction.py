@@ -10,7 +10,6 @@ import asyncio
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)

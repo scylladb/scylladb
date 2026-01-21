@@ -9,7 +9,6 @@ Tests that are specific to the raft-based cluster feature implementation.
 import asyncio
 import time
 
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.cluster import test_cluster_features

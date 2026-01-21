@@ -10,7 +10,6 @@ import pytest
 import time
 import logging
 
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet, get_tablet_replicas
 from test.cluster.util import new_test_keyspace

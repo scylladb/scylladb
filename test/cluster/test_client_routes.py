@@ -7,7 +7,6 @@ import logging
 import time
 import uuid
 
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for

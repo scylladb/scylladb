@@ -20,7 +20,6 @@ from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
 
 

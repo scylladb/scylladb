@@ -11,7 +11,6 @@ import time
 from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)

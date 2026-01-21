@@ -5,7 +5,6 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient

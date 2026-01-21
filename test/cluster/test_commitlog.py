@@ -12,7 +12,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver
-from test.cluster.conftest import skip_mode
 from test.pylib.random_tables import Column, TextType
 
 logger = logging.getLogger(__name__)

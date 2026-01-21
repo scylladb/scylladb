@@ -6,7 +6,6 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 
 import pytest

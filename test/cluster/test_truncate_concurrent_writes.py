@@ -6,7 +6,6 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.cluster.conftest import skip_mode
 from test.cluster.util import create_new_test_keyspace
 from cassandra.query import SimpleStatement, ConsistencyLevel
 

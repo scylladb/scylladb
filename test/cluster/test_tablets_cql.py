@@ -11,7 +11,6 @@ from cassandra.protocol import InvalidRequest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import disable_schema_agreement_wait, parse_replication_options, create_new_test_keyspace, \
     new_test_keyspace, get_replication
 

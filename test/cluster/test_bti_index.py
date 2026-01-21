@@ -11,7 +11,6 @@ import glob
 import json
 import logging
 from typing import Any
-from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetrics

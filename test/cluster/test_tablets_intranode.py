@@ -8,7 +8,6 @@ from cassandra.cluster import Session, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 

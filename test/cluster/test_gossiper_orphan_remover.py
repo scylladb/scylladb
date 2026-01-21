@@ -9,7 +9,6 @@ import time
 import pytest
 import logging
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

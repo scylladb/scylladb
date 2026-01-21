@@ -12,7 +12,6 @@ from uuid import UUID
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely
-from test.cluster.conftest import skip_mode
 from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel, SimpleStatement
@@ -51,7 +50,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize('reuse_ip', [False, True])
 async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bool):
     """

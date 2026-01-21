@@ -31,7 +31,6 @@ from test.cluster.util import get_replication
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.conftest import skip_mode
 from test.pylib.tablets import get_tablet_replica
 
 logger = logging.getLogger(__name__)
