@@ -114,6 +114,10 @@ WantedBy=local-fs.target scylla-server.service
 '''[1:-1]
             with open('/etc/systemd/system/var-lib-systemd-coredump.mount', 'w') as f:
                 f.write(dot_mount)
+            # in case we have old mounts in deleted state hanging around from older installation
+            # systemd doesn't seem to be able to deal with those properly, and assume they are still active
+            # and doesn't do anything about them
+            run('umount  /var/lib/systemd/coredump', shell=True, check=False)
             os.makedirs('/var/lib/scylla/coredump', exist_ok=True)
             systemd_unit.reload()
             systemd_unit('var-lib-systemd-coredump.mount').enable()
