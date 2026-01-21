@@ -269,6 +269,7 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
 enum class tablet_transition_stage {
     allow_write_both_read_old,
     write_both_read_old,
+    write_both_read_old_fallback_cleanup,
     streaming,
     rebuild_repair,
     write_both_read_new,
