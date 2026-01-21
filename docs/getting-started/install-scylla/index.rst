@@ -24,9 +24,9 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   :id: "getting-started"
   :class: my-panel
 
-  * :doc:`Launch ScyllaDB on AWS </getting-started/install-scylla/launch-on-aws>`
-  * :doc:`Launch ScyllaDB on GCP </getting-started/install-scylla/launch-on-gcp>`
-  * :doc:`Launch ScyllaDB on Azure </getting-started/install-scylla/launch-on-azure>`
+  * :doc:`Launch ScyllaDB |CURRENT_VERSION| on AWS </getting-started/install-scylla/launch-on-aws>`
+  * :doc:`Launch ScyllaDB |CURRENT_VERSION| on GCP </getting-started/install-scylla/launch-on-gcp>`
+  * :doc:`Launch ScyllaDB |CURRENT_VERSION| on Azure </getting-started/install-scylla/launch-on-azure>`
 
 
 .. panel-box::
@@ -35,7 +35,7 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   :class: my-panel
 
   * :doc:`Install ScyllaDB with Web Installer (recommended) </getting-started/installation-common/scylla-web-installer>`
-  * :doc:`Install ScyllaDB Linux Packages </getting-started/install-scylla/install-on-linux>`
+  * :doc:`Install ScyllaDB |CURRENT_VERSION| Linux Packages </getting-started/install-scylla/install-on-linux>`
   * :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`
   * :doc:`Install ScyllaDB Without root Privileges </getting-started/installation-common/unified-installer>`
   * :doc:`Air-gapped Server Installation </getting-started/installation-common/air-gapped-install>`

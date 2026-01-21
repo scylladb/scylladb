@@ -1,6 +1,6 @@
-==========================
-Launch ScyllaDB on GCP
-==========================
+=============================================
+Launch ScyllaDB |CURRENT_VERSION| on GCP
+=============================================
 
 This article will guide you through self-managed ScyllaDB deployment on GCP. For a fully-managed deployment of ScyllaDB 
 as-a-service, see `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_.
