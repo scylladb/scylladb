@@ -860,6 +860,7 @@ struct internal_query_state {
     sstring query_string;
     std::unique_ptr<query_options> opts;
     statements::prepared_statement::checked_weak_ptr p;
+    std::optional<service::query_state> qs;
     bool more_results = true;
 };
 
@@ -867,10 +868,14 @@ internal_query_state query_processor::create_paged_state(
         const sstring& query_string,
         db::consistency_level cl,
         const data_value_list& values,
-        int32_t page_size) {
+        int32_t page_size,
+        std::optional<service::query_state> qs) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
-    return internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), true};
+    if (!qs) {
+        qs.emplace(query_state_for_internal_call());
+    }
+    return internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), std::move(qs), true};
 }
 
 bool query_processor::has_more_results(cql3::internal_query_state& state) const {
@@ -893,9 +898,8 @@ future<> query_processor::for_each_cql_result(
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    auto qs = query_state_for_internal_call();
     ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
+      co_await state.p->statement->execute(*this, *state.qs, *state.opts, std::nullopt);
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
@@ -1202,8 +1206,9 @@ future<> query_processor::query_internal(
         db::consistency_level cl,
         const data_value_list& values,
         int32_t page_size,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    auto query_state = create_paged_state(query_string, cl, values, page_size);
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
+        std::optional<service::query_state> qs) {
+    auto query_state = create_paged_state(query_string, cl, values, page_size, std::move(qs));
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
