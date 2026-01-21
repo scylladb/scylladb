@@ -169,7 +169,7 @@ def test_fiber(gdb, task):
 
 # Similar to task(), but looks for a coroutine frame.
 @pytest.fixture(scope="module")
-def coro_task(gdb, scylla_gdb):
+def coro_task(gdb, scylla_gdb, request):
     target = 'service::topology_coordinator::run() [clone .resume]'
     for obj_addr, vtable_addr in scylla_gdb.find_vptrs():
         name = scylla_gdb.resolve(vtable_addr)
@@ -205,7 +205,7 @@ def test_coro_frame(gdb, coro_task):
 def test_sstable_summary(gdb, sstable):
     scylla(gdb, f'sstable-summary {sstable}')
 
-def test_sstable_summary(gdb, sstable):
+def test_sstable_index_cache(gdb, sstable):
     scylla(gdb, f'sstable-index-cache {sstable}')
 
 def test_read_stats(gdb, sstable):
