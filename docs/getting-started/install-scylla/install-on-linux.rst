@@ -4,9 +4,9 @@
 .. |RHEL_EPEL_8| replace:: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
 .. |RHEL_EPEL_9| replace:: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 
-======================================
-Install ScyllaDB Linux Packages
-======================================
+========================================================
+Install ScyllaDB |CURRENT_VERSION| Linux Packages
+========================================================
 
 We recommend installing ScyllaDB using :doc:`ScyllaDB Web Installer for Linux </getting-started/installation-common/scylla-web-installer/>`,
 a platform-agnostic installation script, to install ScyllaDB on any supported Linux platform.
