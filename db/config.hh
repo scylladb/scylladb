@@ -482,6 +482,10 @@ public:
     named_value<uint32_t> alternator_describe_table_info_cache_validity_in_seconds;
     named_value<int> alternator_response_gzip_compression_level;
     named_value<uint32_t> alternator_response_compression_threshold_in_bytes;
+    named_value<bool> alternator_response_skip_header__server;
+    named_value<bool> alternator_response_skip_header__content_type;
+    named_value<bool> alternator_response_skip_header__date;
+    named_value<sstring> alternator_response_custom_header__server;
 
     named_value<bool> abort_on_ebadf;
 
