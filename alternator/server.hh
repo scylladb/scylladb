@@ -98,6 +98,10 @@ class server : public peering_sharded_service<server> {
     };
     utils::scoped_item_list<ongoing_request> _ongoing_requests;
 
+    // Observers for live-update config options that drive Seastar HTTP server state.
+    std::optional<utils::observer<sstring>> _server_header_observer;
+    std::optional<utils::observer<bool>> _date_header_observer;
+
 public:
     server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller, updateable_timeout_config& timeout_config);
 

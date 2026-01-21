@@ -28,6 +28,7 @@
 #include "auth.hh"
 #include <cctype>
 #include <string_view>
+#include <algorithm>
 #include <utility>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
@@ -112,10 +113,18 @@ class api_handler : public handler_base {
     // "application/json". Some other AWS services use later versions instead
     // of "1.0", but DynamoDB currently uses "1.0". Note that this content
     // type applies to all replies, both success and error.
-    static constexpr const char* REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
+    static constexpr std::string_view REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle,
-                const db::config& config) : _response_compressor(config), _f_handle(
+                const db::config& config) :
+            _content_type(config.alternator_http_response_disable_content_type_header()
+                          ? std::nullopt
+                          : std::optional<std::string_view>(REPLY_CONTENT_TYPE)),
+            _content_type_observer(config.alternator_http_response_disable_content_type_header.observe(
+                [this](const bool& ct) {
+                    _content_type = ct ? std::nullopt : std::optional<std::string_view>(REPLY_CONTENT_TYPE);
+                })),
+            _response_compressor(config), _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
@@ -142,11 +151,11 @@ public:
              return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
-                                                               REPLY_CONTENT_TYPE, std::move(str));
+                                                               _content_type, std::move(str));
                 },
                 [&] (body_writer&& body_writer) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
-                                                               REPLY_CONTENT_TYPE, std::move(body_writer));
+                                                               _content_type, std::move(body_writer));
                 },
                 [&] (const api_error& err) {
                     generate_error_reply(*rep, err);
@@ -156,18 +165,18 @@ public:
          });
     }) { }
 
-    api_handler(const api_handler&) = default;
+    api_handler(const api_handler&) = delete;
     future<std::unique_ptr<reply>> handle(const sstring& path,
             std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         handle_CORS(*req, *rep, false);
-        return _f_handle(std::move(req), std::move(rep)).then(
-                [](std::unique_ptr<reply> rep) {
-                    rep->done();
-                    return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
-                });
+        return _f_handle(std::move(req), std::move(rep));
     }
 
 protected:
+    std::optional<std::string_view> _content_type;
+    utils::observer<bool> _content_type_observer;
+    response_compressor _response_compressor;
+    future_handler_function _f_handle;
     void generate_error_reply(reply& rep, const api_error& err) {
         rjson::value results = rjson::empty_object();
         if (!err._extra_fields.IsNull() && err._extra_fields.IsObject()) {
@@ -175,14 +184,11 @@ protected:
         }
         rjson::add(results, "__type", rjson::from_string("com.amazonaws.dynamodb.v20120810#" + err._type));
         rjson::add(results, "message", err._msg);
-        rep._content = rjson::print(std::move(results));
-        rep._status = err._http_code;
-        rep.set_content_type(REPLY_CONTENT_TYPE);
-        slogger.trace("api_handler error case: {}", rep._content);
+        sstring content = rjson::print(std::move(results));
+        slogger.trace("api_handler error case: {}", content);
+        rep.set_status(err._http_code);
+        rep.write_body(_content_type, std::move(content));
     }
-
-    response_compressor _response_compressor;
-    future_handler_function _f_handle;
 };
 
 class gated_handler : public handler_base {
@@ -256,8 +262,7 @@ protected:
             }
         }
         rep->set_status(reply::status_type::ok);
-        rep->set_content_type("json");
-        rep->_content = rjson::print(results);
+        rep->write_body("json", rjson::print(results));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
@@ -924,6 +929,21 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
     } {
 }
 
+// Sanitize an HTTP header value: strip control characters (RFC 7230 §3.2.6)
+// and leading/trailing whitespace. Returns nullopt if the result is empty.
+static std::optional<sstring> sanitize_header_value(const sstring& v, std::string_view option_name) {
+    std::string sanitized(v.begin(), v.end());
+    sanitized.erase(std::remove_if(sanitized.begin(), sanitized.end(),
+        [](unsigned char c) { return std::iscntrl(c); }), sanitized.end());
+    if (sanitized.size() != v.size()) {
+        slogger.warn("Configuration option '{}' contained control characters, they were stripped", option_name);
+    }
+    std::string_view trimmed = sanitized;
+    while (!trimmed.empty() && std::isspace((unsigned char)trimmed.front())) trimmed.remove_prefix(1);
+    while (!trimmed.empty() && std::isspace((unsigned char)trimmed.back())) trimmed.remove_suffix(1);
+    return trimmed.empty() ? std::nullopt : std::optional<sstring>(trimmed);
+}
+
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port,
         std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
         std::optional<tls::credentials_builder> creds,
@@ -940,6 +960,24 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
     }
     return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds] {
         _executor.start().get();
+
+        // Apply current config values and register observers for live updates
+        // before listen() so that no responses are ever sent with stale defaults.
+        // Both options drive Seastar's built-in header generation directly.
+        const db::config& cfg = _proxy.data_dictionary().get_config();
+        auto apply_server_header = [this] (const sstring& v) {
+            auto opt = sanitize_header_value(v, "alternator_http_response_server_header");
+            _http_server.set_server_header(opt);
+            _https_server.set_server_header(opt);
+        };
+        auto apply_date_header = [this] (const bool& disable) {
+            _http_server.set_generate_date_header(!disable);
+            _https_server.set_generate_date_header(!disable);
+        };
+        apply_server_header(cfg.alternator_http_response_server_header());
+        apply_date_header(cfg.alternator_http_response_disable_date_header());
+        _server_header_observer = cfg.alternator_http_response_server_header.observe(std::move(apply_server_header));
+        _date_header_observer = cfg.alternator_http_response_disable_date_header.observe(std::move(apply_date_header));
 
         if (port || port_proxy_protocol) {
             set_routes(_http_server._routes);
