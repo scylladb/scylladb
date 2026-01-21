@@ -25,7 +25,6 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +324,7 @@ async def test_alternator_no_proxy_header_to_proxy_port_fails(alternator_proxy_s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_ssl", [False, True], ids=["http", "https"])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alternator_proxy_protocol_address_in_system_clients(alternator_proxy_server, use_ssl):
     """Test that the source address from the proxy protocol header is correctly
     reported in system.clients.

@@ -15,7 +15,6 @@ from cassandra.protocol import WriteTimeout # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import wait_for_token_ring_and_group0_consistency, new_test_keyspace, reconnect_driver
-from test.cluster.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,6 @@
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement # type: ignore # pylint: disable=no-name-in-module

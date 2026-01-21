@@ -9,7 +9,6 @@ import asyncio
 import pytest
 import time
 import logging
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
 from cassandra.cqltypes import Int32Type

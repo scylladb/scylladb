@@ -9,7 +9,6 @@ import logging
 import time
 
 from cassandra.cluster import NoHostAvailable
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient, ServerUpState
 from test.pylib.util import wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config

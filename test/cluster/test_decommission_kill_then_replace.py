@@ -11,7 +11,6 @@ from contextlib import suppress
 
 import pytest
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import (
     get_topology_coordinator,
     find_server_by_host_id,
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_kill_then_replace(manager: ManagerClient) -> None:
     """
     Boots a 3-node cluster, pauses the topology coordinator before processing backlog,

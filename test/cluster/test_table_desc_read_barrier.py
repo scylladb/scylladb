@@ -9,7 +9,6 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error, read_barrier
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 

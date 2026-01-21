@@ -5,7 +5,6 @@
 #
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
-from test.cluster.conftest import skip_mode
 import pytest
 import logging
 import asyncio

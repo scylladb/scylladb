@@ -10,7 +10,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.pylib.util import start_writes
-from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
 import time
 import pytest

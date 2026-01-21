@@ -13,7 +13,6 @@ import random
 from test.cqlpy.util import local_process_id
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
-from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_all
@@ -514,7 +513,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         assert failed, "Expected at least one restore task to fail after aborting"
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
 

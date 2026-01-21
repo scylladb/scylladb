@@ -13,7 +13,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, new_test_keyspace
-from test.cluster.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)

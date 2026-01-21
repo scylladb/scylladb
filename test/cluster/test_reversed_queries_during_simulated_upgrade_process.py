@@ -7,7 +7,6 @@ from itertools import zip_longest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 

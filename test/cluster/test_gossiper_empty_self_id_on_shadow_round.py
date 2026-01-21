@@ -10,7 +10,6 @@ import pytest
 import asyncio
 import logging
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_coordinator_host
 from test.pylib.manager_client import ManagerClient
 

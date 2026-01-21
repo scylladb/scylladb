@@ -10,7 +10,6 @@ import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import create_new_test_keyspace
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

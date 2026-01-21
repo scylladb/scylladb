@@ -16,7 +16,6 @@ import asyncio
 import logging
 import time
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 from test.cluster.util import new_test_keyspace, wait_for

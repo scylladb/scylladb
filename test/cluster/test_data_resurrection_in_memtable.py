@@ -12,7 +12,6 @@ import time
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing

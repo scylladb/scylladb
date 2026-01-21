@@ -3,7 +3,6 @@ import asyncio
 import subprocess
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_first_completed
-from test.cluster.conftest import skip_mode
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 

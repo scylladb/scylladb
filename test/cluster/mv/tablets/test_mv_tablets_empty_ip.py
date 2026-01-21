@@ -13,7 +13,6 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 

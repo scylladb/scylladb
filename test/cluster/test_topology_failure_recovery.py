@@ -7,7 +7,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 import pytest
 import logging

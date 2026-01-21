@@ -14,7 +14,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.cluster.conftest import cluster_con, skip_mode
+from test.cluster.conftest import cluster_con
 from test.cluster.util import get_coordinator_host_ids, get_current_group0_config
 
 

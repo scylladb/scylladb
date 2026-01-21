@@ -9,7 +9,6 @@ import asyncio
 import pytest
 import logging
 
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace
 from cassandra import ReadTimeout, WriteTimeout

@@ -14,7 +14,6 @@ from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_fini
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
         find_server_by_host_id
-from test.cluster.conftest import skip_mode
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement

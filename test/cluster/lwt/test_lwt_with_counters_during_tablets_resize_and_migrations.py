@@ -9,7 +9,6 @@ import time
 from typing import Dict
 
 import pytest
-from test.cluster.conftest import skip_mode
 from test.cluster.lwt.lwt_common import (
     BaseLWTTester,
     DEFAULT_WORKERS,

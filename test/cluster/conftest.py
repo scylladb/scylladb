@@ -356,27 +356,6 @@ async def random_tables(request, manager):
     if not failed and not await manager.is_dirty():
         tables.drop_all()
 
-skipped_funcs = {}
-# Can be used to mark a test to be skipped for a specific mode=[release, dev, debug]
-# The reason to skip a test should be specified, used as a comment only.
-# Additionally, platform_key can be specified to limit the scope of the attribute
-# to the specified platform. Example platform_key-s: [aarch64, x86_64]
-@warnings.deprecated('Please use pytest.mark.skip_mode instead')
-def skip_mode(mode: str, reason: str, platform_key: str | None = None):
-    """DEPRECATED. Please use pytest.mark.skip_mode instead"""
-    def wrap(func):
-        skipped_funcs.setdefault((func, mode), []).append((reason, platform_key))
-        return func
-    return wrap
-
-@pytest.fixture(scope="function", autouse=True)
-@warnings.deprecated('Please use pytest.mark.skip_mode instead')
-def skip_mode_fixture(request, build_mode):
-    for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
-        if platform_key is None or platform_key in platform.platform():
-            pytest.skip(f'{request.node.name} skipped, reason: {reason}')
-
-
 @pytest.fixture(scope="function", autouse=True)
 async def prepare_3_nodes_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_nodes_cluster"):

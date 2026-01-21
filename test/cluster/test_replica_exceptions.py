@@ -8,7 +8,6 @@ from typing import Any, Callable, NamedTuple
 
 import pytest
 
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics, inject_error

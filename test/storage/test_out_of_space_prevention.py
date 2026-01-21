@@ -15,7 +15,6 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from typing import Callable
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace, new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count

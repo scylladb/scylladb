@@ -10,7 +10,6 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.conftest import skip_mode
 from test.cluster.util import (check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency,
                                get_coordinator_host, get_coordinator_host_ids, wait_new_coordinator_elected)
 

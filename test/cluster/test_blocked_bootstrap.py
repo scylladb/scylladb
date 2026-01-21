@@ -4,7 +4,6 @@
 #
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 
 import pytest
 import logging

@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import get_topology_coordinator, trigger_stepdown
 

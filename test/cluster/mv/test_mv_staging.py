@@ -7,7 +7,6 @@
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import new_test_keyspace, wait_for_cql_and_get_hosts
@@ -46,7 +45,7 @@ async def delete_table_sstables(manager: ManagerClient, server: ServerInfo, ks: 
         break # break unconditionally here to remove only files in `table_dir`
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
     """
     Verifies that staging sstables are processed after node restart.
