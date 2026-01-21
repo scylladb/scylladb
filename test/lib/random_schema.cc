@@ -862,6 +862,9 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
     if (spec.compress() == random_schema_specification::compress_sstable::no) {
         builder.set_compressor_params(compression_parameters::no_compression());
     }
+
+    builder.with_tombstone_gc_options(tombstone_gc_options(tombstone_gc_mode::timeout));
+
     return builder.build();
 }
 
