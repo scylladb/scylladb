@@ -24,65 +24,92 @@
 
 namespace secondary_index {
 
-template <int MAX>
-static void validate_positive_option(const sstring& value) {
+static void validate_positive_option(int max, const sstring& value_name, const sstring& value) {
     int num_value;
     size_t len;
     try {
         num_value = std::stoi(value, &len);
     } catch (...) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is not an integer", value_name, value));
     }
     if (len != value.size()) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is not an integer", value_name, value));
     }
 
-    if (num_value <= 0 || num_value > MAX) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range [1 - {}]", value, MAX));
+    if (num_value <= 0 || num_value > max) {
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is out of valid range [1 - {}]", value_name, value, max));
     }
 }
 
-template <float MIN, float MAX>
-static void validate_factor(const sstring& value) {
+static void validate_factor_option(float min, float max, const sstring& value_name, const sstring& value) {
     float num_value;
     size_t len;
     try {
         num_value = std::stof(value, &len);
     } catch (...) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is not a float", value_name, value));
     }
     if (len != value.size()) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is not a float", value_name, value));
     }
 
-    if (num_value < MIN || num_value > MAX) {
-        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range [{} - {}]", value, MIN, MAX));
-    }
-}
-
-static void validate_similarity_function(const sstring& value) {
-    sstring similarity_function = value;
-    std::transform(similarity_function.begin(), similarity_function.end(), similarity_function.begin(), ::tolower);
-    if (similarity_function != "cosine" && similarity_function != "euclidean" && similarity_function != "dot_product") {
-        throw exceptions::invalid_request_exception(format("Unsupported similarity function: {}", value));
+    if (!(num_value >= min && num_value <= max)) {
+        throw exceptions::invalid_request_exception(format("Invalid value in option '{}' for vector index: '{}' is out of valid range [{} - {}]", value_name, value, min, max));
     }
 }
 
-static void validate_quantization(const sstring& value) {
-    if (!(boost::iequals(value, "f32") || boost::iequals(value, "f16")
-         || boost::iequals(value, "bf16") || boost::iequals(value, "i8") || boost::iequals(value, "b1"))) {
-        throw exceptions::invalid_request_exception(format("Unsupported quantization type: {}", value));
+static void validate_enumerated_option(const std::vector<sstring>& supported_values, const sstring& value_name, const sstring& value) {    
+    bool is_valid = std::any_of(supported_values.begin(), supported_values.end(),
+        [&](const std::string& func) { return boost::iequals(value, func); });
+    
+    if (!is_valid) {
+        throw exceptions::invalid_request_exception(
+            seastar::format("Invalid value in option '{}' for vector index: '{}'. Supported are case-insensitive: {}", 
+                   value_name,
+                   value,
+                   fmt::join(supported_values, ", ")));
     }
 }
 
-const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
-        {"similarity_function", validate_similarity_function},
-        {"maximum_node_connections", validate_positive_option<512>},
-        {"construction_beam_width", validate_positive_option<4096>},
-        {"search_beam_width", validate_positive_option<4096>},
-        {"quantization", validate_quantization},
-        {"oversampling", validate_factor<1.0f, 100.0f>},
+static const std::vector<sstring> similarity_function_values = {
+    "cosine", "euclidean", "dot_product"
+};
+
+static const std::vector<sstring> quantization_values = {
+    "f32", "f16", "bf16", "i8", "b1"
+};
+
+static const std::vector<sstring> boolean_values = {
+    "false", "true"
+};
+
+const static std::unordered_map<sstring, std::function<void(const sstring&, const sstring&)>> vector_index_options = {
+        // `similarity_function` defines method of calculating similarity between vectors
+        // Used internally by vector store during both indexing and querying
+        // CQL implements corresponding functions in cql3/functions/similarity_functions.hh
+        {"similarity_function", std::bind_front(validate_enumerated_option, similarity_function_values)},
+        // 'maximum_node_connections', 'construction_beam_width', 'search_beam_width' define HNSW index parameters
+        // Used internally by vector store.
+        {"maximum_node_connections", std::bind_front(validate_positive_option, 512)},
+        {"construction_beam_width", std::bind_front(validate_positive_option, 4096)},
+        {"search_beam_width", std::bind_front(validate_positive_option, 4096)},
+        // 'quantization' enables compression of vectors in vector store (not in base table!)
+        // Used internally by vector store. Scylla only checks it to enable rescoring.
+        {"quantization", std::bind_front(validate_enumerated_option, quantization_values)},
+        // 'oversampling' defines factor by which number of candidates retrieved from vector store is multiplied.
+        // It can improve accuracy of ANN queries, especially for quantized vectors when combined with rescoring.
+        // Used by Scylla during query processing to increase query limit sent to vector store.
+        {"oversampling", std::bind_front(validate_factor_option, 1.0f, 100.0f)},
+        // 'rescoring' enables recalculating of similarity scores of candidates retrieved from vector store when quantization is used.
+        {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
     };
+
+bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
+    auto q = properties.find("quantization");
+    auto r = properties.find("rescoring");
+    return q != properties.end() && !boost::iequals(q->second, "f32")
+        && r != properties.end() && boost::iequals(r->second, "true");
+}
 
 float vector_index::get_oversampling(const index_options_map& properties) {
     auto it = properties.find("oversampling");
@@ -175,7 +202,7 @@ void vector_index::check_index_options(const cql3::statements::index_specific_pr
         if (it == vector_index_options.end()) {
             throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
         }
-        it->second(option.second);
+        it->second(option.first, option.second);
     }
 }
 
