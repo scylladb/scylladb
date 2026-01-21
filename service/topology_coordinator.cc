@@ -1574,13 +1574,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
-                            if (do_barrier()) {
-                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
-                                updates.emplace_back(get_mutation_builder()
-                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
-                                        .del_session(last_token)
-                                        .build());
-                            }
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                            updates.emplace_back(get_mutation_builder()
+                                    .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                    .del_session(last_token)
+                                    .build());
                             break;
                         }
                     }
@@ -1653,13 +1651,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
 
                         if (rollback) {
-                            if (do_barrier()) {
-                                rtlogger.debug("Will set tablet {} stage to {}: {}", gid, locator::tablet_transition_stage::cleanup_target, *rollback);
-                                updates.emplace_back(get_mutation_builder()
-                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
-                                        .del_session(last_token)
-                                        .build());
-                            }
+                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, locator::tablet_transition_stage::cleanup_target, *rollback);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                .del_session(last_token)
+                                .build());
                             break;
                         }
                     }
