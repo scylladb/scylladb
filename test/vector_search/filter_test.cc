@@ -39,8 +39,7 @@ restrictions::statement_restrictions make_restrictions(
     }
 
     return restrictions::analyze_statement_restrictions(env.data_dictionary(), env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT, where_expr,
-            ctx,
+            statements::statement_type::SELECT, where_expr, ctx,
             /*selects_only_static_columns=*/false,
             /*for_view=*/false,
             /*allow_filtering=*/true, restrictions::check_indexes::yes);
@@ -60,7 +59,8 @@ sstring to_sstring(const bytes_ostream& out) {
 }
 
 /// Helper to get JSON string from restrictions
-sstring get_restrictions_json(const restrictions::statement_restrictions& restr, bool allow_filtering = false, const query_options& options = query_options({})) {
+sstring get_restrictions_json(
+        const restrictions::statement_restrictions& restr, bool allow_filtering = false, const query_options& options = query_options({})) {
     return to_sstring(vector_search::prepare_filter(restr, allow_filtering).to_json(options));
 }
 
@@ -181,7 +181,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_eq) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2)=(10, 20)", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()==()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()==()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -193,7 +194,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_lt) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2)<(10, 20)", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -205,7 +207,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_gt) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>(10, 20)", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -217,7 +220,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_lte) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2)<=(10, 20)", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<=()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<=()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -229,7 +233,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_gte) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>=(10, 20)", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>=()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>=()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -241,7 +246,8 @@ SEASTAR_TEST_CASE(to_json_multi_column_in) {
         auto restr = make_restrictions("pk=1 and (ck1, ck2) in ((1, 2), (3, 4))", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()IN()","lhs":["ck1","ck2"],"rhs":[[1, 2], [3, 4]]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()IN()","lhs":["ck1","ck2"],"rhs":[[1, 2], [3, 4]]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -253,7 +259,8 @@ SEASTAR_TEST_CASE(to_json_multiple_restrictions) {
         auto restr = make_restrictions("pk=1 and ck>=10 and ck<100", e);
         auto json = get_restrictions_json(restr, true);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">=","lhs":"ck","rhs":10},{"type":"<","lhs":"ck","rhs":100}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">=","lhs":"ck","rhs":10},{"type":"<","lhs":"ck","rhs":100}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -289,9 +296,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_clustering_key) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=? and ck>?", e);
-        std::vector<raw_value> bind_values = {
-            raw_value::make_value(int32_type->decompose(1)),
-            raw_value::make_value(int32_type->decompose(50))};
+        std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(1)), raw_value::make_value(int32_type->decompose(50))};
         auto options = make_query_options(std::move(bind_values));
         auto json = get_restrictions_json(restr, true, options);
 
@@ -379,7 +384,8 @@ SEASTAR_TEST_CASE(to_json_bind_marker_multi_column) {
         auto options = make_query_options(std::move(bind_values));
         auto json = get_restrictions_json(restr, true, options);
 
-        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
+        auto expected =
+                R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>()","lhs":["ck1","ck2"],"rhs":[10, 20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
     });
 }
@@ -395,7 +401,8 @@ SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
         auto json1 = to_sstring(filter.to_json(options1));
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(999))};
-        auto options2 = query_options(db::consistency_level::ONE, raw_value_vector_with_unset(std::move(bind_values)), query_options::specific_options::DEFAULT);
+        auto options2 =
+                query_options(db::consistency_level::ONE, raw_value_vector_with_unset(std::move(bind_values)), query_options::specific_options::DEFAULT);
         auto json2 = to_sstring(filter.to_json(options2));
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":42}],"allow_filtering":false})json";

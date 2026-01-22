@@ -20,7 +20,6 @@
 #include "types/json_utils.hh"
 #include "schema/schema.hh"
 #include <charconv>
-#include <exception>
 #include <fmt/ranges.h>
 #include <regex>
 #include <random>
