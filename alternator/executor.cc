@@ -63,6 +63,7 @@
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "alternator/ttl_tag.hh"
 
 using namespace std::chrono_literals;
 
