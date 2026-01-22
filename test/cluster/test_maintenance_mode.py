@@ -42,24 +42,27 @@ async def test_maintenance_mode(manager: ManagerClient):
         ranges = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"""SELECT start_token, end_token
                                                                                 FROM system.token_ring WHERE keyspace_name = '{ks}'
                                                                                 AND endpoint = '{server_a.ip_addr}' ALLOW FILTERING""")]
-
-        # Insert data to the cluster and find a key that is stored on server A.
-        for i in range(256):
-            await cql.run_async(f"INSERT INTO {table} (k, v) VALUES ({i}, {i})")
-
-        # [(key, token of this key)]
-        keys_with_tokens = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"SELECT k, token(k) FROM {table}")]
         key_on_server_a = None
 
-        for key, token in keys_with_tokens:
+        # Insert data to the cluster until a key is stored on server A.
+        new_key = 0
+        while key_on_server_a is None:
+            if new_key == 1000:
+                # The probability of reaching this code is (1/2)^1000 for RF=1. This is much
+                # less than, for example, the probability of a UUID collision, so worrying about this would be silly.
+                # It could still happen due to a bug, and then we want to know about it, so we fail the test.
+                pytest.fail(f"Could not find a key on server {server_a} after inserting 1000 keys")
+            new_key += 1
+
+            await cql.run_async(f"INSERT INTO {table} (k, v) VALUES ({new_key}, {new_key})")
+
+            res = await cql.run_async(f"SELECT token(k) FROM {table} WHERE k = {new_key}")
+            assert len(res) == 1
+            token = res[0][0]
             for start, end in ranges:
                 if (start < end and start < token <= end) or (start >= end and (token <= end or start < token)):
-                    key_on_server_a = key
-
-        if key_on_server_a is None:
-            # There is only a chance ~(1/2)^256 that all keys are stored on the server B
-            # In this case we skip the test
-            pytest.skip("All keys are stored on the server B")
+                    logger.info(f"Found key {new_key} with token {token} on server {server_a} for table {table}")
+                    key_on_server_a = new_key
 
         # Start server A in maintenance mode
         await manager.server_stop_gracefully(server_a.server_id)
