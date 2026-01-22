@@ -1075,15 +1075,18 @@ The following tombstone gc modes are available:
    * - Mode
      - Description
    * - ``timeout``
-     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds`` (default).
+     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds``.
    * - ``repair``
-     - Tombstone GC is performed after repair is run.
+     - Tombstone GC is performed after repair is run (default).
    * - ``disabled``
      - Tombstone GC is never performed. This mode may be useful when loading data to the database, to avoid tombstone GC when part of the data is not yet available.
    * - ``immediate``
      - Tombstone GC is immediately performed. There is no wait time or repair requirement. This mode is useful for a table that uses the TWCS compaction strategy with no user deletes. After data is expired after TTL, ScyllaDB can perform compaction to drop the expired data immediately.
 
 .. warning:: The ``repair`` mode is not supported for :term:`Colocated Tables <Colocated Table>` in this version.
+
+The default tombstone-gc mode is ``repair`` for all tables that use ``NetworkTopologyStrategy`` or ``SimpleStrategy``, except for :term:`Colocated Tables <Colocated Table>`.
+Tables which have a single replica (RF=1) don't need repair (and cannot be repaired either). For such tables, tombstone-gc mode ``repair`` acts the same as ``immediate`` mode would: all tombstones are immediately collectible.
 
 .. _cql-per-table-tablet-options:
 

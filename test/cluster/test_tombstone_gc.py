@@ -24,10 +24,6 @@ def check_tombstone_gc_mode(cql, table, mode):
     assert f"'mode': '{mode}'" in s
 
 
-def get_expected_tombstone_gc_mode(rf, tablets):
-    return "repair" if tablets and rf > 1 else "timeout"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
@@ -37,7 +33,7 @@ async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bo
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int") as table:
-            check_tombstone_gc_mode(cql, table, get_expected_tombstone_gc_mode(rf, tablets))
+            check_tombstone_gc_mode(cql, table, "repair")
 
 
 @pytest.mark.asyncio

@@ -2075,6 +2075,11 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
                     d[k] = '$ID'
                 elif k == 'version':
                     d[k] = '$VERSION'
+                elif k == 'extensions':
+                    # Extensions like tombstone_gc are problematic, because the
+                    # scylla-sstable tool doesn't have access to the keyspace
+                    # definition, so it will come up with different defaults.
+                    pass
                 else:
                     d[k] = v
             return d
