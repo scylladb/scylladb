@@ -874,8 +874,8 @@ cfamDefinition[cql3::statements::create_table_statement::raw_statement& expr]
     ;
 
 cfamColumns[cql3::statements::create_table_statement::raw_statement& expr]
-    @init { bool is_static=false; }
-    : k=ident v=comparatorType (K_STATIC {is_static = true;})? { $expr.add_definition(k, v, is_static); }
+    @init { bool is_static=false, is_ttl=false; }
+    : k=ident v=comparatorType (K_TTL {is_ttl = true;})? (K_STATIC {is_static = true;})? { $expr.add_definition(k, v, is_static, is_ttl); }
         (K_PRIMARY K_KEY { $expr.add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); })?
     | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr.add_column_alias(c); } )* ')'
     ;
