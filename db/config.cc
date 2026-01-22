@@ -1341,7 +1341,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{compression_parameters::algorithm::lz4_with_dicts},
         "Server-global user table compression options. If enabled, all user tables"
         "will be compressed using the provided options, unless overridden"
-        "by compression options in the table schema. The available options are:\n"
+        "by compression options in the table schema. User tables are all tables in non-system keyspaces. The available options are:\n"
         "* sstable_compression: The compression algorithm to use. Supported values: LZ4Compressor, LZ4WithDictsCompressor (default), SnappyCompressor, DeflateCompressor, ZstdCompressor, ZstdWithDictsCompressor, '' (empty string; disables compression).\n"
         "* chunk_length_in_kb: (Default: 4) The size of chunks to compress in kilobytes. Allowed values are powers of two between 1 and 128.\n"
         "* crc_check_chance: (Default: 1.0) Not implemented (option value is ignored).\n"
@@ -1783,6 +1783,21 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
 
 const db::extensions& db::config::extensions() const {
     return *_extensions;
+}
+
+compression_parameters db::config::get_sstable_compression_user_table_options(bool dicts_feature_enabled) const {
+    if (sstable_compression_user_table_options.is_set()
+            || dicts_feature_enabled
+            || !sstable_compression_user_table_options().uses_dictionary_compressor()) {
+        return sstable_compression_user_table_options();
+    } else {
+        // Fall back to non-dict if dictionary compression is not enabled cluster-wide.
+        auto options = sstable_compression_user_table_options();
+        auto params = options.get_options();
+        auto algo = compression_parameters::non_dict_equivalent(options.get_algorithm());
+        params[compression_parameters::SSTABLE_COMPRESSION] = sstring(compression_parameters::algorithm_to_name(algo));
+        return compression_parameters{params};
+    }
 }
 
 std::map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {

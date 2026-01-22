@@ -66,24 +66,24 @@ static thread_local auto sstableinfo_type = user_type_impl::get_instance(
 
 namespace db {
 namespace {
-    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+    const auto set_null_sharder = schema_builder::register_schema_initializer([](schema_builder& builder) {
         // tables in the "system" keyspace which need to use null sharder
         static const std::unordered_set<sstring> tables = {
                 // empty
         };
-        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-            props.use_null_sharder = true;
+        if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+            builder.set_use_null_sharder(true);
         }
     });
-    const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+    const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
         };
-        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-            props.wait_for_sync_to_commitlog = true;
+        if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+            builder.set_wait_for_sync_to_commitlog(true);
         }
     });
-    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+    const auto set_use_schema_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
@@ -113,13 +113,13 @@ namespace {
             system_keyspace::VIEW_BUILDING_TASKS,
             system_keyspace::CLIENT_ROUTES,
         };
-        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-            props.enable_schema_commitlog();
+        if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+            builder.enable_schema_commitlog();
         }
     });
 
     const auto set_group0_table_options =
-        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
             static const std::unordered_set<sstring> tables = {
                 // scylla_local may store a replicated tombstone related to schema
                 // (see `make_group0_schema_version_mutation`), so we include it in the group0 tables list.
@@ -142,8 +142,8 @@ namespace {
                 system_keyspace::CLIENT_ROUTES,
                 system_keyspace::REPAIR_TASKS,
             };
-            if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-                props.is_group0_table = true;
+            if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+                builder.set_is_group0_table(true);
             }
         });
 }

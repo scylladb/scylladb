@@ -107,7 +107,6 @@ def test_huge_chunk_length(cql, test_keyspace, cassandra_bug):
 # is done - the CDC and secondary index implementation on Cassandra is
 # different and does not have an ordinary table backing it.
 # Reproduces issue #26914
-@pytest.mark.xfail(reason='issue #26914')
 def test_aux_tables_compression_parity(cql, test_keyspace):
     extra = "with cdc = {'enabled': true}" if is_scylla(cql) else ""
     with new_test_table(cql, test_keyspace, "p int primary key, v int", extra) as table:

@@ -34,6 +34,7 @@
 #include "readers/combined.hh"
 #include "readers/generating.hh"
 #include "schema/schema_builder.hh"
+#include "schema/compression_initializer.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
@@ -2786,6 +2787,20 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         //
         // On the other hand, we gain access to the code hidden behind the option
         dbcfg.rf_rack_valid_keyspaces(true, ::utils::config_file::config_source::CommandLine);
+
+        // Register schema initializer for default compression settings.
+        //
+        // Note that the initializer determines the default compression settings
+        // from the `sstable_compression_user_table_options` in scylla.yaml.
+        // If we fail to locate scylla.yaml, the initializer uses the default
+        // values of the config option.
+        //
+        // The default values of the config option, and specifically the default
+        // compression algorithm, is not hardcoded; it is either LZ4 or LZ4WithDicts
+        // depending on whether the dictionary compression feature is enabled.
+        // Since scylla-sstable has no context about features, we optimistically
+        // assume that the feature is enabled.
+        register_compression_initializer(dbcfg, true);
 
         {
             unsigned schema_sources = 0;

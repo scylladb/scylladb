@@ -96,16 +96,16 @@ static logging::logger diff_logger("schema_diff");
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace {
-    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        if (ks_name == schema_tables::NAME) {
-            props.enable_schema_commitlog();
+    const auto set_use_schema_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
+        if (builder.ks_name() == schema_tables::NAME) {
+            builder.enable_schema_commitlog();
         }
     });
     const auto set_group0_table_options =
-        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-            if (ks_name == schema_tables::NAME) {
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.ks_name() == schema_tables::NAME) {
                 // all schema tables are group0 tables
-                props.is_group0_table = true;
+                builder.set_is_group0_table(true);
             }
         });
 }

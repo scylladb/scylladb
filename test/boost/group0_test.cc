@@ -250,9 +250,9 @@ SEASTAR_TEST_CASE(test_group0_batch) {
 
         // mark the table as group0 to pass the mutation apply check
         // (group0 mutations are not allowed on non-group0 tables)
-        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-            if (cf_name == "test_group0_batch") {
-                props.is_group0_table = true;
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_batch") {
+                builder.set_is_group0_table(true);
             }
         });
 
