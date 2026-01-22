@@ -605,28 +605,34 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
         assert "driver" not in service_level_names
 
 @pytest.mark.asyncio
-async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
-    number_of_requests = 3000
+async def _verify_requests_count_metrics(manager, server, used_group, unused_group, func):
+    number_of_requests = 1000
+    # If the service level is changed, the scheduling group is changed in connection::process()
+    # after a request is finished. Therefore, a small number of initial requests can be
+    # processed in the previous scheduling group. To handle it and prevent test flakiness,
+    # we add a relatively large margin of requests that are allowed to be processed by a group 
+    # different from used_group.
+    expected_number_of_requests = number_of_requests * 0.9
 
-    def get_processed_tasks_for_group(metrics, group):
-        res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
-        logger.info(f"group={group}, tasks_processed={res}")
+    def get_requests_for_group(metrics, group):
+        res = metrics.get("scylla_transport_cql_requests_count", {'scheduling_group_name': group})
+        logger.info(f"group={group}, _transport_cql_requests_count={res}")
 
         if res is None:
             return 0
         return res
 
     metrics = await manager.metrics.query(server.ip_addr)
-    initial_tasks_processed_by_used_group = get_processed_tasks_for_group(metrics, used_group)
-    initial_tasks_processed_by_unused_group = get_processed_tasks_for_group(metrics, unused_group)
+    initial_requests_processed_by_used_group = get_requests_for_group(metrics, used_group)
+    initial_requests_processed_by_unused_group = get_requests_for_group(metrics, unused_group)
 
     await asyncio.gather(*[asyncio.to_thread(func) for i in range(number_of_requests)])
 
     metrics = await manager.metrics.query(server.ip_addr)
-    tasks_processed_by_used_group = get_processed_tasks_for_group(metrics, used_group)
-    tasks_processed_by_unused_group = get_processed_tasks_for_group(metrics, unused_group)
-    assert tasks_processed_by_used_group - initial_tasks_processed_by_used_group > number_of_requests
-    assert tasks_processed_by_unused_group - initial_tasks_processed_by_unused_group < number_of_requests
+    requests_processed_by_used_group = get_requests_for_group(metrics, used_group)
+    requests_processed_by_unused_group = get_requests_for_group(metrics, unused_group)
+    assert requests_processed_by_used_group - initial_requests_processed_by_used_group >= expected_number_of_requests
+    assert requests_processed_by_unused_group - initial_requests_processed_by_unused_group < expected_number_of_requests
 
 @pytest.mark.asyncio
 async def test_driver_service_level_not_used_for_user_queries(manager: ManagerClient) -> None:
@@ -637,13 +643,13 @@ async def test_driver_service_level_not_used_for_user_queries(manager: ManagerCl
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     func = lambda: cql.execute(f"SELECT * from system.peers")
-    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:driver', func)
+    await _verify_requests_count_metrics(manager, server, 'sl:default', 'sl:driver', func)
 
     await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
     await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
 
     func = lambda: cql.execute(f"SELECT * from system.peers")
-    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:driver', func)
+    await _verify_requests_count_metrics(manager, server, 'sl:test', 'sl:driver', func)
 
 @pytest.mark.asyncio
 async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
@@ -664,15 +670,15 @@ async def test_driver_service_level_used_for_driver_queries(manager: ManagerClie
         return cql, lambda: control_connection.wait_for_response(query)
 
     cql, func = await get_control_connection_query_function(manager)
-    await _verify_tasks_processed_metrics(manager, server, 'sl:driver', 'sl:test', func)
+    await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:test', func)
 
     await cql.run_async(f"DROP SERVICE LEVEL driver", host=h)
     cql, func = await get_control_connection_query_function(manager)
-    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:driver', func)
+    await _verify_requests_count_metrics(manager, server, 'sl:test', 'sl:driver', func)
 
     await cql.run_async(f"CREATE SERVICE LEVEL driver", host=h)
     cql, func = await get_control_connection_query_function(manager)
-    await _verify_tasks_processed_metrics(manager, server, 'sl:driver', 'sl:test', func)
+    await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:test', func)
 
 # Reproduces scylladb/scylladb#26040
 @pytest.mark.asyncio
