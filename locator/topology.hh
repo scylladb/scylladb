@@ -65,6 +65,7 @@ private:
     state _state;
     shard_id _shard_count = 0;
     bool _excluded = false;
+    bool _draining = false;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
@@ -78,7 +79,8 @@ public:
          shard_id shard_count = 0,
          bool excluded = false,
          this_node is_this_node = this_node::no,
-         idx_type idx = -1);
+         idx_type idx = -1,
+         bool draining = false);
 
     node(const node&) = delete;
     node(node&&) = delete;
@@ -143,6 +145,16 @@ public:
         _excluded = excluded;
     }
 
+    // Indicates that the tablet scheduler should move tablet replicas away
+    // from this node because it's undergoing decommission or removenode operation.
+    bool is_draining() const {
+        return _draining;
+    }
+
+    void set_draining(bool draining) {
+        _draining = draining;
+    }
+
     bool is_leaving() const noexcept {
         switch (_state) {
         case state::being_decommissioned:
@@ -178,7 +190,8 @@ private:
                             shard_id shard_count = 0,
                             bool excluded = false,
                             node::this_node is_this_node = this_node::no,
-                            idx_type idx = -1);
+                            idx_type idx = -1,
+                            bool draining = false);
     node_holder clone() const;
 
     void set_topology(const locator::topology* topology) noexcept { _topology = topology; }
@@ -492,7 +505,7 @@ struct fmt::formatter<locator::node> : fmt::formatter<string_view> {
         if (!verbose) {
             return fmt::format_to(ctx.out(), "{}", node.host_id());
         } else {
-            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} excluded={} this_node={}",
+            return fmt::format_to(ctx.out(), " idx={} host_id={} dc={} rack={} state={} shards={} excluded={} draining={} this_node={}",
                     node.idx(),
                     node.host_id(),
                     node.dc_rack().dc,
@@ -500,6 +513,7 @@ struct fmt::formatter<locator::node> : fmt::formatter<string_view> {
                     locator::node::to_string(node.get_state()),
                     node.get_shard_count(),
                     node.is_excluded(),
+                    node.is_draining(),
                     bool(node.is_this_node()));
         }
     }

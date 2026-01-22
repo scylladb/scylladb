@@ -154,6 +154,64 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_critical_utilization_during_decommission(manager: ManagerClient, volumes_factory: Callable) -> None:
+    """
+    Test that decommission fails when the target node reaches critical disk utilization level during streaming.
+
+    Scenario:
+      - Create a 2-node cluster with limited disk space.
+      - Create and populate a test table.
+      - Trap migrations before they start streaming
+      - Start decommissioning one node.
+      - During streaming, create a large file on the target node to push it over the critical disk utilization level.
+      - Unblock streaming
+      - Verify that the decommission operation fails.
+    """
+    cmdline = [*global_cmdline,
+               "--logger-log-level", "load_balancer=debug",
+               "--logger-log-level", "debug_error_injection=debug"
+               ]
+    config = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1
+    }
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*2, config=config, cmdline=cmdline,
+                                     property_file=[{"dc": "dc1", "rack": "r1"}]*2) as servers:
+        cql, _ = await manager.get_ready_cql(servers)
+
+        workdir = await manager.server_get_workdir(servers[0].server_id)
+        log = await manager.server_open_log(servers[0].server_id)
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['{servers[1].rack}'] }}"
+                                              " AND tablets = {'initial': 8}") as ks:
+
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 10)])
+
+                # We want to trap only migrations which happened during decommission
+                await manager.api.quiesce_topology(servers[0].ip_addr)
+
+                await manager.api.enable_injection(servers[0].ip_addr, "stream_tablet_wait", one_shot=False)
+                mark = await log.mark()
+
+                decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
+                mark, _ = await log.wait_for("Will set .* stage to streaming", from_mark=mark)
+
+                logger.info("Create a big file on the target node to reach critical disk utilization level")
+                disk_info = psutil.disk_usage(workdir)
+                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                    mark, _ = await log.wait_for("Refreshing table load stats", from_mark=mark)
+                    mark, _ = await log.wait_for("Refreshed table load stats", from_mark=mark)
+
+                    await manager.api.disable_injection(servers[0].ip_addr, "stream_tablet_wait")
+
+                    with pytest.raises(Exception, match="Decommission failed.*critical disk utilization"):
+                        await decomm_task
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)

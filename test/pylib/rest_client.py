@@ -525,6 +525,9 @@ class ScyllaRESTAPIClient:
     async def get_task_status(self, node_ip: str, task_id: str):
         return await self.client.get_json(f'/task_manager/task_status/{task_id}', host=node_ip)
 
+    async def get_tasks(self, node_ip: str, module: str):
+        return await self.client.get_json(f'/task_manager/list_module_tasks/{module}', host=node_ip)
+
     async def wait_task(self, node_ip: str, task_id: str):
         return await self.client.get_json(f'/task_manager/wait_task/{task_id}', host=node_ip)
 

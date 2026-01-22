@@ -10,6 +10,11 @@
 #include "topology_state_machine.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
+#include "replica/database.hh"
+#include "locator/tablets.hh"
+#include "topology_mutation.hh"
+#include "raft/raft_group0_client.hh"
+#include "raft/raft_group0.hh"
 
 namespace service {
 
@@ -56,6 +61,14 @@ std::optional<request_param> topology::get_request_param(raft::server_id id) con
     auto rit = req_param.find(id);
     if (rit != req_param.end()) {
         return rit->second;
+    }
+    return std::nullopt;
+};
+
+std::optional<topology_request> topology::get_request(raft::server_id id) const {
+    auto it = requests.find(id);
+    if (it != requests.end()) {
+        return it->second;
     }
     return std::nullopt;
 };
@@ -243,6 +256,21 @@ future<> topology_state_machine::await_not_busy() {
     }
 }
 
+node_validation_result
+validate_removing_node(replica::database& db, locator::host_id host_id) {
+    auto tmptr = db.get_token_metadata_ptr();
+    auto* node = tmptr->get_topology().find_node(host_id);
+    if (!node) {
+        return node_validation_failure{fmt::format("Node {} not found in topology", host_id)};
+    }
+    auto op = locator::rf_rack_topology_operation{
+            locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
+    if (!db.check_rf_rack_validity_with_topology_change(tmptr, std::move(op))) {
+        return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
+    }
+    return node_validation_success {};
+}
+
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
@@ -260,6 +288,111 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
     }
 
     co_return sstring();
+}
+
+void topology_state_machine::generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+                                                            gms::feature_service& features,
+                                                            const group0_guard& guard,
+                                                            raft::server_id node,
+                                                            sstring reason) {
+    auto* server_rs = _topology.find(node);
+    if (!server_rs) {
+        return;
+    }
+
+    auto request_id = server_rs->second.request_id;
+    if (!request_id) {
+        return;
+    }
+
+    auto i = _topology.requests.find(node);
+    if (i == _topology.requests.end()) {
+        // Request is not pending, and not cancelable at this stage.
+        return;
+    }
+    auto req = i->second;
+
+    // Request will not be considered as failed if reason is empty.
+    if (reason.empty()) {
+        tsmlogger.warn("Request {} canceled without specifying a reason, at: {}", request_id, seastar::current_backtrace());
+        reason = "canceled";
+    }
+
+    tsmlogger.info("Will cancel {} request {} for node {}: {}", req, request_id, node, reason);
+
+    topology_mutation_builder builder(guard.write_timestamp());
+    auto& node_builder = builder.with_node(node)
+            .del("topology_request");
+
+    switch (req) {
+        case topology_request::replace:
+            [[fallthrough]];
+        case topology_request::join:
+            node_builder.set("node_state", node_state::left);
+            break;
+        case topology_request::leave:
+            [[fallthrough]];
+        case topology_request::rebuild:
+            [[fallthrough]];
+        case topology_request::remove:
+            break;
+    }
+
+    muts.emplace_back(builder.build());
+
+    topology_request_tracking_mutation_builder rtbuilder(request_id);
+    rtbuilder.done(std::move(reason));
+    muts.emplace_back(rtbuilder.build());
+}
+
+future<> topology_state_machine::abort_request(service::raft_group0& group0,
+                                               abort_source& as,
+                                               gms::feature_service& features,
+                                               utils::UUID request_id) {
+    while (true) {
+        auto guard = co_await group0.client().start_operation(as, raft_timeout{});
+
+        utils::chunked_vector<canonical_mutation> muts;
+
+        for (auto& [node, rs] : _topology.transition_nodes) {
+            if (rs.request_id == request_id) {
+                throw std::runtime_error(format("request {} for node {} is already running and cannot be aborted", request_id, node));
+            }
+        }
+
+        for (auto& [node, req] : _topology.requests) {
+            auto *server_rs = _topology.find(node);
+            if (!server_rs || server_rs->second.request_id != request_id) {
+                continue;
+            }
+
+            if (req == topology_request::join || req == topology_request::replace) {
+                // Only topology coordinator can abort join requests. It sends reject RPC.
+                throw std::runtime_error(format("cannot abort {} request for node {}", req, node));
+            }
+
+            tsmlogger.info("aborting {} request {} for node {}", req, request_id, node);
+            generate_cancel_request_update(muts, features, guard, node, "aborted on user request");
+            break;
+        }
+
+        if (muts.empty()) {
+            // FIXME: Handle global requests.
+            throw std::runtime_error(format("Don't know how to abort {}", request_id));
+        }
+
+        topology_change change{std::move(muts)};
+        group0_command cmd = group0.client().prepare_command(std::move(change), guard,
+                                                              ::format("aborting topology request {}", request_id));
+
+        try {
+            co_await group0.client().add_entry(std::move(cmd), std::move(guard), as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            tsmlogger.info("aborting request {}: concurrent modification, retrying.", request_id);
+            continue;
+        }
+        break;
+    }
 }
 
 }

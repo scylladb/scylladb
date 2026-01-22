@@ -1580,15 +1580,25 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
+static bool is_normal_token_owner(const token_metadata& tm, locator::host_id host) {
+    auto& node = tm.get_topology().get_node(host);
+    return tm.is_normal_token_owner(host) && !tm.is_leaving(host) && !node.is_draining();
+}
+
+static bool is_transitioning_token_owner(const token_metadata& tm, locator::host_id host) {
+    auto& node = tm.get_topology().get_node(host);
+    return tm.get_topology().get_node(host).is_bootstrapping() ||
+        (tm.is_normal_token_owner(host) && (tm.is_leaving(host) || node.is_draining()));
+}
+
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
     assert_rf_rack_valid_keyspace(ks, tmptr, ars,
         tmptr->get_topology().get_datacenter_racks(),
         [&tmptr] (host_id host) {
-            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+            return is_normal_token_owner(*tmptr, host);
         },
         [&tmptr] (host_id host) {
-            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
-                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
+            return is_transitioning_token_owner(*tmptr, host);
         }
     );
 }
@@ -1625,14 +1635,13 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
             if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
                 return true;
             }
-            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+            return is_normal_token_owner(*tmptr, host);
         },
         [&tmptr, &op] (host_id host) {
             if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
                 return false;
             }
-            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
-                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
+            return is_transitioning_token_owner(*tmptr, host);
         }
     );
 }
@@ -1642,7 +1651,7 @@ rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc
     auto normal_nodes = [&] (const sstring& rack) {
         int count = 0;
         for (auto n : topo.get_datacenter_rack_nodes().at(dc).at(rack)) {
-            count += int(n.get().is_normal());
+            count += int(n.get().is_normal() && !n.get().is_draining());
         }
         return count;
     };

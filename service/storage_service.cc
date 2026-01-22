@@ -676,6 +676,15 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
 
+    for (auto [node, req] : t.requests) {
+        if (req == topology_request::leave || req == topology_request::remove) {
+            locator::node* n = tmptr->get_topology().find_node(locator::host_id(node.uuid()));
+            if (n) {
+                n->set_draining(true);
+            }
+        }
+    }
+
     auto nodes_to_release = t.left_nodes;
     nodes_to_release.insert(t.ignored_nodes.begin(), t.ignored_nodes.end());
     for (const auto& id: nodes_to_release) {
@@ -833,6 +842,16 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
         tmptr->set_tablets(std::move(*tablets));
+
+        if (_feature_service.parallel_tablet_draining) {
+            for (auto&& [node, req]: topology.requests) {
+                if (req == topology_request::leave || req == topology_request::remove) {
+                    if (tmptr->tablets().has_replica_on(locator::host_id(node.uuid()))) {
+                        topology.paused_requests.emplace(node, req);
+                    }
+                }
+            }
+        }
 
         co_await replicate_to_all_cores(std::move(tmptr));
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));
@@ -3978,6 +3997,12 @@ future<> storage_service::raft_decommission() {
             throw std::runtime_error("Cannot decommission the last token-owning node in the cluster");
         }
 
+        auto validation_result = validate_removing_node(_db.local(), locator::host_id(raft_server.id().uuid()));
+        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            throw std::runtime_error(fmt::format("Decommission failed: node decommission rejected: {}",
+                                                 std::get<node_validation_failure>(validation_result).reason));
+        }
+
         rtlogger.info("request decommission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
@@ -4331,6 +4356,12 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
                 id);
             rtlogger.warn("{}", message);
             throw std::runtime_error(message);
+        }
+
+        auto validation_result = validate_removing_node(_db.local(), host_id);
+        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            throw std::runtime_error(fmt::format("Removenode failed: node remove rejected: {}",
+                                                 std::get<node_validation_failure>(validation_result).reason));
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
@@ -5095,6 +5126,12 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
+future<> storage_service::abort_topology_request(utils::UUID request_id) {
+    co_await container().invoke_on(0, [request_id, this] (storage_service& ss) {
+        return _topology_state_machine.abort_request(*ss._group0, ss._group0_as, ss._feature_service, request_id);
+    });
+}
+
 future<> storage_service::wait_for_topology_not_busy() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     while (_topology_state_machine._topology.is_busy()) {
@@ -5146,6 +5183,10 @@ future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
         }
         break;
     }
+}
+
+bool storage_service::topology_global_queue_empty() const {
+    return !_topology_state_machine._topology.global_request.has_value();
 }
 
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {

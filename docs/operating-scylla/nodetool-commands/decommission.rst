@@ -29,5 +29,13 @@ Before you run ``nodetool decommission``:
   request may fail.
   In such a case, ALTER the keyspace to reduce the RF before running ``nodetool decommission``.
 
+It's allowed to invoke ``nodetool decommission`` on multiple nodes in parallel. This will be faster than doing
+it sequentially if there is significant amount of data in tablet-based keyspaces, because
+tablets are migrated from nodes in parallel. Decommission process first migrates tablets away, and this
+part is done in parallel for all nodes being decommissioned. Then it does the vnode-based decommission, and
+this part is serialized with other vnode-based operations, including those from other decommission operations.
+
+Decommission which is still in the tablet draining phase can be canceled using Task Manager API.
+See :doc:`Task manager </operating-scylla/admin-tools/task-manager>`.
 
 .. include:: nodetool-index.rst

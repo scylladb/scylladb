@@ -69,13 +69,15 @@ def volumes_factory(pytestconfig, build_mode, request):
 
 
 @asynccontextmanager
-async def space_limited_servers(manager: ManagerClient, volumes_factory: Callable, sizes: list[str], **server_args):
+async def space_limited_servers(manager: ManagerClient, volumes_factory: Callable, sizes: list[str], property_file=None, **server_args):
     servers = []
     cmdline = server_args.pop("cmdline", [])
     with volumes_factory(sizes) as volumes:
         try:
+            if not property_file:
+                property_file = [{"dc": "dc1", "rack": f"r{id}"} for id in range(len(volumes))]
             servers = [await manager.server_add(cmdline = [*cmdline, '--workdir', str(volume.mount)],
-                                                property_file={"dc": "dc1", "rack": f"r{id}"},
+                                                property_file=property_file[id],
                                                 **server_args) for id, volume in enumerate(volumes)]
             yield servers
         finally:

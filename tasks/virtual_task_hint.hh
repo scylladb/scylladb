@@ -17,6 +17,7 @@ struct virtual_task_hint {
     std::optional<table_id> table_id;
     std::optional<locator::tablet_task_type> task_type;
     std::optional<locator::tablet_id> tablet_id;
+    std::optional<locator::host_id> node_id;
 
     locator::tablet_task_type get_task_type() const;
     locator::tablet_id get_tablet_id() const;
