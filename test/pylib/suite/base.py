@@ -30,7 +30,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
-from test.pylib.resource_gather import get_resource_gather, setup_cgroup
+from test.pylib.resource_gather import get_resource_gather, setup_cgroup, setup_worker_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
@@ -422,7 +422,11 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             os.getenv("ASAN_OPTIONS"),
         ]
         try:
-            resource_gather = get_resource_gather(is_switched_on=options.gather_metrics, test=test)
+            resource_gather = get_resource_gather(
+                temp_dir=pathlib.Path(options.tmpdir),
+                is_switched_on=options.gather_metrics,
+                test=test
+            )
             resource_gather.make_cgroup()
             log.write("=== TEST.PY STARTING TEST {} ===\n".format(test.uname).encode(encoding="UTF-8"))
             log.write("export UBSAN_OPTIONS='{}'\n".format(

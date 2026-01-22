@@ -304,11 +304,11 @@ def add_cql_connection_options(parser: Parser) -> None:
     cql_options.addoption("--port", default="9042",
                           help="CQL port to connect to")
     cql_options.addoption("--ssl", action="store_true",
-                          help="Connect to CQL via an encrypted TLSv1.2 connection")
+                          help="Connect to CQL via an encrypted TLSv1.2 connection", default=False)
     cql_options.addoption("--auth_username",
-                          help="username for authentication")
+                          help="username for authentication", default=None)
     cql_options.addoption("--auth_password",
-                          help="password for authentication")
+                          help="password for authentication", default=None)
 
 
 # Use cache to execute this function once per pytest session.
@@ -317,9 +317,9 @@ def add_s3_options(parser: Parser) -> None:
     """Options for tests which use S3 server (i.e., cluster/object_store and cqlpy/test_tools.py)"""
 
     s3_options = parser.getgroup("S3 server settings")
-    s3_options.addoption('--s3-server-address')
-    s3_options.addoption('--s3-server-port', type=int)
-    s3_options.addoption('--aws-access-key')
-    s3_options.addoption('--aws-secret-key')
-    s3_options.addoption('--aws-region')
-    s3_options.addoption('--s3-server-bucket')
+    s3_options.addoption('--s3-server-address', default=None)
+    s3_options.addoption('--s3-server-port', type=int, default=None)
+    s3_options.addoption('--aws-access-key', default=None)
+    s3_options.addoption('--aws-secret-key', default=None)
+    s3_options.addoption('--aws-region', default=None)
+    s3_options.addoption('--s3-server-bucket', default=None)

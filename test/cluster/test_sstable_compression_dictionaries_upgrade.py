@@ -11,6 +11,8 @@ import os
 import pathlib
 import contextlib
 import time
+
+from test import path_to
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.scylla_cluster import ScyllaVersionDescription
@@ -23,8 +25,8 @@ from cassandra.query import SimpleStatement
 logger = logging.getLogger(__name__)
 
 
-async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
-    new_exe = os.getenv("SCYLLA")
+async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, build_mode):
+    new_exe = path_to(build_mode, "scylla")
     assert new_exe
 
     logger.info("Bootstrapping cluster")
