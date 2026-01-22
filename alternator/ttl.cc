@@ -878,12 +878,10 @@ future<> expiration_service::run() {
 future<> expiration_service::start() {
     // Called by main() on each shard to start the expiration-service
     // thread. Just runs run() in the background and allows stop().
-    if (_db.features().alternator_ttl) {
-        if (!shutting_down()) {
-            _end = run().handle_exception([] (std::exception_ptr ep) {
-                tlogger.error("expiration_service failed: {}", ep);
-            });
-        }
+    if (!shutting_down()) {
+        _end = run().handle_exception([] (std::exception_ptr ep) {
+            tlogger.error("expiration_service failed: {}", ep);
+        });
     }
     return make_ready_future<>();
 }
