@@ -79,7 +79,8 @@ public:
     range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
-            std::vector<sstring> tables = {})
+            std::vector<sstring> tables = {},
+            size_t max_peer_node = 16)
         : _db(db)
         , _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
@@ -91,13 +92,14 @@ public:
         , _reason(reason)
         , _tables(std::move(tables))
         , _topo_guard(topo_guard)
+        , _limiter(max_peer_node)
     {
         _abort_source.check();
     }
 
     range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
+            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {}, size_t max_peer_node = 16)
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables), max_peer_node) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -168,7 +170,7 @@ private:
     unsigned _nr_tx_added = 0;
     unsigned _nr_rx_added = 0;
     // Limit the number of nodes to stream in parallel to reduce memory pressure with large cluster.
-    seastar::semaphore _limiter{16};
+    seastar::semaphore _limiter;
     size_t _nr_total_ranges = 0;
     size_t _nr_ranges_remaining = 0;
 };
