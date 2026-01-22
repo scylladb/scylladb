@@ -2121,6 +2121,42 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_tombstone_gc_rf_one) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::string keyspace_name = get_name();
+        const std::string table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        auto tombstone_gc = tbl.get_tombstone_gc_state();
+
+        const auto pk = partition_key::from_single_value(*schema, serialized(1));
+        const auto dk = dht::decorate_key(*schema, pk);
+
+        const auto now = gc_clock::now();
+
+        // With RF=1, tombstone-gc should act as if configured in 'immediate' mode.
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), now);
+
+        env.execute_cql(std::format("ALTER KEYSPACE {}"
+                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 2}}",
+                    keyspace_name)).get();
+
+        // After changing RF to > 1, tombstone-gc should revert to regular
+        // repair-mode behaviour. Since there was no repair yet, this should
+        // return min timepoint (no GC).
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), gc_clock::time_point::min());
+    });
+}
+
 SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
