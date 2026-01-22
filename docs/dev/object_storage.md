@@ -221,6 +221,87 @@ scylla-bucket/prefix/
 ```
 See the API [documentation](#copying-sstables-on-s3-backup) for more details about the actual backup request.
 
+### The snapshot manifest
+
+Each table snapshot directory contains a manifest.json file that lists the contents of the snapshot and some metadata.
+The json structure is as follows:
+```
+{
+  "manifest": {
+    "version": "1.0",
+    "scope": "node"
+  },
+  "node": {
+    "host_id": "<UUID>",
+    "datacenter": "mydc",
+    "rack": "myrack"
+  },
+  "snapshot": {
+    "name": "snapshot name",
+    "created_at": seconds_since_epoch,
+    "expires_at": seconds_since_epoch | null,
+  },
+  "table": {
+    "keyspace_name": "my_keyspace",
+    "table_name": "my_table",
+    "table_id": "<UUID>",
+    "tablets_type": "none|powof2",
+    "tablet_count": N
+  },
+  "sstables": [
+    {
+      "id": "67e35000-d8c6-11f0-9599-060de9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq829wcsddgwha1n-big-TOC.txt",
+      "data_size": 75,
+      "index_size": 8,
+      "first_token": -8629266958227979430,
+      "last_token": 9168982884335614769,
+    },
+    {
+      "id": "67e35000-d8c6-11f0-85dc-0625e9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq821a6cqlbmxrtn-big-TOC.txt",
+      "data_size": 73,
+      "index_size": 8,
+      "first_token": 221146791717891383,
+      "last_token": 7354559975791427036,
+    },
+    ...
+  ],
+  "files": [ ... ]
+}
+
+The `manifest` member contains the following attributes:
+- `version` - respresenting the version of the manifest itself. It is incremented when members are added or removed from the manifest.
+- `scope` - the scope of metadata stored in this manifest file.  The following scopes are supported:
+    - `node` - the manifest describes all SSTables owned by this node in this snapshot.
+
+The `node` member contains metadata about this node that enables datacenter- or rack-aware restore.
+- `host_id` - is the node's unique host_id (a UUID).
+- `datacenter` - is the node's datacenter.
+- `rack` - is the node's rack.
+
+The `snapshot` member contains metadata about the snapshot.
+- `name` - is the snapshot name (a.k.a. `tag`)
+- `created_at` - is the time when the snapshot was created.
+- `expires_at` - is an optional time when the snapshot expires and can be dropped, if a TTL was set for the snapshot.  If there is no TTL, `expires_at` may be omitted, set to null, or set to 0.
+
+The `table` member contains metadata about the table being snapshot.
+- `keyspace_name` and `table_name` - are self-explanatory.
+- `table_id` - a universally unique identifier (UUID) of the table set when the table is created.
+- `tablets_type`:
+    - `none` - if the keyspace uses vnodes replication
+    - `powof2` - if the keyspace uses tables replication, and the tablet token ranges are based on powers of 2.
+- `tablet_count` - Optional. If `tablets_type` is not `none`, contains the number of tablets allcated in the table. If `tablets_type` is `powof2`, tablet_count would be a power of 2.
+
+The `sstables` member is a list containing metadata about the SSTables in the snapshot.
+- `id` - is the STable's unique id (a UUID).  It is carried over with the SSTable when it's streamed as part of tablet migration, even if it gets a new generation.
+- `toc_name` - is the name of the SSTable Table Of Contents (TOC) component.
+- `data_size` and `index_size` - are the sizes of the SSTable's data and index components, respectively.  They can be used to estimate how much disk space is needed for restore.
+- `first_token` and `last_token` - are the first and last tokens in the SSTable, respectively.  They can be used to determine if a SSTable is fully contained in a (tablet) token range to enable efficient file-based streaming of the SSTable.
+
+The optional `files` member may contain a list of non-SSTable files included in the snapshot directory, not including the manifest.json file and schema.cql.
+```
+
 3. `CREATE KEYSPACE` with S3/GS storage
 
 When creating a keyspace with S3/GS storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.  

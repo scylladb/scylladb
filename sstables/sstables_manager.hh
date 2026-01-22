@@ -51,6 +51,15 @@ using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
+struct sstable_snapshot_metadata {
+    utils::UUID id;
+    sstring toc_name;
+    uint64_t data_size;
+    uint64_t index_size;
+    int64_t first_token;
+    int64_t last_token;
+};
+
 class storage_manager : public peering_sharded_service<storage_manager> {
     struct config_updater {
         serialized_action action;
@@ -248,7 +257,7 @@ public:
     }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
-    future<std::unordered_set<sstring>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
+    future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);

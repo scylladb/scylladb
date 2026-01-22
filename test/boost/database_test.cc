@@ -13,6 +13,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/bitops.hh>
 #include <seastar/util/file.hh>
 
 #undef SEASTAR_TESTING_MAIN
@@ -33,6 +34,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/rjson.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -40,6 +42,7 @@
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstable_version.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
@@ -629,13 +632,13 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
     }, create_mvs, db_cfg_ptr);
 }
 
-future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
+future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", db::snapshot_options opts = {}) {
     try {
         auto uuid = e.db().local().find_uuid(ks_name, cf_name);
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), uuid, snapshot_name, opts);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
-                ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
+                ks_name, cf_name, snapshot_name, opts.skip_flush, std::current_exception());
         throw;
     }
 }
@@ -649,8 +652,168 @@ future<std::set<sstring>> collect_files(fs::path path) {
     co_return ret;
 }
 
-static future<> snapshot_works(const std::string& table_name) {
+static bool is_component(const sstring& fname, const sstring& suffix) {
+    return fname.ends_with(suffix);
+}
+
+static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, const sstring& suffix) {
+    // Verify manifest against the files in the snapshots dir
+    auto pred = [&suffix] (const sstring& fname) {
+        return is_component(fname, suffix);
+    };
+    return std::ranges::filter_view(all_files, pred) | std::ranges::to<std::set<sstring>>();
+}
+
+// Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
+static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time, bool tablets_enabled) {
+    sstring suffix = "-TOC.txt";
+    auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
+    std::set<sstring> sstables_in_manifest;
+    std::set<sstring> non_sstables_in_manifest;
+
+    auto manifest_str = co_await util::read_entire_file_contiguous(snapshot_dir / "manifest.json");
+    testlog.debug("manifest.json: {}", manifest_str);
+    auto manifest_json = rjson::parse(manifest_str);
+    BOOST_REQUIRE(manifest_json.IsObject());
+
+    BOOST_REQUIRE(manifest_json.HasMember("manifest"));
+    auto& manifest_info = manifest_json["manifest"];
+    BOOST_REQUIRE(manifest_info.IsObject());
+    BOOST_REQUIRE(manifest_info.HasMember("version"));
+    auto& manifest_version = manifest_info["version"];
+    BOOST_REQUIRE(manifest_version.IsString());
+    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "1.0");
+    BOOST_REQUIRE(manifest_info.HasMember("scope"));
+    auto& manifest_scope = manifest_info["scope"];
+    BOOST_REQUIRE(manifest_scope.IsString());
+    BOOST_REQUIRE_EQUAL(manifest_scope.GetString(), "node");
+
+    BOOST_REQUIRE(manifest_json.HasMember("node"));
+    auto& node_info = manifest_json["node"];
+    BOOST_REQUIRE(node_info.IsObject());
+    BOOST_REQUIRE(node_info.HasMember("host_id"));
+    auto& host_id_json = node_info["host_id"];
+    BOOST_REQUIRE(host_id_json.IsString());
+    auto id = utils::UUID(host_id_json.GetString());
+    BOOST_REQUIRE_EQUAL(id, topology.my_host_id().uuid());
+    BOOST_REQUIRE(node_info.HasMember("datacenter"));
+    auto& datacenter = node_info["datacenter"];
+    BOOST_REQUIRE(datacenter.IsString());
+    BOOST_REQUIRE_EQUAL(datacenter.GetString(), topology.get_location().dc);
+    BOOST_REQUIRE(node_info.HasMember("rack"));
+    auto& rack = node_info["rack"];
+    BOOST_REQUIRE(rack.IsString());
+    BOOST_REQUIRE_EQUAL(rack.GetString(), topology.get_location().rack);
+
+    BOOST_REQUIRE(manifest_json.HasMember("snapshot"));
+    auto& manifest_snapshot = manifest_json["snapshot"];
+    BOOST_REQUIRE(manifest_snapshot.IsObject());
+    BOOST_REQUIRE(manifest_snapshot.HasMember("name"));
+    auto& snapshot_name = manifest_snapshot["name"];
+    BOOST_REQUIRE(snapshot_name.IsString());
+    BOOST_REQUIRE_EQUAL(snapshot_dir.filename(), snapshot_name.GetString());
+    BOOST_REQUIRE(manifest_snapshot.HasMember("created_at"));
+    auto& created_at = manifest_snapshot["created_at"];
+    BOOST_REQUIRE(created_at.IsNumber());
+    time_t created_at_seconds = created_at.GetInt64();
+    BOOST_REQUIRE_GE(created_at_seconds, min_time.time_since_epoch().count());
+    BOOST_REQUIRE_LT(created_at_seconds, min_time.time_since_epoch().count() + 60);
+    if (manifest_snapshot.HasMember("expires_at")) {
+        BOOST_REQUIRE(created_at_seconds > 0);
+        auto& expires_at = manifest_snapshot["expires_at"];
+        BOOST_REQUIRE(expires_at.IsNumber());
+        BOOST_REQUIRE_GE(expires_at.GetInt64(), created_at_seconds);
+    }
+
+    BOOST_REQUIRE(manifest_json.HasMember("table"));
+    auto& manifest_table = manifest_json["table"];
+    BOOST_REQUIRE(manifest_table.IsObject());
+    BOOST_REQUIRE(manifest_table.HasMember("keyspace_name"));
+    auto& manifest_table_ks_name = manifest_table["keyspace_name"];
+    BOOST_REQUIRE(manifest_table_ks_name.IsString());
+    BOOST_REQUIRE_EQUAL(snapshot_dir.parent_path().parent_path().parent_path().filename().native(), manifest_table_ks_name.GetString());
+    auto& manifest_table_table_name = manifest_table["table_name"];
+    BOOST_REQUIRE(manifest_table_table_name.IsString());
+    BOOST_REQUIRE(snapshot_dir.parent_path().parent_path().filename().native().starts_with(manifest_table_table_name.GetString()));
+    std::optional<sstring> tablets_type;
+    if (manifest_table.HasMember("tablets_type")) {
+        auto& tablets_type_json = manifest_table["tablets_type"];
+        BOOST_REQUIRE(tablets_type_json.IsString());
+        tablets_type = tablets_type_json.GetString();
+    }
+    if (tablets_enabled) {
+        BOOST_REQUIRE(tablets_type.has_value());
+        BOOST_REQUIRE_EQUAL(*tablets_type, "powof2");
+        BOOST_REQUIRE(manifest_table.HasMember("tablet_count"));
+        auto& tablet_count_json = manifest_table["tablet_count"];
+        BOOST_REQUIRE(tablet_count_json.IsNumber());
+        uint64_t tablet_count = tablet_count_json.GetInt64();
+        BOOST_REQUIRE_EQUAL(tablet_count, 1 << log2ceil(tablet_count));
+    } else {
+        if (tablets_type) {
+            BOOST_REQUIRE_EQUAL(*tablets_type, "none");
+        }
+        if (manifest_table.HasMember("tablet_count")) {
+            auto& tablet_count = manifest_table["tablet_count"];
+            if (!tablet_count.IsNull()) {
+                BOOST_REQUIRE(tablet_count.IsNumber());
+                BOOST_REQUIRE_EQUAL(tablet_count.GetInt64(), 0);
+            }
+        }
+    }
+
+    if (manifest_json.HasMember("sstables")) {
+        auto& sstables = manifest_json["sstables"];
+        BOOST_REQUIRE(sstables.IsArray());
+        for (auto& sst_json : sstables.GetArray()) {
+            BOOST_REQUIRE(sst_json.IsObject());
+
+            auto& id = sst_json["id"];
+            BOOST_REQUIRE(id.IsString());
+            auto uuid = utils::UUID(id.GetString());
+            BOOST_REQUIRE(!uuid.is_null());
+
+            auto& toc_name = sst_json["toc_name"];
+            BOOST_REQUIRE(toc_name.IsString());
+            BOOST_REQUIRE(is_component(toc_name.GetString(), suffix));
+            sstables_in_manifest.insert(toc_name.GetString());
+
+            auto& data_size = sst_json["data_size"];
+            BOOST_REQUIRE(data_size.IsNumber());
+            auto& index_size = sst_json["index_size"];
+            BOOST_REQUIRE(index_size.IsNumber());
+
+            if (sst_json.HasMember("first_token")) {
+                auto& first_token = sst_json["first_token"];
+                BOOST_REQUIRE(first_token.IsNumber());
+
+                BOOST_REQUIRE(sst_json.HasMember("last_token"));
+                auto& last_token = sst_json["last_token"];
+                BOOST_REQUIRE(last_token.IsNumber());
+                BOOST_REQUIRE_LE(first_token.GetInt64(), last_token.GetInt64());
+            } else {
+                BOOST_REQUIRE(!sst_json.HasMember("last_token"));
+            }
+        }
+    }
+
+    if (manifest_json.HasMember("files")) {
+        auto& manifest_files = manifest_json["files"];
+        BOOST_REQUIRE(manifest_files.IsArray());
+        for (auto& f : manifest_files.GetArray()) {
+            non_sstables_in_manifest.insert(f.GetString());
+        }
+    }
+
+    BOOST_REQUIRE_EQUAL(sstables_in_manifest, sstables_in_snapshot);
+    BOOST_REQUIRE_EQUAL(non_sstables_in_manifest, std::set<sstring>{});
+}
+
+static future<> snapshot_works(const std::string& table_name, bool create_mvs, bool tablets_enabled = false) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(tablets_enabled ? db::tablets_mode_t::mode::enabled : db::tablets_mode_t::mode::disabled);
     return do_with_some_data_in_thread({"cf"}, [table_name] (cql_test_env& e) {
+        auto min_time = gc_clock::now();
         take_snapshot(e, "ks", table_name).get();
 
         auto& cf = e.local_db().find_column_family("ks", table_name);
@@ -667,24 +830,33 @@ static future<> snapshot_works(const std::string& table_name) {
         in_table_dir.insert("schema.cql");
         // all files were copied and manifest was generated
         BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
-    }, true);
+
+        const auto& topology = e.local_db().get_token_metadata().get_topology();
+        validate_manifest(topology, snapshot_dir, in_snapshot_dir, min_time, cf.uses_tablets()).get();
+    }, create_mvs, db_cfg_ptr, 100);
 }
 
 SEASTAR_TEST_CASE(table_snapshot_works) {
-    return snapshot_works("cf");
+    return snapshot_works("cf", true, false);
+}
+
+SEASTAR_TEST_CASE(table_snapshot_works_with_tablets) {
+    // FIXME: do_with_some_data does not work with views and tablets yet
+    return snapshot_works("cf", false, true);
 }
 
 SEASTAR_TEST_CASE(view_snapshot_works) {
-    return snapshot_works("view_cf");
+    return snapshot_works("view_cf", true, false);
 }
 
 SEASTAR_TEST_CASE(index_snapshot_works) {
-    return snapshot_works(::secondary_index::index_table_name("index_cf"));
+    return snapshot_works(::secondary_index::index_table_name("index_cf"), true, false);
 }
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
+        db::snapshot_options opts = {.skip_flush = true};
+        take_snapshot(e, "ks", "cf", "test", opts).get();
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
@@ -1457,7 +1629,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         }
         BOOST_REQUIRE(found);
 
-        co_await take_snapshot(e, "ks", "cf", "test", true /* skip_flush */);
+        co_await take_snapshot(e, "ks", "cf", "test", db::snapshot_options{.skip_flush = true});
 
         testlog.debug("Expected: {}", expected);
 
