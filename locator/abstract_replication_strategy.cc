@@ -20,6 +20,7 @@
 
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <variant>
 
 namespace locator {
 
@@ -176,6 +177,15 @@ replication_factor_data abstract_replication_strategy::parse_replication_factor(
 
 size_t get_replication_factor(const replication_strategy_config_option& opt) {
     return replication_factor_data(opt).count();
+}
+
+bool uses_rack_list_exclusively(const replication_strategy_config_options& opts) {
+    for (auto& [_, val] : opts) {
+        if (!std::holds_alternative<rack_list>(val)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 replication_factor_data::replication_factor_data(const replication_strategy_config_option& rf) {

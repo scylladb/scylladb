@@ -190,7 +190,7 @@ then every rack in every datacenter receives a replica, except for racks compris
 of only :doc:`zero-token nodes </architecture/zero-token-nodes>`. Racks added after
 the keyspace creation do not receive replicas.
 
-When ``rf_rack_valid_keyspaces``` is enabled in the config and the keyspace is tablet-based,
+When ``enforce_rack_list`` (or (deprecated) ``rf_rack_valid_keyspaces``) is enabled in the config and the keyspace is tablet-based,
 the numeric replication factor is automatically expanded into a rack list when the statement is
 executed, which can be observed in the DESCRIBE output afterwards. If the numeric RF is smaller than
 the number of racks in a DC, a subset of racks is chosen arbitrarily.
