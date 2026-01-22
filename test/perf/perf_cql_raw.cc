@@ -40,6 +40,7 @@
 #include "transport/response.hh"
 #include <cstring>
 #include <unordered_map>
+#include <stack>
 
 namespace perf {
 using namespace seastar;
@@ -183,7 +184,8 @@ class raw_cql_connection {
     std::unordered_map<int16_t, promise<frame>> _requests;
     future<> _reader_done = make_ready_future<>();
     bool _reader_stopped = false;
-    int16_t _next_stream_id = -1;
+    std::stack<int16_t> _free_streams;
+    int16_t _next_new_stream = 0;
 
 public:
     raw_cql_connection(connected_socket cs, sstring username = {}, sstring password = {}, bool use_prepared = false)
@@ -229,9 +231,37 @@ public:
         }
     }
 
-    int16_t allocate_stream() {
-        _next_stream_id++;
-        return _next_stream_id;
+    struct stream_guard {
+        raw_cql_connection* _c = nullptr;
+        int16_t _id;
+        stream_guard(raw_cql_connection* c, int16_t id) : _c(c), _id(id) {}
+        stream_guard(stream_guard&& x) noexcept : _c(x._c), _id(x._id) { x._c = nullptr; }
+        ~stream_guard() {
+            if (_c) {
+                _c->release_stream(_id);
+             }
+        }
+        operator int16_t() const { return _id; }
+    };
+
+    void release_stream(int16_t stream) {
+        _free_streams.push(stream);
+    }
+
+    stream_guard allocate_stream() {
+        int16_t s;
+        if (!_free_streams.empty()) {
+            s = _free_streams.top();
+            _free_streams.pop();
+        } else {
+            s = _next_new_stream++;
+            if (_next_new_stream == std::numeric_limits<int16_t>::max()) {
+                logger l("abort");
+                l.error("stream id collision, aborting");
+                abort();
+            }
+        }
+        return stream_guard(this, s);
     }
 
     future<> send_frame(temporary_buffer<char> buf) {
