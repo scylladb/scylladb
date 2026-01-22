@@ -210,7 +210,8 @@ enum class messaging_verb : int32_t {
     REPAIR_UPDATE_REPAIRED_AT_FOR_MERGE = 81,
     WORK_ON_VIEW_BUILDING_TASKS = 82,
     NOTIFY_BANNED = 83,
-    LAST = 84,
+    FORWARD_CQL_EXECUTE = 84,
+    LAST = 85,
 };
 
 } // namespace netw

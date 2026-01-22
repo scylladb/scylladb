@@ -134,6 +134,9 @@
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
+#include "service/forward_cql_service.hh"
+#include "idl/forward_cql.dist.hh"
+#include "idl/forward_cql.dist.impl.hh"
 #include "gms/feature_service.hh"
 
 namespace netw {
@@ -748,6 +751,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::FORWARD_CQL_EXECUTE:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:

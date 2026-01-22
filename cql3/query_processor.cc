@@ -19,6 +19,7 @@
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
+#include "service/forward_cql_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "cql3/CqlParser.hpp"
@@ -48,8 +49,11 @@ const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono
 
 struct query_processor::remote {
     remote(service::migration_manager& mm, service::mapreduce_service& fwd,
-           service::storage_service& ss, service::raft_group0_client& group0_client)
+           service::storage_service& ss, service::raft_group0_client& group0_client,
+           service::strong_consistency::coordinator& _sc_coordinator,
+           service::forward_cql_service& fwd_cql)
             : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client)
+            , sc_coordinator(_sc_coordinator), cql_forwarder(fwd_cql)
             , gate("query_processor::remote")
     {}
 
@@ -57,6 +61,8 @@ struct query_processor::remote {
     service::mapreduce_service& mapreducer;
     service::storage_service& ss;
     service::raft_group0_client& group0_client;
+    service::strong_consistency::coordinator& sc_coordinator;
+    service::forward_cql_service& cql_forwarder;
 
     seastar::named_gate gate;
 };
@@ -503,6 +509,12 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.replication_strategy_fail_list_violations,
                             sm::description("Counts the number of replication_strategy_fail_list guardrail violations, "
                                             "i.e. attempts to set a forbidden replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")).set_skip_when_empty(),
+
+                    sm::make_counter(
+                            "forwarded_requests",
+                            _cql_stats.forwarded_requests,
+                            sm::description("Counts the total number of attempts to forward strongly consistent CQL requests to other nodes."
+                                            "One request may be forwarded multiple times if the forwarding is attempted during tablet Raft group changes.")).set_skip_when_empty(),
             });
 
     _mnotifier.register_listener(_migration_subscriber.get());
@@ -514,9 +526,17 @@ query_processor::~query_processor() {
     }
 }
 
+std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder>
+query_processor::acquire_strongly_consistent_coordinator() {
+    auto [remote_, holder] = remote();
+    return {remote_.get().sc_coordinator, std::move(holder)};
+}
+
 void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer,
-                                   service::storage_service& ss, service::raft_group0_client& group0_client) {
-    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client);
+                                   service::storage_service& ss, service::raft_group0_client& group0_client,
+                                   service::strong_consistency::coordinator& sc_coordinator,
+                                   service::forward_cql_service& cql_forwarder) {
+    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client, sc_coordinator, cql_forwarder);
 }
 
 future<> query_processor::stop_remote() {
@@ -539,7 +559,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     // execute all statements that need group0 guard on shard0
     if (this_shard_id() != 0) {
-        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
+        co_return ::make_shared<cql_transport::messages::result_message::bounce>(0,
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
@@ -595,6 +615,15 @@ query_processor::execute_direct_without_checking_exception_message(const std::st
     auto user = query_state.get_client_state().user();
     tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
     return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
+}
+
+future<::shared_ptr<result_message>>
+query_processor::execute_direct_without_checking_exception_message(std::unique_ptr<statements::prepared_statement> prepared, service::query_state& query_state, query_options& options) {
+    log.trace("execute_direct(parsed): \"{}\"", prepared->statement->raw_cql_statement);
+    warn(unimplemented::cause::METRICS);
+    auto user = query_state.get_client_state().user();
+    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
+    return execute_maybe_with_guard(query_state, prepared->statement, options, &query_processor::do_execute_direct, std::move(prepared->warnings));
 }
 
 future<::shared_ptr<result_message>>
@@ -1056,6 +1085,20 @@ query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_pt
     co_return co_await remote_.get().mapreducer.dispatch(std::move(req), std::move(tr_state));
 }
 
+future<service::forward_cql_result>
+query_processor::execute_forwarding_statement(
+        ::shared_ptr<cql_statement> stmt,
+        cql_prepared_id_type prepared_id,
+        service::query_state& query_state,
+        const query_options& options,
+        uint16_t stream,
+        cql_protocol_version_type version,
+        cql_transport::cql_metadata_id_wrapper metadata_id) {
+    auto [remote_, holder] = remote();
+    return remote_.get().cql_forwarder.forward_cql(std::move(stmt), std::move(prepared_id), query_state, options, stream, version, std::move(metadata_id))
+            .finally([holder = std::move(holder)] {});
+}
+
 future<::shared_ptr<messages::result_message>>
 query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::group0_batch& mc) {
     if (this_shard_id() != 0) {
@@ -1220,7 +1263,12 @@ future<> query_processor::query_internal(
 
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     _proxy.get_stats().replica_cross_shard_ops++;
-    return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+    return ::make_shared<cql_transport::messages::result_message::bounce>(shard, std::move(cached_fn_calls));
+}
+
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(locator::tablet_replica replica, seastar::lowres_clock::time_point timeout) {
+    get_cql_stats().forwarded_requests++;
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, timeout);
 }
 
 void query_processor::update_authorized_prepared_cache_config() {

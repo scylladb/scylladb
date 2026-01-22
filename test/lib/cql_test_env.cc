@@ -71,6 +71,8 @@
 #include "debug.hh"
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
+#include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -78,6 +80,7 @@
 #include "init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
+#include "service/forward_cql_service.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -166,6 +169,8 @@ private:
     sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
+    sharded<service::strong_consistency::groups_manager> _groups_manager;
+    sharded<service::strong_consistency::coordinator> _sc_coordinator;
     sharded<service::storage_service> _ss;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
@@ -178,6 +183,7 @@ private:
     sharded<repair_service> _repair;
     sharded<streaming::stream_manager> _stream_manager;
     sharded<service::mapreduce_service> _mapreduce_service;
+    sharded<service::forward_cql_service> _forward_cql_service;
     sharded<direct_failure_detector::failure_detector> _fd;
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
@@ -958,6 +964,18 @@ private:
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
+                std::ref(_db), std::ref(_feature_service)).get();
+            auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
+
+            _forward_cql_service.start(std::ref(_ms), std::ref(_qp)).get();
+            auto stop_forward_cql_service = defer_verbose_shutdown("forward cql service", [this] { _forward_cql_service.stop().get(); });
+
+            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();
+            auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
+                _sc_coordinator.stop().get();
+            });
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -981,7 +999,8 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*_disk_space_monitor_shard0)
+                only_on_shard0(&*_disk_space_monitor_shard0),
+                std::ref(_groups_manager)
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
@@ -995,7 +1014,8 @@ private:
             }).get();
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client);
+                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client, 
+                    _sc_coordinator.local(), _forward_cql_service.local());
             }).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
@@ -1104,6 +1124,10 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            _groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                return m.start();
+            }).get();
 
             _view_building_worker.start(std::ref(_db), std::ref(_sys_ks), std::ref(_mnotifier), std::ref(group0_service), std::ref(_view_update_generator), std::ref(_ms), std::ref(_view_building_state_machine)).get();
             auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [this] {

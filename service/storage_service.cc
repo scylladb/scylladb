@@ -53,6 +53,7 @@
 #include "mutation/canonical_mutation.hh"
 #include "mutation/async_utils.hh"
 #include <seastar/core/on_internal_error.hh>
+#include "service/strong_consistency/groups_manager.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
@@ -211,7 +212,8 @@ storage_service::storage_service(abort_source& abort_source,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
     std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
-    utils::disk_space_monitor* disk_space_monitor
+    utils::disk_space_monitor* disk_space_monitor,
+    strong_consistency::groups_manager& groups_manager
     )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -252,6 +254,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_building_state_machine(view_building_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
         , _disk_space_monitor(disk_space_monitor)
+        , _groups_manager(groups_manager)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
@@ -3413,6 +3416,8 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
     // Apply changes on a single shard
     try {
         _shared_token_metadata.set(std::move(change.pending_token_metadata_ptr[this_shard_id()]));
+        _groups_manager.update(_shared_token_metadata.get());
+
         auto& db =_db.local();
         auto& erms = change.pending_effective_replication_maps[this_shard_id()];
         for (auto it = erms.begin(); it != erms.end(); ) {
