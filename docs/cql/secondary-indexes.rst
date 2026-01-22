@@ -88,17 +88,16 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 
 .. _create-vector-index-statement:
 
-Vector Index :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Vector Index :label-note:`ScyllaDB Cloud`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. note::
 
-   Vector indexes are supported in ScyllaDB Cloud only in the clusters that have the vector search feature enabled.
-   Moreover, vector indexes are an experimental feature that:
-   
-     * is not suitable for production use,
-     * does not guarantee backward compatibility between ScyllaDB versions,
-     * does not support all the features of ScyllaDB (e.g., tracing, filtering, TTL).
+
+   Vector indexes are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
+   Vector indexes do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
+   about Vector Search is available in the
+   `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
 
 ScyllaDB supports creating vector indexes on tables, allowing queries on the table to use those indexes for efficient
 similarity search on vector data. 

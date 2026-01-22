@@ -241,8 +241,8 @@ Currently, the possible orderings are limited by the :ref:`clustering order <clu
 
 .. _vector-queries:
 
-Vector queries
-~~~~~~~~~~~~~~
+Vector queries :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The ``ORDER BY`` clause can also be used with vector columns to perform the approximate nearest neighbor (ANN) search. 
 When using vector columns, the syntax is as follows:
@@ -272,11 +272,12 @@ For example::
 This query returns up to 5 rows with the closest distance of ``embedding`` vector to the provided query vector,
 in this case ``[0.1, 0.2, 0.3, 0.4]``.
 
-.. warning:: 
+.. note::
 
-  Currently, vector queries do not support filtering with ``WHERE`` clause, returning similarity distances,
-  grouping with ``GROUP BY`` and paging. This will be added in the future releases.
-
+   Vector indexes are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
+   Vector indexes do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
+   about Vector Search is available in the
+   `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
 
 .. _limit-clause:
 

@@ -665,6 +665,14 @@ it is not possible to update only some elements of a vector (without updating th
 Types stored in a vector are not implicitly frozen, so if you want to store a frozen collection or
 frozen UDT in a vector, you need to explicitly wrap them using `frozen` keyword.
 
+.. note::
+
+   The main application of vectors is to support vector search capabilities, which
+   are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
+   Note that Vector Search clusters do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
+   about Vector Search is available in the
+   `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
+
 .. .. _custom-types:
 
 .. Custom Types
