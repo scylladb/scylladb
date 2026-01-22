@@ -69,7 +69,7 @@ extern const sstring TTL_TAG_KEY;
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
     if (!_proxy.features().alternator_ttl) {
-        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
+        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Upgrade all nodes to a version that supports it.");
     }
 
     schema_ptr schema = get_table(_proxy, request);
