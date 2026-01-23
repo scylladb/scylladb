@@ -11,7 +11,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import cluster_con
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import new_test_keyspace
+from test.topology.util import create_new_test_keyspace, new_test_keyspace
 
 import pytest
 import logging
@@ -83,11 +83,12 @@ async def test_maintenance_mode(manager: ManagerClient):
         res = await maintenance_cql.run_async(f"SELECT v FROM {table} WHERE k = {key_on_server_a}")
         assert res[0][0] == key_on_server_a
 
-        # Check that group0 operations are disabled
-        with pytest.raises(ConfigurationException):
-            await maintenance_cql.run_async(f"CREATE TABLE {ks}.t2 (k int PRIMARY KEY, v int)")
-
         await maintenance_cql.run_async(f"UPDATE {table} SET v = {key_on_server_a + 1} WHERE k = {key_on_server_a}")
+
+        # Check that group0 operations are disabled
+        with pytest.raises(ConfigurationException, match="cannot start group0 operation in the maintenance mode"):
+            await create_new_test_keyspace(
+                    maintenance_cql, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
         # Ensure that server B recognizes server A as being shutdown, not as being alive.
         res = await cql.run_async(f"SELECT status FROM system.cluster_status WHERE peer = '{server_a.ip_addr}'")
