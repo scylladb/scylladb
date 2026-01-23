@@ -22,6 +22,7 @@ from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
 from test.pylib.resource_gather import get_resource_gather
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
+from test.pylib.scylla_cluster import merge_cmdline_options
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -116,7 +117,7 @@ class CppFile(pytest.File, ABC):
 
     @cached_property
     def test_args(self) -> list[str]:
-        args = [*DEFAULT_SCYLLA_ARGS, *self.suite_config.get("extra_scylla_cmdline_options", [])]
+        args = merge_cmdline_options(DEFAULT_SCYLLA_ARGS, self.suite_config.get("extra_scylla_cmdline_options", []))
         if x_log2_compaction_groups := self.config.getoption("--x-log2-compaction-groups"):
             if all_can_run_compaction_groups_except := self.suite_config.get("all_can_run_compaction_groups_except"):
                 if self.test_name not in all_can_run_compaction_groups_except:
