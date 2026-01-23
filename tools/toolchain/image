@@ -1,1 +1,7 @@
+<<<<<<< HEAD
 docker.io/scylladb/scylla-toolchain:fedora-42-branch-2025.4-20251112
+||||||| parent of eb5e9f728c (build: lock cxxbridge-cmd version to the rest of the cxx packages)
+docker.io/scylladb/scylla-toolchain:fedora-42-20251109
+=======
+docker.io/scylladb/scylla-toolchain:fedora-42-20251122
+>>>>>>> eb5e9f728c (build: lock cxxbridge-cmd version to the rest of the cxx packages)
