@@ -13,7 +13,8 @@ import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.cqlpy import nodetool
-from cassandra import ConsistencyLevel
+from cassandra import ConsistencyLevel, Unavailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement
 from test.pylib.async_cql import _wrap_future
@@ -113,14 +114,19 @@ async def test_putget_2dc_with_rf(
 
 
 @pytest.mark.asyncio
-async def test_query_dc_with_rf_0_does_not_crash_db(request: pytest.FixtureRequest, manager: ManagerClient):
-    """Test querying dc with CL=LOCAL_QUORUM when RF=0 for this dc, does not crash the node and returns None
-    Covers https://github.com/scylladb/scylla/issues/8354"""
+async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureRequest, manager: ManagerClient):
+    """
+    Verifies that operations using local consistency levels (LOCAL_QUORUM, LOCAL_ONE) fail
+    with a clear, actionable error message when the datacenter has replication factor 0.
+
+    Covers:
+    - https://github.com/scylladb/scylla/issues/8354 - Operations should not crash the DB
+    - https://github.com/scylladb/scylladb/issues/27893 - Should give a clear error about RF=0
+    """
     servers = []
     ks = "test_ks"
     table_name = "test_table_name"
-    expected = ["k1", "value1"]
-    dc_replication = {'dc2': 0}
+    dc_replication = {'dc1': 1, 'dc2': 0}
     columns = [Column("name", TextType), Column("value", TextType)]
 
     for i in [1, 2]:
@@ -136,18 +142,40 @@ async def test_query_dc_with_rf_0_does_not_crash_db(request: pytest.FixtureReque
 
     random_tables = RandomTables(request.node.name, manager, ks, 1, dc_replication)
     await random_tables.add_table(ncolumns=2, columns=columns, pks=1, name=table_name)
-    dc1_connection.execute(
-        f"INSERT INTO  {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('{expected[0]}', '{expected[1]}');")
-    select_query = SimpleStatement(f"SELECT * from {ks}.{table_name};",
-                                   consistency_level=ConsistencyLevel.LOCAL_QUORUM)
-    nodetool.flush(dc1_connection, "{ks}.{table_name}")
-    first_node_results = list(dc1_connection.execute(select_query).one())
-    second_node_result = dc2_connection.execute(select_query).one()
 
-    assert first_node_results == expected, \
-        f"Expected {expected} from {select_query.query_string}, but got {first_node_results}"
-    assert second_node_result is None, \
-        f"Expected no results from {select_query.query_string}, but got {second_node_result}"
+    # sanity check: operations from dc1 (RF > 0) should succeed with all local consistency levels
+    local_cls = [ConsistencyLevel.LOCAL_QUORUM, ConsistencyLevel.LOCAL_ONE]
+
+    for i, cl in enumerate(local_cls):
+        dc1_connection.execute(SimpleStatement(
+                f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k{i}', 'value{i}')", consistency_level=cl))
+
+        nodetool.flush(dc1_connection, f"{ks}.{table_name}")
+
+        select_query = SimpleStatement(f"SELECT * FROM {ks}.{table_name} WHERE {columns[0].name} = 'k{i}'", consistency_level=cl)
+        # asserting SELECT's results may seem excessive, but it could happen that it'd fail and return nothing and not throw,
+        # in which case it'd silently return nothing, which we don't want, and hence are asserting it's *really* working
+        result = list(dc1_connection.execute(select_query).one())
+        expected_row = [f"k{i}", f"value{i}"]
+        assert result == expected_row, \
+            f"Expected {expected_row} with CL={cl} from dc1, but got {result}"
+
+    def assert_operation_fails_with_rf0_error(cl: ConsistencyLevel, operation: str) -> None:
+        with pytest.raises((Unavailable, NoHostAvailable)) as exc_info:
+            dc2_connection.execute(SimpleStatement(operation, consistency_level=cl))
+
+        error_msg = str(exc_info.value)
+        assert "Cannot achieve consistency level LOCAL_" in error_msg and "use a non-local consistency level" in error_msg, \
+            f"Expected error indicating RF=0 and datacenter with CL={cl}, but received: {exc_info.value}"
+
+    # SELECT & INSERT from dc2 (with RF=0) using local CLs should fail with a clear error message
+    # indicating the replication factor is 0 and suggesting to use a non-local CL
+    for i, cl in enumerate(local_cls):
+        assert_operation_fails_with_rf0_error(cl,
+            f"SELECT * FROM {ks}.{table_name}")
+
+        assert_operation_fails_with_rf0_error(cl,
+            f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k_fail_{i}', 'value_fail_{i}')")
 
 @pytest.mark.asyncio
 async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ManagerClient):
