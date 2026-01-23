@@ -8,6 +8,8 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "cql3/statements/strong_consistency/select_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -16,7 +18,7 @@
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
-#include "cql3/statements/strongly_consistent_select_statement.hh"
+#include "cql3/statements/broadcast_select_statement.hh"
 
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
@@ -2368,7 +2370,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 && restrictions->partition_key_restrictions_size() == schema->partition_key_size());
     };
 
-    if (_parameters->is_prune_materialized_view()) {
+    if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+        stmt = ::make_shared<strong_consistency::select_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    } else if (_parameters->is_prune_materialized_view()) {
         stmt = ::make_shared<cql3::statements::prune_materialized_view_statement>(
                 schema,
                 ctx.bound_variables_size(),
@@ -2432,7 +2448,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             std::move(prepared_attrs)
         );
     } else if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
-        stmt = ::make_shared<cql3::statements::strongly_consistent_select_statement>(
+        stmt = ::make_shared<cql3::statements::broadcast_select_statement>(
                 schema,
                 ctx.bound_variables_size(),
                 _parameters,

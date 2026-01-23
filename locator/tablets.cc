@@ -470,16 +470,20 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
     return true;
 }
 
-tablet_map::tablet_map(size_t tablet_count)
+tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
         : _log2_tablets(log2ceil(tablet_count)) {
     if (tablet_count != 1ul << _log2_tablets) {
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets.resize(tablet_count);
+    if (with_raft_info) {
+        _raft_info.resize(tablet_count);
+    }
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, _repair_scheduler_config);
+    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, 
+        _repair_scheduler_config, _raft_info);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -497,7 +501,15 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info, _repair_scheduler_config);
+    raft_info_container raft_info;
+    raft_info.reserve(_raft_info.size());
+    for (const auto& i: _raft_info) {
+        raft_info.emplace_back(i);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, 
+        _resize_task_info, _repair_scheduler_config, std::move(raft_info));
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -705,6 +717,24 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
         return nullptr;
     }
     return &i->second;
+}
+
+const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {
+    check_tablet_id(id);
+    if (_raft_info.empty()) {
+        on_internal_error(tablet_logger, "Tablet map doesn't have raft info");
+    }
+    return _raft_info[size_t(id)];
+}
+
+void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) {
+    check_tablet_id(id);
+    if (_raft_info.empty()) {
+        on_internal_error(tablet_logger,
+            format("Tablet map has no raft info, tablet_id {}, group_id {}",
+                id, raft_info.group_id));
+    }
+    _raft_info[size_t(id)] = std::move(raft_info);
 }
 
 // The names are persisted in system tables so should not be changed.
@@ -1416,6 +1446,7 @@ void tablet_aware_replication_strategy::process_tablet_options(abstract_replicat
                                                                replication_strategy_params params) {
     if (ars._uses_tablets) {
         _initial_tablets = params.initial_tablets.value_or(0);
+        _consistency = params.consistency.value_or(data_dictionary::consistency_config_option::eventual);
         mark_as_per_table(ars);
     }
 }
@@ -1722,6 +1753,12 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             out = fmt::format_to(out, ", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
             if (tr->session_id) {
                 out = fmt::format_to(out, ", session={}", tr->session_id);
+            }
+        }
+        if (r.has_raft_info()) {
+            const auto& raft_info = r.get_tablet_raft_info(tid);
+            if (raft_info.group_id) {
+                out = fmt::format_to(out, ", group_id={}", raft_info.group_id);
             }
         }
         first = false;

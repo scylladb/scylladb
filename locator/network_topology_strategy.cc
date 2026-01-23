@@ -311,7 +311,8 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
         tablet_count = aligned_tablet_count;
     }
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), 
+        tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
@@ -325,6 +326,16 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
     for (tablet_id tb : tablets.tablet_ids()) {
         auto tinfo = tablets.get_tablet_info(tb);
         tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
+        if (tablets.has_raft_info()) {
+            for (auto& r: tinfo.replicas) {
+                r.shard  = 0;
+            }
+            if (!tablets.get_tablet_raft_info(tb).group_id) {
+                tablets.set_tablet_raft_info(tb, tablet_raft_info {
+                    .group_id = raft::group_id{utils::UUID_gen::get_time_UUID()}
+                });
+            }
+        }
         tablets.set_tablet(tb, std::move(tinfo));
     }
 

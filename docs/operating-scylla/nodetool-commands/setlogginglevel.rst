@@ -177,8 +177,8 @@ To display the log classes (output changes with each version so your display may
    storage_proxy
    storage_service
    stream_session
-   strongly_consistent_modification_statement
-   strongly_consistent_select_statement
+   broadcast_modification_statement
+   broadcast_select_statement
    system_distributed_keyspace
    system_keyspace
    table

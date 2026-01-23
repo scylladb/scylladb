@@ -13,7 +13,7 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
-#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/statements/broadcast_modification_statement.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raw/update_statement.hh"
 
@@ -333,7 +333,7 @@ std::optional<expr::expression> get_value_condition(const expr::expression& the_
     return binop->rhs;
 }
 
-::shared_ptr<strongly_consistent_modification_statement>
+::shared_ptr<broadcast_modification_statement>
 update_statement::prepare_for_broadcast_tables() const {
     if (attrs) {
         if (attrs->is_time_to_live_set()) {
@@ -359,7 +359,7 @@ update_statement::prepare_for_broadcast_tables() const {
         .value_condition = get_value_condition(_condition),
     };
 
-    return ::make_shared<strongly_consistent_modification_statement>(
+    return ::make_shared<broadcast_modification_statement>(
         get_bound_terms(),
         s,
         query
