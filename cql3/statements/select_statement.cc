@@ -258,11 +258,9 @@ uint32_t select_statement::get_bound_terms() const {
 
 future<> select_statement::check_access(query_processor& qp, const service::client_state& state) const {
     try {
-        const data_dictionary::database db = qp.db();
-        auto&& s = db.find_schema(keyspace(), column_family());
-        auto cdc = db.get_cdc_base_table(*s);
-        auto& cf_name = s->is_view()
-            ? s->view_info()->base_name()
+        auto cdc = qp.db().get_cdc_base_table(*_schema);
+        auto& cf_name = _schema->is_view()
+            ? _schema->view_info()->base_name()
             : (cdc ? cdc->cf_name() : column_family());
         const schema_ptr& base_schema = cdc ? cdc : _schema;
         bool is_vector_indexed = secondary_index::vector_index::has_vector_index(*base_schema);
