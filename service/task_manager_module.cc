@@ -21,7 +21,6 @@ namespace service {
 
 struct status_helper {
     tasks::task_status status;
-    utils::chunked_vector<locator::tablet_id> tablets;
     std::optional<locator::tablet_replica> pending_replica;
 };
 
@@ -273,6 +272,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     auto& tmap = tmptr->tablets().get_tablet_map(table);
     bool repair_task_finished = false;
     bool repair_task_pending = false;
+    bool no_tablets_processed = true;
     if (is_repair_task(task_type)) {
         auto progress = co_await _ss._repair.local().get_tablet_repair_task_progress(id);
         if (progress) {
@@ -289,7 +289,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             auto& task_info = info.repair_task_info;
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
                 update_status(task_info, res.status, sched_nr);
-                res.tablets.push_back(tid);
+                no_tablets_processed = false;
             }
             return make_ready_future();
         });
@@ -300,7 +300,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res.status, sched_nr);
-            res.tablets.push_back(tablet_id);
+            no_tablets_processed = false;
         }
     } else {    // Resize task.
         auto& task_info = tmap.resize_task_info();
@@ -312,14 +312,14 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         }
     }
 
-    if (!res.tablets.empty()) {
+    if (!no_tablets_processed) {
         res.status.state = sched_nr == 0 ? tasks::task_manager::task_state::created : tasks::task_manager::task_state::running;
         co_return res;
     }
 
     if (repair_task_pending) {
         // When repair_task_pending is true, the res.tablets will be empty iff the request is aborted by user.
-        res.status.state = res.tablets.empty() ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::running;
+        res.status.state = no_tablets_processed ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::running;
         co_return res;
     }
     if (repair_task_finished) {
