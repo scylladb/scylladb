@@ -252,8 +252,6 @@ def parse_cmd_line() -> argparse.Namespace:
                         default=None, dest="pytest_arg",
                         help="Additional command line arguments to pass to pytest, for example ./test.py --pytest-arg=\"-v -x\"")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
-    scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
-                             help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
     scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
                                                 "'--logger-log-level raft=trace --default-log-level error'")
@@ -364,8 +362,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.extend(shlex.split(options.pytest_arg))
     if options.random_seed:
         args.append(f'--random-seed={options.random_seed}')
-    if options.x_log2_compaction_groups:
-        args.append(f'--x-log2-compaction-groups={options.x_log2_compaction_groups}')
     if options.gather_metrics:
         args.append('--gather-metrics')
     if options.timeout:
