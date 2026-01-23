@@ -17,6 +17,7 @@
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "db/view/view_build_status.hh"
+#include "locator/tablets.hh"
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
@@ -1875,16 +1876,32 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
+        locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
+        const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
+        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
         // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
-                locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
-                const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
-                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
                     "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
+                }
+            }
+        }
+        // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
+        // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
+        if (!view_builders.empty() || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+            try {
+                locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
+            } catch (const std::invalid_argument& ex) {
+                if (!view_builders.empty()) {
+                    co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
+                        "using tablets require the number of racks in the cluster to be either 1 or 3"));
+                } else {
+                    co_return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
+                        "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
+                        "that have either 1 or 3 racks", table_name));
                 }
             }
         }
@@ -2108,6 +2125,13 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         if (p.local().data_dictionary().has_schema(keyspace_name, lsi_name(table_name, index_name, false))) {
                             co_return api_error::validation(fmt::format(
                                 "LSI {} already exists in table {}, can't use same name for GSI", index_name, table_name));
+                        }
+                        try {
+                            locator::assert_rf_rack_valid_keyspace(keyspace_name, p.local().local_db().get_token_metadata_ptr(),
+                                    p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy());
+                        } catch (const std::invalid_argument& ex) {
+                            co_return api_error::validation(fmt::format("GlobalSecondaryIndexes on a table "
+                                "using tablets require the number of racks in the cluster to be either 1 or 3"));
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
