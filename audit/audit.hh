@@ -129,7 +129,6 @@ public:
     }
     static future<> start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
     static future<> stop_audit();
-    static audit_info_ptr create_no_audit_info();
     static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table, bool batch = false);
     audit(locator::shared_token_metadata& stm,
           cql3::query_processor& qp,

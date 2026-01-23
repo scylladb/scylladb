@@ -216,10 +216,6 @@ audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& k
     return std::make_unique<audit_info>(cat, keyspace, table, batch);
 }
 
-audit_info_ptr audit::create_no_audit_info() {
-    return audit_info_ptr();
-}
-
 future<> audit::start(const db::config& cfg) {
     return _storage_helper_ptr->start(cfg);
 }
@@ -267,18 +263,21 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
 }
 
 future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error) {
+    auto audit_info = statement->get_audit_info();
+    if (!audit_info) {
+        return make_ready_future<>();
+    }
     cql3::statements::batch_statement* batch = dynamic_cast<cql3::statements::batch_statement*>(statement.get());
     if (batch != nullptr) {
         return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
             return inspect(m.statement, query_state, options, error);
         });
     } else {
-        auto audit_info = statement->get_audit_info();
-        if (bool(audit_info) && audit::local_audit_instance().should_log(audit_info)) {
+        if (audit::local_audit_instance().should_log(audit_info)) {
             return audit::local_audit_instance().log(audit_info, query_state, options, error);
         }
+        return make_ready_future<>();
     }
-    return make_ready_future<>();
 }
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error) {
