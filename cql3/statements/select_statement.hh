@@ -163,7 +163,7 @@ protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
-    virtual bool needs_post_query_ordering() const;
+    bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
     }
@@ -366,12 +366,6 @@ class vector_indexed_table_select_statement : public select_statement {
     vector_search::prepared_filter _prepared_filter;
     mutable gc_clock::time_point _query_start_time_point;
 
-    // Vector ANN queries don't need post-query ordering because the vector store
-    // service returns results already sorted by distance to the query vector.
-    bool needs_post_query_ordering() const override {
-        return false;
-    }
-
 public:
     static constexpr size_t max_ann_query_limit = 1000;
 
@@ -379,7 +373,7 @@ public:
             lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
             ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
             ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-            std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs);
+            std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs);
 
     vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
@@ -393,7 +387,7 @@ private:
 
     void update_stats() const;
 
-    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options) const;
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;
 
     std::vector<float> get_ann_ordering_vector(const query_options& options) const;
 
