@@ -209,11 +209,11 @@ future<> audit::stop_audit() {
     });
 }
 
-audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table) {
+audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table, bool batch) {
     if (!audit_instance().local_is_initialized()) {
         return nullptr;
     }
-    return std::make_unique<audit_info>(cat, keyspace, table);
+    return std::make_unique<audit_info>(cat, keyspace, table, batch);
 }
 
 audit_info_ptr audit::create_no_audit_info() {
