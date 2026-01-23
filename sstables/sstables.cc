@@ -28,6 +28,7 @@
 #include <seastar/util/file.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/util/memory-data-source.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -3871,39 +3872,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                     write(_sst->get_version(), fw, tmp);
                     fw.close();
                 });
-                // TODO: move to seastar. Based on buffer_input... in utils, but
-                // handles potential 1+ buffers
-                class buffer_data_source_impl : public data_source_impl {
-                private:
-                    std::vector<temporary_buffer<char>> _bufs;
-                    size_t _index = 0;
-                public:
-                    buffer_data_source_impl(std::vector<temporary_buffer<char>>&& bufs)
-                        : _bufs(std::move(bufs))
-                    {}
-                    buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
-                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
-
-                    future<temporary_buffer<char>> get() override {
-                        if (_index < _bufs.size()) {
-                            return make_ready_future<temporary_buffer<char>>(std::move(_bufs.at(_index++)));
-                        }
-                        return make_ready_future<temporary_buffer<char>>();
-                    }
-                    future<temporary_buffer<char>> skip(uint64_t n) override {
-                        while (n > 0 && _index < _bufs.size()) {
-                            auto& buf = _bufs.at(_index);
-                            auto min = std::min(n, buf.size());
-                            buf.trim_front(min);
-                            if (buf.empty()) {
-                                ++_index;
-                            }
-                            n -= min;
-                        }
-                        return get();
-                    }
-                };
-                co_return input_stream<char>(data_source(std::make_unique<buffer_data_source_impl>(std::move(bufs))));
+                co_return seastar::util::as_input_stream(std::move(bufs));
             }
             co_return make_file_input_stream(_file, options);
         }
