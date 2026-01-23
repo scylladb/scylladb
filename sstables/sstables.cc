@@ -29,6 +29,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/memory-data-source.hh>
+#include <seastar/util/memory-data-sink.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -3841,33 +3842,9 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                 tmp.remove_extension_attributes();
 
                 std::vector<temporary_buffer<char>> bufs;
-                // TODO: move to seastar. Based on memory_data_sink, but allowing us
-                // to actually move away the buffers later. I don't want to modify
-                // util classes in an enterprise patch.
-                class buffer_data_sink_impl : public data_sink_impl {
-                    std::vector<temporary_buffer<char>>& _bufs;
-                public:
-                    buffer_data_sink_impl(std::vector<temporary_buffer<char>>& bufs)
-                        : _bufs(bufs)
-                    {}
-                    future<> put(std::span<temporary_buffer<char>> bufs) override {
-                        for (auto&& buf : bufs) {
-                            _bufs.emplace_back(std::move(buf));
-                        }
-                        return make_ready_future<>();
-                    }
-                    future<> flush() override {
-                        return make_ready_future<>();
-                    }
-                    future<> close() override {
-                        return make_ready_future<>();
-                    }
-                    size_t buffer_size() const noexcept override {
-                        return 128*1024;
-                    }
-                };
 
                 co_await seastar::async([&] {
+                    using buffer_data_sink_impl = seastar::util::basic_memory_data_sink<decltype(bufs), 128*1024>;
                     file_writer fw(data_sink(std::make_unique<buffer_data_sink_impl>(bufs)));
                     write(_sst->get_version(), fw, tmp);
                     fw.close();
