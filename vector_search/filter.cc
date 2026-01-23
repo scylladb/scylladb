@@ -66,153 +66,187 @@ void write_to_json(bytes_ostream& out, std::string_view s) {
     out.write(s.data(), s.size());
 }
 
-rjson::value lhs_to_json(const cql3::expr::column_value& col) {
-    return rjson::from_string(col.col->name_as_text());
+void write_lhs_json(bytes_ostream& out, const cql3::expr::column_value& col) {
+    write_to_json(out, "\"");
+    write_to_json(out, col.col->name_as_text());
+    write_to_json(out, "\"");
 }
 
-rjson::value lhs_to_json(const cql3::expr::tuple_constructor& lhs_tuple) {
-    auto arr = rjson::empty_array();
+void write_lhs_json(bytes_ostream& out, const cql3::expr::tuple_constructor& lhs_tuple) {
+    write_to_json(out, "[");
+    bool first = true;
     for (const auto& elem : lhs_tuple.elements) {
         if (auto* cv = cql3::expr::as_if<cql3::expr::column_value>(&elem)) {
-            rjson::push_back(arr, rjson::from_string(cv->col->name_as_text()));
+            if (!first) {
+                write_to_json(out, ",");
+            }
+            first = false;
+            write_lhs_json(out, *cv);
         }
     }
-    return arr;
+    write_to_json(out, "]");
 }
 
-prepared_restriction make_prepared_restriction(const sstring& op_str, rjson::value lhs_json, const cql3::expr::expression& rhs_expr) {
+void write_rhs_json(bytes_ostream& out, const cql3::expr::expression& rhs_expr, std::vector<bind_marker_metadata>& bind_markers) {
     auto rhs_type = cql3::expr::type_of(rhs_expr);
     if (cql3::expr::contains_bind_marker(rhs_expr)) {
-        return prepared_restriction{
-                .type_json = rjson::from_string(op_str), .lhs_json = std::move(lhs_json), .rhs = prepared_rhs{std::move(rhs_type), rhs_expr}};
+        bind_markers.push_back(bind_marker_metadata{out.size(), std::move(rhs_type), rhs_expr});
     } else {
         auto rhs_val = cql3::expr::evaluate(rhs_expr, cql3::query_options({}));
-        auto rhs_json = rjson::parse(value_to_json(rhs_type, rhs_val));
-        return prepared_restriction{.type_json = rjson::from_string(op_str), .lhs_json = std::move(lhs_json), .rhs = std::move(rhs_json)};
+        auto json_str = value_to_json(rhs_type, rhs_val);
+        write_to_json(out, json_str);
     }
 }
 
-void single_column_restriction_to_prepared(
-        const cql3::expr::binary_operator& binop, const cql3::expr::column_value& col, std::vector<prepared_restriction>& restrictions) {
+class json_array_builder {
+    bytes_ostream& _out;
+    bool _first = true;
+
+public:
+    explicit json_array_builder(bytes_ostream& out)
+        : _out(out) {
+    }
+
+    template <typename Func>
+    void add_element(Func&& write_func) {
+        if (!_first) {
+            write_to_json(_out, ",");
+        }
+        _first = false;
+        write_func(_out);
+    }
+};
+
+void write_restriction_json(bytes_ostream& out, const sstring& op_str, const cql3::expr::column_value& col, const cql3::expr::expression& rhs_expr,
+        std::vector<bind_marker_metadata>& bind_markers) {
+    write_to_json(out, R"({"type":")");
+    write_to_json(out, op_str);
+    write_to_json(out, R"(","lhs":)");
+    write_lhs_json(out, col);
+    write_to_json(out, R"(,"rhs":)");
+    write_rhs_json(out, rhs_expr, bind_markers);
+    write_to_json(out, "}");
+}
+
+void write_restriction_json(bytes_ostream& out, const sstring& op_str, const cql3::expr::tuple_constructor& lhs_tuple, const cql3::expr::expression& rhs_expr,
+        std::vector<bind_marker_metadata>& bind_markers) {
+    write_to_json(out, R"({"type":")");
+    write_to_json(out, op_str);
+    write_to_json(out, R"(","lhs":)");
+    write_lhs_json(out, lhs_tuple);
+    write_to_json(out, R"(,"rhs":)");
+    write_rhs_json(out, rhs_expr, bind_markers);
+    write_to_json(out, "}");
+}
+
+void single_column_restriction_to_json(const cql3::expr::binary_operator& binop, const cql3::expr::column_value& col,
+        std::vector<bind_marker_metadata>& bind_markers, json_array_builder& builder) {
     auto op_str = to_single_column_op_string(binop.op);
     if (!op_str) {
         throw exceptions::unsupported_operation_exception(sstring("Unsupported operator in restriction on column ") + col.col->name_as_text());
     }
 
-    restrictions.push_back(make_prepared_restriction(*op_str, lhs_to_json(col), binop.rhs));
+    builder.add_element([&](bytes_ostream& out) {
+        write_restriction_json(out, *op_str, col, binop.rhs, bind_markers);
+    });
 }
 
-void multi_column_restriction_to_prepared(
-        const cql3::expr::binary_operator& binop, const cql3::expr::tuple_constructor& lhs_tuple, std::vector<prepared_restriction>& restrictions) {
+void multi_column_restriction_to_json(const cql3::expr::binary_operator& binop, const cql3::expr::tuple_constructor& lhs_tuple,
+        std::vector<bind_marker_metadata>& bind_markers, json_array_builder& builder) {
     auto op_str = to_multi_column_op_string(binop.op);
     if (!op_str) {
         throw exceptions::unsupported_operation_exception(sstring("Unsupported operator in restriction on columns ") + to_string(lhs_tuple));
     }
 
-    restrictions.push_back(make_prepared_restriction(*op_str, lhs_to_json(lhs_tuple), binop.rhs));
+    builder.add_element([&](bytes_ostream& out) {
+        write_restriction_json(out, *op_str, lhs_tuple, binop.rhs, bind_markers);
+    });
 }
 
-void binary_operator_to_prepared(const cql3::expr::binary_operator& binop, std::vector<prepared_restriction>& restrictions) {
+void binary_operator_to_json(const cql3::expr::binary_operator& binop, std::vector<bind_marker_metadata>& bind_markers, json_array_builder& builder) {
     if (auto* cv = cql3::expr::as_if<cql3::expr::column_value>(&binop.lhs)) {
-        single_column_restriction_to_prepared(binop, *cv, restrictions);
+        single_column_restriction_to_json(binop, *cv, bind_markers, builder);
         return;
     }
 
     if (auto* tuple = cql3::expr::as_if<cql3::expr::tuple_constructor>(&binop.lhs)) {
-        multi_column_restriction_to_prepared(binop, *tuple, restrictions);
+        multi_column_restriction_to_json(binop, *tuple, bind_markers, builder);
         return;
     }
 }
 
-void expression_to_prepared(const cql3::expr::expression& expr, std::vector<prepared_restriction>& restrictions) {
+void expression_to_json(const cql3::expr::expression& expr, std::vector<bind_marker_metadata>& bind_markers, json_array_builder& builder) {
     cql3::expr::for_each_expression<cql3::expr::binary_operator>(expr, [&](const cql3::expr::binary_operator& binop) {
-        binary_operator_to_prepared(binop, restrictions);
+        binary_operator_to_json(binop, bind_markers, builder);
     });
 }
 
-void restriction_to_json(bytes_ostream& out, const prepared_restriction& r, const cql3::query_options& options) {
-    write_to_json(out, R"({"type":)");
-    write_to_json(out, rjson::print(r.type_json));
-    write_to_json(out, R"(,"lhs":)");
-    write_to_json(out, rjson::print(r.lhs_json));
-    write_to_json(out, R"(,"rhs":)");
-    write_to_json(out, rjson::print(r.rhs_to_json(options)));
-    write_to_json(out, "}");
-}
+bytes_ostream substitute_bind_markers(
+        const bytes_ostream& cached_json, const std::vector<bind_marker_metadata>& bind_markers, const cql3::query_options& options) {
+    auto frag = cached_json.begin();
+    ser::buffer_view<bytes_ostream::fragment_iterator> view(*frag, cached_json.size(), std::next(frag));
 
-void restrictions_to_json(bytes_ostream& out, const std::vector<prepared_restriction>& restrictions, bool allow_filtering, const cql3::query_options& options) {
-    if (restrictions.empty() && !allow_filtering) {
-        return;
-    }
+    bytes_ostream result;
+    size_t current_offset = 0;
 
-    write_to_json(out, R"({"restrictions":[)");
-
-    bool first = true;
-    for (const auto& r : restrictions) {
-        if (!first) {
-            write_to_json(out, ",");
+    for (const auto& marker : bind_markers) {
+        // Copy bytes from current_offset to marker.offset
+        if (marker.offset > current_offset) {
+            auto prefix = view.prefix(marker.offset - current_offset);
+            for (bytes_view frag : prefix) {
+                result.write(frag);
+            }
+            view.remove_prefix(marker.offset - current_offset);
         }
-        first = false;
-        restriction_to_json(out, r, options);
+
+        // Write the bind marker value
+        auto val = cql3::expr::evaluate(marker.expr, options);
+        auto json_str = value_to_json(marker.type, val);
+        result.write(json_str.data(), json_str.size());
+
+        current_offset = marker.offset;
     }
 
-    write_to_json(out, R"(],"allow_filtering":)");
-    write_to_json(out, allow_filtering ? "true" : "false");
-    write_to_json(out, "}");
+    // Copy remaining bytes after last bind marker
+    for (bytes_view frag : view) {
+        result.write(frag);
+    }
+
+    return result;
 }
 
 } // anonymous namespace
 
-rjson::value prepared_restriction::rhs_to_json(const cql3::query_options& options) const {
-    return std::visit(
-            [&](const auto& v) -> rjson::value {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, rjson::value>) {
-                    return rjson::copy(v);
-                } else {
-                    const auto& [type, expr] = v;
-                    auto val = cql3::expr::evaluate(expr, options);
-                    return rjson::parse(value_to_json(type, val));
-                }
-            },
-            rhs);
-}
-
 bytes_ostream prepared_filter::to_json(const cql3::query_options& options) const {
-    bytes_ostream out;
-
-    if (_cached_json) {
-        write_to_json(out, rjson::print(_cached_json.value()));
-        return out;
+    if (_bind_markers.empty()) {
+        return _cached_json;
     }
 
-    restrictions_to_json(out, _restrictions, _allow_filtering, options);
-    return out;
+    return substitute_bind_markers(_cached_json, _bind_markers, options);
 }
 
 prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions& restrictions, bool allow_filtering) {
-    if (restrictions.is_empty()) {
-        return prepared_filter({}, allow_filtering);
-    }
+    bytes_ostream out;
+    std::vector<bind_marker_metadata> bind_markers;
 
-    std::vector<prepared_restriction> prepared_restrictions;
+    if (restrictions.is_empty() && !allow_filtering) {
+        return prepared_filter(std::move(out), std::move(bind_markers));
+    }
 
     auto& partition_key_restrictions = restrictions.get_partition_key_restrictions();
     auto& clustering_columns_restrictions = restrictions.get_clustering_columns_restrictions();
 
-    expression_to_prepared(partition_key_restrictions, prepared_restrictions);
-    expression_to_prepared(clustering_columns_restrictions, prepared_restrictions);
+    write_to_json(out, R"({"restrictions":[)");
 
-    bool has_bind_markers = cql3::expr::contains_bind_marker(partition_key_restrictions) || cql3::expr::contains_bind_marker(clustering_columns_restrictions);
+    json_array_builder builder(out);
+    expression_to_json(partition_key_restrictions, bind_markers, builder);
+    expression_to_json(clustering_columns_restrictions, bind_markers, builder);
 
-    if (!has_bind_markers) {
-        bytes_ostream cached_out;
-        restrictions_to_json(cached_out, prepared_restrictions, allow_filtering, cql3::query_options({}));
-        auto cached_json = rjson::parse(sstring(to_string_view(cached_out.linearize())));
-        return prepared_filter(std::move(prepared_restrictions), allow_filtering, std::move(cached_json));
-    }
+    write_to_json(out, R"(],"allow_filtering":)");
+    write_to_json(out, allow_filtering ? "true" : "false");
+    write_to_json(out, "}");
 
-    return prepared_filter(std::move(prepared_restrictions), allow_filtering);
+    return prepared_filter(std::move(out), std::move(bind_markers));
 }
 
 } // namespace vector_search

@@ -9,7 +9,6 @@
 #pragma once
 
 #include "bytes_ostream.hh"
-#include "utils/rjson.hh"
 #include "cql3/expr/expression.hh"
 
 namespace cql3 {
@@ -25,33 +24,27 @@ class statement_restrictions;
 
 namespace vector_search {
 
-struct prepared_rhs {
+/// Metadata for a bind marker in the cached JSON template.
+/// Contains the byte offset in the cached JSON where the value should be inserted,
+/// along with the type and expression needed to evaluate the bind marker at execution time.
+struct bind_marker_metadata {
+    size_t offset;
     data_type type;
     cql3::expr::expression expr;
 };
 
-struct prepared_restriction {
-    rjson::value type_json;
-    rjson::value lhs_json;
-    std::variant<rjson::value, prepared_rhs> rhs;
-
-    rjson::value rhs_to_json(const cql3::query_options& options) const;
-};
-
 class prepared_filter {
-    std::vector<prepared_restriction> _restrictions;
-    bool _allow_filtering;
-    // Cached JSON representation for filters without bind markers.
-    std::optional<rjson::value> _cached_json;
+    bytes_ostream _cached_json;
+    std::vector<bind_marker_metadata> _bind_markers;
 
 public:
-    prepared_filter(std::vector<prepared_restriction> restrictions, bool allow_filtering, std::optional<rjson::value> cached_json = std::nullopt)
-        : _restrictions(std::move(restrictions))
-        , _allow_filtering(allow_filtering)
-        , _cached_json(std::move(cached_json)) {
+    prepared_filter(bytes_ostream cached_json, std::vector<bind_marker_metadata> bind_markers)
+        : _cached_json(std::move(cached_json))
+        , _bind_markers(std::move(bind_markers)) {
     }
 
     /// Serializes the prepared filter to a JSON buffer compatible with the Vector Store service filtering API.
+    /// Bind marker placeholders in the cached template are substituted with actual values from `query_options`.
     /// Returns a bytes_ostream that can be efficiently consumed without materialization.
     bytes_ostream to_json(const cql3::query_options& options) const;
 };
