@@ -840,8 +840,6 @@ async def test_lwt_shutdown(manager: ManagerClient):
     This is a regression test for #26355:
     * Start a cluster with two nodes (s0, s1) and a tablet-based table.
     * Inject `paxos_state_learn_after_mutate` on s0 for this table.
-    * Inject `storage_proxy::stop` on s0 to ensure that s0 shutdown does not
-      complete before the LWT write on s0 finishes.
     * Execute an LWT with `cl_learn=1` on s0 and wait for it to succeed.
       This LWT leaves a background write to s0 storage.
     * Begin s0 shutdown and wait until it reaches “storage proxy RPC verbs”,
@@ -877,17 +875,13 @@ async def test_lwt_shutdown(manager: ManagerClient):
         logger.info("Wait for 'paxos_state_learn_after_mutate' injection")
         await log.wait_for('paxos_state_learn_after_mutate: waiting for message')
 
-        logger.info(f"Enable 'storage_proxy::stop' injection on {s0.ip_addr}")
-        await manager.api.enable_injection(s0.ip_addr, 'storage_proxy::stop', True)
-
         logger.info("Start node shutdown")
         stop_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
         await log.wait_for('Shutting down storage proxy RPC verbs')
-        # assert len(await log.grep('Shutting down paxos store')) == 0
+        assert len(await log.grep('Shutting down paxos store')) == 0
 
-        logger.info("Trigger storage_proxy::stop and database_apply_wait")
+        logger.info("Trigger paxos_state_learn_after_mutate")
         await manager.api.message_injection(s0.ip_addr, "paxos_state_learn_after_mutate")
-        await manager.api.message_injection(s0.ip_addr, 'storage_proxy::stop')
 
         logger.info("Waiting for paxos store shutdown")
         await log.wait_for('Shutting down paxos store')

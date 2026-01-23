@@ -833,7 +833,6 @@ public:
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true, cdc::per_request_options cdc_opts = {});
 
-    future<> stop();
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
     future<> drain_hints_for_left_nodes();
