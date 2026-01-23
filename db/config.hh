@@ -598,6 +598,15 @@ public:
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
 
+    
+    named_value<double> background_writer_scheduling_quota;
+    named_value<bool> auto_adjust_flush_quota;
+    named_value<float> memtable_flush_static_shares;
+    named_value<float> compaction_static_shares;
+    named_value<float> compaction_max_shares;
+    named_value<bool> compaction_enforce_min_threshold;
+    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
@@ -622,15 +631,6 @@ private:
     void maybe_in_workdir(named_value<string_list>&, const char*);
 
     std::shared_ptr<db::extensions> _extensions;
-
-    named_value<double> background_writer_scheduling_quota;
-    named_value<bool> auto_adjust_flush_quota;
-    named_value<float> memtable_flush_static_shares;
-    named_value<float> compaction_static_shares;
-    named_value<float> compaction_max_shares;
-    named_value<bool> compaction_enforce_min_threshold;
-    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
-
 };
 
 }
