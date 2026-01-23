@@ -1261,6 +1261,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     future<std::optional<group0_guard>> maybe_schedule_auto_rf_change(group0_guard guard) {
+        if (utils::get_local_injector().enter("skip_auto_rf_change")) {
+            rtlogger.debug("Injection point skip_auto_rf_change enabled, skipping auto RF change check");
+            co_return std::move(guard);
+        }
         if (!_feature_service.rack_list_rf) {
             rtlogger.debug("rack_list_rf feature is disabled, skipping auto RF change check");
             co_return std::move(guard);
