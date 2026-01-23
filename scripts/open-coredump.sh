@@ -20,7 +20,7 @@ set -e
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
 SCRIPT_NAME=$(basename $0)
-SCYLLA_S3_RELOC_SERVER_DEFAULT_URL=http://backtrace.scylladb.com
+SCYLLA_S3_RELOC_SERVER_DEFAULT_URL=https://api.backtrace.scylladb.com
 
 function print_usage {
 cat << EOF
@@ -284,7 +284,8 @@ then
 
     log "Build id: ${BUILD_ID}"
 
-    BUILD=$(curl -s -X GET "${SCYLLA_S3_RELOC_SERVER_URL}/build.json?build_id=${BUILD_ID}")
+    # https://api.backtrace.scylladb.com/api/docs#/default/search_by_build_id_search_build_id_get
+    BUILD=$(curl "${SCYLLA_S3_RELOC_SERVER_URL}/api/search/build_id?build_id=${BUILD_ID}" -H 'accept: application/json')
 
     if [[ -z "$BUILD" ]]
     then
@@ -293,12 +294,16 @@ then
     fi
 
     RESPONSE_BUILD_ID=$(get_json_field "$BUILD" "build_id")
-    VERSION=$(get_json_field "$BUILD" "version")
-    PRODUCT=$(get_json_field "$BUILD" "product")
-    RELEASE=$(get_json_field "$BUILD" "release")
-    ARCH=$(get_json_field "$BUILD" "arch")
-    BUILD_MODE=$(get_json_field "$BUILD" "build_mode")
-    PACKAGE_URL=$(get_json_field "$BUILD" "package_url" 1)
+    BUILD_MODE=$(get_json_field "$BUILD" "build_type")
+    PACKAGE_URL=$(get_json_field "$BUILD" "unstripped_url")
+    BUILD_DATA=$(get_json_field "$BUILD" "build_data")
+
+    VERSION=$(get_json_field "$BUILD_DATA" "version")
+    PRODUCT=$(get_json_field "$BUILD_DATA" "product")
+    RELEASE=$(get_json_field "$BUILD_DATA" "release")
+    ARCH=$(get_json_field "$BUILD_DATA" "platform")
+    TIMESTAMP=$(get_json_field "$BUILD_DATA" "timestamp")
+
 
     if [[ "$RESPONSE_BUILD_ID" != "$BUILD_ID" ]]
     then
@@ -306,7 +311,7 @@ then
         exit 1
     fi
 
-    log "Matching build is ${PRODUCT}-${VERSION} ${RELEASE} ${BUILD_MODE}-${ARCH}"
+    log "Matching build is ${PRODUCT}-${VERSION} ${RELEASE} ${BUILD_MODE}-${ARCH} from ${TIMESTAMP}"
 fi
 
 if ! [[ -d ${ARTIFACT_DIR}/scylla.package ]]
