@@ -148,6 +148,8 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     }
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
+    co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(10s));
+  while (true) {
     co_await _ss._topology_state_machine.event.wait([&] {
         auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
         if (is_resize_task(task_type)) {    // Resize task.
@@ -155,11 +157,25 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
         } else if (tablet_id_opt.has_value()) {    // Migration task.
             return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
         } else {    // Repair task.
-            return std::all_of(res->tablets.begin(), res->tablets.end(), [&] (const locator::tablet_id& tablet) {
-                return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
-            });
+            return true;
         }
     });
+
+    if (!is_repair_task(task_type)) {
+        break;
+    }
+
+    auto tmptr = _ss.get_token_metadata_ptr();
+    auto& tmap = tmptr->tablets().get_tablet_map(table);
+    bool repair_still_running = false;
+    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
+        repair_still_running = repair_still_running || (info.repair_task_info.is_valid() && info.repair_task_info.tablet_task_id.uuid() == id.uuid());
+        return make_ready_future();
+    });
+    if (!repair_still_running) {
+        break;
+    }
+  }
 
     res->status.state = tasks::task_manager::task_state::done; // Failed repair task is retried.
     if (is_migration_task(task_type)) {
