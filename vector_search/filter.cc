@@ -55,12 +55,15 @@ std::optional<sstring> to_multi_column_op_string(cql3::expr::oper_t op) {
     }
 }
 
-rjson::value value_to_json(const data_type& type, const cql3::raw_value& val) {
+sstring value_to_json(const data_type& type, const cql3::raw_value& val) {
     if (val.is_null()) {
-        return rjson::null_value();
+        return "null";
     }
-    auto json_str = to_json_string(*type, to_bytes(val.view()));
-    return rjson::parse(json_str);
+    return to_json_string(*type, to_bytes(val.view()));
+}
+
+void write_to_json(bytes_ostream& out, std::string_view s) {
+    out.write(s.data(), s.size());
 }
 
 rjson::value lhs_to_json(const cql3::expr::column_value& col) {
@@ -84,7 +87,8 @@ prepared_restriction make_prepared_restriction(const sstring& op_str, rjson::val
                 .type_json = rjson::from_string(op_str), .lhs_json = std::move(lhs_json), .rhs = prepared_rhs{std::move(rhs_type), rhs_expr}};
     } else {
         auto rhs_val = cql3::expr::evaluate(rhs_expr, cql3::query_options({}));
-        return prepared_restriction{.type_json = rjson::from_string(op_str), .lhs_json = std::move(lhs_json), .rhs = value_to_json(rhs_type, rhs_val)};
+        auto rhs_json = rjson::parse(value_to_json(rhs_type, rhs_val));
+        return prepared_restriction{.type_json = rjson::from_string(op_str), .lhs_json = std::move(lhs_json), .rhs = std::move(rhs_json)};
     }
 }
 
@@ -126,30 +130,35 @@ void expression_to_prepared(const cql3::expr::expression& expr, std::vector<prep
     });
 }
 
-rjson::value restriction_to_json(const prepared_restriction& r, const cql3::query_options& options) {
-    auto obj = rjson::empty_object();
-    rjson::add(obj, "type", rjson::copy(r.type_json));
-    rjson::add(obj, "lhs", rjson::copy(r.lhs_json));
-    rjson::add(obj, "rhs", r.rhs_to_json(options));
-    return obj;
+void restriction_to_json(bytes_ostream& out, const prepared_restriction& r, const cql3::query_options& options) {
+    write_to_json(out, "{\"type\":");
+    write_to_json(out, rjson::print(r.type_json));
+    write_to_json(out, ",\"lhs\":");
+    write_to_json(out, rjson::print(r.lhs_json));
+    write_to_json(out, ",\"rhs\":");
+    write_to_json(out, rjson::print(r.rhs_to_json(options)));
+    write_to_json(out, "}");
 }
 
-rjson::value restrictions_to_json(const std::vector<prepared_restriction>& restrictions, bool allow_filtering, const cql3::query_options& options) {
-    auto result = rjson::empty_object();
-
+void restrictions_to_json(bytes_ostream& out, const std::vector<prepared_restriction>& restrictions, bool allow_filtering, const cql3::query_options& options) {
     if (restrictions.empty() && !allow_filtering) {
-        return result;
+        return;
     }
 
-    auto restrictions_arr = rjson::empty_array();
+    write_to_json(out, "{\"restrictions\":[");
+
+    bool first = true;
     for (const auto& r : restrictions) {
-        rjson::push_back(restrictions_arr, restriction_to_json(r, options));
+        if (!first) {
+            write_to_json(out, ",");
+        }
+        first = false;
+        restriction_to_json(out, r, options);
     }
 
-    rjson::add(result, "restrictions", std::move(restrictions_arr));
-    rjson::add(result, "allow_filtering", rjson::value(allow_filtering));
-
-    return result;
+    write_to_json(out, "],\"allow_filtering\":");
+    write_to_json(out, allow_filtering ? "true" : "false");
+    write_to_json(out, "}");
 }
 
 } // anonymous namespace
@@ -163,18 +172,22 @@ rjson::value prepared_restriction::rhs_to_json(const cql3::query_options& option
                 } else {
                     const auto& [type, expr] = v;
                     auto val = cql3::expr::evaluate(expr, options);
-                    return value_to_json(type, val);
+                    return rjson::parse(value_to_json(type, val));
                 }
             },
             rhs);
 }
 
-rjson::value prepared_filter::to_json(const cql3::query_options& options) const {
+bytes_ostream prepared_filter::to_json(const cql3::query_options& options) const {
+    bytes_ostream out;
+
     if (_cached_json) {
-        return rjson::copy(_cached_json.value());
+        write_to_json(out, rjson::print(_cached_json.value()));
+        return out;
     }
 
-    return restrictions_to_json(_restrictions, _allow_filtering, options);
+    restrictions_to_json(out, _restrictions, _allow_filtering, options);
+    return out;
 }
 
 prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions& restrictions, bool allow_filtering) {
@@ -193,7 +206,9 @@ prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions&
     bool has_bind_markers = cql3::expr::contains_bind_marker(partition_key_restrictions) || cql3::expr::contains_bind_marker(clustering_columns_restrictions);
 
     if (!has_bind_markers) {
-        auto cached_json = restrictions_to_json(prepared_restrictions, allow_filtering, cql3::query_options({}));
+        bytes_ostream cached_out;
+        restrictions_to_json(cached_out, prepared_restrictions, allow_filtering, cql3::query_options({}));
+        auto cached_json = rjson::parse(sstring(to_string_view(cached_out.linearize())));
         return prepared_filter(std::move(prepared_restrictions), allow_filtering, std::move(cached_json));
     }
 

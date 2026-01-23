@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "bytes_ostream.hh"
 #include "utils/rjson.hh"
 #include "cql3/expr/expression.hh"
 
@@ -50,8 +51,9 @@ public:
         , _cached_json(std::move(cached_json)) {
     }
 
-    /// Serializes the prepared filter to JSON compatible with the Vector Store service filtering API.
-    rjson::value to_json(const cql3::query_options& options) const;
+    /// Serializes the prepared filter to a JSON buffer compatible with the Vector Store service filtering API.
+    /// Returns a bytes_ostream that can be efficiently consumed without materialization.
+    bytes_ostream to_json(const cql3::query_options& options) const;
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
