@@ -1549,7 +1549,11 @@ void reader_concurrency_semaphore::dequeue_permit(reader_permit::impl& permit) {
         case reader_permit::state::waiting_for_admission:
         case reader_permit::state::waiting_for_memory:
         case reader_permit::state::waiting_for_execution:
-            --_stats.waiters;
+            if (_stats.waiters > 0) {
+                --_stats.waiters;
+            } else {
+                on_internal_error_noexcept(rcslog, "reader_concurrency_semaphore::dequeue_permit(): invalid state: no waiters yet dequeueing a waiting permit");
+            }
             break;
         case reader_permit::state::inactive:
         case reader_permit::state::evicted:
