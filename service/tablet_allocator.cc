@@ -908,6 +908,7 @@ class load_balancer {
     size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
     size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
     uint64_t _total_capacity_storage; // Total storage of non-drained nodes in the balanced node set.
+    size_t _migrating_candidates; // Number of candidate replicas skipped because tablet is migrating.
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -3398,7 +3399,13 @@ public:
             // If there are 7 tablets and RF=3, each node must have 1 tablet replica.
             // So node3 will have average load of 1, and node1 and node2 will have
             // average shard load of 7.
-            lblogger.info("Not possible to achieve balance in {}", _location);
+
+            // Show when this is the final plan with no active migrations left to execute,
+            // otherwise it may just be a temporary situation due to lack of candidates.
+            if (_migrating_candidates == 0) {
+                lblogger.info("Not possible to achieve balance in {}", _location);
+                print_node_stats(nodes, only_active::no);
+            }
         }
 
         co_return std::move(plan);
@@ -3485,6 +3492,7 @@ public:
         _location = fmt::format("{}{}", dc, rack ? fmt::format("/{}", *rack) : "");
         _current_stats = _stats.for_dc(dc);
         auto _ = seastar::defer([&] { _current_stats = nullptr; });
+        _migrating_candidates = 0;
 
         auto node_filter = [&] (const locator::node& node) {
             return node.dc_rack().dc == dc && (!rack || node.dc_rack().rack == *rack);
@@ -3764,6 +3772,8 @@ public:
                         if (!migrating(t1) && !migrating(t2)) {
                             auto candidate = colocated_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
                             add_candidate(shard_load_info, migration_tablet_set{std::move(candidate), tablet_sizes_sum});
+                        } else {
+                            _migrating_candidates++;
                         }
                     } else {
                         if (tids.size() != tablet_sizes.size()) {
@@ -3772,6 +3782,8 @@ public:
                         for (size_t i = 0; i < tids.size(); i++) {
                             if (!migrating(get_table_desc(tids[i]))) { // migrating tablets are not candidates
                                 add_candidate(shard_load_info, migration_tablet_set{global_tablet_id{table, tids[i]}, tablet_sizes[i]});
+                            } else {
+                                _migrating_candidates++;
                             }
                         }
                     }
