@@ -3473,8 +3473,8 @@ public:
                 write += shard_load.streaming_write_load;
             }
             auto level = !only_active_ || (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
-                                " stream_read={} stream_write={}",
+            lblogger.log(level, "Node {}: {}/{} load={:.6f} tablets={} shards={} tablets/shard={:.3f} state={} cap={}"
+                                " rd={} wr={}",
                          host, load.dc(), load.rack(), load.avg_load, load.tablet_count, load.shard_count,
                          load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
         }
