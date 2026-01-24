@@ -3620,14 +3620,22 @@ public:
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
         if (nodes_to_drain.empty()) {
+            std::optional<host_id> incomplete_host;
+            size_t incomplete_count = 0;
+
             for (auto nodes_i = nodes.begin(); nodes_i != nodes.end();) {
                 host_id host = nodes_i->first;
                 if (!_load_sketch->has_complete_data(host)) {
-                    lblogger.info("Node {} does not have complete tablet stats, ignoring", nodes_i->first);
+                    incomplete_host.emplace(host);
+                    incomplete_count++;
                     nodes_i = nodes.erase(nodes_i);
                 } else {
                     ++nodes_i;
                 }
+            }
+
+            if (incomplete_host) {
+                lblogger.info("Ignoring {} node(s) with incomplete tablet stats, e.g. {}", incomplete_count, *incomplete_host);
             }
         }
 
