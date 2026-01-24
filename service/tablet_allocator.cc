@@ -3455,6 +3455,24 @@ public:
         }
     };
 
+    using only_active = bool_class<struct only_active_tag>;
+
+    void print_node_stats(node_load_map& nodes, only_active only_active_) {
+        for (auto&& [host, load] : nodes) {
+            size_t read = 0;
+            size_t write = 0;
+            for (auto& shard_load : load.shards) {
+                read += shard_load.streaming_read_load;
+                write += shard_load.streaming_write_load;
+            }
+            auto level = !only_active_ || (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
+                                " stream_read={} stream_write={}",
+                         host, load.dc(), load.rack(), load.avg_load, load.tablet_count, load.shard_count,
+                         load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
+        }
+    }
+
     future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt) {
         migration_plan plan;
 
@@ -3791,19 +3809,7 @@ public:
             }
         }
 
-        for (auto&& [host, load] : nodes) {
-            size_t read = 0;
-            size_t write = 0;
-            for (auto& shard_load : load.shards) {
-                read += shard_load.streaming_read_load;
-                write += shard_load.streaming_write_load;
-            }
-            auto level = (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
-                                " stream_read={} stream_write={}",
-                         host, dc, load.rack(), load.avg_load, load.tablet_count, load.shard_count,
-                         load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
-        }
+        print_node_stats(nodes, only_active::yes);
 
         if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || !is_balanced(min_load, max_load)))) {
             host_id target = *min_load_node;
