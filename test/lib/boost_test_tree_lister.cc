@@ -11,6 +11,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <fmt/ranges.h>
 
+#include <flat_set>
 #include <memory>
 #include <ranges>
 
@@ -232,7 +233,13 @@ public:
         test_file_info& test_file = get_file_info(filename);
 
         std::string test_name = tc.p_name;
-        std::vector<label_info> labels = tc.p_labels.get();
+
+        // Boost.Test duplicates the labels for some reason when we
+        // traverse the tree from within a global fixture. This
+        // is an ugly workaround until we find out a cleaner solution.
+        auto labels = tc.p_labels.get()
+                | std::ranges::to<std::flat_set<label_info>>()
+                | std::ranges::to<std::vector<label_info>>();
 
         test_case_info test_info {.name = std::move(test_name), .labels = std::move(labels)};
 
@@ -264,6 +271,23 @@ public:
         if (ts.p_parent_id == boost::unit_test::INV_TEST_UNIT_ID) {
             assert(active_suites.empty());
             return;
+        }
+
+        // If the suite doesn't have any children, that indicates one of
+        // the following:
+        //
+        // * This suite represents an actual test suite that doesn't contain
+        //   any tests.
+        // * This suite corresponds to a test file that was compiled into
+        //   the `test/boost/combined_tests` binary. In that case, the test
+        //   file was empty, i.e. it didn't contain any suites or tests.
+        //
+        // In either situation, we still want to record the information that
+        // the file/suite exists (e.g. to be able to tell if the file the user
+        // wants to run even exists).
+        if (ts.size() == 0) {
+            const std::string_view filename = {ts.p_file_name.begin(), ts.p_file_name.end()};
+            (void) get_active_suite(filename);
         }
 
         drop_active_suite();
