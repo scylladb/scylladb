@@ -1239,7 +1239,7 @@ def testInsertWithCompactStorageAndTwoClusteringColumns(cql, test_keyspace, forc
 # Test for CAS with compact storage table, and CASSANDRA-6813 in particular,
 # migrated from cql_tests.py:TestCQL.cas_and_compact_test()
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def testCompactStorage(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(partition text, key text, owner text, PRIMARY KEY (partition, key)) WITH COMPACT STORAGE") as table:
