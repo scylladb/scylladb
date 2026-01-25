@@ -1042,6 +1042,7 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statemen
         std::vector<alter_table_statement::column_change> column_changes;
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
         auto attrs = std::make_unique<cql3::attributes::raw>();
+        shared_ptr<cql3::column_identifier::raw> ttl_change;
     }
     : K_ALTER K_COLUMNFAMILY cf=columnFamilyName
           ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; column_changes.emplace_back(alter_table_statement::column_change{id, v}); }
@@ -1060,9 +1061,11 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statemen
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
+          | K_TTL                                     { type = alter_table_statement::type::ttl; }
+               ( id=cident { ttl_change = id; } | K_NULL )
           )
     {
-        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames), std::move(attrs));
+        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames), std::move(attrs), std::move(ttl_change));
     }
     ;
 
