@@ -386,6 +386,21 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
         }
         invoke_column_change_fn(std::mem_fn(&alter_table_statement::drop_column));
+
+        // If we dropped the column used for per-row TTL, we need to remove the tag.
+        if (std::optional<std::string> ttl_column = db::find_tag(*s, TTL_TAG_KEY)) {
+            for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
+                if (*ttl_column == raw_name->text()) {
+                    const std::map<sstring, sstring>* tags_ptr = db::get_tags_of_table(s);
+                    if (tags_ptr) {
+                        std::map<sstring, sstring> tags_map = *tags_ptr;
+                        tags_map.erase(TTL_TAG_KEY);
+                        cfm.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags_map)));
+                    }
+                    break;
+                }
+            }
+        }
         break;
 
     case alter_table_statement::type::opts:
