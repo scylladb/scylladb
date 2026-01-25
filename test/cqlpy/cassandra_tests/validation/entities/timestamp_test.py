@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ...porting import *
+from ....util import keyspace_has_tablets
 
 import time
 from cassandra.query import UNSET_VALUE
@@ -59,7 +60,7 @@ def testTimestampTTL(cql, test_keyspace):
 
 # Migrated from cql_tests.py:TestCQL.invalid_custom_timestamp_test()
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def testInvalidCustomTimestamp(cql, test_keyspace):
     # Conditional updates
@@ -80,6 +81,9 @@ def testInvalidCustomTimestamp(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, v) VALUES(1, 0) IF NOT EXISTS")
         assert_invalid(cql, table, "INSERT INTO %s (k, v) VALUES(1, 1) IF NOT EXISTS USING TIMESTAMP 5")
     # Counters
+    if keyspace_has_tablets(cql, test_keyspace):
+        # counters are not supported with tablets"
+        return
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, c counter)") as table:
         execute(cql, table, "UPDATE %s SET c = c + 1 WHERE k = 0")
         assert_invalid(cql, table, "UPDATE %s USING TIMESTAMP 10 SET c = c + 1 WHERE k = 0")
