@@ -201,12 +201,9 @@ def test_unset_insert_where(cql, table2):
 # NOT EXISTS"). Test that using an UNSET_VALUE in an LWT condition causes
 # a clear error, not silent skip and not a crash as in issue #13001.
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
-def test_unset_insert_where_lwt(cql, test_keyspace):
-  # FIXME: new_test_table is used here due to https://github.com/scylladb/scylladb/issues/18066
-  # When fixed, this test can go back to using the `table2` fixture.
-  with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY (p, c)") as table2:
+def test_unset_insert_where_lwt(cql, table2):
     p = unique_key_int()
     stmt = cql.prepare(f'INSERT INTO {table2} (p, c) VALUES ({p}, ?) IF NOT EXISTS')
     with pytest.raises(InvalidRequest, match="unset"):
@@ -225,12 +222,9 @@ def test_unset_update_where(cql, table3):
 # Python driver doesn't allow sending an UNSET_VALUE for the partition key,
 # so only the clustering key is tested.
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
-def test_unset_update_where_lwt(cql, test_keyspace):
-  # FIXME: new_test_table is used here due to https://github.com/scylladb/scylladb/issues/18066
-  # When fixed, this test can go back to using the `table3` fixture.
-  with new_test_table(cql, test_keyspace, "p int, c int, r int, PRIMARY KEY (p, c)") as table3:
+def test_unset_update_where_lwt(cql, table3):
     stmt = cql.prepare(f"UPDATE {table3} SET r = 42 WHERE p = 0 AND c = ? IF r = ?")
 
     with pytest.raises(InvalidRequest, match="unset"):
