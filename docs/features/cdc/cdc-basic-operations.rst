@@ -10,6 +10,11 @@ The CDC log table reflects operations that are performed on the base table. Diff
 * row range deletions,
 * partition deletions.
 
+Note that TTL expirations are not operations, and not reflected in the CDC
+log tables. If you do need CDC events when entire rows expire, consider
+using `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+which does generate special CDC events when rows expire.
+
 The following sections describe how each of these operations are handled by the CDC log.
 
 .. include:: /features/cdc/_common/cdc-updates.rst
