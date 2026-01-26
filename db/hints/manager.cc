@@ -142,7 +142,7 @@ future<> directory_initializer::ensure_rebalanced() {
 }
 
 manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
-        resource_manager& res_manager, sharded<replica::database>& db)
+        resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg)
     : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
     , _proxy(proxy)
@@ -150,6 +150,7 @@ manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_fi
     , _local_db(db.local())
     , _draining_eps_gate(seastar::format("hints::manager::{}", _hints_dir.native()))
     , _resource_manager(res_manager)
+    , _hints_sending_sched_group(sg)
 {
     if (utils::get_local_injector().enter("decrease_hints_flush_period")) {
         hints_flush_period = std::chrono::seconds{1};
@@ -415,7 +416,7 @@ hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const
 
     try {
         std::filesystem::path hint_directory = hints_dir() / (_uses_host_id ? fmt::to_string(host_id) : fmt::to_string(ip));
-        auto [it, _] = _ep_managers.emplace(host_id, hint_endpoint_manager{host_id, std::move(hint_directory), *this});
+        auto [it, _] = _ep_managers.emplace(host_id, hint_endpoint_manager{host_id, std::move(hint_directory), *this, _hints_sending_sched_group});
         hint_endpoint_manager& ep_man = it->second;
 
         manager_logger.trace("Created an endpoint manager for {}", host_id);

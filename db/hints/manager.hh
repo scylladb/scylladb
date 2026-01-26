@@ -133,6 +133,7 @@ private:
 
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
+    scheduling_group _hints_sending_sched_group;
 
     // We need to keep a variant here. Before migrating hinted handoff to using host ID, hint directories will
     // still represent IP addresses. But after the migration, they will start representing host IDs.
@@ -155,7 +156,7 @@ private:
 
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
-            int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
+            int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg);
 
     manager(const manager&) = delete;
     manager& operator=(const manager&) = delete;
