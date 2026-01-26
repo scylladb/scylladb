@@ -239,8 +239,13 @@ private:
                 _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
                 break;
             case state::evicted:
+            case state::preemptive_aborted:
                 break;
         }
+
+        // The function call not only sets state to reader_permit::state::preemptive_aborted
+        // but also correctly decreases the statistics i.e. need_cpu_permits and awaits_permits.
+        on_permit_inactive(reader_permit::state::preemptive_aborted);
     }
 
 public:
@@ -358,6 +363,17 @@ public:
 
     void on_executing() {
         on_permit_active();
+    }
+
+    void on_preemptive_aborted() {
+        if (_state != reader_permit::state::waiting_for_admission && _state != reader_permit::state::waiting_for_memory) {
+            on_internal_error(rcslog, format("on_preemptive_aborted(): permit in invalid state {}", _state));
+        }
+
+        _ttl_timer.cancel();
+        _state = reader_permit::state::preemptive_aborted;
+        _aux_data.pr.set_exception(named_semaphore_aborted(_semaphore._name));
+        _semaphore.on_permit_preemptive_aborted();
     }
 
     void on_register_as_inactive() {
@@ -688,6 +704,9 @@ auto fmt::formatter<reader_permit::state>::format(reader_permit::state s, fmt::f
             break;
         case reader_permit::state::evicted:
             name = "evicted";
+            break;
+        case reader_permit::state::preemptive_aborted:
+            name = "preemptive_aborted";
             break;
     }
     return formatter<string_view>::format(name, ctx);
@@ -1562,10 +1581,15 @@ void reader_concurrency_semaphore::dequeue_permit(reader_permit::impl& permit) {
         case reader_permit::state::active:
         case reader_permit::state::active_need_cpu:
         case reader_permit::state::active_await:
+        case reader_permit::state::preemptive_aborted:
             on_internal_error_noexcept(rcslog, format("reader_concurrency_semaphore::dequeue_permit(): unrecognized queued state: {}", permit.get_state()));
     }
     permit.unlink();
     _permit_list.push_back(permit);
+}
+
+void reader_concurrency_semaphore::on_permit_preemptive_aborted() noexcept {
+    ++_stats.total_reads_shed_due_to_overload;
 }
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
