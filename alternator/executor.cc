@@ -2815,32 +2815,34 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         .alternator = true,
         .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
-    if (needs_read_before_write) {
-        if (_write_isolation == write_isolation::FORBID_RMW) {
-            throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
-        }
-        global_stats.reads_before_write++;
-        per_table_stats.reads_before_write++;
-        if (_write_isolation == write_isolation::UNSAFE_RMW) {
-            // This is the old, unsafe, read before write which does first
-            // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
-                if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
-                }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+    if (!cdc_opts.alternator_streams_increased_compatibility) {
+        if (needs_read_before_write) {
+            if (_write_isolation == write_isolation::FORBID_RMW) {
+                throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
+            }
+            global_stats.reads_before_write++;
+            per_table_stats.reads_before_write++;
+            if (_write_isolation == write_isolation::UNSAFE_RMW) {
+                // This is the old, unsafe, read before write which does first
+                // a read, then a write. TODO: remove this mode entirely.
+                return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
+                        [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
+                    if (!m) {
+                        return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
+                    }
+                    return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
+                        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+                    });
                 });
+            }
+        } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+            std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
+            SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+            return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
+                return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
             });
         }
-    } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
-        std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-        });
     }
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
@@ -2850,7 +2852,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
-    auto read_command = needs_read_before_write ?
+    auto read_command = needs_read_before_write || cdc_opts.alternator_streams_increased_compatibility ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), *this, read_command, to_partition_ranges(*schema(), _pk),
@@ -2975,10 +2977,11 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
@@ -3079,10 +3082,11 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
@@ -4576,6 +4580,11 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     if (_attribute_updates) {
         apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
     }
+
+    if (cdc_opts.alternator_streams_increased_compatibility && !previous_item && !any_updates) {
+        // no previous item and only deletes - nothing to do
+        return mutation{ _schema, _pk };
+    }
     if (!modified_attrs.empty()) {
         auto serialized_map = modified_attrs.to_mut().serialize(*attrs_type());
         row.cells().apply(attrs_column(*_schema), std::move(serialized_map));
@@ -4613,10 +4622,11 @@ future<executor::request_return_type> executor::update_item(client_state& client
     auto op = make_shared<update_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool uses_streams = (op->schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_increased_compatibility());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
-    auto cas_shard = op->shard_for_execute(needs_read_before_write);
+    auto cas_shard = op->shard_for_execute(needs_read_before_write || uses_streams);
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
