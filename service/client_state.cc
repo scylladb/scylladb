@@ -98,16 +98,6 @@ future<> service::client_state::has_column_family_access(const sstring& ks,
     co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
 }
 
-future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
-    auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
-    co_return co_await has_access(s.ks_name(), {p, r});
-}
-
-future<> service::client_state::has_schema_access(const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
-    auth::resource r = auth::make_data_resource(ks_name, cf_name);
-    co_return co_await has_access(ks_name, {p, r});
-}
-
 future<> service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const {
     // 1. CDC and $paxos tables are managed internally by Scylla. Users are prohibited
     //    from running ALTER or DROP commands on them.
