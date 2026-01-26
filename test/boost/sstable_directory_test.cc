@@ -262,32 +262,6 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
     });
 }
 
-// Test the presence of TemporaryStatistics. If the old Statistics file is around
-// this is benign and we'll just delete it and move on. If the old Statistics file
-// is not around (but mentioned in the TOC), then this is an error.
-SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
-    sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-        auto sst = make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local())));
-        auto tempstr = test(sst).filename(component_type::TemporaryStatistics);
-        tests::touch_file(tempstr.native()).get();
-        auto statstr = test(sst).filename(component_type::Statistics);
-
-        with_sstable_directory(env, [&] (sharded<sstables::sstable_directory>& sstdir_ok) {
-            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
-            BOOST_REQUIRE_NO_THROW(expect_ok.get());
-            BOOST_REQUIRE(!file_exists(tempstr.native()).get());
-            BOOST_REQUIRE(file_exists(statstr.native()).get()); // sanity check that we didn't miss the directory itself
-        });
-
-        remove_file(statstr.native()).get();
-
-        with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
-            auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
-            BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
-        });
-    }).get();
-}
-
 // Test that we see the right generation during the scan. Temporary files are skipped
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {

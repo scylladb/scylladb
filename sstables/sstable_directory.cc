@@ -187,13 +187,6 @@ void sstable_directory::filesystem_components_lister::handle(sstables::entry_des
     auto generations_found_it = _state->generations_found.emplace(desc.generation, filename);
 
     switch (desc.component) {
-    case component_type::TemporaryStatistics:
-        // We generate TemporaryStatistics when we rewrite the Statistics file,
-        // for instance on mutate_level. We should delete it - so we mark it for deletion
-        // here, but just the component. The old statistics file should still be there
-        // and we'll go with it.
-        _state->files_for_removal.insert(filename.native());
-        break;
     case component_type::TemporaryHashes:
         // We generate TemporaryHashes when writing the sstable,
         // and it's removed before the sstable is sealed.
