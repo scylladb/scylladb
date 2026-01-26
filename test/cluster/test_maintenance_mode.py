@@ -189,3 +189,6 @@ async def test_maintenance_mode(manager: ManagerClient):
 
     logger.info("Checking tables in normal mode")
     await gather_safely(*(check_table_in_normal_mode(table, key) for table, key in key_on_server_a_per_table.items()))
+
+    cluster.shutdown()
+    maintenance_cluster.shutdown()
