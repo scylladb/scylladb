@@ -12,7 +12,6 @@ target_sources(utils
     big_decimal.cc
     bloom_calculations.cc
     bloom_filter.cc
-    buffer_input_stream.cc
     build_id.cc
     config_file.cc
     crypt_sha512.cc
