@@ -152,7 +152,7 @@ class TestHelper(Tester):
         table_path = self.get_table_path(cf)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            node1.run_scylla_sstable("scrub", additional_args=["--scrub-mode", "abort", "--output-dir", tmp_dir, "--logger-log-level", "scylla-sstable=debug", "--unsafe-accept-nonempty-output-dir"], keyspace=ks, column_families=[cf])
+            node1.run_scylla_sstable("scrub", additional_args=["--scrub-mode", "abort", "--output-dir", tmp_dir, "--logger-log-level", "scylla-sstable=debug"], keyspace=ks, column_families=[cf])
             # Replace the table's sstables with the scrubbed ones, just like online scrub would do.
             shutil.rmtree(table_path)
             shutil.copytree(tmp_dir, table_path)

@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/algorithm/string.hpp>
 #include <filesystem>
 #include <set>
 #include <fmt/chrono.h>
@@ -32,7 +31,9 @@
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
+#include "readers/filtering.hh"
 #include "readers/generating.hh"
+#include "readers/multi_range.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
 #include "sstables/index_reader.hh"
@@ -77,28 +78,10 @@ const auto app_name = "sstable";
 
 logging::logger sst_log(format("scylla-{}", app_name));
 
-struct decorated_key_hash {
-    std::size_t operator()(const dht::decorated_key& dk) const {
-        return dht::token::to_int64(dk.token());
-    }
-};
-
-struct decorated_key_equal {
-    const schema& _s;
-    explicit decorated_key_equal(const schema& s) : _s(s) {
-    }
-    bool operator()(const dht::decorated_key& a, const dht::decorated_key& b) const {
-        return a.equal(_s, b);
-    }
-};
-
-using partition_set = std::unordered_set<dht::decorated_key, decorated_key_hash, decorated_key_equal>;
-
-template <typename T>
-using partition_map = std::unordered_map<dht::decorated_key, T, decorated_key_hash, decorated_key_equal>;
+using partition_set = std::set<dht::decorated_key, dht::decorated_key::less_comparator>;
 
 partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_config) {
-    partition_set partitions(app_config.count("partition"), {}, decorated_key_equal(*schema));
+    partition_set partitions{dht::decorated_key::less_comparator(schema)};
     auto pk_type = schema->partition_key_type();
 
     auto dk_from_hex = [&] (std::string_view hex) {
@@ -837,16 +820,8 @@ public:
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
 };
 
-void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
-    auto fd = open_file_dma(output_dir.native(), open_flags::ro).get();
-    unsigned entries = 0;
-    fd.list_directory([&entries] (directory_entry) {
-        ++entries;
-        return make_ready_future<>();
-    }).done().get();
-    if (entries && !accept_nonempty_output_dir) {
-        throw std::invalid_argument("output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory");
-    }
+void validate_output_dir(std::filesystem::path output_dir) {
+    open_file_dma(output_dir.native(), open_flags::ro).get();
 }
 
 void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -903,7 +878,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     }
     auto output_dir = vm["output-dir"].as<std::string>();
     if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
-        validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+        validate_output_dir(output_dir);
     }
 
     scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
@@ -1883,7 +1858,7 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
         throw std::invalid_argument("no sstables specified on the command line");
     }
     const auto merge = vm.count("merge");
-    const auto partitions = partition_set(0, {}, decorated_key_equal(*schema));
+    const auto partitions = partition_set(dht::decorated_key::less_comparator(schema));
     if (!vm.count("script-file")) {
         throw std::invalid_argument("missing required option '--script-file'");
     }
@@ -2204,7 +2179,7 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
     const auto all = vm.count("all");
 
     const auto output_dir = vm["output-dir"].as<std::string>();
-    validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+    validate_output_dir(output_dir);
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
@@ -2268,6 +2243,81 @@ void dump_schema_operation(schema_ptr schema, reader_permit permit, const std::v
     fmt::print(std::cout, "{}\n", schema_desc.create_statement.value().linearize());
 }
 
+void filter_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    if (vm.count("include") && vm.count("exclude")) {
+        throw std::invalid_argument("cannot provide both --include and --exclude");
+    }
+    const auto include = !vm.count("exclude");
+
+    const auto output_dir = vm["output-dir"].as<std::string>();
+    validate_output_dir(output_dir);
+
+    const auto local = data_dictionary::make_local_options(output_dir);
+
+    const auto new_format = sstables::sstable_format_types::big;
+    const auto new_version = vm.contains("sstable-version")
+        ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
+        : sst_man.get_preferred_sstable_version();
+
+    struct named_mutation_source {
+        sstring name;
+        mutation_source source;
+    };
+
+    auto sources = sstables
+        | std::views::transform([] (const sstables::shared_sstable& sst) { return named_mutation_source{fmt::to_string(sst->get_filename()), sst->as_mutation_source()}; })
+        | std::ranges::to<std::vector<named_mutation_source>>();
+
+    if (vm.count("merge")) {
+        auto named_sources = std::exchange(sources, {});
+        auto sources_to_merge = named_sources
+            | std::views::transform([] (const named_mutation_source& ms) { return ms.source; })
+            | std::ranges::to<std::vector<mutation_source>>();
+        sources.push_back(named_mutation_source{"<combined>", make_combined_mutation_source(std::move(sources_to_merge))});
+    }
+
+    const auto partitions = get_partitions(schema, vm);
+
+    auto make_reader = [&] (const mutation_source& source) {
+        // FIXME: for the include case I want to use a much more efficient
+        // multi-range reader here, but cannot due to
+        // https://github.com/scylladb/scylladb/issues/28317
+        return make_filtering_reader(source.make_mutation_reader(schema, permit), [&] (const dht::decorated_key& dk) { return (include == partitions.contains(dk)); });
+    };
+
+    for (const auto& [name, source] : sources) {
+        fmt::print(std::cout, "Filtering {}... ", name);
+
+        auto reader = make_reader(source);
+
+        // Peek the reader to see if it has any content after filtering.
+        if (!reader.peek().get()) {
+            fmt::print(std::cout, "no output\n");
+            reader.close().get();
+            continue;
+        }
+
+        const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
+
+        auto writer_cfg = sst_man.configure_writer("scylla-sstable");
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+
+        new_sst->write_components(
+                std::move(reader),
+                include ? partitions.size() : 1 /* cannot estimate overlap, so just use 1, the bloom filter will be regenerated at seal time */,
+                schema,
+                writer_cfg,
+                encoding_stats{}).get();
+
+        fmt::print(std::cout, "output written to {}\n", new_sst->get_filename());
+    }
+}
+
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -2294,7 +2344,7 @@ Dump the content of the data component. This component contains the data-proper
 of the sstable. This might produce a huge amount of output. In general the
 human-readable output will be larger than the binary file.
 
-It is possible to filter the data to print via the --partitions or
+It is possible to filter the data to print via the --partition or
 --partitions-file options. Both expect partition key values in the hexdump
 format.
 
@@ -2391,22 +2441,15 @@ For more information, see: {}
 fmt::format(R"(
 Read and re-write the sstable, getting rid of or fixing broken parts, depending
 on the selected mode.
-Output sstables are written to the directory specified via `--output-directory`.
+Output sstables are written to the directory specified via `--output-dir`.
 They will be written with the BIG format and the highest supported sstable
-format, with generations chosen by scylla-sstable. Generations are chosen such
-that they are unique between the sstables written by the current scrub.
-The output directory is expected to be empty, if it isn't scylla-sstable will
-abort the scrub. This can be overridden by the
-`--unsafe-accept-nonempty-output-dir` command line flag, but note that scrub will
-be aborted if an sstable cannot be written because its generation clashes with
-pre-existing sstables in the directory.
+format, with generations chosen by scylla-sstable.
 
 For more information, see: {}
 )", doc_link("operating-scylla/admin-tools/scylla-sstable#scrub")),
             {
                     typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the scrubbed sstables to"),
-                    typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
             scrub_operation},
 /* validate-checksums */
@@ -2585,7 +2628,6 @@ For more information, see: {}
                 typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                 typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
                 typed_option<>("all", "upgrade all sstables, even if they are already at the requested version"),
-                typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
             upgrade_operation},
 /* dump-schema */
@@ -2609,6 +2651,39 @@ For more information, see: {}
             {
             }},
             dump_schema_operation},
+/* filter */
+    {{"filter",
+            "Filter the sstable(s), including/excluding specified partitions",
+fmt::format(R"(
+The partition list can be provided either via the --partition command line
+argument, or via a file path passed to the the --partitions-file argument.
+The file should contain one partition key per line.
+Partition keys should be provided in the hex format.
+
+With --include, only the specified partitions are kept from the input
+sstable(s). With --exclude, the specified partitions are discarded and
+won't be written to the output sstable(s).
+It is possible that certain input sstable(s) won't have any content left after
+the filtering. These input sstable(s) will not have a matching output sstable.
+
+By default, each input sstable is filtered individually. Use --merge to filter
+the combined content of all input sstables, producing a single output sstable.
+
+Output sstables use the latest supported sstable format (can be changed with
+--sstable-version).
+
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#filter")),
+            {
+                typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
+                typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
+                typed_option<>("include", "include only the specified partition(s) in the output, discard the rest"),
+                typed_option<>("exclude", "exclude the specified partition(s) from the output, keep the rest"),
+                typed_option<>("merge", "combine all sstable(s) into a single output sstable"),
+                typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
+                typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
+            }},
+            filter_operation},
 };
 
 } // anonymous namespace

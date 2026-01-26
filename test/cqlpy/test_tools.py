@@ -1414,20 +1414,6 @@ def test_scrub_output_dir(scylla_path, scrub_workdir, scrub_schema_file, scrub_g
         # Empty output directory is accepted.
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable])
 
-    with tempfile.TemporaryDirectory(prefix="test_scrub_output_dir", dir=scrub_workdir) as tmp_dir:
-        with open(os.path.join(tmp_dir, "dummy.txt"), "w") as f:
-            f.write("dummy")
-            f.flush()
-
-        # Non-empty output directory is rejected.
-        subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable], "error processing arguments: output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory\n")
-
-        # Validate doesn't write output sstables, so it doesn't care if output dir is non-empty.
-        subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "validate", "--output-dir", tmp_dir, scrub_good_sstable])
-
-        # Check that overriding with --unsafe-accept-nonempty-output-dir works.
-        subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, "--unsafe-accept-nonempty-output-dir", scrub_good_sstable])
-
 
 def test_scrub_abort_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
     with tempfile.TemporaryDirectory(prefix="test_scrub_abort_mode", dir=scrub_workdir) as tmp_dir:
@@ -2066,10 +2052,7 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
                 f.write("dummy")
                 f.flush()
 
-            with pytest.raises(subprocess.CalledProcessError):
-                lines = invoke(tmp_dir, [])
-
-            lines = invoke(tmp_dir, ["--unsafe-accept-nonempty-output-dir"])
+            lines = invoke(tmp_dir, [])
             assert len(lines) == len(sstables)
             for line, sst in zip(lines, sstables):
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
@@ -2111,3 +2094,50 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
             assert new_res == expected_results[schema_table]
     finally:
         cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+
+
+def test_scylla_sstable_filter(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        pks = [r.pk for r in cql.execute(f"SELECT pk FROM {test_keyspace}.{table}")]
+
+        print(f"Generated primary keys: {pks}")
+
+        assert len(pks) > 2
+
+        serialized_pks = [_serialize_value(scylla_path, pk) for pk in pks]
+
+        def filter(flag):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                cmd = [scylla_path, "sstable", "filter", "--schema-file", schema_file, "--output-dir", tmp_dir , flag]
+                for pk in serialized_pks[:2]:
+                    cmd += ["--partition", pk]
+                cmd += sstables
+
+                out = subprocess.check_output(cmd, text=True)
+
+                print(f"Filter: {' '.join(cmd)}\n{out}")
+
+                out_lines = out.strip().split('\n')
+
+                filtered_sstables = []
+                for line in out_lines:
+                    m = re.match(r"^Filtering.*\.\.\. output written to (.*)$", line)
+                    if m:
+                        filtered_sstables.append(m.group(1))
+
+                assert len(filtered_sstables) >= 1
+
+                query_cmd = [scylla_path, "sstable", "query", "--output-format", "json", "--schema-file", schema_file] + filtered_sstables
+                query_res = json.loads(subprocess.check_output(query_cmd, text=True))
+
+                print(f"Query: {' '.join(query_cmd)}\n{query_res}")
+
+                return {row['pk'] for row in query_res}
+
+        if filter("--include") != set(pks[:2]):
+            shutil.copy(schema_file, "/home/bdenes/out")
+            for sst in sstables:
+                shutil.copy(sst, "/home/bdenes/out/")
+
+        assert filter("--include") == set(pks[:2])
+        assert filter("--exclude") == set(pks[2:])
