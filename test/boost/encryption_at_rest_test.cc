@@ -113,9 +113,6 @@ static future<> test_provider(const test_provider_args& args) {
         auto cfg = seastar::make_shared<db::config>(ext);
         cfg->data_file_directories({args.tmp.path().string()});
 
-        // Currently the test fails with consistent_cluster_management = true. See #2995.
-        cfg->consistent_cluster_management(false);
-
         {
             boost::program_options::options_description desc;
             boost::program_options::options_description_easy_init init(&desc);
@@ -198,9 +195,6 @@ static auto make_commitlog_config(const test_provider_args& args, const std::uno
     auto cfg = seastar::make_shared<db::config>(ext);
     cfg->data_file_directories({args.tmp.path().string()});
     cfg->commitlog_sync("batch"); // just to make sure files are written
-
-    // Currently the test fails with consistent_cluster_management = true. See #2995.
-    cfg->consistent_cluster_management(false);
 
     boost::program_options::options_description desc;
     boost::program_options::options_description_easy_init init(&desc);

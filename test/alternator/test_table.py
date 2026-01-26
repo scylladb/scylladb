@@ -451,24 +451,6 @@ def test_update_table_non_existent(dynamodb, test_table):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
 
-# Consistent schema change feature is optionally enabled and
-# some tests are expected to fail on Scylla without this
-# option enabled, and pass with it enabled (and also pass on Cassandra).
-# These tests should use the "fails_without_consistent_cluster_management"
-# fixture. When consistent mode becomes the default, this fixture can be removed.
-@pytest.fixture(scope="module")
-def check_pre_consistent_cluster_management(dynamodb):
-    # If not running on Scylla, return false.
-    if is_aws(dynamodb):
-        return False
-    consistent = scylla_config_read(dynamodb, 'consistent_cluster_management')
-    return consistent is None or consistent == 'false'
-
-@pytest.fixture(scope="function")
-def fails_without_consistent_cluster_management(request, check_pre_consistent_cluster_management):
-    if check_pre_consistent_cluster_management:
-        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without consistent cluster management feature on'))
-
 # Test for reproducing issues #6391 and #9868 - where CreateTable did not
 # *atomically* perform all the schema modifications - creating a keyspace,
 # a table, secondary indexes and tags - and instead it created the different
@@ -526,7 +508,7 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
         'Tags': [{'Key': 'k1', 'Value': 'v1'}]
     }
 ])
-def test_concurrent_create_and_delete_table(dynamodb, table_def, fails_without_consistent_cluster_management):
+def test_concurrent_create_and_delete_table(dynamodb, table_def):
     # According to boto3 documentation, "Unlike Resources and Sessions,
     # clients are generally thread-safe.". So because we have two threads
     # in this test, we must not use "dynamodb" (containing the boto3
