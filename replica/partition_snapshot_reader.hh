@@ -19,6 +19,8 @@
 
 extern seastar::logger mplog;
 
+namespace replica {
+
 template <bool Reversing, typename Accounter>
 class partition_snapshot_flat_reader : public mutation_reader::impl, public Accounter {
     struct row_info {
@@ -305,3 +307,5 @@ make_partition_snapshot_flat_reader(schema_ptr s,
         return res;
     }
 }
+
+} // namespace replica

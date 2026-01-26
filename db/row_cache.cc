@@ -24,7 +24,7 @@
 #include "readers/forwardable.hh"
 #include "readers/nonforwardable.hh"
 #include "cache_mutation_reader.hh"
-#include "partition_snapshot_reader.hh"
+#include "replica/partition_snapshot_reader.hh"
 #include "keys/clustering_key_filter.hh"
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
@@ -845,7 +845,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
             cache_entry& e = *i;
             upgrade_entry(e);
             tracing::trace(ts, "Reading partition {} from cache", pos);
-            return make_partition_snapshot_flat_reader<false, dummy_accounter>(
+            return replica::make_partition_snapshot_flat_reader<false, dummy_accounter>(
                     schema,
                     std::move(permit),
                     e.key(),

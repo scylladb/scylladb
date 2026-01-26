@@ -14,7 +14,6 @@
 
 #include "mutation/partition_version.hh"
 #include "db/partition_snapshot_row_cursor.hh"
-#include "partition_snapshot_reader.hh"
 #include "keys/clustering_interval_set.hh"
 
 #include "test/lib/scylla_test_case.hh"

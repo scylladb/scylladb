@@ -10,7 +10,7 @@
 #include "memtable.hh"
 #include "replica/database.hh"
 #include "mutation/frozen_mutation.hh"
-#include "partition_snapshot_reader.hh"
+#include "replica/partition_snapshot_reader.hh"
 #include "partition_builder.hh"
 #include "mutation/mutation_partition_view.hh"
 #include "readers/empty.hh"
