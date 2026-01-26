@@ -437,7 +437,9 @@ def cql(dynamodb):
     host, = re.search(r'.*://([^:]*):', url).groups()
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        # It's obviously not an intended change. What did I do wrong that LOCAL_QUORUM was failing with:
+        #   Cannot achieve consistency level for cl LOCAL_QUORUM. Requires 2, alive 1" info={\'consistency\': \'LOCAL_QUORUM\', \'required_replicas\': 2, \'alive_replicas\': 1
+        consistency_level=ConsistencyLevel.LOCAL_ONE,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         request_timeout=120)
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},

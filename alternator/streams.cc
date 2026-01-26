@@ -135,7 +135,7 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
 
 namespace alternator {
 
-future<alternator::executor::request_return_type> alternator::executor::list_streams(client_state& client_state, service_permit permit, rjson::value request) {
+future<alternator::executor::request_return_type> alternator::executor::list_streams(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.list_streams++;
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
@@ -187,26 +187,25 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
-
     std::optional<stream_arn> last;
+    std::set<sstring> ks_names, table_names; // for auditing
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
         auto& ks_name = s->ks_name();
         auto& cf_name = s->cf_name();
-
         if (!is_alternator_keyspace(ks_name)) {
             continue;
         }
         if (cdc::is_log_for_some_table(db.real_database(), ks_name, cf_name)) {
             rjson::value new_entry = rjson::empty_object();
-
             last = i->schema()->id();
             rjson::add(new_entry, "StreamArn", *last);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
-
+            ks_names.insert(ks_name);
+            table_names.insert(cf_name);
             --limit;
         }
     }
@@ -216,7 +215,11 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     if (last) {
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
-
+    // Mentions only the CDC log tables, without the base tables
+    // Using only local metadata reads, hence the CL value
+    // FIXME: will audit only successful requests, yet it seems this request can throw only when limit is invalid, so maybe it's ok like this.
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::QUERY, print_names_for_audit(ks_names), print_names_for_audit(table_names), db::consistency_level::LOCAL_ONE);
+    audit_info->set_query_string(sstring(rjson::print(request)), "ListStreams");
     return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
@@ -428,7 +431,7 @@ using namespace std::chrono_literals;
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 
-future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.describe_stream++;
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100); // according to spec
@@ -451,6 +454,12 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
         throw api_error::resource_not_found("Invalid StreamArn");
     }
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+
+    // _sdks.cdc_get_versioned_streams() uses quorum_if_many() underneath, which uses CL=QUORUM for many token owners and CL=ONE otherwise.
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::QUERY, bs->ks_name() + "|" + schema->ks_name(), bs->cf_name() + "|" + schema->cf_name(), 
+            (normal_token_owners>1) ? db::consistency_level::QUORUM : db::consistency_level::ONE);
+    audit_info->set_query_string(sstring(rjson::print(request)), "DescribeStream");
 
     if (limit < 1) {
         throw api_error::validation("Limit must be 1 or more");
@@ -496,8 +505,6 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     // TODO: label
     // TODO: creation time
-
-    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
 
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
@@ -568,7 +575,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 if (j == e) {
                     return std::nullopt;
                 }
-                // add this so we sort of match potential 
+                // add this so we sort of match potential
                 // sequence numbers in get_records result.
                 return j->first + confidence_interval(db);
             }();
@@ -601,7 +608,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
                 rjson::add(shard, "SequenceNumberRange", std::move(range));
                 rjson::push_back(shards, std::move(shard));
-                
+
                 if (--limit == 0) {
                     break;
                 }
@@ -616,7 +623,6 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
         rjson::add(stream_desc, "Shards", std::move(shards));
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
-            
         return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
     });
 }
@@ -709,7 +715,7 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator_typ
 
 namespace alternator {
 
-future<executor::request_return_type> executor::get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.get_shard_iterator++;
 
     auto type = rjson::get<shard_iterator_type>(request, "ShardIteratorType");
@@ -737,6 +743,11 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     if (!schema || !cdc::get_base_table(db.real_database(), *schema) || !is_alternator_keyspace(schema->ks_name())) {
         throw api_error::resource_not_found("Invalid StreamArn");
     }
+
+    // Uses only node-local context (the metadata) to generate response, co CL=LOCAL_ONE
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), db::consistency_level::LOCAL_ONE);
+    audit_info->set_query_string(sstring(rjson::print(request)), "GetShardIterator");
+
     if (!sid) {
         throw api_error::resource_not_found("Invalid ShardId");
     }
@@ -769,7 +780,6 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
-
     return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
@@ -798,7 +808,7 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
 
 namespace alternator {
     
-future<executor::request_return_type> executor::get_records(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::get_records(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_cl>& audit_info) {
     _stats.api_operations.get_records++;
     auto start_time = std::chrono::steady_clock::now();
 
@@ -824,16 +834,17 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
         co_return api_error::resource_not_found(fmt::to_string(iter.table));
     }
+    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+
+    audit_info = std::make_unique<audit::audit_info_cl>(audit::statement_category::QUERY, base->ks_name() + "|" + schema->ks_name(), base->cf_name() + "|" + schema->cf_name(), cl);
+    audit_info->set_query_string(sstring(rjson::print(request)), "GetRecords");
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
 
-    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
     partition_key pk = iter.shard.id.to_partition_key(*schema);
-
     dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };
-
     auto high_ts = db_clock::now() - confidence_interval(db);
     auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch());
     auto lo = clustering_key_prefix::from_exploded(*schema, { iter.threshold.serialize() });
@@ -899,7 +910,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {
         cql3::selection::result_set_builder builder(*selection, gc_clock::now());
         query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 
@@ -908,17 +919,17 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
         auto& metadata = result_set->get_metadata();
 
-        auto op_index = std::distance(metadata.get_names().begin(), 
+        auto op_index = std::distance(metadata.get_names().begin(),
             std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
                 return cdef->name->name() == op_column_name;
             })
         );
-        auto ts_index = std::distance(metadata.get_names().begin(), 
+        auto ts_index = std::distance(metadata.get_names().begin(),
             std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
                 return cdef->name->name() == timestamp_column_name;
             })
         );
-        auto eor_index = std::distance(metadata.get_names().begin(), 
+        auto eor_index = std::distance(metadata.get_names().begin(),
             std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
                 return cdef->name->name() == eor_column_name;
             })
@@ -965,21 +976,21 @@ future<executor::request_return_type> executor::get_records(client_state& client
             /**
              * We merge rows with same timestamp into a single event.
              * This is pretty much needed, because a CDC row typically
-             * encodes ~half the info of an alternator write. 
-             * 
+             * encodes ~half the info of an alternator write.
+             *
              * A big, big downside to how alternator records are written
              * (i.e. CQL), is that the distinction between INSERT and UPDATE
-             * is somewhat lost/unmappable to actual eventName. 
+             * is somewhat lost/unmappable to actual eventName.
              * A write (currently) always looks like an insert+modify
-             * regardless whether we wrote existing record or not. 
-             * 
-             * Maybe RMW ops could be done slightly differently so 
+             * regardless whether we wrote existing record or not.
+             *
+             * Maybe RMW ops could be done slightly differently so
              * we can distinguish them here...
-             * 
+             *
              * For now, all writes will become MODIFY.
-             * 
+             *
              * Note: we do not check the current pre/post
-             * flags on CDC log, instead we use data to 
+             * flags on CDC log, instead we use data to
              * drive what is returned. This is (afaict)
              * consistent with dynamo streams
              */
@@ -1042,7 +1053,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
 
         return _sdks.cdc_current_generation_timestamp({ normal_token_owners }).then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
-            auto& shard = iter.shard;            
+            auto& shard = iter.shard;
 
             if (shard.time < ts && ts < high_ts) {
                 // The DynamoDB documentation states that when a shard is

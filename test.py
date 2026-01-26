@@ -257,6 +257,8 @@ def parse_cmd_line() -> argparse.Namespace:
     scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
                                                 "'--logger-log-level raft=trace --default-log-level error'")
+    scylla_additional_options.add_argument('--audit', action="store", default="table", type=str,
+                             help="Set the audit backend type. Possible values are \"table\" and \"syslog\". Default is \"table\".")
 
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",

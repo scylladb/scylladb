@@ -34,7 +34,7 @@ class server : public peering_sharded_service<server> {
     // DynamoDB also has the same limit set to 16 MB.
     static constexpr size_t request_content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
-            tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>)>;
+            tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>, std::unique_ptr<audit::audit_info_cl>&)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
 
     httpd::http_server _http_server;
