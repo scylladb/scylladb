@@ -1,3 +1,0 @@
-type: Tool
-coverage: false
-launcher: unshare -rn pytest --run-within-unshare

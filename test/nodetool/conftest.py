@@ -18,6 +18,8 @@ import requests.exceptions
 from test import TOP_SRC_DIR, path_to
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
+from test.pylib.db.model import Test
+from test.pylib.runner import testpy_test_fixture_scope
 
 
 def pytest_addoption(parser):
@@ -38,8 +40,8 @@ class ServerAddress(NamedTuple):
     port: int
 
 
-@pytest.fixture(scope="session")
-def server_address(request):
+@pytest.fixture(scope=testpy_test_fixture_scope)
+async def server_address(request, testpy_test: None|Test):
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
     if request.config.getoption('--run-within-unshare'):
@@ -53,12 +55,17 @@ def server_address(request):
         ip = '127.0.0.1'
         port = 12345
     else:
-        ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
+        if testpy_test is not None:
+            ip = await testpy_test.suite.hosts.lease_host()
+        else:
+            ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
         port = random.randint(10000, 65535)
     yield ServerAddress(ip, port)
+    if testpy_test is not None:
+        await testpy_test.suite.hosts.release_host(ip)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def rest_api_mock_server(request, server_address):
     server_process = subprocess.Popen([sys.executable,
                                        os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
@@ -89,7 +96,7 @@ def rest_api_mock_server(request, server_address):
         server_process.wait()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def jmx(request, rest_api_mock_server):
     if request.config.getoption("nodetool") == "scylla":
         yield
@@ -150,7 +157,7 @@ def jmx(request, rest_api_mock_server):
     jmx_process.wait()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def nodetool_path(request, build_mode):
     if request.config.getoption("nodetool") == "scylla":
         return path_to(build_mode, "scylla")

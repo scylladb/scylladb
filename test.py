@@ -67,6 +67,7 @@ PYTEST_RUNNER_DIRECTORIES = [
     TEST_DIR / 'cql',
     TEST_DIR / 'cqlpy',
     TEST_DIR / 'rest_api',
+    TEST_DIR / 'nodetool',
 ]
 
 launch_time = time.monotonic()
