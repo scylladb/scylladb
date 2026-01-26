@@ -163,27 +163,6 @@ def cassandra_bug(cql):
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
 
-# Consistent schema change feature is optionally enabled and
-# some tests are expected to fail on Scylla without this
-# option enabled, and pass with it enabled (and also pass on Cassandra).
-# These tests should use the "fails_without_consistent_cluster_management"
-# fixture. When consistent mode becomes the default, this fixture can be removed.
-@pytest.fixture(scope="function")
-def check_pre_consistent_cluster_management(cql):
-    # If not running on Scylla, return false.
-    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
-    if not any('scylla' in name for name in names):
-        return False
-    # In Scylla, we check Raft mode by inspecting the configuration via CQL.
-    consistent = list(cql.execute("SELECT value FROM system.config WHERE name = 'consistent_cluster_management'"))
-    return len(consistent) == 0 or consistent[0].value == "false"
-
-
-@pytest.fixture(scope="function")
-def fails_without_consistent_cluster_management(request, check_pre_consistent_cluster_management):
-    if check_pre_consistent_cluster_management:
-        request.node.add_marker(pytest.mark.xfail(reason="Test expected to fail without consistent cluster management "
-                                                         "feature on"))
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was
 # not the last page. Some tests which filter out most of the results can end
