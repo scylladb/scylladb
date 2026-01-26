@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/thread.hh>
+#include <seastar/util/memory-data-source.hh>
 #include "test/lib/scylla_test_case.hh"
 
 #include "utils/assert.hh"
@@ -342,29 +343,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_bytes_view) {
     }
 }
 
-namespace {
-
-class memory_data_source final : public data_source_impl {
-private:
-    using vector_type = std::vector<temporary_buffer<char>>;
-    vector_type _buffers;
-    vector_type::iterator _position;
-public:
-    explicit memory_data_source(std::vector<temporary_buffer<char>> buffers)
-        : _buffers(std::move(buffers))
-        , _position(_buffers.begin())
-    { }
-
-    virtual future<temporary_buffer<char>> get() override {
-        if (_position == _buffers.end()) {
-            return make_ready_future<temporary_buffer<char>>();
-        }
-        return make_ready_future<temporary_buffer<char>>(std::move(*_position++));
-    }
-};
-
-}
-
 SEASTAR_THREAD_TEST_CASE(test_read_fragmented_buffer) {
     using tuple_type = std::tuple<std::vector<temporary_buffer<char>>,
                                   bytes,
@@ -412,7 +390,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_fragmented_buffer) {
         auto size = expected_data.size();
         auto suffix_size = expected_suffix.size();
 
-        auto in = input_stream<char>(data_source(std::make_unique<memory_data_source>(std::move(buffers))));
+        auto in = seastar::util::as_input_stream(std::move(buffers));
 
         auto prefix = in.read_exactly(prefix_size).get();
         BOOST_CHECK_EQUAL(prefix.size(), prefix_size);
@@ -491,8 +469,7 @@ static void do_test_read_exactly_eof(size_t input_size) {
     if (input_size) {
         data.push_back(temporary_buffer<char>(input_size));
     }
-    auto ds = data_source(std::make_unique<memory_data_source>(std::move(data)));
-    auto is = input_stream<char>(std::move(ds));
+    auto is = seastar::util::as_input_stream(std::move(data));
     auto reader = fragmented_temporary_buffer::reader();
     auto result = reader.read_exactly(is, input_size + 1).get();
     BOOST_CHECK_EQUAL(result.size_bytes(), size_t(0));
