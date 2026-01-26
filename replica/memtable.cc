@@ -19,7 +19,7 @@
 
 namespace replica {
 
-static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
+static mutation_reader make_partition_snapshot_reader_from_snp_schema(
         bool is_reversed,
         reader_permit permit,
         dht::decorated_key dk,
@@ -482,7 +482,7 @@ public:
                         auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), _slice, key_and_snp->first.key());
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
                         bool is_reversed = _slice.is_reversed();
-                        _delegate = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, _permit, std::move(key_and_snp->first), std::move(cr), std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
+                        _delegate = make_partition_snapshot_reader_from_snp_schema(is_reversed, _permit, std::move(key_and_snp->first), std::move(cr), std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
                         _delegate->upgrade_schema(schema());
                     } else {
                         _end_of_stream = true;
@@ -604,7 +604,7 @@ public:
     }
 };
 
-static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
+static mutation_reader make_partition_snapshot_reader_from_snp_schema(
         bool is_reversed,
         reader_permit permit,
         dht::decorated_key dk,
@@ -617,10 +617,10 @@ static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
         streamed_mutation::forwarding fwd, memtable& memtable) {
     if (is_reversed) {
         schema_ptr rev_snp_schema = snp->schema()->make_reversed();
-        return make_partition_snapshot_flat_reader<true, partition_snapshot_read_accounter>(std::move(rev_snp_schema), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
+        return make_partition_snapshot_reader<true, partition_snapshot_read_accounter>(std::move(rev_snp_schema), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
     } else {
         schema_ptr snp_schema = snp->schema();
-        return make_partition_snapshot_flat_reader<false, partition_snapshot_read_accounter>(std::move(snp_schema), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
+        return make_partition_snapshot_reader<false, partition_snapshot_read_accounter>(std::move(snp_schema), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
     }
 }
 
@@ -660,7 +660,7 @@ private:
             update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
-            _partition_reader = make_partition_snapshot_flat_reader<false, partition_snapshot_flush_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
+            _partition_reader = make_partition_snapshot_reader<false, partition_snapshot_flush_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
                             std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
             _partition_reader->upgrade_schema(schema());
         }
@@ -737,7 +737,7 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
         auto dk = pos.as_decorated_key();
         auto cr = query::clustering_key_filter_ranges::get_ranges(*query_schema, slice, dk.key());
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
-        auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
+        auto rd = make_partition_snapshot_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(query_schema);
         return rd;
     } else {

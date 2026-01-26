@@ -845,7 +845,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
             cache_entry& e = *i;
             upgrade_entry(e);
             tracing::trace(ts, "Reading partition {} from cache", pos);
-            return replica::make_partition_snapshot_flat_reader<false, dummy_accounter>(
+            return replica::make_partition_snapshot_reader<false, dummy_accounter>(
                     schema,
                     std::move(permit),
                     e.key(),
