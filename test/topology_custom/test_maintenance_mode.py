@@ -135,7 +135,7 @@ async def test_maintenance_mode(manager: ManagerClient):
 
     # Start server A in maintenance mode
     await manager.server_stop_gracefully(server_a.server_id)
-    await manager.server_update_config(server_a.server_id, "maintenance_mode", "true")
+    await manager.server_update_config(server_a.server_id, "maintenance_mode", True)
     await manager.server_start(server_a.server_id)
 
     log = await manager.server_open_log(server_a.server_id)
