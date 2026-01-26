@@ -9,9 +9,7 @@
 #pragma once
 
 #include "mutation/partition_version.hh"
-#include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
-#include "readers/range_tombstone_change_merger.hh"
 #include "keys/clustering_key_filter.hh"
 #include "query/query-request.hh"
 #include "db/partition_snapshot_row_cursor.hh"
