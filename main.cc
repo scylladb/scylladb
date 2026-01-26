@@ -1306,6 +1306,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting storage proxy");
             service::storage_proxy::config spcfg {
                 .hints_directory_initializer = hints_dir_initializer,
+                .hints_sched_group = maintenance_scheduling_group,
             };
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();

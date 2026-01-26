@@ -158,7 +158,7 @@ void hint_endpoint_manager::cancel_draining() noexcept {
     _sender.cancel_draining();
 }
 
-hint_endpoint_manager::hint_endpoint_manager(const endpoint_id& key, fs::path hint_directory, manager& shard_manager)
+hint_endpoint_manager::hint_endpoint_manager(const endpoint_id& key, fs::path hint_directory, manager& shard_manager, scheduling_group send_sg)
     : _key(key)
     , _shard_manager(shard_manager)
     , _store_gate("hint_endpoint_manager")
@@ -169,7 +169,7 @@ hint_endpoint_manager::hint_endpoint_manager(const endpoint_id& key, fs::path hi
     // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
     // TODO: Should this logic be deduplicated with what is in the commitlog?
     , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
-    , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
+    , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper(), send_sg)
 {}
 
 hint_endpoint_manager::hint_endpoint_manager(hint_endpoint_manager&& other)

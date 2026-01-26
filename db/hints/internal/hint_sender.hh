@@ -120,7 +120,7 @@ private:
     std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 
 public:
-    hint_sender(hint_endpoint_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, const gms::gossiper& local_gossiper) noexcept;
+    hint_sender(hint_endpoint_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, const gms::gossiper& local_gossiper, scheduling_group sg) noexcept;
     ~hint_sender();
 
     /// \brief A constructor that should be called from the copy/move-constructor of hint_endpoint_manager.

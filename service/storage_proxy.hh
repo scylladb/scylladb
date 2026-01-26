@@ -195,6 +195,7 @@ public:
         // they need a separate smp_service_group to prevent an ABBA deadlock
         // with writes.
         smp_service_group write_ack_smp_service_group = default_smp_service_group();
+        scheduling_group hints_sched_group;
     };
 private:
 
