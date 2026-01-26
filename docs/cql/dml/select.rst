@@ -281,7 +281,8 @@ For example::
       ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
 
 
-Vector queries also support filtering with ``WHERE`` clauses on columns that are part of the primary key.
+Vector queries also support filtering with ``WHERE`` clauses on columns that are part of the primary key
+or columns provided in a definition of the index.
 
 For example::
 
