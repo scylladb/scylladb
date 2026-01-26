@@ -195,6 +195,9 @@ SEASTAR_TEST_CASE(test_same_key_in_different_tables) {
 
 // basic tests of the index functions.
 SEASTAR_TEST_CASE(test_index) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
     auto indexp = std::make_unique<log_index>();
     auto& index = *indexp;
 
@@ -269,6 +272,9 @@ static future<> do_segment_manager_test(segment_manager_config cfg, noncopyable_
 // write multiple mutations to multiple segments, then read all records in those segments back using
 // for_each_record and verify we get exactly the mutations we wrote.
 SEASTAR_TEST_CASE(test_for_each_record) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
     tmpdir tmp;
     segment_manager_config cfg = {
         .base_dir = tmp.path(),
@@ -355,6 +361,9 @@ SEASTAR_TEST_CASE(test_for_each_record) {
 // write many mutations with the same key to fill the disk multiple times, each write overwrites the previous one.
 // compaction should be triggered to free the old locations and allow us to continue writing without running out of space.
 SEASTAR_TEST_CASE(test_overwrites_with_compaction) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
     tmpdir tmp;
     segment_manager_config sm_cfg = {
         .base_dir = tmp.path(),

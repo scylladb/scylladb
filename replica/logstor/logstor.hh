@@ -45,6 +45,9 @@ public:
     future<> start();
     future<> stop();
 
+    static void init_crypto();
+    static void free_crypto();
+
     void enable_auto_compaction();
     future<> disable_auto_compaction();
     future<> trigger_compaction(bool major = false);

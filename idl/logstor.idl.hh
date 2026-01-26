@@ -13,7 +13,7 @@ namespace replica {
 namespace logstor {
 
 struct index_key {
-    uint64_t key;
+    std::array<uint8_t, replica::logstor::index_key::digest_size> digest;
 };
 
 class log_record {
