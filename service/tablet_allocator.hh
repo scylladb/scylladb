@@ -257,6 +257,7 @@ class migration_notifier;
 class tablet_allocator {
 public:
     struct config {
+        scheduling_group background_sg;
     };
     class impl {
     public:

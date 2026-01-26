@@ -1677,7 +1677,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
 
             checkpoint(stop_signal, "starting tablet allocator");
-            service::tablet_allocator::config tacfg;
+            service::tablet_allocator::config tacfg {
+                .background_sg = maintenance_scheduling_group,
+            };
             sharded<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {

@@ -3792,6 +3792,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
     load_balancer_stats_manager _load_balancer_stats;
+    scheduling_group _background;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
     locator::load_stats_ptr _load_stats;
@@ -3813,7 +3814,9 @@ public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
             : _migration_notifier(mn)
             , _db(db)
-            , _load_balancer_stats("load_balancer") {
+            , _load_balancer_stats("load_balancer")
+            , _background(cfg.background_sg)
+    {
         _migration_notifier.register_listener(this);
     }
 
@@ -3830,7 +3833,7 @@ public:
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, service::topology* topology, db::system_keyspace* sys_ks, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
         auto lb = make_load_balancer(tm, topology, sys_ks, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist));
-        co_await coroutine::switch_to(_db.get_streaming_scheduling_group());
+        co_await coroutine::switch_to(_background);
         co_return co_await lb.make_plan();
     }
 
