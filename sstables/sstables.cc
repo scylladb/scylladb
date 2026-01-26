@@ -1366,8 +1366,7 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     }
     auto stats = std::make_unique<stats_metadata>(old_stats);
     stats->repaired_at = repaired_at;
-     _components->statistics.contents[metadata_type::Stats] = std::move(stats);
-    rewrite_statistics();
+    _components->statistics.contents[metadata_type::Stats] = std::move(stats);
     return old_repaired_at;
 }
 
@@ -1376,18 +1375,9 @@ future<> sstable::copy_components(const sstable& src) {
     _recognized_components = src._recognized_components;
 }
 
-void sstable::rewrite_statistics() {
-    sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-
-    auto lock = get_units(_mutate_sem, 1).get();
-    file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
-    auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::truncate).get();
-    write(_version, w, _components->statistics);
-    w.close();
-    // rename() guarantees atomicity when renaming a file into place.
-    sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+bool sstable::should_update_repaired_at(int64_t repaired_at) const {
+    const stats_metadata& stats = get_stats_metadata();
+    return stats.repaired_at != repaired_at;
 }
 
 future<shared_sstable> sstable::link_with_rewritten_component(
@@ -2581,19 +2571,15 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<> sstable::snapshot(const sstring& name) const {
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name));
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
-    // just in case, not really needed as the sstable is not yet in use while in the upload dir
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3192,37 +3178,26 @@ std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
     }
 }
 
-future<> sstable::mutate_sstable_level(uint32_t new_level) {
+void sstable::mutate_sstable_level(uint32_t new_level) {
     if (!has_component(component_type::Statistics)) {
-        return make_ready_future<>();
+        return;
     }
 
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        return make_ready_future<>();
+        return;
     }
 
     auto& p = entry->second;
     if (!p) {
-        return make_exception_future<>(std::runtime_error("Statistics is malformed"));
+        throw std::runtime_error("Statistics is malformed");
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
-        return make_ready_future<>();
+        return;
     }
 
     s.sstable_level = new_level;
-    // Technically we don't have to write the whole file again. But the assumption that
-    // we will always write sequentially is a powerful one, and this does not merit an
-    // exception.
-    return seastar::async([this] {
-        // This is not part of the standard memtable flush path, but there is no reason
-        // to come up with a class just for that. It is used by the snapshot/restore mechanism
-        // which comprises mostly hard link creation and this operation at the end + this operation,
-        // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
-        // priority enough so we will use the default priority
-        rewrite_statistics();
-    });
 }
 
 int sstable::compare_by_max_timestamp(const sstable& other) const {
@@ -3528,9 +3503,6 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 
 future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
-    // Serialize with other calls to unlink or potentially ongoing mutations.
-    auto lock = co_await get_units(_mutate_sem, 1);
-
     _unlinked = true;
     _on_delete(*this);
 

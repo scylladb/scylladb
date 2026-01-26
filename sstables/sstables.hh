@@ -630,9 +630,6 @@ private:
     size_t _total_memory_reclaimed{0};
     bool _unlinked{false};
 
-    // The mutate semaphore is used to serialize operations like rewrite_statistics
-    // with linking or moving the sstable between directories.
-    mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
     components_digests _components_digests;
 public:
     bool has_component(component_type f) const;
@@ -721,9 +718,6 @@ private:
 
     future<> read_statistics();
     void write_statistics();
-    // Rewrite statistics component by creating a temporary Statistics and
-    // renaming it into place of existing one.
-    void rewrite_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -1016,7 +1010,7 @@ public:
         return _components->compression;
     }
 
-    future<> mutate_sstable_level(uint32_t);
+    void mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
         return _components->summary;
@@ -1137,10 +1131,9 @@ public:
     service::session_id being_repaired;
 public:
     void mark_as_being_repaired(const service::session_id& id);
-    // This function must run inside a seastar thread since it calls
-    // rewrite_statistics which must run inside a seastar thread.
     int64_t update_repaired_at(int64_t repaired_at);
     future<> copy_components(const sstable& src);
+    bool should_update_repaired_at(int64_t repaired_at) const;
     void write_component_with_metadata(component_type type, std::optional<scylla_metadata> metadata_opt);
 
     // Creates a new sstable by linking all sstable components except for the specified component,

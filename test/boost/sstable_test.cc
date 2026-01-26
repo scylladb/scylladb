@@ -398,6 +398,22 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
+future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const std::string& dir_path, uint32_t new_level) {
+    auto modifier = [new_level] (sstables::sstable& sst) {
+        sst.mutate_sstable_level(new_level);
+    };
+    auto creator = [&] () {
+        return env.make_sstable(sstp->get_schema(), dir_path, sstp->get_version());
+    };
+
+    auto new_sst = co_await sstp->link_with_rewritten_component(std::move(creator), component_type::Statistics, modifier);
+    co_await sstp->unlink();
+    sstp = new_sst;
+
+    sstp = co_await env.reusable_sst(uncompressed_schema(), dir_path, sstp->generation());
+    co_return sstp;
+}
+
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
         auto uncompressed_dir_copy = env.tempdir().path();
@@ -410,10 +426,8 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         auto exists = file_exists(file_path).get();
         BOOST_REQUIRE(exists);
 
-        // mutate_sstable_level results in statistics rewrite
-        sstp->mutate_sstable_level(10).get();
-
-        sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
+        sstp = mutate_sstable_level(env, sstp, uncompressed_dir_copy.native(), 10).get();
+        sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native(), sstp->generation()).get();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
