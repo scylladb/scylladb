@@ -1340,6 +1340,11 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     return old_repaired_at;
 }
 
+future<> sstable::copy_components(const sstable& src) {
+    _components = co_await src._components.copy();
+    _recognized_components = src._recognized_components;
+}
+
 void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
@@ -1352,6 +1357,55 @@ void sstable::rewrite_statistics() {
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+}
+
+future<shared_sstable> sstable::link_with_rewritten_component(
+    std::function<shared_sstable()> sstable_creator,
+    component_type component,
+    std::function<void(sstable&)> modifier) {
+    auto new_sst = sstable_creator();
+    auto generation = new_sst->generation();
+
+    co_await _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla});
+    co_await new_sst->copy_components(*this);
+
+    modifier(*new_sst);
+
+    std::optional<scylla_metadata> metadata;
+    if (has_scylla_component()) {
+        scylla_metadata md;
+        co_await read_simple<component_type::Scylla>(md);
+        metadata = std::move(md);
+    }
+    co_await seastar::async([&] {
+        new_sst->write_component_with_metadata(component, std::move(metadata));
+    });
+    new_sst->_shards = {this_shard_id()};
+    co_await new_sst->seal_sstable(false);
+    co_await new_sst->load_metadata();
+    co_await new_sst->open_data();
+
+    co_return new_sst;
+}
+
+void sstable::write_component_with_metadata(component_type type, std::optional<scylla_metadata> metadata_opt) {
+    if (type != component_type::Statistics) {
+        throw std::invalid_argument("Only Statistics component can be written with metadata");
+    }
+    write_statistics();
+
+    if (!metadata_opt) {
+        return;
+    }
+    auto& metadata = *metadata_opt;
+    auto cd = metadata.data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+    if (cd) {
+        cd->statistics_digest = _components_digests.statistics_digest;
+    } else {
+        metadata.data.set<scylla_metadata_type::ComponentsDigests>(components_digests{.statistics_digest = _components_digests.statistics_digest});
+    }
+    write_simple<component_type::Scylla>(metadata);
+    _components->scylla_metadata = std::move(metadata);
 }
 
 future<> sstable::read_summary() noexcept {
