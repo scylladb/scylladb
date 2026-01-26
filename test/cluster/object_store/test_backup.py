@@ -315,23 +315,22 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     #
     # in this test, we:
     # 1. upload:
-    #    prefix: {prefix}/{suffix}
+    #    prefix: {some}/{objects}/{path}
     #    sstables:
     #    - 1-TOC.txt
     #    - 2-TOC.txt
     #    - ...
     # 2. download:
-    #    prefix = {prefix}
+    #    prefix = {some}/{objects}/{path}
     #    sstables:
-    #    - {suffix}/1-TOC.txt
-    #    - {suffix}/2-TOC.txt
+    #    - 1-TOC.txt
+    #    - 2-TOC.txt
     #    - ...
-    suffix = 'suffix'
     old_files = list_sstables();
-    toc_names = [f'{suffix}/{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
+    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}/{suffix}')
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}')
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
@@ -630,6 +629,7 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
     for s in servers:
         streamed_to = defaultdict(int)
         log, mark = log_marks[s.server_id]
+        direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTables to the table', from_mark=mark)
         res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
         for r in res:
             target_host_id = r[1].group('target_host_id')
@@ -662,14 +662,17 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
 
         # asses balance
         streamed_to_counts = streamed_to.values()
-        assert len(streamed_to_counts) > 0
-        mean_count = statistics.mean(streamed_to_counts)
-        max_deviation = max(abs(count - mean_count) for count in streamed_to_counts)
-        if not primary_replica_only:
-            assert max_deviation == 0, f'if primary_replica_only is False, streaming should be perfectly balanced: {streamed_to}'
-            continue
+        if scope == 'node' and len(streamed_to_counts) == 0:
+            assert len(direct_downloads) > 0
+        else:
+            assert len(streamed_to_counts) > 0
+            mean_count = statistics.mean(streamed_to_counts)
+            max_deviation = max(abs(count - mean_count) for count in streamed_to_counts)
+            if not primary_replica_only:
+                assert max_deviation == 0, f'if primary_replica_only is False, streaming should be perfectly balanced: {streamed_to}'
+                continue
 
-        assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
+            assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
 
 async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix = None, object_storage = None, primary_replica_only = False, load_fn=do_restore_server):
     logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
@@ -937,6 +940,10 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
         res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
 
         assert res[0].count == expected_rows, f"number of rows after restore is incorrect: {res[0].count}"
+        log = await manager.server_open_log(server.server_id)
+        await log.wait_for("fully contained SSTables to local node from object storage", timeout=10)
+        # just make sure we had partially contained sstables as well
+        await log.wait_for("partially contained SSTables", timeout=10)
 
 @pytest.mark.asyncio
 async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClient, object_storage):

@@ -11,11 +11,13 @@
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/core/units.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/rpc/rpc.hh>
 #include "sstables_loader.hh"
+#include "dht/auto_refreshing_sharder.hh"
 #include "replica/distributed_loader.hh"
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
@@ -178,11 +180,13 @@ private:
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
+    sharded<replica::database>& _db;
     const locator::tablet_map& _tablet_map;
 public:
-    tablet_sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
+    tablet_sstable_streamer(netw::messaging_service& ms, sharded<replica::database>& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
                             std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
-        : sstable_streamer(ms, db, table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
+        : sstable_streamer(ms, db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
+        , _db(db)
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
@@ -199,9 +203,139 @@ private:
         return result;
     }
 
-    future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
-        // FIXME: fully contained sstables can be optimized.
-        return stream_sstables(pr, std::move(sstables), std::move(progress));
+    struct minimal_sst_info {
+        sstables::generation_type _generation;
+        sstables::sstable_version_types _version;
+        sstables::sstable_format_types _format;
+    };
+    using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
+
+    future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
+        llog.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", _table.schema()->cf_name(), this_shard_id(), from_shard);
+        auto& db = _db.local();
+        auto& table = db.find_column_family(ks, cf);
+        auto& sst_manager = table.get_sstables_manager();
+        auto sst = sst_manager.make_sstable(
+            table.schema(), table.get_storage_options(), min_info._generation, sstables::sstable_state::normal, min_info._version, min_info._format);
+        sst->set_sstable_level(0);
+        auto units = co_await sst_manager.dir_semaphore().get_units(1);
+        co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
+        co_await table.add_sstable_and_update_cache(sst);
+    }
+
+    future<>
+    stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
+        if (_stream_scope != stream_scope::node) {
+            co_return co_await stream_sstables(pr, std::move(sstables), std::move(progress));
+        }
+        llog.debug("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
+        auto downloaded_ssts = co_await download_fully_contained_sstables(std::move(sstables));
+
+        co_await smp::invoke_on_all(
+            [this, &downloaded_ssts, from = this_shard_id(), ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name()] -> future<> {
+                auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
+                for (const auto& min_info : shard_ssts) {
+                    co_await attach_sstable(from, ks, cf, min_info);
+                }
+            });
+        if (progress) {
+            progress->advance(std::accumulate(downloaded_ssts.cbegin(), downloaded_ssts.cend(), 0., [](float acc, const auto& v) { return acc + v.size(); }));
+        }
+    }
+
+    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
+        constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
+        constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
+        sst_classification_info downloaded_sstables(smp::count);
+        for (const auto& sstable : sstables) {
+            auto components = sstable->all_components();
+
+            // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
+            // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
+            // this partially created SSTable will be cleaned up properly at some point.
+            auto toc_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::TOC; });
+            if (toc_it != components.begin()) {
+                swap(*toc_it, components.front());
+            }
+
+            // Ensure the Scylla component is processed second.
+            //
+            // The sstable_sink->output() call for each component may invoke load_metadata()
+            // and save_metadata(), but these functions only operate correctly if the Scylla
+            // component file already exists on disk. If the Scylla component is written first,
+            // load_metadata()/save_metadata() become no-ops, leaving the original Scylla
+            // component (with outdated metadata) untouched.
+            //
+            // By placing the Scylla component second, we guarantee that:
+            //   1) The first component (TOC) is written and the Scylla component file already
+            //      exists on disk when subsequent output() calls happen.
+            //   2) Later output() calls will overwrite the Scylla component with the correct,
+            //      updated metadata.
+            //
+            // In short: Scylla must be written second so that all following output() calls
+            // can properly update its metadata instead of silently skipping it.
+            auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
+            if (scylla_it != std::next(components.begin())) {
+                swap(*scylla_it, *std::next(components.begin()));
+            }
+
+            auto gen = _table.get_sstable_generation_generator()();
+            auto files = co_await sstable->readable_file_for_all_components();
+            for (auto it = components.cbegin(); it != components.cend(); ++it) {
+                try {
+                    auto descriptor = sstable->get_descriptor(it->first);
+                    auto sstable_sink = sstables::create_stream_sink(
+                        _table.schema(),
+                        _table.get_sstables_manager(),
+                        _table.get_storage_options(),
+                        sstables::sstable_state::normal,
+                        sstables::sstable::component_basename(
+                            _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
+                        sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend()});
+                    auto out = co_await sstable_sink->output(foptions, stream_options);
+
+                    input_stream src(co_await [this, &it, sstable, f = files.at(it->first)]() -> future<input_stream<char>> {
+                        const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
+
+                        if (it->first != sstables::component_type::Data) {
+                            co_return input_stream<char>(
+                                co_await sstable->get_storage().make_source(*sstable, it->first, f, 0, std::numeric_limits<size_t>::max(), fis_options));
+                        }
+                        auto permit = co_await _db.local().obtain_reader_permit(_table, "download_fully_contained_sstables", db::no_timeout, {});
+                        co_return co_await (
+                            sstable->get_compression()
+                                ? sstable->data_stream(0, sstable->ondisk_data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::yes)
+                                : sstable->data_stream(0, sstable->data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::no));
+                    }());
+
+                    std::exception_ptr eptr;
+                    try {
+                        co_await seastar::copy(src, out);
+                    } catch (...) {
+                        eptr = std::current_exception();
+                        llog.info("Error downloading SSTable component {}. Reason: {}", it->first, eptr);
+                    }
+                    co_await src.close();
+                    co_await out.close();
+                    if (eptr) {
+                        co_await sstable_sink->abort();
+                        std::rethrow_exception(eptr);
+                    }
+                    if (auto sst = co_await sstable_sink->close()) {
+                        const auto& shards = sstable->get_shards_for_this_sstable();
+                        if (shards.size() != 1) {
+                            on_internal_error(llog, "Fully-contained sstable must belong to one shard only");
+                        }
+                        llog.debug("SSTable shards {}", fmt::join(shards, ", "));
+                        downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
+                    }
+                } catch (...) {
+                    llog.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
+                    throw;
+                }
+            }
+        }
+        co_return downloaded_sstables;
     }
 
     bool tablet_in_scope(locator::tablet_id) const;
@@ -400,8 +534,14 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
             progress,
             sstables_fully_contained.size() + sstables_partially_contained.size());
         auto tablet_pr = dht::to_partition_range(tablet_range);
-        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress);
-        co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), per_tablet_progress);
+        if (!sstables_partially_contained.empty()) {
+            llog.debug("Streaming {} partially contained SSTables.",sstables_partially_contained.size());
+            co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress);
+        }
+        if (!sstables_fully_contained.empty()) {
+            llog.debug("Streaming {} fully contained SSTables.",sstables_fully_contained.size());
+            co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), per_tablet_progress);
+        }
     }
 }
 
@@ -536,14 +676,6 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     }
 }
 
-template <typename... Args>
-static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets, Args&&... args) {
-    if (uses_tablets) {
-        return std::make_unique<tablet_sstable_streamer>(std::forward<Args>(args)...);
-    }
-    return std::make_unique<sstable_streamer>(std::forward<Args>(args)...);
-}
-
 future<locator::effective_replication_map_ptr> sstables_loader::await_topology_quiesced_and_get_erm(::table_id table_id) {
     // By waiting for topology to quiesce, we guarantee load-and-stream will not start in the middle
     // of a topology operation that changes the token range boundaries, e.g. split or merge.
@@ -581,9 +713,14 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // throughout its lifetime.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
 
-    auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
-                                          _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
-                                          primary, unlink_sstables(unlink), scope);
+    std::unique_ptr<sstable_streamer> streamer;
+    if (_db.local().find_column_family(table_id).uses_tablets()) {
+        streamer =
+            std::make_unique<tablet_sstable_streamer>(_messaging, _db, table_id, std::move(erm), std::move(sstables), primary, unlink_sstables(unlink), scope);
+    } else {
+        streamer =
+            std::make_unique<sstable_streamer>(_messaging, _db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink_sstables(unlink), scope);
+    }
 
     co_await streamer->stream(progress);
 }
