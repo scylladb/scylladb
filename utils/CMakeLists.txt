@@ -32,7 +32,6 @@ target_sources(utils
     io-wrappers.cc
     large_bitset.cc
     like_matcher.cc
-    limiting_data_source.cc
     lister.cc
     logalloc.cc
     managed_bytes.cc

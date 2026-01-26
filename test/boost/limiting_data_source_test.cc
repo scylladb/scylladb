@@ -7,10 +7,10 @@
  */
 
 #include "utils/assert.hh"
-#include "utils/limiting_data_source.hh"
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/limiting_data_source.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>

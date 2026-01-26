@@ -10,7 +10,7 @@
 #include "sstables/consumer.hh"
 
 #include "bytes.hh"
-#include "utils/limiting_data_source.hh"
+#include "test/lib/limiting_data_source.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "schema/schema.hh"
