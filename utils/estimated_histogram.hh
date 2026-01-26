@@ -60,7 +60,8 @@ namespace utils {
  * is split linearly to 'Precision' number of buckets.
  *
  * The total number of buckets is:
- *   NUM_BUCKETS = log2(Max/Min)*Precision +1
+ *   NUM_BUCKETS = log2(Max/Min)*Precision +1                   (when Min >= Precision)
+ *   NUM_BUCKETS = Precision + log2(Max/Precision)*Precision +1 (when Min == 1)
  *
  * For example, if the Min value is 128, the Max is 1024 and the Precision is 4, the number of buckets is 13.
  *
@@ -74,6 +75,9 @@ namespace utils {
  * Each range is split into 4 (The Precision).
  * 128            | 256            | 512            | 1024
  * 128 160 192 224| 256 320 384 448| 512 640 768 896|
+ *
+ * When Min=1 with Precision=4, buckets 0-3 provide linear resolution, then exponential:
+ * 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32...
  *
  * To get the exponential part of an index you divide by the Precision.
  * The linear part of the index is Modulus the precision.
@@ -107,18 +111,25 @@ namespace utils {
  * ================================
  * For Min, Max and Precision, choose numbers that are a power of 2.
  *
- * Limitation: You must set the MIN value to be higher or equal to the Precision.
+ * Min can be either:
+ * - Greater than or equal to Precision (standard exponential bucketing)
+ * - Equal to 1 (hybrid mode: linear bucketing for values 1 to Precision-1, then exponential)
+ *
+ * When Min=1, the histogram provides unit resolution for small values (1 to Precision-1),
+ * then transitions to exponential bucketing starting at Precision.
+ * Example with Min=1, Precision=4: buckets cover [1], [2], [3], then [4,5), [5,6), [6,7), [7,8), etc.
  *
  */
 template<uint64_t Min, uint64_t Max, size_t Precision>
-requires (Min >= Precision && Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
+requires ((Min == 1 || Min >= Precision) && Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
 class approx_exponential_histogram {
 public:
-
-    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max/Min);
-    static constexpr size_t NUM_BUCKETS = NUM_EXP_RANGES * Precision + 1;
+    // When Min==1, use Precision as the effective Min for exponential calculations
+    static constexpr uint64_t EFFECTIVE_MIN = (Min == 1) ? Precision : Min;
+    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max/EFFECTIVE_MIN);
+    static constexpr size_t NUM_BUCKETS = (Min == 1) ? (Precision + NUM_EXP_RANGES * Precision + 1) : (NUM_EXP_RANGES * Precision + 1);
     static constexpr unsigned PRECISION_BITS = log2floor(Precision);
-    static constexpr unsigned BASESHIFT = log2floor(Min);
+    static constexpr unsigned BASESHIFT = log2floor(EFFECTIVE_MIN);
     static constexpr uint64_t LOWER_BITS_MASK = Precision - 1;
 private:
     std::array<uint64_t, NUM_BUCKETS> _buckets;
@@ -136,8 +147,17 @@ public:
         if (bucket_id == NUM_BUCKETS - 1) {
             return Max;
         }
+        // Linear range for Min==1: direct mapping for buckets 0 to Precision-1
+        if constexpr (Min == 1) {
+            if (bucket_id < Precision) {
+                return bucket_id;
+            }
+            // Adjust bucket_id for exponential range
+            bucket_id -= Precision;
+        }
+        // Standard exponential calculation (works for both Min>=Precision and adjusted Min==1)
         int16_t exp_rang = (bucket_id >> PRECISION_BITS);
-        return (Min << exp_rang) +  ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
+        return (EFFECTIVE_MIN << exp_rang) + ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
     }
 
     /*!
@@ -154,19 +174,32 @@ public:
 
     /*!
      * \brief Find the bucket index for a given value
-     * The position of a value that is lower or equal to Min will always be 0.
+     * The position of a value that is lower than Min will always be 0.
      * The position of a value that is higher or equal to MAX will always be NUM_BUCKETS - 1.
      */
     uint16_t find_bucket_index(uint64_t val) const {
         if (val >= Max) {
             return NUM_BUCKETS - 1;
         }
-        if (val <= Min) {
-            return 0;
+        // Linear range for Min==1: direct mapping for values 0 to Precision-1
+        if constexpr (Min == 1) {
+            if (val < Precision) {
+                return val;
+            }
+        } else {
+            if (val <= Min) {
+                return 0;
+            }
         }
+        // Standard exponential calculation (works for both Min>=Precision and Min==1 with val>=Precision)
         uint16_t range = log2floor(val);
-        val >>= range - PRECISION_BITS; // leave the top most N+1 bits where N is the resolution.
-        return ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
+        val >>= range - PRECISION_BITS;
+        uint16_t index = ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
+        // Adjust index for Min==1 to account for the Precision linear buckets
+        if constexpr (Min == 1) {
+            index += Precision;
+        }
+        return index;
     }
 
     /*!
