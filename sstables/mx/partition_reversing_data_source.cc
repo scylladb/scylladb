@@ -8,6 +8,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/util/memory-data-source.hh>
 #include "partition_reversing_data_source.hh"
 #include "reader_permit.hh"
 #include "sstables/consumer.hh"
@@ -15,7 +16,6 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
 #include "sstables/types.hh"
-#include "utils/buffer_input_stream.hh"
 #include "utils/to_string.hh"
 
 namespace sstables {
@@ -417,7 +417,7 @@ private:
             }
             _current_read_size = std::min(max_read_size, _current_read_size * 2);
         }
-        co_return make_buffer_input_stream(_cached_read.share(_cached_read.size() - row_size, row_size));
+        co_return seastar::util::as_input_stream(_cached_read.share(_cached_read.size() - row_size, row_size));
     }
     temporary_buffer<char> last_row(size_t row_size) {
         auto tmp = _cached_read.share(_cached_read.size() - row_size, row_size);

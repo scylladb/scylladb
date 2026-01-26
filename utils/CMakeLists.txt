@@ -12,7 +12,6 @@ target_sources(utils
     big_decimal.cc
     bloom_calculations.cc
     bloom_filter.cc
-    buffer_input_stream.cc
     build_id.cc
     config_file.cc
     crypt_sha512.cc
@@ -33,7 +32,6 @@ target_sources(utils
     io-wrappers.cc
     large_bitset.cc
     like_matcher.cc
-    limiting_data_source.cc
     lister.cc
     logalloc.cc
     managed_bytes.cc
