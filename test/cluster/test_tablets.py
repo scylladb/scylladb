@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from collections import defaultdict
 import uuid
 
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
@@ -31,6 +32,7 @@ import glob
 import shutil
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # The glob below is designed to match the version-generation-format-component.extension format, e.g.
 # da-3gqu_1hke_4919c2kfgur9y2bm77-bti-Data.db
@@ -1695,3 +1697,60 @@ async def test_table_creation_wakes_up_balancer(manager: ManagerClient):
         # up to stats refresh period, which is 60s. So use a small timeout.
         await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
         await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)
+
+
+def calculate_powof2_tokens(num_nodes: int, tokens_per_node: int) -> dict[int, list[int]]:
+    exp = 0
+    while 2**exp < num_nodes * tokens_per_node:
+        exp += 1
+    n = 2**exp
+    new_tokens_combined = [int(i * 2**64 // n - 2**63 - 1) for i in range(1, n+1)]
+    calculated_new_tokens = defaultdict(list)
+    new_server_id = 1
+    for i, t in enumerate(new_tokens_combined):
+        calculated_new_tokens[new_server_id  + (i % num_nodes)].append(t)
+    for s, tokens in calculated_new_tokens.items():
+        calculated_new_tokens[s] = sorted(tokens)
+    logger.debug(f"{calculated_new_tokens=}")
+    return calculated_new_tokens
+
+async def get_tokens(manager, servers: list[ServerInfo]) -> dict[int, list[int]]: 
+    tokens = dict()
+    num_tokens = 0
+    for s in servers:
+        cql = await manager.get_cql_exclusive(s)
+        res = await cql.run_async("SELECT tokens FROM system.local")
+        tokens[s.server_id] = sorted(list([int(i) for i in res[0].tokens]))
+        num_tokens += len(tokens[s.server_id])
+    logger.debug(f"get_tokens: {num_tokens=} {tokens=}")
+    return tokens
+
+def verify_tokens(actual_tokens: dict[int, list[int]], calculated_new_tokens: dict[int, list[int]]):
+    logger.debug("Verifying tokens")
+    for s, tokens in actual_tokens.items():
+        found = False
+        for c, calculated in calculated_new_tokens.items():
+            if set(tokens) == set(calculated):
+                found = True
+                calculated_new_tokens.pop(c)
+                break
+        assert found, f"server_id={s} expected one of {calculated_new_tokens=}, but got {tokens=}"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("num_nodes", [1, 3])
+async def test_create_cluster_with_powof2_vnodes(manager: ManagerClient, num_nodes: int):
+    tokens_per_node = 16
+    calculated_new_tokens = calculate_powof2_tokens(num_nodes, tokens_per_node)
+
+    servers = []
+    for i, tokens in calculated_new_tokens.items():
+        logger.debug(f"Adding server {i} {tokens=}")
+        cmdline = [
+            f"--initial-token={','.join([str(t) for t in tokens])}",
+        ]
+        # FIXME: if some new token is in use by a node the new node won't bootstrap
+        servers.append(await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": f"rack{i}"}))
+
+    tokens = await get_tokens(manager, servers)
+
+    verify_tokens(tokens, calculated_new_tokens)
