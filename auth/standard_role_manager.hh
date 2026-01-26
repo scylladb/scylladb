@@ -114,6 +114,7 @@ private:
 
     future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change, ::service::group0_batch& mc);
 
+    future<std::optional<record>> legacy_find_record(std::string_view role_name);
     future<std::optional<record>> find_record(std::string_view role_name);
     future<record> require_record(std::string_view role_name);
     future<> collect_roles(

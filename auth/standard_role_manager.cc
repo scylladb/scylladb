@@ -60,7 +60,7 @@ static db::consistency_level consistency_for_role(std::string_view role_name) no
     return db::consistency_level::LOCAL_ONE;
 }
 
-future<std::optional<standard_role_manager::record>> standard_role_manager::find_record(std::string_view role_name) {
+future<std::optional<standard_role_manager::record>> standard_role_manager::legacy_find_record(std::string_view role_name) {
     const sstring query = seastar::format("SELECT * FROM {}.{} WHERE {} = ?",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
@@ -84,6 +84,23 @@ future<std::optional<standard_role_manager::record>> standard_role_manager::find
             (row.has("member_of")
                         ? row.get_set<sstring>("member_of")
                         : role_set())});
+}
+
+future<std::optional<standard_role_manager::record>> standard_role_manager::find_record(std::string_view role_name) {
+    if (legacy_mode(_qp)) {
+        return legacy_find_record(role_name);
+    }
+    auto name = sstring(role_name);
+    auto role = _cache.get(name);
+    if (!role) {
+        return make_ready_future<std::optional<record>>(std::nullopt);
+    }
+    return make_ready_future<std::optional<record>>(std::make_optional(record{
+        .name = std::move(name),
+        .is_superuser = role->is_superuser,
+        .can_login = role->can_login,
+        .member_of = role->member_of
+    }));
 }
 
 future<standard_role_manager::record> standard_role_manager::require_record(std::string_view role_name) {
