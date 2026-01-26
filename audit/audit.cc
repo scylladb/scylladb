@@ -268,7 +268,7 @@ future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state
         return make_ready_future<>();
     }
     if (audit_info->batch()) {
-        cql3::statements::batch_statement* batch = dynamic_cast<cql3::statements::batch_statement*>(statement.get());
+        cql3::statements::batch_statement* batch = static_cast<cql3::statements::batch_statement*>(statement.get());
         return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
             return inspect(m.statement, query_state, options, error);
         });
