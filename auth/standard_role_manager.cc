@@ -52,13 +52,6 @@ static const class_registrator<
         ::service::migration_manager&,
         cache&> registration("org.apache.cassandra.auth.CassandraRoleManager");
 
-struct record final {
-    sstring name;
-    bool is_superuser;
-    bool can_login;
-    role_set member_of;
-};
-
 static db::consistency_level consistency_for_role(std::string_view role_name) noexcept {
     if (role_name == meta::DEFAULT_SUPERUSER_NAME) {
         return db::consistency_level::QUORUM;
@@ -67,13 +60,13 @@ static db::consistency_level consistency_for_role(std::string_view role_name) no
     return db::consistency_level::LOCAL_ONE;
 }
 
-static future<std::optional<record>> find_record(cql3::query_processor& qp, std::string_view role_name) {
+future<std::optional<standard_role_manager::record>> standard_role_manager::find_record(std::string_view role_name) {
     const sstring query = seastar::format("SELECT * FROM {}.{} WHERE {} = ?",
-            get_auth_ks_name(qp),
+            get_auth_ks_name(_qp),
             meta::roles_table::name,
             meta::roles_table::role_col_name);
 
-    const auto results = co_await qp.execute_internal(
+    const auto results = co_await _qp.execute_internal(
             query,
             consistency_for_role(role_name),
             internal_distributed_query_state(),
@@ -93,8 +86,8 @@ static future<std::optional<record>> find_record(cql3::query_processor& qp, std:
                         : role_set())});
 }
 
-static future<record> require_record(cql3::query_processor& qp, std::string_view role_name) {
-    return find_record(qp, role_name).then([role_name](std::optional<record> mr) {
+future<standard_role_manager::record> standard_role_manager::require_record(std::string_view role_name) {
+    return find_record(role_name).then([role_name](std::optional<record> mr) {
         if (!mr) {
             throw nonexistant_role(role_name);
         }
@@ -386,7 +379,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
         return fmt::to_string(fmt::join(assignments, ", "));
     };
 
-    return require_record(_qp, role_name).then([this, role_name, &u, &mc](record) {
+    return require_record(role_name).then([this, role_name, &u, &mc](record) {
         if (!u.is_superuser && !u.can_login) {
             return make_ready_future<>();
         }
@@ -620,18 +613,17 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
     });
 }
 
-static future<> collect_roles(
-        cql3::query_processor& qp,
+future<> standard_role_manager::collect_roles(
         std::string_view grantee_name,
         bool recurse,
         role_set& roles) {
-    return require_record(qp, grantee_name).then([&qp, &roles, recurse](record r) {
-        return do_with(std::move(r.member_of), [&qp, &roles, recurse](const role_set& memberships) {
-            return do_for_each(memberships.begin(), memberships.end(), [&qp, &roles, recurse](const sstring& role_name) {
+    return require_record(grantee_name).then([this, &roles, recurse](standard_role_manager::record r) {
+        return do_with(std::move(r.member_of), [this, &roles, recurse](const role_set& memberships) {
+            return do_for_each(memberships.begin(), memberships.end(), [this, &roles, recurse](const sstring& role_name) {
                 roles.insert(role_name);
 
                 if (recurse) {
-                    return collect_roles(qp, role_name, true, roles);
+                    return collect_roles(role_name, true, roles);
                 }
 
                 return make_ready_future<>();
@@ -646,7 +638,7 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
     return do_with(
             role_set{sstring(grantee_name)},
             [this, grantee_name, recurse](role_set& roles) {
-        return collect_roles(_qp, grantee_name, recurse, roles).then([&roles] { return roles; });
+        return collect_roles(grantee_name, recurse, roles).then([&roles] { return roles; });
     });
 }
 
@@ -706,20 +698,20 @@ future<role_set> standard_role_manager::query_all(::service::query_state& qs) {
 }
 
 future<bool> standard_role_manager::exists(std::string_view role_name) {
-    return find_record(_qp, role_name).then([](std::optional<record> mr) {
+    return find_record(role_name).then([](std::optional<record> mr) {
         return static_cast<bool>(mr);
     });
 }
 
 future<bool> standard_role_manager::is_superuser(std::string_view role_name) {
-    return require_record(_qp, role_name).then([](record r) {
+    return require_record(role_name).then([](record r) {
         return r.is_superuser;
     });
 }
 
 future<bool> standard_role_manager::can_login(std::string_view role_name) {
     if (legacy_mode(_qp)) {
-       const auto r = co_await require_record(_qp, role_name);
+       const auto r = co_await require_record(role_name);
        co_return r.can_login;
     }
     auto role = _cache.get(sstring(role_name));
