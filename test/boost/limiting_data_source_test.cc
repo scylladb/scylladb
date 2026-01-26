@@ -53,7 +53,7 @@ data_source create_test_data_source() {
 
 void test_get(unsigned limit) {
     auto src = create_test_data_source();
-    auto tested = make_limiting_data_source(std::move(src), [limit] { return limit; });
+    auto tested = make_limiting_data_source(std::move(src), limit);
     char expected = 0;
     auto test_get = [&] {
         auto buf = tested.get().get();
@@ -69,7 +69,7 @@ void test_get(unsigned limit) {
 
 data_source prepare_test_skip() {
     auto src = create_test_data_source();
-    auto tested = make_limiting_data_source(std::move(src), [] { return 1; });
+    auto tested = make_limiting_data_source(std::move(src), 1);
     auto buf = tested.get().get();
     BOOST_REQUIRE_EQUAL(1, buf.size());
     BOOST_REQUIRE_EQUAL(0, buf[0]);

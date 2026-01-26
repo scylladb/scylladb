@@ -15,18 +15,18 @@ using namespace seastar;
 
 class limiting_data_source_impl final : public data_source_impl {
     data_source _src;
-    seastar::noncopyable_function<size_t()> _limit_generator;
+    size_t _limit;
     temporary_buffer<char> _buf;
     future<temporary_buffer<char>> do_get() {
-        uint64_t size = std::min(_limit_generator(), _buf.size());
+        uint64_t size = std::min(_limit, _buf.size());
         auto res = _buf.share(0, size);
         _buf.trim_front(size);
         return make_ready_future<temporary_buffer<char>>(std::move(res));
     }
 public:
-    limiting_data_source_impl(data_source&& src, seastar::noncopyable_function<size_t()>&& limit_generator)
+    limiting_data_source_impl(data_source&& src, size_t limit)
         : _src(std::move(src))
-        , _limit_generator(std::move(limit_generator))
+        , _limit(limit)
     {}
 
     limiting_data_source_impl(limiting_data_source_impl&&) noexcept = default;
@@ -56,6 +56,6 @@ public:
     }
 };
 
-data_source make_limiting_data_source(data_source&& src, seastar::noncopyable_function<size_t()>&& limit_generator) {
-    return data_source{std::make_unique<limiting_data_source_impl>(std::move(src), std::move(limit_generator))};
+data_source make_limiting_data_source(data_source&& src, size_t limit) {
+    return data_source{std::make_unique<limiting_data_source_impl>(std::move(src), limit)};
 }

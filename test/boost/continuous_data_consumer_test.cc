@@ -27,10 +27,9 @@
 
 namespace {
 
-input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf,
-                                            seastar::noncopyable_function<size_t()>&& limit_generator) {
+input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf, size_t limit) {
     auto res = data_source{std::make_unique<seastar::util::temporary_buffer_data_source>(std::move(buf))};
-    return input_stream < char > { make_limiting_data_source(std::move(res), std::move(limit_generator)) };
+    return input_stream < char > { make_limiting_data_source(std::move(res), limit) };
 }
 
 class test_consumer final : public data_consumer::continuous_data_consumer<test_consumer> {
@@ -55,7 +54,7 @@ class test_consumer final : public data_consumer::continuous_data_consumer<test_
         for (int i = 0; i < MULTIPLIER; ++i) {
             pos += unsigned_vint::serialize(tested_value, out + pos);
         }
-        return make_buffer_input_stream(std::move(buf), [] {return 1;});
+        return make_buffer_input_stream(std::move(buf), 1);
     }
 
 public:
@@ -128,7 +127,7 @@ class skipping_consumer final : public data_consumer::continuous_data_consumer<s
         std::memset(buf.get_write(), 'a', initial_data_size);
         std::memset(buf.get_write() + initial_data_size, 'b', to_skip);
         std::memset(buf.get_write() + initial_data_size + to_skip, 'a', next_data_size);
-        return make_buffer_input_stream(std::move(buf), [] {return 1;});
+        return make_buffer_input_stream(std::move(buf), 1);
     }
     static size_t prepare_initial_consumer_length(int initial_data_size, int to_skip) {
         // some bytes that we want to skip may end up even after the initial consumer range
