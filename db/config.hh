@@ -185,13 +185,6 @@ public:
      * All values and documentation taken from
      * http://docs.datastax.com/en/cassandra/2.1/cassandra/configuration/configCassandra_yaml_r.html
      */
-    named_value<double> background_writer_scheduling_quota;
-    named_value<bool> auto_adjust_flush_quota;
-    named_value<float> memtable_flush_static_shares;
-    named_value<float> compaction_static_shares;
-    named_value<float> compaction_max_shares;
-    named_value<bool> compaction_enforce_min_threshold;
-    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
     named_value<sstring> cluster_name;
     named_value<sstring> listen_address;
     named_value<sstring> listen_interface;
@@ -612,6 +605,14 @@ public:
     named_value<bool> force_capacity_based_balancing;
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
+
+    named_value<double> background_writer_scheduling_quota;
+    named_value<bool> auto_adjust_flush_quota;
+    named_value<float> memtable_flush_static_shares;
+    named_value<float> compaction_static_shares;
+    named_value<float> compaction_max_shares;
+    named_value<bool> compaction_enforce_min_threshold;
+    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 
     static const sstring default_tls_priority;
 private:
