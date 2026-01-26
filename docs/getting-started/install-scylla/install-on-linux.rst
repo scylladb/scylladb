@@ -46,8 +46,8 @@ Install ScyllaDB
 
             .. code-block:: console
     
-               sudo gpg --homedir /tmp --no-default-keyring --keyring /tmp/temp.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys a43e06657bac99e3
-               sudo gpg --homedir /tmp --no-default-keyring --keyring /tmp/temp.gpg --export --armor a43e06657bac99e3 | gpg --dearmor > /etc/apt/keyrings/scylladb.gpg
+               sudo gpg --homedir /tmp --no-default-keyring --keyring /tmp/temp.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys c503c686b007f39e
+               sudo gpg --homedir /tmp --no-default-keyring --keyring /tmp/temp.gpg --export --armor c503c686b007f39e | gpg --dearmor > /etc/apt/keyrings/scylladb.gpg
 
             .. code-block:: console
                :substitutions:
