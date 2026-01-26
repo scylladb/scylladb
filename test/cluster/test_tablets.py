@@ -1754,3 +1754,45 @@ async def test_create_cluster_with_powof2_vnodes(manager: ManagerClient, num_nod
     tokens = await get_tokens(manager, servers)
 
     verify_tokens(tokens, calculated_new_tokens)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("num_nodes", [1, 3])
+async def test_convert_cluster_to_powof2_vnodes(manager: ManagerClient, num_nodes: int):
+    tokens_per_node = 16
+
+    servers = await manager.servers_add(num_nodes, cmdline=[f"--num-tokens={tokens_per_node}"], auto_rack_dc="dc1")
+
+    async with new_test_keyspace(manager,
+        f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {num_nodes}}} "
+        "AND tablets = {'enabled': false}") as ks:
+
+        await manager.cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, ck int);")
+        stmt = manager.cql.prepare(f"INSERT INTO {ks}.test (pk, ck) VALUES (?, ?)")
+        num_keys = 1000
+        await asyncio.gather(*[manager.cql.run_async(stmt, [k, k]) for k in range(num_keys)])
+
+        calculated_new_tokens = calculate_powof2_tokens(num_nodes, tokens_per_node)
+
+        new_servers = []
+        for i, new_tokens in calculated_new_tokens.items():
+            new_server_id = num_nodes + i
+            logger.debug(f"Adding server {new_server_id} tokens={new_tokens}")
+            cmdline = [
+                f"--initial-token={','.join([str(t) for t in new_tokens])}",
+            ]
+            new_servers.append(await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": f"rack{i}"}))
+            await manager.decommission_node(servers[i - 1].server_id)
+
+        tokens = await get_tokens(manager, new_servers)
+
+        verify_tokens(tokens, calculated_new_tokens)
+
+        logger.debug("Verifying data")
+        data = dict()
+        res = await manager.cql.run_async(f"SELECT * FROM {ks}.test;")
+        for r in res:
+            assert r.pk >= 0 and r.pk < num_keys
+            assert r.pk == r.ck
+            assert r.pk not in data
+            data[r.pk] = r
+        assert len(data) == num_keys
