@@ -1378,6 +1378,11 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     return old_repaired_at;
 }
 
+future<> sstable::copy_components(const sstable& src) {
+    _components = co_await src._components.copy();
+    _recognized_components = src._recognized_components;
+}
+
 void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
@@ -1390,6 +1395,80 @@ void sstable::rewrite_statistics() {
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+}
+
+// Creates a new SSTable generation by hard-linking existing components and rewriting a specific one.
+// This efficiently creates a modified SSTable without copying all files.
+// 1. Create a new SSTable object with a new generation number
+//    - The creator function determines the new generation
+// 2. Hard-link all components EXCEPT the one being rewritten and optionally the Scylla component (if update_sstable_id is true)
+//    - The component being rewritten will be written fresh (not linked)
+// 3. Copy in-memory components from the source SSTable
+//    - This doesn't deep copy _components, just copies the foreign_ptr
+// 4. Apply the modifier function to the new SSTable's components
+// 5. If update_sstable_id is true, read scylla metadata and change sstable_id
+// 6. Write the component being rewritten (and optionally the Scylla component if update_sstable_id is true) to the new SSTable
+// 7. Finalize the new SSTable
+//    - Copy sharding information, seal the SSTable, and open data files
+future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
+        component_type component,
+        std::function<void(sstable&)> modifier,
+        bool update_sstable_id) {
+    if (!is_component_rewrite_supported(component)) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    if (!has_component(component)) {
+        on_internal_error(sstlog, fmt::format("SSTable does not have {} component to rewrite.", component_name(*this, component)));
+    }
+
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+    }
+
+    return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
+        auto new_sst = creator(shared_from_this());
+        auto generation = new_sst->generation();
+
+        std::unordered_set<component_type> excluded_components = {component};
+        if (update_sstable_id) {
+            excluded_components.insert(component_type::Scylla);
+        }
+
+        _storage->link_with_excluded_components(*this, generation, excluded_components).get();
+        new_sst->copy_components(*this).get();
+
+        modifier(*new_sst);
+
+        if (update_sstable_id) {
+            // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+            // If unchanged, reuse the existing _components->scylla_metadata instead.
+            scylla_metadata metadata;
+            read_simple<component_type::Scylla>(metadata).get();
+            metadata.set_sstable_identifier();
+            new_sst->write_component_with_metadata(component, std::move(metadata));
+        } else {
+            new_sst->write_component(component);
+        }
+
+        new_sst->_shards = this->_shards;
+        new_sst->seal_sstable(false).get();
+        new_sst->open_data().get();
+
+        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        return new_sst;
+    });
+}
+
+void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+    if (!is_component_rewrite_supported(type)) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    write_component(type);
+    write_simple<component_type::Scylla>(metadata);
+
+    _components->scylla_metadata = std::move(metadata);
 }
 
 future<> sstable::read_summary() noexcept {
@@ -1765,6 +1844,26 @@ void sstable::disable_component_memory_reload() {
     _total_memory_reclaimed = 0;
 }
 
+bool sstable::is_component_rewrite_supported(component_type type) {
+    switch (type) {
+    case component_type::Statistics:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void sstable::write_component(component_type type) {
+    switch (type) {
+    case component_type::Statistics:
+        write_statistics();
+        break;
+    default:
+        on_internal_error(sstlog, fmt::format("Writing component {} is not supported.", component_name(*this, type)));
+    }
+}
+
+
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
     co_await read_toc(cfg);
     // read scylla-meta after toc. Might need it to parse
@@ -2118,7 +2217,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sid = sstable_id(utils::UUID_gen::get_time_UUID());
         sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
     }
-    _components->scylla_metadata->data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
+    _components->scylla_metadata->set_sstable_identifier(sid);
 
     sstable_schema_type sstable_schema;
     sstable_schema.id = _schema->id();
@@ -3461,7 +3560,11 @@ sstable::unlink(storage::sync_dir sync) noexcept {
     auto remove_fut = _storage->wipe(*this, sync);
 
     try {
-        co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
+        if (_cloned_to_sstable_filename) {
+            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), _cloned_to_sstable_filename.value());
+        } else {
+            co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
+        }
     } catch (...) {
         memory::scoped_critical_alloc_section _;
         // Just log and ignore failures to delete large data entries.

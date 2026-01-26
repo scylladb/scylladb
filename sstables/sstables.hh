@@ -635,6 +635,7 @@ private:
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
+    std::optional<sstring> _cloned_to_sstable_filename;
 public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -761,6 +762,8 @@ private:
     // Disable reload of components for this sstable
     void disable_component_memory_reload();
 
+    static bool is_component_rewrite_supported(component_type type);
+    void write_component(component_type type);
 public:
     // Finds first position_in_partition in a given partition.
     // If reversed is false, then the first position is actually the first row (can be the static one).
@@ -1134,6 +1137,18 @@ public:
     // This function must run inside a seastar thread since it calls
     // rewrite_statistics which must run inside a seastar thread.
     int64_t update_repaired_at(int64_t repaired_at);
+    future<> copy_components(const sstable& src);
+
+    // Creates a new sstable by linking all sstable components except for the specified component,
+    // which is created by calling the provided sstable_creator function and then written to the disc.
+    // The modifier function is called on the new sstable before writing the component
+    // Returns the newly created and sealed sstable.
+    future<shared_sstable> link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
+            component_type component,
+            std::function<void(sstable&)> modifier,
+            bool update_sstable_id);
+    // Must be called in a seastar thread
+    void write_component_with_metadata(component_type type, scylla_metadata metadata);
 };
 
 // Validate checksums
