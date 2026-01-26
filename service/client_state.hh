@@ -359,8 +359,6 @@ public:
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER, std::optional<bool> is_vector_indexed = std::nullopt) const;
-    future<> has_schema_access(const schema& s, auth::permission p) const;
-    future<> has_schema_access(const sstring&, const sstring&, auth::permission p) const;
 
     future<> has_functions_access(auth::permission p) const;
     future<> has_functions_access(const sstring& ks, auth::permission p) const;
