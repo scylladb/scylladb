@@ -46,6 +46,7 @@
 BOOST_AUTO_TEST_SUITE(memtable_test)
 
 using namespace std::literals::chrono_literals;
+namespace utf = boost::unit_test;
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -149,7 +150,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_p
 }
 
 // reverse
-SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_reverse_basic) {
+SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_reverse_basic,  * utf::label("nightly")) {
     return test_memtable(run_mutation_source_tests_reverse_basic);
 }
 
