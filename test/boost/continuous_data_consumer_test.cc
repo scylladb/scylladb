@@ -10,7 +10,7 @@
 #include "sstables/consumer.hh"
 
 #include "bytes.hh"
-#include "utils/buffer_input_stream.hh"
+#include "utils/limiting_data_source.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "schema/schema.hh"
@@ -20,11 +20,18 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/util/memory-data-source.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <random>
 
 namespace {
+
+input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf,
+                                            seastar::noncopyable_function<size_t()>&& limit_generator) {
+    auto res = data_source{std::make_unique<seastar::util::temporary_buffer_data_source>(std::move(buf))};
+    return input_stream < char > { make_limiting_data_source(std::move(res), std::move(limit_generator)) };
+}
 
 class test_consumer final : public data_consumer::continuous_data_consumer<test_consumer> {
     static const int MULTIPLIER = 10;
