@@ -809,6 +809,27 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbst
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
+# Test UpdateItem which does a PUT followed by a REMOVE - the single column value should be removed.
+# Reproduces #28369
+def test_streams_update_item_with_remove_doesnt_work(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ["INSERT", {"p": "p0", "c": "c0"}, null, {"p": "p0", "c": "c0", "e": 0, "g": 0}],
+            ["MODIFY", {"p": "p0", "c": "c0"}, {"p": "p0", "c": "c0", "e": 0, "g": 0}, {"p": "p0", "c": "c0", "e": 0}],
+        ]
+
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, AttributeUpdates={'e': {'Value': 0, 'Action': 'PUT'}, 'g': {'Value': 0, 'Action': 'PUT'}})
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 0, "g": 0}
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g', )
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', {})
+        assert v == {"p": "p0", "c": "c0", "e": 0}
+
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
 # Replacing an item should result in a MODIFY, rather than REMOVE and MODIFY.
 # Moreover, the old item should be visible in OldImage. Reproduces #6930.
 def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
