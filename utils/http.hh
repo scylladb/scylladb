@@ -27,23 +27,24 @@ protected:
     int _port;
     logging::logger& _logger;
     semaphore _init_semaphore{1};
-    bool _addr_init = false;
     bool _creds_init = false;
-    std::vector<net::inet_address> _addr_list;
+    std::optional<std::vector<net::inet_address>> _addr_list;
     shared_ptr<tls::certificate_credentials> _creds;
     uint16_t _addr_pos{0};
     bool _use_https;
+    std::chrono::seconds _address_ttl{0};
+    timer<lowres_clock> _addr_update_timer;
 
-    future<> init_addresses();
     future<> init_credentials();
     future<net::inet_address> get_address();
     future<shared_ptr<tls::certificate_credentials>> get_creds();
-    future<connected_socket> connect();
+    future<connected_socket> connect(net::inet_address address);
 public:
     dns_connection_factory(dns_connection_factory&&);
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
 
     virtual future<connected_socket> make(abort_source*) override;
+    future<> close() override;
 };
 
 } // namespace utils::http
