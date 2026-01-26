@@ -69,6 +69,8 @@ private:
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
+    future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
+            const std::unordered_set<component_type>& excluded_components) const override;
 
     future<> change_dir(sstring new_dir) {
         auto old_dir = std::exchange(_dir, opened_directory(new_dir));
@@ -410,6 +412,32 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
 
 future<> filesystem_storage::create_links(const sstable& sst, const std::filesystem::path& dir) const {
     return create_links_common(sst, dir.native(), sst._generation, link_mode::default_mode);
+}
+
+future<> filesystem_storage::link_with_excluded_components(const sstable& sst, generation_type new_gen,
+        const std::unordered_set<component_type>& excluded_components) const {
+    sstlog.trace("link_with_excluded_components: {} -> generation={} excluded={}",
+            sst.get_filename(), new_gen, excluded_components);
+
+    auto dst_dir = _dir.native();
+    auto comps = sst.all_components();
+
+    auto dst_temp_toc = filename(sst, dst_dir, new_gen, component_type::TemporaryTOC);
+    co_await sst.sstable_write_io_check(idempotent_link_file, fmt::to_string(sst.filename(component_type::TOC)), std::move(dst_temp_toc));
+    co_await _dir.sync(sst._write_error_handler);
+
+    co_await parallel_for_each(comps, [&] (auto& p) {
+        auto& [comp_id, comp_name] = p;
+        if (excluded_components.contains(comp_id) || comp_id == component_type::TOC) {
+            return make_ready_future<>();
+        }
+        auto src = filename(sst, _dir.native(), sst._generation, comp_name);
+        auto dst = filename(sst, dst_dir, new_gen, comp_name);
+        return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
+    });
+
+    co_await _dir.sync(sst._write_error_handler);
+    sstlog.trace("link_with_excluded_components: {} -> generation={}: done", sst.get_filename(), new_gen);
 }
 
 future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {

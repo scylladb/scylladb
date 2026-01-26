@@ -5128,6 +5128,9 @@ struct large_row_handler : public db::large_data_handler {
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view) const override {
         return make_ready_future<>();
     }
+    virtual future<> update_large_data_entries_sstable_name(const schema& s, sstring old_name, sstring new_name, std::string_view large_table_name) const override {
+        return make_ready_future<>();
+    }
 };
 }
 

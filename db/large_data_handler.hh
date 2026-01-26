@@ -112,6 +112,7 @@ public:
     }
 
     future<> maybe_delete_large_data_entries(sstables::shared_sstable sst);
+    future<> maybe_update_large_data_entries_sstable_name(sstables::shared_sstable sst, sstring new_name);
 
     const large_data_handler::stats& stats() const { return _stats; }
 
@@ -141,6 +142,7 @@ protected:
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const = 0;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const = 0;
+    virtual future<> update_large_data_entries_sstable_name(const schema& s, sstring old_name, sstring new_name, std::string_view large_table_name) const = 0;
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const = 0;
 };
 
@@ -172,6 +174,7 @@ public:
 protected:
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const override;
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const override;
+    virtual future<> update_large_data_entries_sstable_name(const schema& s, sstring old_name, sstring new_name, std::string_view large_table_name) const override;
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
@@ -186,9 +189,20 @@ private:
             uint64_t dead_rows, uint64_t range_tombstones) const;
 
 private:
+    using row_reinsert_func = std::function<future<>(const cql3::untyped_result_set_row&)>;
+    row_reinsert_func make_row_reinsert_func(std::string_view large_table_name, const sstring& ks_name, const sstring& cf_name, const sstring& new_name) const;
+
     template <typename... Args>
     future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
             std::string_view size_desc, std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const;
+
+    // Core INSERT helper used by both try_record (for new entries) and
+    // update_large_data_entries_sstable_name (for re-inserting with a new sstable name).
+    template <typename... Args>
+    future<> do_insert_large_data_entry(std::string_view large_table,
+            sstring ks_name, sstring cf_name, sstring sstable_name,
+            int64_t size, sstring partition_key, db_clock::time_point compaction_time,
+            const std::vector<sstring>& extra_fields, Args&&... args) const;
 };
 
 class nop_large_data_handler : public large_data_handler {
@@ -199,6 +213,10 @@ public:
     }
 
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const override {
+        return make_ready_future<>();
+    }
+
+    virtual future<> update_large_data_entries_sstable_name(const schema& s, sstring old_name, sstring new_name, std::string_view large_table_name) const override {
         return make_ready_future<>();
     }
 

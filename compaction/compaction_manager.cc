@@ -1786,6 +1786,41 @@ protected:
     }
 };
 
+class rewrite_sstables_component_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
+    std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& _rewritten_sstables;
+public:
+    rewrite_sstables_component_compaction_task_executor(compaction_manager& mgr,
+                                       throw_if_stopping do_throw_if_stopping,
+                                       compaction_group_view* t,
+                                       tasks::task_id parent_id,
+                                       compaction_type_options options,
+                                       std::vector<sstables::shared_sstable> sstables,
+                                       compacting_sstable_registration compacting,
+                                       std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables)
+            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, options, {},
+                std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::no, "component_rewrite"),
+            _rewritten_sstables(rewritten_sstables)
+    {}
+protected:
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        compaction_stats stats{};
+
+        switch_state(state::pending);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+
+        while (!_sstables.empty()) {
+            auto sst = consume_sstable();
+            auto it = _rewritten_sstables.emplace(sst, sstables::shared_sstable{}).first;
+            auto res = co_await rewrite_sstable(std::move(sst));
+            _cm._validation_errors += res.stats.validation_errors;
+            stats += res.stats;
+            it->second = std::move(res.new_sstables.front());
+        }
+
+        co_return stats;
+    }
+};
+
 class split_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
     compaction_type_options::split _opt;
 public:
@@ -1897,6 +1932,28 @@ compaction_manager::rewrite_sstables(compaction_group_view& t, compaction_type_o
                                      get_candidates_func get_func, tasks::task_info info, can_purge_tombstones can_purge,
                                      sstring options_desc) {
     return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>("rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), throw_if_stopping::no, can_purge, std::move(options_desc));
+}
+
+future<compaction_manager::compaction_stats_opt>
+compaction_manager::rewrite_sstables_component(compaction_group_view& t,
+                                     std::vector<sstables::shared_sstable>& sstables,
+                                     compaction_type_options options,
+                                     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
+                                     tasks::task_info info) {
+    auto gh = start_compaction(t);
+    if (!gh) {
+        co_return std::nullopt;
+    }
+
+    if (sstables.empty()) {
+        co_return std::nullopt;
+    }
+
+    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
+    compacting.register_compacting(sstables);
+
+    co_return co_await perform_compaction<rewrite_sstables_component_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id,
+        std::move(options), std::move(sstables), std::move(compacting), rewritten_sstables);
 }
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
@@ -2321,6 +2378,18 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     co_await sst->unlink();
 
     co_return ret;
+}
+
+future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> compaction_manager::perform_component_rewrite(compaction::compaction_group_view& t,
+            tasks::task_info info,
+            std::vector<sstables::shared_sstable> sstables,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction_type_options::component_rewrite::update_sstable_id update_id) {
+    std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
+    rewritten_sstables.reserve(sstables.size());
+    co_await rewrite_sstables_component(t, sstables, compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id), rewritten_sstables, info);
+    co_return rewritten_sstables;
 }
 
 // Submit a table to be scrubbed and wait for its termination.
