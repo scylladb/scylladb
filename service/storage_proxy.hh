@@ -802,7 +802,6 @@ public:
 
     mutation get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
-    future<> stop();
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
     future<> drain_hints_for_left_nodes();
