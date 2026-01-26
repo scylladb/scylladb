@@ -199,9 +199,6 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
       #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
 
 
-If you need JMX server, see
-:doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`
-and get new version. 
 
 Start the node
 --------------

@@ -94,16 +94,6 @@ Install ScyllaDB
 
                apt-get install scylla{,-server,-kernel-conf,-node-exporter,-conf,-python3,-cqlsh}=2025.3.1-0.20250907.2bbf3cf669bb-1
 
-
-        #. (Ubuntu only) Set Java 11.
-
-            .. code-block:: console
-    
-               sudo apt-get update
-               sudo apt-get install -y openjdk-11-jre-headless
-               sudo update-java-alternatives --jre-headless -s java-1.11.0-openjdk-amd64
-
-
    .. group-tab:: Centos/RHEL
 
         #. Install the EPEL repository.
@@ -156,14 +146,6 @@ Install ScyllaDB
                :class: hide-copy-button
     
                sudo yum install scylla-5.2.3
-
-(Optional) Install scylla-jmx
--------------------------------
-
-    scylla-jmx is an optional package and is not installed by default.
-    If you need JMX server, see :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`.
-
-
 
 .. include:: /getting-started/_common/setup-after-install.rst
 
