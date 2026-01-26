@@ -695,6 +695,14 @@ struct scylla_metadata {
         auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
         return sid ? sid->value : sstable_id::create_null_id();
     }
+    components_digests& get_or_create_components_digests() {
+        auto* cd = data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+        if (!cd) {
+            data.set<scylla_metadata_type::ComponentsDigests>(components_digests{});
+            cd = data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+        }
+        return *cd;
+    }
     const components_digests* get_components_digests() const {
         return data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
     }

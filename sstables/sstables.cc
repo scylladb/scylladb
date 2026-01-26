@@ -1413,6 +1413,11 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     return old_repaired_at;
 }
 
+future<> sstable::copy_components(const sstable& src) {
+    _components = co_await src._components.copy();
+    _recognized_components = src._recognized_components;
+}
+
 void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
@@ -1425,6 +1430,62 @@ void sstable::rewrite_statistics() {
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+}
+
+future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
+        component_type component,
+        std::function<void(sstable&)> modifier) {
+    auto new_sst = sstable_creator(shared_from_this());
+    auto generation = new_sst->generation();
+
+    if (!is_component_rewrite_supported(component)) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    if (!has_component(component)) {
+        on_internal_error(sstlog, fmt::format("SSTable does not have {} component to rewrite.", component_name(*this, component)));
+    }
+
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+    }
+
+    co_await _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla});
+    co_await new_sst->copy_components(*this);
+
+    modifier(*new_sst);
+
+    scylla_metadata metadata;
+    co_await read_simple<component_type::Scylla>(metadata);
+
+    co_await seastar::async([&] {
+        new_sst->write_component_with_metadata(component, std::move(metadata));
+    });
+
+    new_sst->_shards = this->_shards;
+    co_await new_sst->seal_sstable(false);
+    co_await new_sst->open_data();
+
+    co_return new_sst;
+}
+
+void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+    if (type != component_type::Statistics) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    write_component(type);
+
+    auto& cd = metadata.get_or_create_components_digests();
+    auto statistics_digest = _components_digests.map[type];
+    cd.map[component_type::Statistics] = statistics_digest;
+
+    metadata.digest = serialized_checksum(_version, metadata.data);
+
+    write_simple<component_type::Scylla>(metadata);
+
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests, scylla_metadata::components_digests>(std::move(cd));
+    _components->scylla_metadata->digest = metadata.digest;
 }
 
 future<> sstable::read_summary() noexcept {
@@ -1800,6 +1861,26 @@ void sstable::disable_component_memory_reload() {
 
     _total_memory_reclaimed = 0;
 }
+
+bool sstable::is_component_rewrite_supported(component_type type) const {
+    switch (type) {
+        case component_type::Statistics:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void sstable::write_component(component_type type) {
+    switch (type) {
+        case component_type::Statistics:
+            write_statistics();
+            break;
+        default:
+            on_internal_error(sstlog, fmt::format("Writing component {} is not supported.", component_name(*this, type)));
+    }
+}
+
 
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
     co_await read_toc(cfg);
