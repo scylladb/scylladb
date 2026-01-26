@@ -104,6 +104,12 @@ class view_update_generator;
  *            redo the missing step, for simplicity.
  */
 class view_builder final : public service::migration_listener::only_view_notifications, public seastar::peering_sharded_service<view_builder> {
+    //aliasing for semaphore units that will be used throughout the class
+    using view_builder_units = semaphore_units<named_semaphore_exception_factory>;
+
+    //aliasing for optional semaphore units that will be used throughout the class
+    using view_builder_units_opt = std::optional<view_builder_units>;
+
     /**
      * Keeps track of the build progress for a particular view.
      * When the view is built, next_token == first_token.
@@ -173,6 +179,16 @@ class view_builder final : public service::migration_listener::only_view_notific
     // Ensures bookkeeping operations are serialized, meaning that while we execute
     // a build step we don't consider newly added or removed views. This simplifies
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
+    // Semaphore usage invariants:
+    // - One unit of _sem serializes all per-shard bookkeeping that mutates view-builder state
+    //   (_base_to_build_step, _built_views, build_status, reader resets).
+    // - The unit is held for the whole operation, including the async chain, until the state
+    //   is stable for the next operation on that shard.
+    // - Cross-shard operations acquire _sem on shard 0 for the duration of the broadcast.
+    //   Other shards acquire their own _sem only around their local handling; shard 0 skips
+    //   the local acquire because it already holds the unit from the dispatcher.
+    // Guard the whole startup routine with a semaphore so that it's not intercepted by
+    // `on_drop_view`, `on_create_view`, or `on_update_view` events.
     seastar::named_semaphore _sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder"}};
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
@@ -269,12 +285,11 @@ private:
     void setup_metrics();
     future<> dispatch_create_view(sstring ks_name, sstring view_name);
     future<> dispatch_drop_view(sstring ks_name, sstring view_name);
-    future<> handle_seed_view_build_progress(sstring ks_name, sstring view_name);
-    future<> handle_create_view_local(sstring ks_name, sstring view_name);
-    future<> handle_drop_view_local(sstring ks_name, sstring view_name);
-    future<> handle_create_view_local_impl(sstring ks_name, sstring view_name);
-    future<> handle_drop_view_local_impl(sstring ks_name, sstring view_name);
-    future<> handle_drop_view_global_cleanup(sstring ks_name, sstring view_name);
+    future<> handle_seed_view_build_progress(const sstring& ks_name, const sstring& view_name);
+    future<> handle_create_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units);
+    future<> handle_drop_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units);
+    future<> handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name);
+    future<view_builder_units> get_or_adopt_view_builder_lock(view_builder_units_opt units);
 
     template <typename Func1, typename Func2>
     future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {

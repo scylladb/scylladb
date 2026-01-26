@@ -65,6 +65,7 @@
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
+#include "view_builder.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
 #include "types/list.hh"
@@ -2241,9 +2242,16 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
     try {
         view_builder_init_state vbi;
         auto fail = defer([&barrier] mutable { barrier.abort(); });
-        // Guard the whole startup routine with a semaphore,
-        // so that it's not intercepted by `on_drop_view`, `on_create_view`
-        // or `on_update_view` events.
+        // Semaphore usage invariants:
+        // - One unit of _sem serializes all per-shard bookkeeping that mutates view-builder state
+        //   (_base_to_build_step, _built_views, build_status, reader resets).
+        // - The unit is held for the whole operation, including the async chain, until the state
+        //   is stable for the next operation on that shard.
+        // - Cross-shard operations acquire _sem on shard 0 for the duration of the broadcast.
+        //   Other shards acquire their own _sem only around their local handling; shard 0 skips
+        //   the local acquire because it already holds the unit from the dispatcher.
+        // Guard the whole startup routine with a semaphore so that it's not intercepted by
+        // `on_drop_view`, `on_create_view`, or `on_update_view` events.
         auto units = co_await get_units(_sem, view_builder_semaphore_units);
         // Wait for schema agreement even if we're a seed node.
         co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
@@ -2667,63 +2675,60 @@ static bool should_ignore_tablet_keyspace(const replica::database& db, const sst
     return db.features().view_building_coordinator && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
 }
 
-future<> view_builder::dispatch_create_view(sstring ks_name, sstring view_name) {
-    if (should_ignore_tablet_keyspace(_db, ks_name)) {
-        return make_ready_future<>();
-    }
-    return with_semaphore(_sem, view_builder_semaphore_units, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-        // This runs on shard 0 only; seed the global rows before broadcasting.
-        return handle_seed_view_build_progress(ks_name, view_name).then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-            return container().invoke_on_all([ks_name = std::move(ks_name), view_name = std::move(view_name)] (view_builder& vb) mutable {
-                return vb.handle_create_view_local(std::move(ks_name), std::move(view_name));
-            });
-        });
-    });
+future<view_builder::view_builder_units> view_builder::get_or_adopt_view_builder_lock(view_builder_units_opt units) {
+    co_return units ? std::move(*units) : co_await get_units(_sem, view_builder_semaphore_units);
 }
 
-future<> view_builder::handle_seed_view_build_progress(sstring ks_name, sstring view_name) {
+future<> view_builder::dispatch_create_view(sstring ks_name, sstring view_name) {
+    if (should_ignore_tablet_keyspace(_db, ks_name)) {
+        co_return;
+    }
+
+    auto units = co_await get_or_adopt_view_builder_lock(std::nullopt);
+    co_await handle_seed_view_build_progress(ks_name, view_name);
+
+    co_await coroutine::all(
+        [this, ks_name, view_name, units = std::move(units)] mutable -> future<> {
+            co_await handle_create_view_local(ks_name, view_name, std::move(units)); },
+        [this, ks_name, view_name] mutable -> future<> {
+            co_await container().invoke_on_others([ks_name = std::move(ks_name), view_name = std::move(view_name)] (view_builder& vb) mutable -> future<> {
+                return vb.handle_create_view_local(ks_name, view_name, std::nullopt); }); });
+}
+
+future<> view_builder::handle_seed_view_build_progress(const sstring& ks_name, const sstring& view_name) {
     auto view = view_ptr(_db.find_schema(ks_name, view_name));
     auto& step = get_or_create_build_step(view->view_info()->base_id());
     return _sys_ks.register_view_for_building_for_all_shards(view->ks_name(), view->cf_name(), step.current_token());
 }
 
-future<> view_builder::handle_create_view_local(sstring ks_name, sstring view_name){
-    if (this_shard_id() == 0) { 
-        return handle_create_view_local_impl(std::move(ks_name), std::move(view_name));
-    } else {
-        return with_semaphore(_sem, view_builder_semaphore_units, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-            return handle_create_view_local_impl(std::move(ks_name), std::move(view_name));
-        });
-    }
-}
-
-future<> view_builder::handle_create_view_local_impl(sstring ks_name, sstring view_name) {
+future<> view_builder::handle_create_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units) {
+    [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::move(units));
     auto view = view_ptr(_db.find_schema(ks_name, view_name));
     auto& step = get_or_create_build_step(view->view_info()->base_id());
-    return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
-        return flush_base(step.base, _as);
-    }).then([this, view, &step] () {
+    try {
+        co_await coroutine::all(
+            [&step] -> future<> {
+                co_await step.base->await_pending_writes(); },
+            [&step] -> future<> {
+                co_await step.base->await_pending_streams(); });
+        co_await flush_base(step.base, _as);
+    
         // This resets the build step to the current token. It may result in views currently
         // being built to receive duplicate updates, but it simplifies things as we don't have
         // to keep around a list of new views to build the next time the reader crosses a token
         // threshold.
-        return initialize_reader_at_current_token(step).then([this, view, &step] () mutable {
-            return add_new_view(view, step);
-        }).then_wrapped([this, view] (future<>&& f) {
-            try {
-                f.get();
-            } catch (abort_requested_exception&) {
-                vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
-            } catch (raft::request_aborted&) {
-                vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
-            } catch (...) {
-                vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), std::current_exception());
-            }
+        co_await initialize_reader_at_current_token(step);
+        co_await add_new_view(view, step);
+    } catch (abort_requested_exception&) {
+        vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
+    } catch (raft::request_aborted&) {
+        vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
+    } catch (...) {
+        vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), std::current_exception());
+    }
 
-            // Waited on indirectly in stop().
-            static_cast<void>(_build_step.trigger());
-        });
-    });
+    // Waited on indirectly in stop().
+    static_cast<void>(_build_step.trigger());
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
@@ -2760,62 +2765,55 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 
 future<> view_builder::dispatch_drop_view(sstring ks_name, sstring view_name) {
     if (should_ignore_tablet_keyspace(_db, ks_name)) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return with_semaphore(_sem, view_builder_semaphore_units, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-        // This runs on shard 0 only; broadcast local cleanup before global cleanup.
-        return container().invoke_on_all([ks_name, view_name] (view_builder& vb) mutable {
-            return vb.handle_drop_view_local(std::move(ks_name), std::move(view_name));
-        }).then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-            return handle_drop_view_global_cleanup(std::move(ks_name), std::move(view_name));
-        });
-    });
+    auto units = co_await get_or_adopt_view_builder_lock(std::nullopt);
+
+    co_await coroutine::all(
+        [this, ks_name, view_name, units = std::move(units)] mutable -> future<> {
+            co_await handle_drop_view_local(ks_name, view_name, std::move(units)); },
+        [this, ks_name, view_name] mutable -> future<> {
+            co_await container().invoke_on_others([ks_name = std::move(ks_name), view_name = std::move(view_name)] (view_builder& vb) mutable -> future<> {
+                return vb.handle_drop_view_local(ks_name, view_name, std::nullopt); });});
+    co_await handle_drop_view_global_cleanup(ks_name, view_name);
 }
 
-future<> view_builder::handle_drop_view_local(sstring ks_name, sstring view_name) {
-    if (this_shard_id() == 0) { 
-        return handle_drop_view_local_impl(std::move(ks_name), std::move(view_name));
-    } else {
-        return with_semaphore(_sem, view_builder_semaphore_units, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] () mutable {
-            return handle_drop_view_local_impl(std::move(ks_name), std::move(view_name));
-        });
-    }
-}
-
-future<> view_builder::handle_drop_view_local_impl(sstring ks_name, sstring view_name) {
+future<> view_builder::handle_drop_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units) {
+    [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::move(units));
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
-    // The view is absent from the database at this point, so find it by brute force.
-    ([&, this] {
-        for (auto& [_, step] : _base_to_build_step) {
-            if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
-                continue;
-            }
-            for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
-                if (it->view->cf_name() == view_name) {
-                    _built_views.erase(it->view->id());
-                    step.build_status.erase(it);
-                    return;
-                }
+
+    for (auto& [_, step] : _base_to_build_step) {
+        if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
+            continue;
+        }
+        for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
+            if (it->view->cf_name() == view_name) {
+                _built_views.erase(it->view->id());
+                step.build_status.erase(it);
+                co_return;
             }
         }
-    })();
-    return make_ready_future<>();  
+    }
 }
 
-future<> view_builder::handle_drop_view_global_cleanup(sstring ks_name, sstring view_name) {
+future<> view_builder::handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name) {
     if (this_shard_id() != 0) {
-        return make_ready_future<>();
+        co_return;
     }
     vlogger.info0("Starting view global cleanup {}.{}", ks_name, view_name);
-    return when_all_succeed(
-                _sys_ks.remove_view_build_progress_across_all_shards(ks_name, view_name),
-                _sys_ks.remove_built_view(ks_name, view_name),
-                remove_view_build_status(ks_name, view_name))
-                    .discard_result()
-                    .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
-        vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
-    });
+    
+    try {
+        co_await coroutine::all(
+            [this, &ks_name, &view_name] -> future<>  {
+                co_await _sys_ks.remove_view_build_progress_across_all_shards(ks_name, view_name); },
+            [this, &ks_name, &view_name] -> future<>  {
+                co_await _sys_ks.remove_built_view(ks_name, view_name); },
+            [this, &ks_name, &view_name] -> future<>  {
+                co_await remove_view_build_status(ks_name, view_name); });
+    } catch (...) {
+        vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, std::current_exception());
+    }
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
