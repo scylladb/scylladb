@@ -140,16 +140,55 @@ Vector Index :label-note:`ScyllaDB Cloud`
    `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
 
 ScyllaDB supports creating vector indexes on tables, allowing queries on the table to use those indexes for efficient
-similarity search on vector data. 
+similarity search on vector data. Vector indexes could be a global index for indexing vectors per table or a local
+index for indexing vectors per partition.
 
 The vector index is the only custom type index supported in ScyllaDB. It is created using
-the ``CUSTOM`` keyword and specifying the index type as ``vector_index``. Example:
+the ``CUSTOM`` keyword and specifying the index type as ``vector_index``. It is also possible to
+add additional columns to the index for filtering the search results. The partition column
+specified in the global vector index definition must be the vector column, and any subsequent
+columns are treated as filtering columns. The local vector index requires that the partition key
+of the base table is also the partition key of the index and the vector column is the first one
+from the following columns.
+
+Example of a global vector index:
 
 .. code-block:: cql
 
-      CREATE CUSTOM INDEX vectorIndex ON ImageEmbeddings (embedding) 
+      CREATE CUSTOM INDEX vectorIndex ON ImageEmbeddings (embedding, category, info)
       USING 'vector_index' 
       WITH OPTIONS = {'similarity_function': 'COSINE', 'maximum_node_connections': '16'};
+
+Example of a local vector index:
+
+.. code-block:: cql
+
+      CREATE CUSTOM INDEX vectorIndex ON ImageEmbeddings ((id, created_at), embedding, category, info)
+      USING 'vector_index' 
+      WITH OPTIONS = {'similarity_function': 'COSINE', 'maximum_node_connections': '16'};
+
+The following types of filtering columns are supported in vector indexes:
+
+* ``ascii``
+* ``bigint``
+* ``blob``
+* ``boolean``
+* ``date``
+* ``decimal``
+* ``double``
+* ``float``
+* ``inet``
+* ``int``
+* ``smallint``
+* ``text``
+* ``varchar``
+* ``time``
+* ``timestamp``
+* ``timeuuid``
+* ``tinyint``
+* ``uuid``
+* ``varint``
+
 
 The following options are supported for vector indexes. All of them are optional.
 

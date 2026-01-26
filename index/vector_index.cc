@@ -17,10 +17,15 @@
 #include "index/secondary_index.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/concrete_types.hh"
+#include "types/types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>
 
+namespace {
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+logging::logger vilogger("vector_index");
+}
 
 namespace secondary_index {
 
@@ -147,17 +152,102 @@ std::optional<cql3::description> vector_index::describe(const index_metadata& im
 }
 
 void vector_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const {
-    if (targets.size() != 1) {
-        throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
-    }
-    auto target = targets[0];
-    auto c_def = schema.get_column_definition(to_bytes(target->column_name()));
-    if (!c_def) {
-        throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
-    }
-    auto type = c_def->type;
-    if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
-        throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
+
+    struct validate_visitor {
+        const class schema& schema;
+        bool& is_vector;
+
+        static bool is_supported_filtering_column(abstract_type const & kind_type) {
+            switch (kind_type.get_kind()) {
+                case abstract_type::kind::ascii:
+                case abstract_type::kind::boolean:
+                case abstract_type::kind::byte:
+                case abstract_type::kind::bytes:
+                case abstract_type::kind::date:
+                case abstract_type::kind::decimal:
+                case abstract_type::kind::double_kind:
+                case abstract_type::kind::float_kind:
+                case abstract_type::kind::inet:
+                case abstract_type::kind::int32:
+                case abstract_type::kind::long_kind:
+                case abstract_type::kind::short_kind:
+                case abstract_type::kind::simple_date:
+                case abstract_type::kind::time:
+                case abstract_type::kind::timestamp:
+                case abstract_type::kind::timeuuid:
+                case abstract_type::kind::utf8:
+                case abstract_type::kind::uuid:
+                case abstract_type::kind::varint:
+                    return true;
+                default:
+                    break;
+            }
+            return false;
+        }
+
+        void validate(cql3::column_identifier const& column, bool is_vector) const {
+            auto const& c_name = column.to_string();
+            auto const* c_def = schema.get_column_definition(column.name());
+            if (c_def == nullptr) {
+                throw exceptions::invalid_request_exception(format("Column {} not found in schema in check target validator", c_name));
+            }
+
+            auto type = c_def->type;
+            if (!type) {
+                on_internal_error(vilogger, format("Column {} has no type in check target validator", c_name));
+            }
+
+            if (is_vector) {
+                if (!type->is_vector()) {
+                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
+                }
+
+                // It is safe to static cast since we checked it is a vector.
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+                auto elements_type = static_cast<const vector_type_impl*>(type.get())->get_elements_type();
+                if (!elements_type) {
+                    on_internal_error(vilogger, format("Column {} has no vector element type in check target validator", c_name));
+                }
+
+                if (elements_type->get_kind() != abstract_type::kind::float_kind) {
+                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
+                }
+                return;
+            }
+
+            if (!is_supported_filtering_column(*type)) {
+                throw exceptions::invalid_request_exception(format("Unsupported vector index filtering column '{}' type", c_name));
+            }
+        }
+
+        void operator()(const std::vector<::shared_ptr<cql3::column_identifier>>& columns) const {
+            for (const auto& column : columns) {
+                if (!column) {
+                    on_internal_error(vilogger, "Null column in check_target validator");
+                }
+                // CQL restricts the secondary local index to have multiple columns with partition key only.
+                // Vectors shouldn't be partition key columns and they aren't supported as a filtering column,
+                // so we can assume here that these are non-vectors filtering columns.
+                validate(*column, false);
+            }
+        }
+
+        void operator()(const ::shared_ptr<cql3::column_identifier>& column) {
+            if (!column) {
+                on_internal_error(vilogger, "Null column in check_target validator");
+            }
+            validate(*column, is_vector);
+            // The first column is the vector column, the rest mustn't be vectors.
+            is_vector = false;
+        }
+    };
+
+    bool is_vector = true;
+    for (const auto& target : targets) {
+        if (!target) {
+            on_internal_error(vilogger, "Null target in check_target validator");
+        }
+        std::visit(validate_visitor{.schema = schema, .is_vector = is_vector}, target->value);
     }
 }
 
