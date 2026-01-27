@@ -159,53 +159,29 @@ aws_error aws_error::from_system_error(const std::system_error& system_error) {
     }
 }
 
-aws_error aws_error::from_maybe_nested_exception(std::exception_ptr eptr) {
-    std::string original_message;
-    while (eptr) {
-        try {
-            std::rethrow_exception(eptr);
-        } catch (const std::exception& e) {
-            if (original_message.empty()) {
-                original_message = e.what();
-            }
-
-            if (auto* sys = dynamic_cast<const std::system_error*>(&e)) {
-                return from_system_error(*sys);
-            }
-
-            try {
-                std::rethrow_if_nested(e);
-            } catch (...) {
-                eptr = std::current_exception();
-                continue;
-            }
-            break;
-        } catch (...) {
-            // Non-std::exception, should not happen in general
-            break;
-        }
-    }
-
-    if (original_message.empty()) {
-        original_message = fmt::format("No error message was provided, exception content: {}", eptr);
-    }
-
-    return {aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
-}
-
-
 aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
-    if (exception) {
+    std::string original_message;
+    while (exception) {
         try {
             std::rethrow_exception(exception);
         } catch (const aws_exception& ex) {
             return ex.error();
         } catch (const std::system_error& ex) {
             return from_system_error(ex);
-        } catch (const std::exception&) {
-            return from_maybe_nested_exception(std::current_exception());
+        } catch (const std::exception& ex) {
+            if (original_message.empty()) {
+                original_message = ex.what();
+            }
+
+            try {
+                std::rethrow_if_nested(ex);
+            } catch (...) {
+                exception = std::current_exception();
+                continue;
+            }
+            return aws_error{aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
         } catch (...) {
-            return aws_error{aws_error_type::UNKNOWN, seastar::format("{}", std::current_exception()), retryable::no};
+            return aws_error{aws_error_type::UNKNOWN, seastar::format("No error message was provided, exception content: {}", std::current_exception()), retryable::no};
         }
     }
     return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
