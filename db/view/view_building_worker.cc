@@ -588,11 +588,7 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
     utils::get_local_injector().inject("do_build_range_fail",
             [] { throw std::runtime_error("do_build_range failed due to error injection"); });
 
-    // Run the view building in the streaming scheduling group
-    // so that it doesn't impact other tasks with higher priority.
-    seastar::thread_attributes attr;
-    attr.sched_group = _db.get_streaming_scheduling_group();
-    return seastar::async(std::move(attr), [this, base_id, views_ids = std::move(views_ids), last_token, &as] {
+    return seastar::async([this, base_id, views_ids = std::move(views_ids), last_token, &as] {
         gc_clock::time_point now = gc_clock::now();
         auto base_cf = _db.find_column_family(base_id).shared_from_this();
         reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
