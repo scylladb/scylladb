@@ -121,17 +121,17 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name(), estimated_partitions);
     auto [sink, source] = co_await si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->topo_guard, si->id);
 
-        auto got_error_from_peer = make_lw_shared<bool>(false);
-        auto table_is_dropped = make_lw_shared<bool>(false);
+        auto got_error_from_peer = false;
+        auto table_is_dropped = false;
 
-        auto source_op = [source, got_error_from_peer, table_is_dropped, si] () mutable -> future<> {
+        auto source_op = [source, &got_error_from_peer, &table_is_dropped, si] () mutable -> future<> {
                     while (auto status_opt = co_await source()) {
                         auto status = std::get<0>(*status_opt);
                         if (status == -1) {
-                            *got_error_from_peer = true;
+                            got_error_from_peer = true;
                         } else if (status == -2) {
-                            *got_error_from_peer = true;
-                            *table_is_dropped = true;
+                            got_error_from_peer = true;
+                            table_is_dropped = true;
                         }
                         sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, status);
                         // we've got an error from the other side, but we cannot just abandon rpc::source we
@@ -141,7 +141,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                     }
         };
 
-        auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
+        auto sink_op = [sink, si, &got_error_from_peer] () mutable -> future<> {
             co_await coroutine::finally([sink] (std::exception_ptr ex) mutable {
                 return sink(frozen_mutation_fragment(bytes_ostream()), ex ? stream_mutation_fragments_cmd::error : stream_mutation_fragments_cmd::end_of_stream).finally([sink] () mutable {
                     return sink.close();
@@ -152,7 +152,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             mutation_fragment_stream_validator validator(*s);
 
                     while (auto mf = co_await si->reader()) {
-                        if (*got_error_from_peer) {
+                        if (got_error_from_peer) {
                             co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error("Got status error code from peer")));
                         }
 
@@ -176,8 +176,8 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
 
         co_await coroutine::all(std::move(source_op), std::move(sink_op));
 
-            if (*got_error_from_peer) {
-                if (*table_is_dropped) {
+            if (got_error_from_peer) {
+                if (table_is_dropped) {
                      sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
                 } else {
                     throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id, si->plan_id, si->cf_id));
