@@ -49,10 +49,12 @@ namespace utils::gcp::storage {
     private:
         uint32_t max_results;
         std::string token;
+        bool done;
         friend class client;
     public:
         bucket_paging(uint64_t max = 1000)
             : max_results(max)
+            , done(false)
         {}
         bucket_paging(const bucket_paging&) = delete;
         bucket_paging(bucket_paging&&) = default;
