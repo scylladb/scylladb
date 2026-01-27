@@ -14,7 +14,8 @@ env:
   CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang message mutation mutation_writer node_ops raft redis replica service
   SEASTAR_BAD_INCLUDE_OUTPUT_PATH: build/seastar-bad-include.log
 
-permissions: {}
+permissions:
+  contents: read
 
 # cancel the in-progress run upon a repush
 concurrency:
