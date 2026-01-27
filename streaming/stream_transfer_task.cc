@@ -190,13 +190,17 @@ future<> stream_transfer_task::execute() {
     auto cf_id = this->cf_id;
     auto id = session->peer;
     auto& sm = session->manager();
-    auto table_dropped = co_await streaming::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) {
+    auto table_dropped = co_await streaming::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) -> future<> {
         auto dst_cpu_id = session->dst_cpu_id;
         sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
         sort_and_merge_ranges();
         auto reason = session->get_reason();
         auto topo_guard = session->topo_guard();
-        return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
+
+        std::exception_ptr ep;
+
+      try {
+        co_await sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
             auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
             return sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason, topo_guard] (reader_permit permit) mutable {
                 auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, id] (size_t sz) {
@@ -213,23 +217,30 @@ future<> stream_transfer_task::execute() {
                     return si->reader.close();
                 });
             });
-        }).then([this, plan_id, cf_id, id, &sm] {
+        });
+
+        try {
             sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-            return ser::streaming_rpc_verbs::send_stream_mutation_done(&sm.ms(), id, plan_id, _ranges,
-                    cf_id, session->dst_cpu_id).handle_exception([plan_id, id] (auto ep) {
-                sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
-                std::rethrow_exception(ep);
-            });
-        }).then([this, id, plan_id] {
+            co_await ser::streaming_rpc_verbs::send_stream_mutation_done(&sm.ms(), id, plan_id, _ranges,
+                cf_id, session->dst_cpu_id);
             _mutation_done_sent = true;
             sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id);
-        }).handle_exception([plan_id, id, &sm] (std::exception_ptr ep) {
+        } catch (...) {
+            ep = std::current_exception();
+            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
+            std::rethrow_exception(ep);
+        }
+      } catch (...) {
+            ep = std::current_exception();
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
             utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [&sm] () {
                 sm.db().find_column_family(table_id::create_null_id());
             });
-            std::rethrow_exception(ep);
-        });
+      }
+
+      if (ep) {
+        co_await coroutine::return_exception_ptr(std::move(ep));
+      }
     });
     // If the table is dropped during streaming, we can ignore the
     // errors and make the stream successful. This allows user to
