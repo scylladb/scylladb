@@ -696,9 +696,9 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     }
 
     if (prev_released) {
-    auto nodes_to_release = get_released_nodes(t, *tmptr);
-    std::erase_if(nodes_to_release, [&] (const auto& host_id) { return prev_released->contains(host_id); });
-    std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
+        auto nodes_to_release = get_released_nodes(t, *tmptr);
+        std::erase_if(nodes_to_release, [&] (const auto& host_id) { return prev_released->contains(host_id); });
+        std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
     }
 
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
