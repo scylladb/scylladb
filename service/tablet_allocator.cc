@@ -515,6 +515,38 @@ struct hash<migration_tablet_set> {
 
 namespace service {
 
+// Subtract right from left. The result contains only keys from left.
+static std::unordered_map<sstring, std::vector<sstring>> substract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right) {
+    std::unordered_map<sstring, std::vector<sstring>> res;
+    for (const auto& [dc, rf_value] : left) {
+        auto it = right.find(dc);
+        if (it == right.end()) {
+            res[dc] = rf_value;
+        } else {
+            std::vector<sstring> diff = rf_value | std::views::filter([&] (const sstring& rack) {
+                return std::find(it->second.begin(), it->second.end(), rack) == it->second.end();
+            }) | std::ranges::to<std::vector<sstring>>();
+            if (!diff.empty()) {
+                res[dc] = diff;
+            }
+        }
+    }
+    return res;
+}
+
+static bool rf_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next) {
+    if (current.size() != next.size()) {
+        return false;
+    }
+    for (const auto& [dc, current_rf_value] : current) {
+        auto it = next.find(dc);
+        if (it == next.end() || get_replication_factor(it->second) != get_replication_factor(current_rf_value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// The algorithm aims to equalize tablet count on each shard.
 /// This goal is based on the assumption that every shard has similar processing power and space capacity,
 /// and that each tablet has equal consumption of those resources. So by equalizing tablet count per shard we
@@ -1433,8 +1465,317 @@ public:
         co_return std::move(plan);
     }
 
+    enum class rf_change_state {
+        ready,              // RF change is ready (succeed or failed).
+        rollback,           // Current RF change step needs to be rolled back.
+        needs_extending,    // In current RF change step new replicas is added.
+        needs_shrinking,    // In current RF change step replicas are removed.
+    };
+
+    rf_change_state determine_rf_change_state(const locator::replication_strategy_config_options& previous, const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next, const sstring& error) {
+        if (!error.empty() && !rf_equals(previous, next)) {
+            return rf_change_state::rollback;
+        }
+
+        for (const auto& [dc, next_rf_value] : next) {
+            auto it = current.find(dc);
+            auto next_rf = get_replication_factor(next_rf_value);
+            if ((it == current.end() && next_rf != 0) || (it != current.end() && get_replication_factor(it->second) < next_rf)) {
+                return rf_change_state::needs_extending;
+            }
+        }
+
+        for (const auto& [dc, current_rf_value] : current) {
+            auto it = next.find(dc);
+            if (it == next.end() || get_replication_factor(it->second) < get_replication_factor(current_rf_value)) {
+                return rf_change_state::needs_shrinking;
+            }
+        }
+
+        return rf_change_state::ready;
+    }
+
+    future<std::unordered_map<sstring, sstring>> get_racks_to_work_on(const keyspace& ks, const std::vector<schema_ptr>& tables, rf_change_state rf_state) {
+        auto replication = ks.metadata()->strategy_options() | std::views::transform([] (const auto& pair) {
+            return std::make_pair(pair.first, std::get<rack_list>(pair.second));
+        }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>();
+        auto next_replication = *ks.metadata()->next_strategy_options_opt() | std::views::transform([] (const auto& pair) {
+            return std::make_pair(pair.first, std::get<rack_list>(pair.second));
+        }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>();
+
+        // Continue current steps.
+        std::unordered_map<sstring, std::vector<sstring>> res_prep;
+        for (const auto& table : tables) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table->id());
+            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                std::unordered_map<dc_name, std::vector<sstring>> dc_to_racks;
+                for (const auto& r : ti.replicas) {
+                    const auto& node_dc_rack = _tm->get_topology().get_node(r.host).dc_rack();
+                    dc_to_racks[node_dc_rack.dc].push_back(node_dc_rack.rack);
+                }
+                res_prep.merge(rf_state == rf_change_state::needs_extending || rf_state == rf_change_state::rollback ?
+                    substract_replication(dc_to_racks, replication) : substract_replication(replication, dc_to_racks));
+                return make_ready_future();
+            });
+        }
+
+        // Start new steps.
+        if (rf_state != rf_change_state::rollback) {    // rollback applies only to current step.
+            res_prep.merge(rf_state == rf_change_state::needs_extending ? substract_replication(next_replication, replication) : substract_replication(replication, next_replication));
+        }
+
+        co_return res_prep | std::views::filter([] (const auto& pair) {
+            return !pair.second.empty();
+        }) | std::views::transform([] (const auto& pair) {
+            return std::make_pair(pair.first, pair.second.front());
+        }) | std::ranges::to<std::unordered_map<sstring, sstring>>();
+    }
+
     future<keyspace_rf_change_plan> make_rf_change_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_rf_change_plan");
+
         keyspace_rf_change_plan plan;
+        if (!ongoing_rf_change()) {
+            co_return plan;
+        }
+
+        node_load_map nodes;
+        const locator::topology& topo = _tm->get_topology();
+        topo.for_each_node([&] (const locator::node& node) {
+            if (node.get_state() == locator::node::state::normal && !node.is_excluded()) {
+                ensure_node(nodes, node.host_id());
+            }
+        });
+
+        // Consider load that is already scheduled.
+        co_await consider_scheduled_load(nodes);
+
+        // Consider load that is about to be scheduled.
+        co_await consider_planned_load(nodes, mplan);
+
+        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
+        for (const auto& request_id : _topology->ongoing_rf_changes) {
+            auto req_entry = co_await _sys_ks->get_topology_request_entry(request_id);
+            sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+
+            if (!_db.has_keyspace(ks_name)) {
+                plan.completion = rf_change_completion_info{
+                    .request_id = request_id,
+                    .ks_name = ks_name,
+                    .error = format("Keyspace {} not found", ks_name),
+                    .saved_ks_props = req_entry.new_keyspace_rf_change_data.value(),
+                };
+                break;
+            }
+            auto& ks = _db.find_keyspace(ks_name);
+            if (!ks.metadata()->next_strategy_options_opt() || !ks.metadata()->previous_strategy_options_opt()) {
+                on_internal_error(lblogger, format("There is an ongoing rf change request {} for keyspace {}, "
+                    "but the keyspace does not have previous or next replication settings", request_id, ks_name));
+            }
+
+            auto tables = ks.metadata()->tables();
+            auto views = ks.metadata()->views() | std::views::transform([] (const auto& view) { return schema_ptr(view); }) | std::ranges::to<std::vector<schema_ptr>>();
+            if (tables.empty() && views.empty()) {
+                plan.completion = rf_change_completion_info{
+                    .request_id = request_id,
+                    .ks_name = ks_name,
+                    .error = req_entry.error,
+                    .saved_ks_props = req_entry.new_keyspace_rf_change_data.value()
+                };
+                break;
+            }
+
+            auto rf_change_state = determine_rf_change_state(*ks.metadata()->previous_strategy_options_opt(),
+                ks.metadata()->strategy_options(), *ks.metadata()->next_strategy_options_opt(), req_entry.error);
+            if (rf_change_state == rf_change_state::ready) {
+                plan.completion = rf_change_completion_info{
+                    .request_id = request_id,
+                    .ks_name = ks_name,
+                    .error = req_entry.error,
+                    .saved_ks_props = req_entry.new_keyspace_rf_change_data.value()
+                };
+                break;
+            }
+
+            // Do not need to consider views here - the changes are first applied to base tables.
+            auto racks_to_work_on = co_await get_racks_to_work_on(ks, tables, rf_change_state);
+            if (rf_change_state == rf_change_state::rollback && racks_to_work_on.empty()) {
+                // Rollback of the most recent step is completed.
+                plan.rollbacks.push_back(rollback_rf_change_info { .ks_name = ks_name });
+                continue;
+            }
+
+            std::unordered_set<global_tablet_id> rebuild_tablet_ids;
+            std::unordered_map<sstring, std::vector<sstring>> new_current_replication = ks.metadata()->strategy_options() | std::views::transform([] (const auto& pair) {
+                return std::make_pair(pair.first, std::get<rack_list>(pair.second));
+            }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>();
+            bool needs_replication_update = false;
+            for (const auto& [dc, rack] : racks_to_work_on) {
+                locator::endpoint_dc_rack endpoint{dc, rack};
+                auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
+                    auto& [host, load] = host_load;
+                    auto& node = *load.node;
+                    return node.dc_rack().dc == dc && node.dc_rack().rack == rack;
+                }) | std::views::keys | std::ranges::to<std::vector<host_id>>();
+
+                if (nodes_by_load_dst.empty()) {
+                    plan.completion = rf_change_completion_info{
+                        .request_id = request_id,
+                        .ks_name = ks_name,
+                        .error = format("No target nodes available in dc {}, rack {}", dc, rack),
+                        .saved_ks_props = req_entry.new_keyspace_rf_change_data.value()
+                    };
+                    break;
+                }
+
+                auto nodes_cmp = nodes_by_load_cmp(nodes);
+                auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
+                    return nodes_cmp(b, a);
+                };
+
+                // Ascending load heap of candidate target nodes.
+                std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+                bool all_done = true;
+                auto process_table = [&] (const schema_ptr& table_or_mv) -> future<> {
+                    const auto& tmap = _tm->tablets().get_tablet_map(table_or_mv->id());
+                    co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                        auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
+
+                        auto it = std::find_if(ti.replicas.begin(), ti.replicas.end(), [&] (const tablet_replica& r) {
+                            return topo.get_node(r.host).dc_rack() == endpoint;
+                        });
+
+                        auto replica = it != ti.replicas.end() ? std::optional<tablet_replica>{*it} : std::nullopt;
+
+                        if ((rf_change_state == rf_change_state::needs_extending && replica) ||
+                                ((rf_change_state == rf_change_state::needs_shrinking || rf_change_state == rf_change_state::rollback) && !replica)) {
+                            return make_ready_future<>();
+                        }
+
+                        all_done = false;
+
+                        // Skip tablet that is in transitions.
+                        auto* tti = tmap.get_tablet_transition_info(tid);
+                        if (tti) {
+                            lblogger.debug("Skipped rf change extending for tablet={} which is already in transition={}", gid, tti->transition);
+                            return make_ready_future<>();
+                        }
+
+                        // Skip tablet that is about to be in transition.
+                        if (migration_tablet_ids.contains(gid)) {
+                            return make_ready_future<>();
+                        }
+
+                        // Skip tablet that is about to be rebuilt.
+                        if (rebuild_tablet_ids.contains(gid)) {
+                            return make_ready_future<>();
+                        }
+
+                        migration_tablet_set source_tablets {
+                            .tablet_s = gid,     // Ignore the merge co-location.
+                        };
+                        if (rf_change_state == rf_change_state::needs_extending) {
+                            // Pick the least loaded node as target.
+                            std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+                            auto target = nodes_by_load_dst.back();
+                            std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+
+                            lblogger.debug("target node: {}, avg_load={}", target, nodes[target].avg_load);
+
+                            auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+
+                            lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
+                                        nodes[target].shards[dst.shard].tablet_count,
+                                        nodes[target].shard_load(dst.shard, _target_tablet_size));
+
+                            tablet_replica pending_replica{
+                                .host = target,
+                                .shard = dst.shard,
+                            };
+                            auto next = ti.replicas;
+                            next.push_back(pending_replica);
+                            auto mig_streaming_info = get_migration_streaming_info(topo, ti, tablet_transition_info{
+                                tablet_transition_stage::allow_write_both_read_old, tablet_transition_kind::rebuild_v2, std::move(next), pending_replica});
+                            pick(*_load_sketch, dst.host, dst.shard, source_tablets);
+                            if (can_accept_load(nodes, mig_streaming_info)) {
+                                apply_load(nodes, mig_streaming_info);
+                                mark_as_scheduled(gid);
+                                plan.rebuilds.push_back(tablet_rebuild_info{
+                                    .tablet = gid,
+                                    .replica = pending_replica,
+                                    .type = replica_type::pending,
+                                });
+                                rebuild_tablet_ids.insert(gid);
+                            }
+                            increase_node_load(nodes, dst, source_tablets);
+                        } else {
+                            auto next = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
+                                return r != *replica;
+                            }) |  std::ranges::to<tablet_replica_set>();
+                            auto mig_streaming_info = get_migration_streaming_info(topo, ti, tablet_transition_info{
+                                tablet_transition_stage::allow_write_both_read_old, tablet_transition_kind::rebuild_v2, std::move(next), std::nullopt});
+                            _load_sketch->ensure_node(replica->host);
+                            unload(*_load_sketch, replica->host, replica->shard, source_tablets);
+                            if (can_accept_load(nodes, mig_streaming_info)) {
+                                apply_load(nodes, mig_streaming_info);
+                                mark_as_scheduled(gid);
+                                plan.rebuilds.push_back(tablet_rebuild_info{
+                                    .tablet = gid,
+                                    .replica = *replica,
+                                    .type = replica_type::leaving,
+                                });
+                                rebuild_tablet_ids.insert(gid);
+                            }
+                            decrease_node_load(nodes, *replica, source_tablets);
+                        }
+                        return make_ready_future<>();
+                    });
+                };
+
+                auto process_tables = [&] (const std::vector<schema_ptr>& higher_priority_tables, const std::vector<schema_ptr>& lower_priority_tables) -> future<> {
+                    for (const auto& table : higher_priority_tables) {
+                        co_await process_table(table);
+                    }
+
+                    if (!all_done) {
+                        co_return;
+                    }
+
+                    for (const auto& table : lower_priority_tables) {
+                        co_await process_table(table);
+                    }
+                };
+
+                // For the sake of view pairing we prefer when the base table replicas are added first.
+                // Thus, when rolling back or shrinking, we consider views first.
+                if (rf_change_state == rf_change_state::needs_extending) {
+                    co_await process_tables(tables, views);
+                } else {
+                    co_await process_tables(views, tables);
+                }
+
+                if (!all_done) {
+                    continue;
+                }
+
+                needs_replication_update = true;
+                if (rf_change_state == rf_change_state::needs_extending) {
+                    new_current_replication[dc].push_back(rack);
+                } else {
+                    auto& racks = new_current_replication[dc];
+                    racks.erase(std::remove(racks.begin(), racks.end(), rack), racks.end());
+                }
+            }
+            if (needs_replication_update) {
+                plan.replication_updates.push_back(replication_update_info {
+                    .ks_name = ks_name,
+                    .new_replication = std::move(new_current_replication),
+                });
+            }
+            if (plan.completion) {
+                break;
+            }
+        }
         co_return plan;
     }
 
@@ -2568,6 +2909,10 @@ public:
 
     static void pick(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
         sketch.pick(host, shard, tablet_set.tablets().size(), tablet_set.tablet_set_disk_size);
+    }
+
+    void mark_as_scheduled(const global_tablet_id& gid) {
+        _scheduled_tablets.insert(gid);
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
