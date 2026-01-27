@@ -13,7 +13,6 @@ class DTestConfig:
         self.num_tokens = -1
         self.experimental_features = []
         self.tablets = False
-        self.force_gossip_topology_changes = False
         self.scylla_features = set()
 
     def setup(self, request):
@@ -21,7 +20,6 @@ class DTestConfig:
         self.num_tokens = request.config.getoption("--num-tokens")
         self.experimental_features = request.config.getoption("--experimental-features") or set()
         self.tablets = request.config.getoption("--tablets", default=False)
-        self.force_gossip_topology_changes = request.config.getoption("--force-gossip-topology-changes", default=False)
         self.scylla_features = request.config.scylla_features
 
     @property

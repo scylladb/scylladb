@@ -102,13 +102,6 @@ std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, st
     if (!cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         disabled.insert("STRONGLY_CONSISTENT_TABLES"s);
     }
-    if (cfg.force_gossip_topology_changes()) {
-        if (cfg.enable_tablets_by_default()) {
-            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
-        }
-        startlog.warn("The tablets feature is disabled due to forced gossip topology changes");
-        disabled.insert("TABLETS"s);
-    }
     if (!cfg.table_digest_insensitive_to_expiry()) {
         disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }
