@@ -1039,6 +1039,10 @@ public:
         return _topology != nullptr && _sys_ks != nullptr && !_topology->paused_rf_change_requests.empty();
     }
 
+    bool ongoing_rf_change() const {
+        return _topology != nullptr && _sys_ks != nullptr && !_topology->ongoing_rf_changes.empty();
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
