@@ -386,9 +386,12 @@ def modify_pytest_item(item: pytest.Item) -> None:
 
     for mark in skip_marks:
         def __skip_test(mode, reason, platform_key=None):
-            if mode == item.stash[BUILD_MODE]:
-                if platform_key is None or platform_key in platform.platform():
-                    item.add_marker(pytest.mark.skip(reason=reason))
+            modes = [mode] if isinstance(mode, str) else mode
+
+            for mode in modes:
+                if mode == item.stash[BUILD_MODE]:
+                    if platform_key is None or platform_key in platform.platform():
+                        item.add_marker(pytest.mark.skip(reason=reason))
         try:
             __skip_test(*mark.args, **mark.kwargs)
         except TypeError as e:
