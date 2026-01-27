@@ -338,7 +338,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 }
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
-static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
+static void ensure_group0_schema(const group0_command& cmd, data_dictionary::database db) {
     auto validate_schema = [&db](const utils::chunked_vector<canonical_mutation>& mutations) {
         for (const auto& mut : mutations) {
             // Get the schema for the column family
@@ -392,7 +392,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         // Ensure that the schema of the mutations is a group0 schema.
         // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
-        ensure_group0_schema(cmd, _client.sys_ks().local_db());
+        ensure_group0_schema(cmd, _sp.data_dictionary());
 #endif
 
         slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
