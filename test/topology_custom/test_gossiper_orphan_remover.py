@@ -30,6 +30,7 @@ async def test_crashed_node_substitution(manager: ManagerClient):
 
     log = await manager.server_open_log(failed_server.server_id)
     await log.wait_for("finished do_send_ack2_msg")
+    failed_id = await manager.get_host_id(failed_server.server_id)
     await manager.api.message_injection(failed_server.ip_addr, 'crash_before_group0_join')
     
     await task
@@ -50,7 +51,14 @@ async def test_crashed_node_substitution(manager: ManagerClient):
     [await manager.api.message_injection(s.ip_addr, 'fast_orphan_removal_fiber') for s in servers]
 
     log = await manager.server_open_log(servers[0].server_id)
+<<<<<<< HEAD:test/topology_custom/test_gossiper_orphan_remover.py
     await log.wait_for(f"Finished to force remove node {orphan_ip}")
+||||||| parent of a2c1569e04 (test: test_gossiper_orphan_remover: get host ID of the bootstrapping node before it crashes):test/cluster/test_gossiper_orphan_remover.py
+    failed_id = await  manager.get_host_id(failed_server.server_id)
+    await log.wait_for(f"Finished to force remove node {failed_id}")
+=======
+    await log.wait_for(f"Finished to force remove node {failed_id}")
+>>>>>>> a2c1569e04 (test: test_gossiper_orphan_remover: get host ID of the bootstrapping node before it crashes):test/cluster/test_gossiper_orphan_remover.py
 
     post_wait_live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     post_wait_down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
