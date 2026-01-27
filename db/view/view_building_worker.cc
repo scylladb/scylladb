@@ -115,7 +115,7 @@ static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& table
     return tablet_id;
 }
 
-view_building_worker::view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier, service::raft_group0& group0, view_update_generator& vug, netw::messaging_service& ms, view_building_state_machine& vbsm)
+view_building_worker::view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier, service::raft_group0& group0, view_update_generator& vug, netw::messaging_service& ms, view_building_state_machine& vbsm, scheduling_group background_sg)
         : _db(db)
         , _sys_ks(sys_ks)
         , _mnotifier(mnotifier)
@@ -125,7 +125,7 @@ view_building_worker::view_building_worker(replica::database& db, db::system_key
         , _vb_state_machine(vbsm)
         , _gate("view_building_worker_gate")
 {
-    init_messaging_service();
+    init_messaging_service(background_sg);
 }
 
 future<> view_building_worker::init() {
@@ -443,8 +443,7 @@ future<> view_building_worker::check_for_aborted_tasks() {
     });
 }
 
-void view_building_worker::init_messaging_service() {
-    auto sg = _db.get_streaming_scheduling_group();
+void view_building_worker::init_messaging_service(scheduling_group sg) {
     ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this, sg] (raft::term_t term, shard_id shard, std::vector<utils::UUID> ids) -> future<std::vector<utils::UUID>> {
         return container().invoke_on(shard, [term, ids = std::move(ids), sg] (auto& vbw) mutable -> future<std::vector<utils::UUID>> {
             return with_scheduling_group(sg, [term, ids = std::move(ids), &vbw] () mutable {
