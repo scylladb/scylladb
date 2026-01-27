@@ -19,7 +19,8 @@ int scylla_row_cache_update_main(int argc, char**argv);
 int scylla_simple_query_main(int argc, char** argv);
 int scylla_sstable_main(int argc, char** argv);
 int scylla_tablets_main(int argc, char**argv);
-std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config> cfg)>* after_init_func);
+std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func);
 int scylla_tablet_load_balancing_main(int argc, char**argv);
+std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func);
 
 } // namespace tools

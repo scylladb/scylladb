@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <seastar/core/abort_source.hh>
 #include <signal.h>
 #include <seastar/core/future.hh>
 #include <seastar/core/thread.hh>
@@ -42,6 +43,8 @@ struct test_config {
     bool flush;
     std::string remote_host;
     bool continue_after_error;
+
+    sharded<abort_source>* as;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -406,6 +409,7 @@ void workload_main(const test_config& c) {
     fun_t fun = it->second;
 
     auto results = time_parallel([&] {
+        c.as->local().check();
         static thread_local auto sharded_cli_pool = make_client_pool(c); // for simplicity never closed as it lives for the whole process runtime
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
@@ -415,18 +419,7 @@ void workload_main(const test_config& c) {
     std::cout << aggregated_perf_results(results) << std::endl;
 }
 
-std::tuple<int,char**> cut_arg(int ac, char** av, std::string name, int num_args = 2) {
-    for (int i = 1 ; i < ac - 1; i++) {
-        if (std::string(av[i]) == name) {
-            std::shift_left(av + i, av + ac, num_args);
-            ac -= num_args;
-            break;
-        }
-    }
-    return std::make_tuple(ac, av);
-}
-
-std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config> cfg)>* after_init_func) {
+std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
        
@@ -482,9 +475,10 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             });
         }
 
-        *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg) mutable {
+        *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->alternator_port();
-            (void)seastar::async([c = std::move(c)] {
+            c.as = &as;
+            return seastar::async([c = std::move(c)] {
                 try {
                     workload_main(c);
                 } catch(...) {

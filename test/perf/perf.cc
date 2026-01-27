@@ -141,4 +141,15 @@ reader_permit reader_concurrency_semaphore_wrapper::make_permit() {
     return _semaphore->make_tracking_only_permit(nullptr, "perf", db::no_timeout, {});
 }
 
+std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args) {
+    for (int i = 1 ; i < ac - 1; i++) {
+        if (std::string(av[i]) == name) {
+            std::shift_left(av + i, av + ac, num_args);
+            ac -= num_args;
+            break;
+        }
+    }
+    return std::make_tuple(ac, av);
+}
+
 } // namespace perf

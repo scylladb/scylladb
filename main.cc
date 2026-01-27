@@ -571,7 +571,7 @@ sharded<service::storage_proxy> *the_storage_proxy;
 // This is used by perf-alternator to allow running scylla together with the tool
 // in a single process. So that it's easier to measure internals. It's not added
 // to main_func_type to not complicate common flow as no other tool needs such logic.
-std::function<void(lw_shared_ptr<db::config>)> after_init_func;
+std::function<future<>(lw_shared_ptr<db::config>, sharded<abort_source>&)> after_init_func;
 
 static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace>& sys_ks,
         sharded<locator::snitch_ptr>& snitch,
@@ -2576,11 +2576,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("serving");
 
             startlog.info("Scylla version {} initialization completed.", scylla_version());
+            future<> after_init_fut = make_ready_future<>();
             if (after_init_func) {
-                after_init_func(cfg);
+                after_init_fut = after_init_func(cfg, stop_signal.as_sharded_abort_source());
             }
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
+            std::move(after_init_fut).get();
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
           } catch (const sleep_aborted&) {
             startlog.info("Startup interrupted");
@@ -2650,7 +2652,8 @@ int main(int ac, char** av) {
         {"perf-load-balancing", perf::scylla_tablet_load_balancing_main, "run tablet load balancer tests"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
-        {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"}
+        {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"},
+        {"perf-cql-raw", perf::perf_cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"}
     };
 
     main_func_type main_func;
