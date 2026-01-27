@@ -23,6 +23,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <flat_map>
 
