@@ -526,10 +526,6 @@ class DTestSetup:
                     experimental_features.append(f)
         self.scylla_features |= set(values.get("experimental_features", []))
 
-        if self.dtest_config.force_gossip_topology_changes:
-            logger.debug("Forcing gossip topology changes")
-            values["force_gossip_topology_changes"] = True
-
         logger.debug("Setting 'enable_tablets' to %s", self.dtest_config.tablets)
         values["enable_tablets"] = self.dtest_config.tablets
         values["tablets_mode_for_new_keyspaces"] = "enabled" if self.dtest_config.tablets else "disabled"

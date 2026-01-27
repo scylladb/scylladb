@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_topology_change(manager: ManagerClient):
-    cfg = {'force_gossip_topology_changes': True,
-           'tablets_mode_for_new_keyspaces': 'disabled',
+    cfg = {'tablets_mode_for_new_keyspaces': 'disabled',
            'error_injections_at_startup': ['delay_before_get_view_natural_endpoint']}
 
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
