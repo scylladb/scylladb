@@ -83,23 +83,18 @@ struct send_info {
     {
     }
     future<bool> has_relevant_range_on_this_shard() {
-        return do_with(false, ranges.begin(), [this] (bool& found_relevant_range, dht::token_range_vector::iterator& ranges_it) {
-            auto stop_cond = [this, &found_relevant_range, &ranges_it] { return ranges_it == ranges.end() || found_relevant_range; };
-            return do_until(std::move(stop_cond), [this, &found_relevant_range, &ranges_it] {
+        auto found_relevant_range = false;
+        auto ranges_it = ranges.begin();
+        while (ranges_it != ranges.end() && !found_relevant_range) {
                 dht::token_range range = *ranges_it++;
-                if (!found_relevant_range) {
                     auto& table_sharder = cf->get_effective_replication_map()->get_sharder(*cf->schema());
                     auto sharder = dht::selective_token_range_sharder(table_sharder, std::move(range), this_shard_id());
                     auto range_shard = sharder.next();
                     if (range_shard) {
                         found_relevant_range = true;
                     }
-                }
-                return make_ready_future<>();
-            }).then([&found_relevant_range] {
-                return found_relevant_range;
-            });
-        });
+        }
+        co_return found_relevant_range;
     }
     future<size_t> estimate_partitions() {
         auto sstables = cf->get_sstables();
