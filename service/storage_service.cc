@@ -532,6 +532,13 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 }
 
+static std::unordered_set<locator::host_id> get_released_nodes(const service::topology& topology, const locator::token_metadata& tm) {
+    return boost::join(topology.left_nodes, topology.ignored_nodes)
+            | std::views::transform([] (const auto& raft_id) { return locator::host_id(raft_id.uuid()); })
+            | std::views::filter([&] (const auto& h) { return !tm.get_topology().has_node(h); })
+            | std::ranges::to<std::unordered_set<locator::host_id>>();
+}
+
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
 future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal) {
@@ -688,14 +695,8 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
 
-    auto nodes_to_release = t.left_nodes;
-    nodes_to_release.insert(t.ignored_nodes.begin(), t.ignored_nodes.end());
-    for (const auto& id: nodes_to_release) {
-        auto host_id = locator::host_id(id.uuid());
-        if (!tmptr->get_topology().find_node(host_id)) {
-            nodes_to_notify.released.push_back(host_id);
-        }
-    }
+    const auto nodes_to_release = get_released_nodes(t, *tmptr);
+    std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
 
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 
