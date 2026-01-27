@@ -305,7 +305,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
                     task_id = response['tablet_task_id']
 
                     for _ in range(await get_tablet_count(manager, servers[1], ks, table)):
-                        coord_mark, matches = await coord_log.wait_for("Initiating tablet repair host=(?P<host>.*) tablet=(?P<tablet>.*)", from_mark=coord_mark)
+                        coord_mark, matches = await coord_log.wait_for(r"Initiating tablet repair host=(?P<host>.*) tablet=(?P<tablet>.*) request_type=.*", from_mark=coord_mark)
                         dst_host, tablet = matches[0][1].group("host"), matches[0][1].group("tablet")
                         if host == dst_host:
                             # Tablet repair is triggered on the node with disk utilization above the critical level.
