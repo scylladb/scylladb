@@ -383,7 +383,7 @@ future<> utils::gcp::storage::client::object_data_sink::acquire_session() {
     }
     auto path = fmt::format("/upload/storage/v1/b/{}/o?uploadType=resumable&name={}"
         , _bucket
-        , _object_name
+        , seastar::http::internal::url_encode(_object_name)
     );
 
     auto reply = co_await _impl->send_with_retry(path
@@ -595,7 +595,11 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
             gcp_storage.debug("Reading object {}:{} ({}-{}/{})", _bucket, _object_name, _position, _position+to_read, _size);
 
             // Ensure we read from the same generation as we queried in read_info. Note: mock server ignores this.
-            auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media", _bucket, _object_name, _generation);
+            auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media"
+                , _bucket
+                , seastar::http::internal::url_encode(_object_name)
+                , _generation
+            );
             auto range = fmt::format("bytes={}-{}", _position, _position+to_read-1); // inclusive range
 
             co_await _impl->send_with_retry(path
@@ -656,7 +660,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
 future<> utils::gcp::storage::client::object_data_source::read_info() {
     gcp_storage.debug("Read info {}:{}", _bucket, _object_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}", _bucket, _object_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}", _bucket, seastar::http::internal::url_encode(_object_name));
 
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_ONLY
@@ -809,7 +813,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
 future<> utils::gcp::storage::client::delete_object(std::string_view bucket, std::string_view object_name) {
     gcp_storage.debug("Delete object {}:{}", bucket, object_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, object_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, seastar::http::internal::url_encode(object_name));
 
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_WRITE
@@ -841,7 +845,11 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_name) {
     gcp_storage.debug("Move object {}:{} -> {}", bucket, object_name, new_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}", bucket, object_name, new_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}"
+        , bucket
+        , seastar::http::internal::url_encode(object_name)
+        , seastar::http::internal::url_encode(new_name)
+    );
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_WRITE
         , ""s
@@ -864,8 +872,15 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // Copying an object in GCP can only process a certain amount of data in one call
 // Must keep doing it until all data is copied, and check response.
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name) {
-    auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}", bucket, object_name, new_bucket, to_name);
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
+
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}"
+        , bucket
+        , seastar::http::internal::url_encode(object_name)
+        , new_bucket
+        , seastar::http::internal::url_encode(to_name)
+    );
     std::string body;
 
     for (;;) {
