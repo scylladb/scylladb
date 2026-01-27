@@ -131,6 +131,7 @@ public:
     reader_concurrency_semaphore& get(scheduling_group sg);
     reader_concurrency_semaphore* get_or_null(scheduling_group sg);
     reader_concurrency_semaphore& add_or_update(scheduling_group sg, size_t shares);
+    shared_memory_pool& get_shared_pool() noexcept { return _shared_pool; }
     future<> remove(scheduling_group sg);
     size_t size();
     void foreach_semaphore(std::function<void(scheduling_group, reader_concurrency_semaphore&)> func);
