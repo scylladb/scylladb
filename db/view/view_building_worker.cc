@@ -242,7 +242,7 @@ future<> view_building_worker::create_staging_sstable_tasks() {
                 utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, false,
                 table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
             };
-            auto mut = co_await _group0.client().sys_ks().make_view_building_task_mutation(guard.write_timestamp(), task);
+            auto mut = co_await _sys_ks.make_view_building_task_mutation(guard.write_timestamp(), task);
             cmuts.emplace_back(std::move(mut));
         }
     }
@@ -386,7 +386,6 @@ future<> view_building_worker::update_built_views() {
         auto schema = _db.find_schema(table_id);
         return std::make_pair(schema->ks_name(), schema->cf_name());
     };
-    auto& sys_ks = _group0.client().sys_ks();
 
     std::set<std::pair<sstring, sstring>> built_views;
     for (auto& [id, statuses]: _vb_state_machine.views_state.status_map) {
@@ -395,22 +394,22 @@ future<> view_building_worker::update_built_views() {
         }
     }
 
-    auto local_built = co_await sys_ks.load_built_views() | std::views::filter([&] (auto& v) {
+    auto local_built = co_await _sys_ks.load_built_views() | std::views::filter([&] (auto& v) {
         return !_db.has_keyspace(v.first) || _db.find_keyspace(v.first).uses_tablets();
     }) | std::ranges::to<std::set>();
 
     // Remove dead entries
     for (auto& view: local_built) {
         if (!built_views.contains(view)) {
-            co_await sys_ks.remove_built_view(view.first, view.second);
+            co_await _sys_ks.remove_built_view(view.first, view.second);
         }
     }
 
     // Add new entries
     for (auto& view: built_views) {
         if (!local_built.contains(view)) {
-            co_await sys_ks.mark_view_as_built(view.first, view.second);
-            co_await sys_ks.remove_view_build_progress_across_all_shards(view.first, view.second);
+            co_await _sys_ks.mark_view_as_built(view.first, view.second);
+            co_await _sys_ks.remove_view_build_progress_across_all_shards(view.first, view.second);
         }
     }
 }
