@@ -137,6 +137,8 @@ public:
         return _workload_type;
     }
 
+    std::optional<seastar::scheduling_group> maybe_get_default_batch_scheduling_group() const;
+
     auth_state get_auth_state() const noexcept {
         return _auth_state;
     }

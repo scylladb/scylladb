@@ -417,6 +417,13 @@ static service_level_options get_driver_service_level_slo() {
     return slo;
 }
 
+static service_level_options get_default_batch_service_level_slo() {
+    service_level_options slo;
+    slo.shares = 100;
+    slo.workload = service_level_options::workload_type::batch;
+    return slo;
+}
+
 future<utils::chunked_vector<mutation>> service_level_controller::get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) {
 
     utils::chunked_vector<mutation> mutations;
@@ -425,6 +432,19 @@ future<utils::chunked_vector<mutation>> service_level_controller::get_create_dri
     std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
 
     auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, timestamp);
+    mutations.push_back(std::move(sys_ks_mutation));
+
+    co_return mutations;
+}
+
+future<utils::chunked_vector<mutation>> service_level_controller::get_create_default_batch_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) {
+
+    utils::chunked_vector<mutation> mutations;
+
+    auto sl_mutations = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), service_level_controller::default_batch_service_level_name, get_default_batch_service_level_slo(), timestamp);
+    std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
+
+    auto sys_ks_mutation = co_await sys_ks.make_service_level_default_batch_created_mutation(true, timestamp);
     mutations.push_back(std::move(sys_ks_mutation));
 
     co_return mutations;
@@ -451,6 +471,33 @@ future<std::optional<service::group0_guard>> service_level_controller::migrate_t
         } catch (...) {
             sl_logger.error("Failed to create service level for driver: {}. Removal of user service levels below the limit is necessary to allow sl:driver creation.", std::current_exception());
             _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::now();
+        }
+        co_return std::nullopt;
+    }
+    co_return std::move(guard); // return guard untouched
+}
+
+future<std::optional<service::group0_guard>> service_level_controller::migrate_to_default_batch_service_level(service::group0_guard guard, db::system_keyspace& sys_ks) {
+    // Don't try creating default_batch service level too often if it already failed.
+    // We don't want to block the topology coordinator.
+    if (_last_unsuccessful_default_batch_sl_creation_attempt + 5min < seastar::lowres_clock::now()) {
+        sl_logger.info("migrate_to_default_batch_service_level: starting sl:{} creation", service_level_controller::default_batch_service_level_name);
+        try {
+            service::group0_batch mc{std::move(guard)};
+
+            constexpr bool if_not_exists = true;
+            co_await add_distributed_service_level(service_level_controller::default_batch_service_level_name, get_default_batch_service_level_slo(), if_not_exists, mc);
+
+            auto sys_ks_mutation = co_await sys_ks.make_service_level_default_batch_created_mutation(true, mc.write_timestamp());
+            mc.add_mutation(std::move(sys_ks_mutation), "set service_level_default_batch_created=true");
+
+            co_await commit_mutations(std::move(mc));
+            sl_logger.info("create_default_batch_service_level: sl:{} created", service_level_controller::default_batch_service_level_name);
+        } catch (service::group0_concurrent_modification&) {
+            throw; // Let caller handle `group0_concurrent_modification`
+        } catch (...) {
+            sl_logger.error("Failed to create service level for default_batch: {}. Removal of user service levels below the limit is necessary to allow sl:default_batch creation.", std::current_exception());
+            _last_unsuccessful_default_batch_sl_creation_attempt = seastar::lowres_clock::now();
         }
         co_return std::nullopt;
     }
@@ -1131,6 +1178,39 @@ utils::small_vector<cql3::description, 2> describe_driver_service_level(const st
     return result;
 }
 
+utils::small_vector<cql3::description, 2> describe_default_batch_service_level(const std::optional<service_level_options>& default_batch_service_level_slo) {
+    utils::small_vector<cql3::description, 2> result;
+    const auto service_level_type = "service_level";
+    if (default_batch_service_level_slo.has_value()) {
+        // We need to use CREATE IF EXISTS because `default_batch` service level can be already created automatically
+        // We also need to ALTER because if default_batch exists, it can have different shares number
+        const sstring create_statement = describe_service_level(service_level_controller::default_batch_service_level_name, default_batch_service_level_slo.value(), describe_cmd::CREATE_IF_NOT_EXISTS);
+        const sstring alter_statement = describe_service_level(service_level_controller::default_batch_service_level_name, default_batch_service_level_slo.value(), describe_cmd::ALTER);
+
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::default_batch_service_level_name,
+            .create_statement = managed_string(create_statement)
+        });
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::default_batch_service_level_name,
+            .create_statement = managed_string(alter_statement)
+        });
+    } else {
+        const sstring drop_statement = describe_service_level(service_level_controller::default_batch_service_level_name, service_level_options{}, describe_cmd::DROP_IF_EXISTS);
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::default_batch_service_level_name,
+            .create_statement = managed_string(drop_statement)
+        });
+    }
+    return result;
+}
+
 future<std::vector<cql3::description>> service_level_controller::describe_created_service_levels() const {
 
     std::vector<cql3::description> result{};
@@ -1147,12 +1227,17 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
     // good enough if someone does attempt to make a backup in that state.
 
     std::optional<service_level_options> driver_service_level_slo;
+    std::optional<service_level_options> default_batch_service_level_slo;
     for (const auto& [sl_name, sl] : _service_levels_db) {
         if (sl.is_static) {
             continue;
         }
         if (sl_name == driver_service_level_name) {
             driver_service_level_slo = sl.slo;
+            continue;
+        }
+        if (sl_name == default_batch_service_level_name) {
+            default_batch_service_level_slo = sl.slo;
             continue;
         }
 
@@ -1171,9 +1256,11 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
 
     std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
     auto driver_sl_description = describe_driver_service_level(driver_service_level_slo);
+    auto default_batch_sl_description = describe_default_batch_service_level(default_batch_service_level_slo);
 
     std::vector<cql3::description> combined;
-    combined.reserve(result.size() + driver_sl_description.size());
+    combined.reserve(result.size() + driver_sl_description.size() + default_batch_sl_description.size());
+    std::move(default_batch_sl_description.begin(), default_batch_sl_description.end(), std::back_inserter(combined));
     std::move(driver_sl_description.begin(), driver_sl_description.end(), std::back_inserter(combined));
     std::move(result.begin(), result.end(), std::back_inserter(combined));
     co_return combined;
