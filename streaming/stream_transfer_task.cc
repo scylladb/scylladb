@@ -124,9 +124,8 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         auto table_is_dropped = make_lw_shared<bool>(false);
 
         auto source_op = [source, got_error_from_peer, table_is_dropped, si] () mutable -> future<> {
-            return repeat([source, got_error_from_peer, table_is_dropped, si] () mutable {
-                return source().then([source, got_error_from_peer, table_is_dropped, si] (std::optional<std::tuple<int32_t>> status_opt) mutable {
-                    if (status_opt) {
+            std::optional<std::tuple<int32_t>> status_opt;
+                    while ((status_opt = co_await source())) {
                         auto status = std::get<0>(*status_opt);
                         if (status == -1) {
                             *got_error_from_peer = true;
@@ -139,50 +138,50 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                         // need to continue reading until EOS since this will signal that no more work
                         // is left and rpc::source can be destroyed. The sender closes connection immediately
                         // after sending the status, so EOS should arrive shortly.
-                        return stop_iteration::no;
-                    } else {
-                        return stop_iteration::yes;
                     }
-                });
-            });
         };
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
-            mutation_fragment_stream_validator validator(*(si->reader.schema()));
-            return do_with(std::move(sink), std::move(validator), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink, mutation_fragment_stream_validator& validator) {
-                return repeat([&sink, &validator, si, got_error_from_peer] () mutable {
-                    return si->reader().then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+            auto s = si->reader.schema();
+            mutation_fragment_stream_validator validator(*s);
+                mutation_fragment_opt mf;
+                std::exception_ptr ex;
+
+                try {
+                    while ((mf = co_await si->reader())) {
                         if (*got_error_from_peer) {
-                            return make_exception_future<stop_iteration>(std::runtime_error("Got status error code from peer"));
+                            ex = std::make_exception_ptr(std::runtime_error("Got status error code from peer"));
+                            break;
                         }
-                        if (mf) {
+
                             if (!validator(mf->mutation_fragment_kind())) {
-                                return make_exception_future<stop_iteration>(std::runtime_error(format("Stream reader mutation_fragment validator failed, previous={}, current={}",
+                                ex = std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed, previous={}, current={}",
                                         validator.previous_mutation_fragment_kind(), mf->mutation_fragment_kind())));
+                                break;
                             }
+
                             frozen_mutation_fragment fmf = freeze(*s, *mf);
                             auto size = fmf.representation().size();
                             si->update(size);
-                            return sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data).then([] { return stop_iteration::no; });
-                        } else {
+
+                            co_await sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data);
+                    }
+
                             if (!validator.on_end_of_stream()) {
-                                return make_exception_future<stop_iteration>(std::runtime_error(format("Stream reader mutation_fragment validator failed on end_of_stream, previous={}, current=end_of_stream",
+                                ex = std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed on end_of_stream, previous={}, current=end_of_stream",
                                         validator.previous_mutation_fragment_kind())));
                             }
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        }
-                    });
-                }).then([&sink] () mutable {
-                    return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::end_of_stream);
-                }).handle_exception([&sink] (std::exception_ptr ep) mutable {
-                    // Notify the receiver the sender has failed
-                    return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
-                        return make_exception_future<>(std::move(ep));
-                    });
-                }).finally([&sink] () mutable {
-                    return sink.close();
-                });
-            });
+
+                    co_await sink(frozen_mutation_fragment(bytes_ostream()), ex ? stream_mutation_fragments_cmd::error : stream_mutation_fragments_cmd::end_of_stream);
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+
+                co_await sink.close();
+
+                if (ex) {
+                    co_await coroutine::return_exception_ptr(std::move(ex));
+                }
         };
 
         co_await coroutine::all(std::move(source_op), std::move(sink_op));
