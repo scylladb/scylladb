@@ -11,6 +11,7 @@
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
 #include "tablet_allocator_fwd.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
 
@@ -181,6 +182,51 @@ struct tablet_rack_list_colocation_plan {
     }
 };
 
+enum class replica_type {
+    pending,
+    leaving
+};
+
+struct tablet_rebuild_info {
+    locator::global_tablet_id tablet;
+    locator::tablet_replica replica;
+    replica_type type;
+};
+
+struct replication_update_info {
+    sstring ks_name;
+    std::unordered_map<sstring, std::vector<sstring>> new_replication;
+};
+
+struct rollback_rf_change_info {
+    sstring ks_name;
+};
+
+struct rf_change_completion_info {
+    utils::UUID request_id;
+    sstring ks_name;
+    sstring error;
+    std::unordered_map<sstring, sstring> saved_ks_props;
+};
+
+struct keyspace_rf_change_plan {
+    std::vector<tablet_rebuild_info> rebuilds;
+    std::vector<replication_update_info> replication_updates;
+    std::vector<rollback_rf_change_info> rollbacks;
+    std::optional<rf_change_completion_info> completion;
+
+    size_t size() const { return rebuilds.size() + replication_updates.size() + rollbacks.size() + (completion ? 1 : 0); };
+
+    void merge(keyspace_rf_change_plan&& other) {
+        std::move(other.rebuilds.begin(), other.rebuilds.end(), std::back_inserter(rebuilds));
+        std::move(other.replication_updates.begin(), other.replication_updates.end(), std::back_inserter(replication_updates));
+        std::move(other.rollbacks.begin(), other.rollbacks.end(), std::back_inserter(rollbacks));
+        if (!completion) {
+            completion = std::move(other.completion);
+        }
+    }
+};
+
 class migration_plan {
 public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
@@ -189,6 +235,7 @@ private:
     table_resize_plan _resize_plan;
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
+    keyspace_rf_change_plan _rf_change_plan;
     bool _has_nodes_to_drain = false;
     std::vector<drain_failure> _drain_failures;
 public:
@@ -197,11 +244,12 @@ public:
 
     const migrations_vector& migrations() const { return _migrations; }
     bool empty() const { return !size(); }
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size() + _rf_change_plan.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
     size_t tablet_rack_list_colocation_count() const { return _rack_list_colocation_plan.size(); }
+    size_t keyspace_rf_change_count() const { return _rf_change_plan.size(); }
     const std::vector<drain_failure>& drain_failures() const { return _drain_failures; }
 
     void add(tablet_migration_info info) {
@@ -225,6 +273,7 @@ public:
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
         _rack_list_colocation_plan.merge(std::move(other._rack_list_colocation_plan));
+        _rf_change_plan.merge(std::move(other._rf_change_plan));
     }
 
     void set_has_nodes_to_drain(bool b) {
@@ -247,6 +296,12 @@ public:
 
     void set_rack_list_colocation_plan(tablet_rack_list_colocation_plan rack_list_colocation_plan) {
         _rack_list_colocation_plan = std::move(rack_list_colocation_plan);
+    }
+
+    const keyspace_rf_change_plan& rf_change_plan() const { return _rf_change_plan; }
+
+    void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
+        _rf_change_plan = std::move(rf_change_plan);
     }
 
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
