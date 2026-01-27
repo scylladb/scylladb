@@ -916,6 +916,12 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
 future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager) {
+    utils::chunked_vector<utils::gcp::storage::object_info> result;
+
+    if (pager.done) {
+        co_return result;
+    }
+
     std::string bucket(bucket_in);
 
     gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
@@ -934,8 +940,6 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
         path += fmt::format("{}pageToken={}", psep, pager.token);
         psep = "&&";
     }
-
-    utils::chunked_vector<utils::gcp::storage::object_info> result;
 
     co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_ONLY
@@ -965,6 +969,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
             }
 
             pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
+            pager.done = pager.token.empty();
 
             for (auto& item : items->GetArray()) {
                 object_info info = create_info(item);
