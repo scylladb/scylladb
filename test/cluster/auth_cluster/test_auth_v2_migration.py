@@ -146,47 +146,6 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     await asyncio.gather(*(cql.run_async(f"LIST ROLES OF {username}", host=host) for host in hosts))
     await cql.run_async(f"DROP ROLE {username}")
 
-
-@pytest.mark.asyncio
-async def test_auth_v2_migration(request, manager: ManagerClient):
-    # First, force the first node to start in legacy mode
-    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
-
-    servers = [await manager.server_add(config=cfg)]
-    # Enable raft-based node operations for subsequent nodes - they should fall back to
-    # using gossiper-based node operations
-    cfg.pop('force_gossip_topology_changes')
-
-    servers += [await manager.server_add(config=cfg) for _ in range(2)]
-    cql = manager.cql
-    assert(cql)
-
-    logging.info("Waiting until driver connects to every server")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
-    logging.info("Checking the upgrade state on all nodes")
-    for host in hosts:
-        status = await manager.api.raft_topology_upgrade_status(host.address)
-        assert status == "not_upgraded"
-
-    await populate_auth_v1_data(manager)
-    await warmup_v1_static_values(manager, hosts)
-
-    logging.info("Triggering upgrade to raft topology")
-    await manager.api.upgrade_to_raft_topology(hosts[0].address)
-
-    logging.info("Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-
-    logging.info("Checking migrated data in system")
-    await check_auth_v2_data_migration(manager, hosts)
-
-    logging.info("Checking auth statements after migration")
-    await check_auth_v2_works(manager, hosts)
-
-
 @pytest.mark.asyncio
 async def test_auth_v2_during_recovery(manager: ManagerClient):
     # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.

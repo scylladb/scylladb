@@ -13,6 +13,7 @@ from test.pylib.util import wait_for_first_completed
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(reason="gossiper topology mode is no longer supported, need to rewrite the test using raft topology")
 async def test_different_group0_ids(manager: ManagerClient):
     """
     The reproducer for #14448.
