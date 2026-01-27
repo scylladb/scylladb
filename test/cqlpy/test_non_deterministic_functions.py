@@ -47,31 +47,31 @@ def lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, pk_type, fn):
         assert len(rows) == num_iterations * 2
 
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def test_lwt_uuid_fn_pk_insert(cql, test_keyspace):
     lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "uuid", "uuid")
 
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def test_lwt_currenttimestamp_fn_pk_insert(cql, test_keyspace):
     lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timestamp", "currenttimestamp")
 
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def test_lwt_currenttime_fn_pk_insert(cql, test_keyspace):
     lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "time", "currenttime")
 
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def test_lwt_currenttimeuuid_fn_pk_insert(cql, test_keyspace):
     lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "currenttimeuuid")
 
 @pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         ["tablets", "vnodes"],
                          indirect=True)
 def test_lwt_now_fn_pk_insert(cql, test_keyspace):
     lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "now")

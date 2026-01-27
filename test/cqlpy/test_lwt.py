@@ -15,10 +15,9 @@ from cassandra.protocol import InvalidRequest
 from .util import new_test_table, unique_key_int
 
 @pytest.fixture(scope="module")
-# FIXME: LWT is not supported with tablets yet. See #18066
-def table1(cql, test_keyspace_vnodes):
+def table1(cql, test_keyspace):
     schema='p int, c int, r int, s int static, PRIMARY KEY(p, c)'
-    with new_test_table(cql, test_keyspace_vnodes, schema) as table:
+    with new_test_table(cql, test_keyspace, schema) as table:
         yield table
 
 # An LWT UPDATE whose condition uses non-static columns begins by reading
