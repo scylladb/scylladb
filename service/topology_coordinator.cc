@@ -1817,7 +1817,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             .last_token  = dht::token::to_int64(tmap.get_last_token(gid.tablet)),
                             .table_uuid  = gid.table,
                         };
-                        rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
+                        auto request_type = tinfo.repair_task_info.request_type;
+                        rtlogger.info("Initiating tablet repair host={} tablet={} request_type={}", dst, gid, request_type);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
@@ -1829,8 +1830,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             entry.timestamp = db_clock::now();
                             tablet_state.repair_task_updates = co_await _sys_ks.get_update_repair_task_mutations(entry, api::new_timestamp());
                         }
-                        rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
-                                dst, tablet, duration, res.repair_time);
+                        rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={} request_type={}",
+                                dst, tablet, duration, res.repair_time, request_type);
                     })) {
                         if (utils::get_local_injector().enter("delay_end_repair_update")) {
                             break;
