@@ -213,3 +213,7 @@ Alternator table, the following features will not work for this table:
 * Enabling Streams with CreateTable or UpdateTable doesn't work
   (results in an error).
   See <https://github.com/scylladb/scylla/issues/23838>.
+* Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) require
+  the cluster to have either exactly 3 racks or exactly 1 rack, and the
+  `rf_rack_valid_keyspaces` configuration option must be enabled. Tables
+  with GSI or LSI will fail to be created if these requirements are not met.

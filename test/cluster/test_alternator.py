@@ -94,7 +94,7 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
        in the wrong scheduling group. We can assume this because we don't
        run multiple tests in parallel on the same cluster.
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc="dc1")
     alternator = get_alternator(servers[0].ip_addr)
     table = alternator.create_table(TableName=unique_table_name(),
         BillingMode='PAY_PER_REQUEST',
@@ -661,6 +661,39 @@ async def test_index_requires_rf_rack_valid(manager: ManagerClient):
             ]
         )
 
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
+    """
+    Verify that the flag `rf_rack_valid_keyspaces` enforces RF-rack-validity.
+    Create a cluster with 4 racks, and try to create a table. By default the
+    table will have RF=3, so the creation should fail with appropriate error.
+    """
+    config = alternator_config | {"rf_rack_valid_keyspaces": True}
+
+    # Add 4 nodes in 4 racks
+    servers_rack1 = await manager.servers_add(4, config=config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack4'},
+    ])
+
+    alternator = get_alternator(servers_rack1[0].ip_addr)
+
+    expected_err = "the configuration option 'rf_rack_valid_keyspaces' is enabled, " \
+                "which enforces that tables using tablets can only be created in clusters " \
+                "that have either 1 or 3 racks"
+
+    # Try to create a table - the default is RF=3, so this should fail due to RF!=#racks
+    with pytest.raises(ClientError, match=expected_err):
+        alternator.create_table(
+            TableName=unique_table_name(),
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]
+        )
+
 # Unfortunately by default a Python thread print the exception that kills
 # it (e.g., pytest assert failures) but it doesn't propagate the exception
 # to the join() - so the overall test doesn't fail. The following ThreadWrapper
@@ -961,9 +994,10 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
     # the assignment of data (tablets or vnodes) to nodes isn't trivial,
     # which will allow us to check that non-trivial request forwarding works.
-    servers = await manager.servers_add(4, config=alternator_config)
+    config = alternator_config | {'rf_rack_valid_keyspaces': False}
+    servers = await manager.servers_add(4, config=config)
     # Add a fifth node, with zero tokens (no data), by setting join_ring=false:
-    zero_token_server = await manager.server_add(config=alternator_config | {'join_ring': False})
+    zero_token_server = await manager.server_add(config=config | {'join_ring': False})
 
     # Get an Alternator connection to the zero-token node:
     alternator = get_alternator(zero_token_server.ip_addr)
