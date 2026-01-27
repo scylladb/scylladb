@@ -7,9 +7,9 @@
  */
 
 
-#include "seastar/core/shard_id.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
