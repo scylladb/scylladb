@@ -87,13 +87,13 @@ struct send_info {
         auto found_relevant_range = false;
         auto ranges_it = ranges.begin();
         while (ranges_it != ranges.end() && !found_relevant_range) {
-                dht::token_range range = *ranges_it++;
-                    auto& table_sharder = cf->get_effective_replication_map()->get_sharder(*cf->schema());
-                    auto sharder = dht::selective_token_range_sharder(table_sharder, std::move(range), this_shard_id());
-                    auto range_shard = sharder.next();
-                    if (range_shard) {
-                        found_relevant_range = true;
-                    }
+            dht::token_range range = *ranges_it++;
+            auto& table_sharder = cf->get_effective_replication_map()->get_sharder(*cf->schema());
+            auto sharder = dht::selective_token_range_sharder(table_sharder, std::move(range), this_shard_id());
+            auto range_shard = sharder.next();
+            if (range_shard) {
+                found_relevant_range = true;
+            }
         }
         co_return found_relevant_range;
     }
@@ -125,20 +125,20 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         auto table_is_dropped = false;
 
         auto source_op = [source, &got_error_from_peer, &table_is_dropped, si] () mutable -> future<> {
-                    while (auto status_opt = co_await source()) {
-                        auto status = std::get<0>(*status_opt);
-                        if (status == -1) {
-                            got_error_from_peer = true;
-                        } else if (status == -2) {
-                            got_error_from_peer = true;
-                            table_is_dropped = true;
-                        }
-                        sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, status);
-                        // we've got an error from the other side, but we cannot just abandon rpc::source we
-                        // need to continue reading until EOS since this will signal that no more work
-                        // is left and rpc::source can be destroyed. The sender closes connection immediately
-                        // after sending the status, so EOS should arrive shortly.
-                    }
+            while (auto status_opt = co_await source()) {
+                auto status = std::get<0>(*status_opt);
+                if (status == -1) {
+                    got_error_from_peer = true;
+                } else if (status == -2) {
+                    got_error_from_peer = true;
+                    table_is_dropped = true;
+                }
+                sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, status);
+                // we've got an error from the other side, but we cannot just abandon rpc::source we
+                // need to continue reading until EOS since this will signal that no more work
+                // is left and rpc::source can be destroyed. The sender closes connection immediately
+                // after sending the status, so EOS should arrive shortly.
+            }
         };
 
         auto sink_op = [sink, si, &got_error_from_peer] () mutable -> future<> {
@@ -151,38 +151,38 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             auto s = si->reader.schema();
             mutation_fragment_stream_validator validator(*s);
 
-                    while (auto mf = co_await si->reader()) {
-                        if (got_error_from_peer) {
-                            co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error("Got status error code from peer")));
-                        }
+            while (auto mf = co_await si->reader()) {
+                if (got_error_from_peer) {
+                    co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error("Got status error code from peer")));
+                }
 
-                            if (!validator(mf->mutation_fragment_kind())) {
-                                co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed, previous={}, current={}",
-                                        validator.previous_mutation_fragment_kind(), mf->mutation_fragment_kind()))));
-                            }
+                if (!validator(mf->mutation_fragment_kind())) {
+                    co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed, previous={}, current={}",
+                            validator.previous_mutation_fragment_kind(), mf->mutation_fragment_kind()))));
+                }
 
-                            frozen_mutation_fragment fmf = freeze(*s, *mf);
-                            auto size = fmf.representation().size();
-                            si->update(size);
+                frozen_mutation_fragment fmf = freeze(*s, *mf);
+                auto size = fmf.representation().size();
+                si->update(size);
 
-                            co_await sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data);
-                    }
+                co_await sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data);
+            }
 
-                            if (!validator.on_end_of_stream()) {
-                                co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed on end_of_stream, previous={}, current=end_of_stream",
-                                        validator.previous_mutation_fragment_kind()))));
-                            }
+            if (!validator.on_end_of_stream()) {
+                co_await coroutine::return_exception_ptr(std::make_exception_ptr(std::runtime_error(format("Stream reader mutation_fragment validator failed on end_of_stream, previous={}, current=end_of_stream",
+                        validator.previous_mutation_fragment_kind()))));
+            }
         };
 
         co_await coroutine::all(std::move(source_op), std::move(sink_op));
 
-            if (got_error_from_peer) {
-                if (table_is_dropped) {
-                     sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
-                } else {
-                    throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id, si->plan_id, si->cf_id));
-                }
+        if (got_error_from_peer) {
+            if (table_is_dropped) {
+                 sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
+            } else {
+                throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id, si->plan_id, si->cf_id));
             }
+        }
 }
 
 future<> stream_transfer_task::execute() {
@@ -199,10 +199,10 @@ future<> stream_transfer_task::execute() {
 
         std::exception_ptr ep;
 
-      try {
-        co_await sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable -> future<> {
-            auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
-            auto permit = co_await sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {});
+        try {
+            co_await sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable -> future<> {
+                auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
+                auto permit = co_await sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {});
                 auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, id] (size_t sz) {
                     sm.update_progress(plan_id, id, streaming::progress_info::direction::OUT, sz);
                 });
@@ -211,36 +211,36 @@ future<> stream_transfer_task::execute() {
                     return si->reader.close();
                 });
 
-                    if (!co_await si->has_relevant_range_on_this_shard()) {
-                        sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
-                                plan_id, cf_id, this_shard_id());
-                        co_return;
-                    }
-                    co_await send_mutation_fragments(si);
-        });
+                if (!co_await si->has_relevant_range_on_this_shard()) {
+                    sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
+                            plan_id, cf_id, this_shard_id());
+                    co_return;
+                }
+                co_await send_mutation_fragments(si);
+            });
 
-        try {
-            sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-            co_await ser::streaming_rpc_verbs::send_stream_mutation_done(&sm.ms(), id, plan_id, _ranges,
-                cf_id, session->dst_cpu_id);
-            _mutation_done_sent = true;
-            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id);
+            try {
+                sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
+                co_await ser::streaming_rpc_verbs::send_stream_mutation_done(&sm.ms(), id, plan_id, _ranges,
+                    cf_id, session->dst_cpu_id);
+                _mutation_done_sent = true;
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id);
+            } catch (...) {
+                ep = std::current_exception();
+                sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
+                std::rethrow_exception(ep);
+            }
         } catch (...) {
-            ep = std::current_exception();
-            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
-            std::rethrow_exception(ep);
-        }
-      } catch (...) {
             ep = std::current_exception();
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
             utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [&sm] () {
                 sm.db().find_column_family(table_id::create_null_id());
             });
-      }
+        }
 
-      if (ep) {
-        co_await coroutine::return_exception_ptr(std::move(ep));
-      }
+        if (ep) {
+            co_await coroutine::return_exception_ptr(std::move(ep));
+        }
     });
     // If the table is dropped during streaming, we can ignore the
     // errors and make the stream successful. This allows user to
