@@ -200,8 +200,6 @@ public:
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 
-    db::system_keyspace& sys_ks();
-
     bool in_recovery() const;
 
     gc_clock::duration get_history_gc_duration() const;

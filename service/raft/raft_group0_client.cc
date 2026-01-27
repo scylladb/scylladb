@@ -471,10 +471,6 @@ future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source
     return get_units(_read_apply_mutex, 1, as);
 }
 
-db::system_keyspace& raft_group0_client::sys_ks() {
-    return _sys_ks;
-}
-
 bool raft_group0_client::in_recovery() const {
     return _upgrade_state == group0_upgrade_state::recovery;
 }
