@@ -817,6 +817,9 @@ arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='clan
                         help='C compiler path')
 arg_parser.add_argument('--compiler-cache', action='store', dest='compiler_cache', default='auto',
                         help='Compiler cache to use: auto (default, prefers sccache), sccache, ccache, none, or a path to a binary')
+# Workaround for https://github.com/mozilla/sccache/issues/2575
+arg_parser.add_argument('--sccache-rust', action=argparse.BooleanOptionalAction, default=False,
+                        help='Use sccache for rust code (if sccache is selected as compiler cache). Doesn\'t work with distributed builds.')
 add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
                         help='Use dpdk (from seastar dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
@@ -2405,7 +2408,7 @@ def write_build_file(f,
     # If compiler cache is available, prefix the compiler with it
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
     # For Rust, sccache is used via RUSTC_WRAPPER environment variable
-    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache else ''
+    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -3149,7 +3152,7 @@ def configure_using_cmake(args):
         settings['CMAKE_CXX_COMPILER_LAUNCHER'] = compiler_cache
         settings['CMAKE_C_COMPILER_LAUNCHER'] = compiler_cache
         # For Rust, sccache is used via RUSTC_WRAPPER
-        if 'sccache' in compiler_cache:
+        if 'sccache' in compiler_cache and args.sccache_rust:
             settings['Scylla_RUSTC_WRAPPER'] = compiler_cache
 
     if args.date_stamp:
