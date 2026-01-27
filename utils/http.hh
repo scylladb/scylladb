@@ -10,7 +10,6 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>
-#include <seastar/coroutine/all.hh>
 #include <seastar/http/client.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
@@ -20,63 +19,42 @@
 
 namespace utils::http {
 
+future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
+
+class address_provider{
+    bool _addr_init = false;
+    bool _creds_init = false;
+    std::vector<net::inet_address> addr_list;
+    shared_ptr<tls::certificate_credentials> _creds;
+    const std::string& _host;
+    size_t _addr_pos{0};
+    bool _use_https;
+
+    future<> init_addresses();
+    future<> init_credentials();
+
+public:
+    address_provider(const std::string& host, bool use_https);
+
+    future<net::inet_address> get_address();
+    future<shared_ptr<tls::certificate_credentials>> get_creds();
+    future<> reset();
+};
+
 class dns_connection_factory : public seastar::http::experimental::connection_factory {
 protected:
     std::string _host;
     int _port;
+    size_t _addr_pos = 0;
     logging::logger& _logger;
-    struct state {
-        bool initialized = false;
-        socket_address addr;
-        ::shared_ptr<tls::certificate_credentials> creds;
-    };
-    lw_shared_ptr<state> _state;
-    shared_future<> _done;
+    address_provider _addr_provider;
 
-    static future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
-
-    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
-        co_await coroutine::all(
-            [state, host, port] () -> future<> {
-                auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-                state->addr = socket_address(hent.addr_list.front(), port);
-            },
-            [state, use_https] () -> future<> {
-                if (use_https) {
-                    state->creds = co_await system_trust_credentials();
-                }
-            }
-        );
-
-        state->initialized = true;
-        logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
-    }
+    future<connected_socket> connect();
 
 public:
-    dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger)
-        : _host(std::move(host))
-        , _port(port)
-        , _logger(logger)
-        , _state(make_lw_shared<state>())
-        , _done(initialize(_state, _host, _port, use_https, _logger))
-    {
-    }
+    dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger);
 
-    virtual future<connected_socket> make(abort_source*) override {
-        if (!_state->initialized) {
-            _logger.debug("Waiting for factory to initialize");
-            co_await _done.get_future();
-        }
-
-        if (_state->creds) {
-            _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-            co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
-        } else {
-            _logger.debug("Making new HTTP connection");
-            co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
-        }
-    }
+    virtual future<connected_socket> make(abort_source*) override;
 };
 
 } // namespace utils::http
