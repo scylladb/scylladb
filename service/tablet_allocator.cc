@@ -1032,6 +1032,10 @@ public:
         return _topology != nullptr && _sys_ks != nullptr && !_topology->paused_rf_change_requests.empty();
     }
 
+    bool ongoing_rf_change() const {
+        return _topology != nullptr && _sys_ks != nullptr && !_topology->ongoing_rf_changes.empty();
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
@@ -1060,11 +1064,14 @@ public:
         }
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
-        // Note : Resize plans should be generated before repair plans to avoid scheduling repairs when there is pending resize finalization
+        // Note : Resize plans should be generated before repair or rf change plans to avoid scheduling repairs or rebuilds when there is pending resize finalization
         plan.merge_resize_plan(co_await make_resize_plan(plan));
 
-        // Skip making repair plans if resize finalizations are pending, since repairs could delay finalization.
+        // Skip making repair or rf change plans if resize finalizations are pending, since repairs or rebuilds could delay finalization.
         if (plan.resize_plan().finalize_resize.empty()) {
+            if (ongoing_rf_change()) {
+                plan.set_rf_change_plan(co_await make_rf_change_plan(plan));
+            }
             plan.set_repair_plan(co_await make_repair_plan(plan));
         }
 
@@ -1424,6 +1431,11 @@ public:
         }
         plan.set_rack_list_colocation_plan(std::move(rack_list_plan));
         co_return std::move(plan);
+    }
+
+    future<keyspace_rf_change_plan> make_rf_change_plan(const migration_plan& mplan) {
+        keyspace_rf_change_plan plan;
+        co_return plan;
     }
 
     // Returns true if a table has replicas of all its sibling tablets co-located.
@@ -4149,6 +4161,10 @@ future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migrat
     for (auto& gid : _repair_plan._repairs) {
         co_await coroutine::maybe_yield();
         tablets.insert(gid);
+    }
+    for (auto& rebuild : _rf_change_plan.rebuilds) {
+        co_await coroutine::maybe_yield();
+        tablets.insert(rebuild.tablet);
     }
     co_return tablets;
 }

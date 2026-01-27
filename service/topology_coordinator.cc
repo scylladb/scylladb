@@ -404,7 +404,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         try {
             rtlogger.info("updating topology state: {}", reason);
             rtlogger.trace("update_topology_state mutations: {}", updates);
-            topology_change change{std::move(updates)};
+            mixed_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         } catch (group0_concurrent_modification&) {
@@ -1468,6 +1468,106 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
     }
 
+    // Schedules rebuilds.
+    void generate_rebuild_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const tablet_rebuild_info& rebuild) {
+        const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(rebuild.tablet.table);
+        auto last_token = tmap.get_last_token(rebuild.tablet.tablet);
+        auto new_replicas = tmap.get_tablet_info(rebuild.tablet.tablet).replicas;
+        if (rebuild.type == replica_type::pending) {
+            new_replicas.push_back(rebuild.replica);
+        } else {
+            new_replicas.erase(std::remove(new_replicas.begin(), new_replicas.end(), rebuild.replica), new_replicas.end());
+        }
+        out.emplace_back(
+            replica::tablet_mutation_builder(guard.write_timestamp(), rebuild.tablet.table)
+                .set_new_replicas(last_token, std::move(new_replicas))
+                .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                .set_transition(last_token, locator::tablet_transition_kind::rebuild_v2)
+                .build());
+    }
+
+    // Updates system_schema.keyspaces::replication_v2 to new value reflecting tablet replicas placement.
+    void generate_replication_factor_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const replication_update_info& replication_update) {
+        auto& ks = _db.find_keyspace(replication_update.ks_name);
+        auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+        ks_md->set_strategy_options(replication_update.new_replication | std::views::filter([] (const auto& r) { return !r.second.empty(); }) | std::ranges::to<locator::replication_strategy_config_options>());
+
+        auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+        for (auto& m: schema_muts) {
+            out.emplace_back(m);
+        }
+    }
+
+    // Sets system_schema.keyspaces::next_replication to system_schema.keyspaces::previous_replication.
+    void generate_rf_change_rollback_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rollback_rf_change_info& rollback) {
+        auto& ks = _db.find_keyspace(rollback.ks_name);
+        auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+        ks_md->set_next_strategy_options(ks_md->previous_strategy_options_opt().value());
+
+        auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+        for (auto& m: schema_muts) {
+            out.emplace_back(m);
+        }
+    }
+
+    // Updates keyspace properties; removes system_schema.keyspaces::{previous,next}_replication;
+    // finishes RF change request; Removes request from system.topology::ongoing_rf_changes.
+    void generate_rf_change_completion_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rf_change_completion_info& completion) {
+        sstring error = completion.error;
+        auto& ks = _db.find_keyspace(completion.ks_name);
+        if (error.empty()) {
+            cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{completion.saved_ks_props.begin(), completion.saved_ks_props.end()}};
+            new_ks_props.validate();
+            auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *get_token_metadata_ptr(), _db.features(), _db.get_config());
+            ks_md->clear_previous_strategy_options();
+            ks_md->clear_next_strategy_options();
+
+            auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+            for (auto& m: schema_muts) {
+                out.emplace_back(m);
+            }
+        } else {
+            auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+            ks_md->clear_previous_strategy_options();
+            ks_md->clear_next_strategy_options();
+
+            auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+            for (auto& m: schema_muts) {
+                out.emplace_back(m);
+            }
+        }
+
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id)
+                .build());
+
+        out.push_back(canonical_mutation(topology_request_tracking_mutation_builder(completion.request_id)
+                .done(error)
+                .build()));
+    }
+
+    future<> generate_rf_change_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const keyspace_rf_change_plan& rf_change_plan) {
+        for (const auto& rebuild : rf_change_plan.rebuilds) {
+            co_await coroutine::maybe_yield();
+            generate_rebuild_update(out, guard, rebuild);
+        }
+
+        for (const auto& update : rf_change_plan.replication_updates) {
+            co_await coroutine::maybe_yield();
+            generate_replication_factor_update(out, guard, update);
+        }
+
+        for (const auto& rollback : rf_change_plan.rollbacks) {
+            co_await coroutine::maybe_yield();
+            generate_rf_change_rollback_update(out, guard, rollback);
+        }
+
+        if (rf_change_plan.completion.has_value()) {
+            co_await coroutine::maybe_yield();
+            generate_rf_change_completion_update(out, guard, *rf_change_plan.completion);
+        }
+    }
+
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
@@ -1490,6 +1590,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
             }
+
+            co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
         }
 
         auto sched_time = db_clock::now();
