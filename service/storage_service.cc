@@ -3255,8 +3255,9 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
                 set_topology_change_kind(topology_change_kind::raft);
                 break;
             case join_node_query_result::topology_mode::legacy:
-                slogger.info("Will join existing cluster in legacy topology operations mode because the cluster still doesn't use raft-based topology operations");
-                set_topology_change_kind(topology_change_kind::legacy);
+                throw std::runtime_error(
+                        "Cannot join existing cluster in legacy topology operations mode because it is no longer supported. "
+                        "Enable consistent topology changes with Raft.");
             }
         }
     }
