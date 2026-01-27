@@ -1040,7 +1040,7 @@ static void decode_tuple(const tuple_type_impl& type, managed_bytes_view& compar
 static void encode_vector(const vector_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
     const auto& element_type = *type.get_elements_type();
     auto value_length = element_type.value_length_if_fixed();
-    for (size_t i = 0; i < type.get_dimension(); i++) {
+    for (size_t i = 0; i < static_cast<size_t>(type.get_dimension()); i++) {
         encode_component(element_type, read_vector_element(serialized_bytes_view, value_length), out);
     }
     write_native_int(out, TERMINATOR);

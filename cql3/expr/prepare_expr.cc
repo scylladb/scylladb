@@ -501,13 +501,13 @@ vector_validate_assignable_to(const collection_constructor& c, data_dictionary::
         throw exceptions::invalid_request_exception(format("Invalid vector type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
 
-    size_t expected_size = vt->get_dimension();
-    if (!expected_size) {
+    vector_dimension_t expected_size = vt->get_dimension();
+    if (expected_size == 0) {
         throw exceptions::invalid_request_exception(format("Invalid vector type literal for {}: type {} expects at least one element",
                                                             *receiver.name, receiver.type->as_cql3_type()));
     }
     size_t received_size = c.elements.size();
-    if (expected_size != received_size) {
+    if (static_cast<size_t>(expected_size) != received_size) {
         throw exceptions::invalid_request_exception(format("Invalid vector literal for {}: type {} expects {:d} elements but got {:d}",
                                                             *receiver.name, receiver.type->as_cql3_type(), expected_size, received_size));
     }
