@@ -49,6 +49,7 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   "--critical-disk-utilization-level", "0.8",
                   "--commitlog-segment-size-in-mb", "2",
                   "--schema-commitlog-segment-size-in-mb", "4",
+                  "--tablet-load-stats-refresh-interval-in-seconds", "1",
                   ]
 
 
@@ -170,10 +171,7 @@ async def test_critical_utilization_during_decommission(manager: ManagerClient, 
                "--logger-log-level", "load_balancer=debug",
                "--logger-log-level", "debug_error_injection=debug"
                ]
-    config = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1
-    }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*2, config=config, cmdline=cmdline,
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*2, cmdline=cmdline,
                                      property_file=[{"dc": "dc1", "rack": "r1"}]*2) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
@@ -272,10 +270,7 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
 
 @pytest.mark.asyncio
 async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) -> None:
-    cfg = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1,
-        }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -337,10 +332,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
 
 @pytest.mark.asyncio
 async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, volumes_factory: Callable) -> None:
-    cfg = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1,
-        }
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         await manager.disable_tablet_balancing()
 
         cql, _ = await manager.get_ready_cql(servers)
@@ -398,12 +390,9 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
 
 @pytest.mark.asyncio
 async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_factory: Callable) -> None:
-    cfg = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1,
-        }
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
@@ -464,12 +453,9 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
-    cfg = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1,
-    }
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
-    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd, config=cfg) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmd) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
