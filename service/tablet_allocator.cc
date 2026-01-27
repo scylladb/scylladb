@@ -2504,14 +2504,13 @@ public:
         src_shard.dusage->used -= tablet_sizes;
     }
 
-    // Adjusts the load of the source and destination (host:shard) that were picked for the migration.
-    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, const migration_tablet_set& tablet_set) {
+    void decrease_node_load(node_load_map& nodes, tablet_replica replica, const migration_tablet_set& tablet_set) {
         auto tablet_count = tablet_set.tablets().size();
         auto tablet_sizes = tablet_set.tablet_set_disk_size;
         auto table = tablet_set.tablets().front().table;
 
-        auto& dst_node = nodes[dst.host];
-        auto& dst_shard = dst_node.shards[dst.shard];
+        auto& dst_node = nodes[replica.host];
+        auto& dst_shard = dst_node.shards[replica.shard];
         dst_shard.tablet_count += tablet_count;
         dst_shard.tablet_count_per_table[table] += tablet_count;
         dst_shard.tablet_sizes_per_table[table] += tablet_sizes;
@@ -2521,9 +2520,15 @@ public:
         dst_node.tablet_count += tablet_count;
         dst_node.dusage->used += tablet_sizes;
         dst_node.update();
+    }
 
-        auto& src_node = nodes[src.host];
-        auto& src_shard = src_node.shards[src.shard];
+    void increase_node_load(node_load_map& nodes, tablet_replica replica, const migration_tablet_set& tablet_set) {
+        auto tablet_count = tablet_set.tablets().size();
+        auto tablet_sizes = tablet_set.tablet_set_disk_size;
+        auto table = tablet_set.tablets().front().table;
+
+        auto& src_node = nodes[replica.host];
+        auto& src_shard = src_node.shards[replica.shard];
         src_shard.tablet_count -= tablet_count;
         src_shard.tablet_count_per_table[table] -= tablet_count;
         src_shard.tablet_sizes_per_table[table] -= tablet_sizes;
@@ -2537,6 +2542,12 @@ public:
             src_node.dusage->used -= tablet_sizes;
         }
         src_node.update();
+    }
+
+    // Adjusts the load of the source and destination (host:shard) that were picked for the migration.
+    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, const migration_tablet_set& tablet_set) {
+        decrease_node_load(nodes, dst, tablet_set);
+        increase_node_load(nodes, src, tablet_set);
     }
 
     static void unload(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
