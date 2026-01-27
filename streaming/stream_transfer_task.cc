@@ -210,23 +210,30 @@ future<> stream_transfer_task::execute() {
         std::exception_ptr ep;
 
       try {
-        co_await sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
+        co_await sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable -> future<> {
             auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
-            return sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason, topo_guard] (reader_permit permit) mutable {
+            auto permit = co_await sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {});
                 auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, id] (size_t sz) {
                     sm.update_progress(plan_id, id, streaming::progress_info::direction::OUT, sz);
                 });
-                return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
-                    if (!has_relevant_range_on_this_shard) {
+                std::exception_ptr ex;
+
+                try {
+                    if (!co_await si->has_relevant_range_on_this_shard()) {
                         sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
                                 plan_id, cf_id, this_shard_id());
-                        return make_ready_future<>();
+                        co_return;
                     }
-                    return send_mutation_fragments(std::move(si));
-                }).finally([si] {
-                    return si->reader.close();
-                });
-            });
+                    co_await send_mutation_fragments(std::move(si));
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+
+                co_await si->reader.close();
+
+                if (ex) {
+                    co_await coroutine::return_exception_ptr(std::move(ex));
+                }
         });
 
         try {
