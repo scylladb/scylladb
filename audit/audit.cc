@@ -209,15 +209,11 @@ future<> audit::stop_audit() {
     });
 }
 
-audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table) {
+audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table, bool batch) {
     if (!audit_instance().local_is_initialized()) {
         return nullptr;
     }
-    return std::make_unique<audit_info>(cat, keyspace, table);
-}
-
-audit_info_ptr audit::create_no_audit_info() {
-    return audit_info_ptr();
+    return std::make_unique<audit_info>(cat, keyspace, table, batch);
 }
 
 future<> audit::start(const db::config& cfg) {
@@ -267,18 +263,21 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
 }
 
 future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error) {
-    cql3::statements::batch_statement* batch = dynamic_cast<cql3::statements::batch_statement*>(statement.get());
-    if (batch != nullptr) {
+    auto audit_info = statement->get_audit_info();
+    if (!audit_info) {
+        return make_ready_future<>();
+    }
+    if (audit_info->batch()) {
+        cql3::statements::batch_statement* batch = static_cast<cql3::statements::batch_statement*>(statement.get());
         return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
             return inspect(m.statement, query_state, options, error);
         });
     } else {
-        auto audit_info = statement->get_audit_info();
-        if (bool(audit_info) && audit::local_audit_instance().should_log(audit_info)) {
+        if (audit::local_audit_instance().should_log(audit_info)) {
             return audit::local_audit_instance().log(audit_info, query_state, options, error);
         }
+        return make_ready_future<>();
     }
-    return make_ready_future<>();
 }
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error) {

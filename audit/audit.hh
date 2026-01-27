@@ -75,11 +75,13 @@ class audit_info final {
     sstring _keyspace;
     sstring _table;
     sstring _query;
+    bool _batch;
 public:
-    audit_info(statement_category cat, sstring keyspace, sstring table)
+    audit_info(statement_category cat, sstring keyspace, sstring table, bool batch)
         : _category(cat)
         , _keyspace(std::move(keyspace))
         , _table(std::move(table))
+        , _batch(batch)
     { }
     void set_query_string(const std::string_view& query_string) {
         _query = sstring(query_string);
@@ -89,6 +91,7 @@ public:
     const sstring& query() const { return _query; }
     sstring category_string() const;
     statement_category category() const { return _category; }
+    bool batch() const { return _batch; }
 };
 
 using audit_info_ptr = std::unique_ptr<audit_info>;
@@ -126,8 +129,7 @@ public:
     }
     static future<> start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm);
     static future<> stop_audit();
-    static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table);
-    static audit_info_ptr create_no_audit_info();
+    static audit_info_ptr create_audit_info(statement_category cat, const sstring& keyspace, const sstring& table, bool batch = false);
     audit(locator::shared_token_metadata& stm,
           cql3::query_processor& qp,
           service::migration_manager& mm,

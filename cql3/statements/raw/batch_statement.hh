@@ -50,8 +50,8 @@ public:
 protected:
     virtual audit::statement_category category() const override;
     virtual audit::audit_info_ptr audit_info() const override {
-        // We don't audit batch statements. Instead we audit statements that are inside the batch.
-        return audit::audit::create_no_audit_info();
+        constexpr bool batch = true;
+        return audit::audit::create_audit_info(category(), sstring(), sstring(), batch);
     }
 };
 
