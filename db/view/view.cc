@@ -2833,11 +2833,7 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
 }
 
 future<> view_builder::run_in_background() {
-    // Run the view building in the streaming scheduling group
-    // so that it doesn't impact other tasks with higher priority.
-    seastar::thread_attributes attr;
-    attr.sched_group = _db.get_streaming_scheduling_group();
-    return seastar::async(std::move(attr), [this] {
+    return seastar::async([this] {
         exponential_backoff_retry r(1s, 1min);
         while (!_as.abort_requested()) {
             try {
