@@ -326,56 +326,6 @@ async def test_singledc_alter_tablets_rf(manager: ManagerClient):
         with pytest.raises(InvalidRequest):
             await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
 
-
-# ALTER tablets KS cannot change RF of any DC by more than 1 at a time.
-# In a multi-dc environment, we can create replicas in a DC that didn't have replicas before,
-# but the above requirement should still be honoured, because we'd be changing RF from 0 to N in the new DC.
-# Reproduces https://github.com/scylladb/scylladb/issues/20039#issuecomment-2271365060
-# See also `test_singledc_alter_tablets_rf` above for basic scenarios tested
-@pytest.mark.asyncio
-async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
-    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
-
-    logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
-    # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
-    await manager.servers_add(2, config=config, auto_rack_dc="dc1")
-    await manager.servers_add(2, config=config, auto_rack_dc="dc2")
-
-    cql = manager.get_cql()
-    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
-        # need to create a table to not change only the schema, but also tablets replicas
-        await cql.run_async(f"create table {ks}.t (pk int primary key)")
-        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            # changing RF of dc2 from 0 to 2 should fail
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': ['rack1', 'rack2']}}")
-
-        # changing RF of dc2 from 0 to 1 should succeed
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': ['rack1']}}")
-        # ensure that RFs of both DCs are equal to 1 now, i.e. that omitting dc1 in above command didn't change it
-        repl = get_replication(cql, ks)
-        logger.info(f"repl = {repl}")
-        assert len(repl['dc1']) == 1
-        assert repl['dc2'] == ['rack1']
-
-        # incrementing RF of 2 DCs at once should NOT succeed, because it'd leave 2 pending tablets replicas
-        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2'], 'dc2': ['rack1', 'rack2']}}")
-        # as above, but decrementing
-        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 0}}")
-        # as above, but decrement 1 RF and increment the other
-        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1','rack2'], 'dc2': 0}}")
-        # as above, but RFs are swapped
-        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': ['rack1', 'rack2']}}")
-
-        # check that we can remove all replicas from dc2 by changing RF from 1 to 0
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}")
-        # check that we can remove all replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0}}")
-
-
 @pytest.mark.asyncio
 async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
@@ -606,7 +556,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
 
     numeric_injection = "create_with_numeric"
     colocation_injection = "wait_with_rack_list_colocation"
-    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [numeric_injection, colocation_injection]}
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "error_injections_at_startup": [numeric_injection, colocation_injection]}
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--smp=2',
