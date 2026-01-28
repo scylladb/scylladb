@@ -68,6 +68,7 @@
 #include "utils/labels.hh"
 #include "utils/result.hh"
 #include "utils/reusable_buffer.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -236,22 +237,35 @@ void cql_sg_stats::register_metrics()
         cql_binary_opcode opcode = cql_binary_opcode{i};
 
         transport_metrics.emplace_back(
-                sm::make_counter("cql_requests_count", [this, opcode] { return get_cql_opcode_stats(opcode).count; },
+                sm::make_counter("cql_requests_count", [this, opcode] { return get_cql_opcode_stats(opcode).request_size.count(); },
                                  sm::description("Counts the total number of CQL messages of a specific kind."),
                                  {{"kind", to_string(opcode)}, {"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
         );
 
         transport_metrics.emplace_back(
-                sm::make_counter("cql_request_bytes", [this, opcode] { return get_cql_opcode_stats(opcode).request_size; },
+                sm::make_counter("cql_request_bytes", [this, opcode] { return get_cql_opcode_stats(opcode).request_size.sum(); },
                                  sm::description("Counts the total number of received bytes in CQL messages of a specific kind."),
                                  {{"kind", to_string(opcode)}, {"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
         );
 
         transport_metrics.emplace_back(
-                sm::make_counter("cql_response_bytes", [this, opcode] { return get_cql_opcode_stats(opcode).response_size; },
+                sm::make_counter("cql_response_bytes", [this, opcode] { return get_cql_opcode_stats(opcode).response_size.sum(); },
                                  sm::description("Counts the total number of sent response bytes for CQL requests of a specific kind."),
                                  {{"kind", to_string(opcode)}, {"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
         );
+        if (opcode == cql_binary_opcode::EXECUTE || opcode == cql_binary_opcode::BATCH || opcode == cql_binary_opcode::QUERY) {
+            transport_metrics.emplace_back(
+                    sm::make_histogram("cql_request_histogram_bytes", [this, opcode] { return to_metrics_histogram(get_cql_opcode_stats(opcode).request_size); },
+                                    sm::description("A histogram of received bytes in CQL messages of a specific kind and specific scheduling group."),
+                                    {{"kind", to_string(opcode)}, {"scheduling_group_name", cur_sg_name}}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+            );
+
+            transport_metrics.emplace_back(
+                    sm::make_histogram("cql_response_histogram_bytes", [this, opcode] { return to_metrics_histogram(get_cql_opcode_stats(opcode).response_size); },
+                                    sm::description("A histogram of sent response bytes in CQL messages of a specific kind and specific scheduling group."),
+                                    {{"kind", to_string(opcode)}, {"scheduling_group_name", cur_sg_name}}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+            );
+        }
     }
 
     new_metrics.add_group("transport", std::move(transport_metrics));
@@ -461,8 +475,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     cql_sg_stats::request_kind_stats& cql_stats = _server.get_cql_opcode_stats(cqlop);
     tracing::set_request_size(trace_state, fbuf.bytes_left());
-    cql_stats.request_size += fbuf.bytes_left();
-    ++cql_stats.count;
+    cql_stats.request_size.add(fbuf.bytes_left());
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
@@ -552,7 +565,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             }
 
             tracing::set_response_size(trace_state, response->size());
-            cql_stats.response_size += response->size();
+            cql_stats.response_size.add(response->size());
             return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(response));
         }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
             if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
