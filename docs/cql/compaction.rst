@@ -253,13 +253,13 @@ The following options only apply to IncrementalCompactionStrategy:
 
 =====
 
-``space_amplification_goal`` (default: null)
+``space_amplification_goal`` (default: 1.5)
 
    .. versionadded:: 2020.1.6
 
    This is a threshold of the ratio of the sum of the sizes of the two largest tiers to the size of the largest tier,
    above which ICS will automatically compact the second largest and largest tiers together to eliminate stale data that may have been overwritten, expired, or deleted.
-   The space_amplification_goal is given as a double-precision floating point number that must be greater than 1.0.
+   The space_amplification_goal is given as a double-precision floating point number that must be greater than 1.0 and less than or equal to 2.0; or 0 to disable.
 
    For example, if **'space_amplification_goal = 1.25'** and the largest tier holds **1000GB**,
    when the second-largest tier accumulates SSTables with the total size of 250GB or more,
