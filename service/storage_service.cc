@@ -3219,18 +3219,16 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
         // We are a part of group 0.
-        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
-        slogger.info("The node is already in group 0 and will restart in {} mode", raft_topology_change_enabled() ? "raft" : "legacy");
-    } else if (_sys_ks.local().bootstrap_complete()) {
-        if (co_await _sys_ks.local().load_topology_features_state()) {
+        if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
             throw std::runtime_error(
-                    "Cannot start - Raft-based topology has been enabled but persistent group 0 ID is not present. "
-                    "If you are trying to run the Raft-based recovery procedure, you must set recovery_leader.");
+                    "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
+                    "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
         }
-
-        // We already bootstrapped but we are not a part of group 0. This means that we are restarting after recovery.
-        slogger.info("Restarting in legacy mode. The node was either upgraded from a non-raft-topology version or is restarting after recovery.");
-        set_topology_change_kind(topology_change_kind::legacy);
+        set_topology_change_kind(topology_change_kind::raft);
+        slogger.info("The node is already in group 0");
+    } else if (_sys_ks.local().bootstrap_complete()) {
+        // setup_group0_if_exist() should already throw in this case, so do internal error here.
+        on_internal_error(slogger, "The node does not have group 0 but has already completed bootstrap. This should not happen.");
     } else {
         // We are not in group 0 and we are just bootstrapping. We need to discover group 0.
         const std::vector<gms::inet_address> contact_nodes{initial_contact_nodes.begin(), initial_contact_nodes.end()};
