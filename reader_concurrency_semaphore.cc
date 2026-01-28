@@ -237,7 +237,9 @@ private:
                 break;
             case state::inactive:
                 _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
-                break;
+                // Return here on purpose. The evicted permit is destroyed when closing a reader.
+                // As a consequence, any member access beyond this point is invalid.
+                return;
             case state::evicted:
             case state::preemptive_aborted:
                 break;
