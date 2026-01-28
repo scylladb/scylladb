@@ -8,10 +8,6 @@
 # Modifications: Copyright 2026-present ScyllaDB
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
-# Before importing porting.py, enable pytest's nice assertion rewrite in
-# its functions such as assert_rows():
-import pytest
-pytest.register_assert_rewrite('test.cqlpy.cassandra_tests.porting')
 from ...porting import *
 
 from cassandra.util import Duration
