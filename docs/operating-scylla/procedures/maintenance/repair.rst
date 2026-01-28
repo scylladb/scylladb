@@ -58,4 +58,12 @@ See also
 
 * `Blog: ScyllaDB Open Source 3.1: Efficiently Maintaining Consistency with Row-Level Repair <https://www.scylladb.com/2019/08/13/scylla-open-source-3-1-efficiently-maintaining-consistency-with-row-level-repair/>`_
 
+Incremental Repair
+------------------
 
+Built on top of `Row-level Repair <row-level-repair_>`_ and `Tablets </architecture/tablets>`_, Incremental Repair enables frequent and quick repairs. For more details, see `Incremental Repair </features/incremental-repair>`_.
+
+Automatic Repair
+----------------
+
+Built on top of `Incremental Repair </features/incremental-repair>`_, `Automatic Repair </features/automatic-repair>`_ offers repair scheduling and execution directly in ScyllaDB, without external processes.
