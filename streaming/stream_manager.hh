@@ -196,6 +196,8 @@ public:
     }
 
     future<> fail_stream_plan(streaming::plan_id plan_id);
+
+    scheduling_group get_scheduling_group() const noexcept { return _streaming_group; }
 };
 
 } // namespace streaming
