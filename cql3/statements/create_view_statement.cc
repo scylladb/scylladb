@@ -39,6 +39,25 @@ namespace cql3 {
 
 namespace statements {
 
+static bool is_only_is_not_null(const expr::expression& e) {
+    if (expr::is<expr::binary_operator>(e)) {
+        return expr::as<expr::binary_operator>(e).op == expr::oper_t::IS_NOT;
+    }
+    if (expr::is<expr::conjunction>(e)) {
+        const auto& children = expr::as<expr::conjunction>(e).children;
+        if (children.empty()) {
+            return true;
+        }
+        for (const auto& child : children) {
+            if (!is_only_is_not_null(child)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 create_view_statement::create_view_statement(
         cf_name view_name,
         cf_name base_name,
@@ -295,23 +314,31 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     }
 
     // The unique feature of a filter by a non-key column is that the
-    // value of such column can be updated - and also be expired with TTL
+    // value of such a column can be updated - and also be expired with TTL
     // and cause the view row to appear and disappear. We don't currently
-    // support support this case - see issue #3430, and neither does
-    // Cassandra - see see CASSANDRA-13798 and CASSANDRA-13832.
+    // support this case - see issue #3430, and neither does
+    // Cassandra - see CASSANDRA-13798 and CASSANDRA-13832.
     // Actually, as CASSANDRA-13798 explains, the problem is "the liveness of
     // view row is now depending on multiple base columns (multiple filtered
     // non-pk base column + base column used in view pk)". When the filtered
     // column *is* the base column added to the view pk, we don't have this
     // problem. And this case actually works correctly.
     const expr::single_column_restrictions_map& non_pk_restrictions = restrictions->get_non_pk_restriction();
-    if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
-            target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
-        // This case (filter by new PK column of the view) works, as explained above
-    } else if (!non_pk_restrictions.empty()) {
+    std::vector<const column_definition*> illegal_non_pk_restrictions;
+    for (const auto& [col, expr] : non_pk_restrictions) {
+        if (target_primary_keys.contains(col)) {
+            continue;
+        }
+        if (is_only_is_not_null(expr)) {
+            continue;
+        }
+        illegal_non_pk_restrictions.push_back(col);
+    }
+
+    if (!illegal_non_pk_restrictions.empty()) {
         throw exceptions::invalid_request_exception(seastar::format("Non-primary key columns cannot be restricted in the SELECT statement used for materialized view {} creation (got restrictions on: {})",
                 column_family(),
-                fmt::join(non_pk_restrictions | std::views::keys | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
+                fmt::join(illegal_non_pk_restrictions | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
 
     // IS NOT NULL restrictions are handled separately from other restrictions.

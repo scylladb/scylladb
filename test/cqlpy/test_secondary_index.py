@@ -2261,3 +2261,52 @@ def test_tombstone_gc_property_unnamed_index(cql, test_keyspace, scylla_only):
 
         desc_row = cql.execute(f"DESCRIBE MATERIALIZED VIEW {table}_v_idx_index").one()
         assert "tombstone_gc = {" in desc_row.create_statement
+
+# Test that IS NULL and IS NOT NULL operators work on indexed columns
+# but require ALLOW FILTERING since secondary indexes cannot efficiently
+# support null checks. The materialized view backing the secondary index
+# has a partition for each value of the indexed column, but does not have
+# a partition for the NULL key (NULL cannot be a key in a materialized view).
+# Reproducer for issue #8517
+def test_is_null_with_secondary_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        # Create secondary index on v
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        
+        # Insert test data with some NULL values in indexed column
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 2, 20)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 3, NULL)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (2, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (2, 2, NULL)")
+        
+        # Wait for index to be built
+        time.sleep(0.5)
+        
+        # IS NULL on indexed column should require ALLOW FILTERING
+        # because the index cannot efficiently support it
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f"SELECT * FROM {table} WHERE v IS NULL")
+        
+        # IS NOT NULL on indexed column should also require ALLOW FILTERING
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f"SELECT * FROM {table} WHERE v IS NOT NULL")
+        
+        # With ALLOW FILTERING, IS NULL should work correctly
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE v IS NULL ALLOW FILTERING"))
+        assert len(result) == 2
+        assert set((r.p, r.c) for r in result) == {(1, 3), (2, 2)}
+        
+        # With ALLOW FILTERING, IS NOT NULL should work correctly
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE v IS NOT NULL ALLOW FILTERING"))
+        assert len(result) == 3
+        assert set((r.p, r.c) for r in result) == {(1, 1), (1, 2), (2, 1)}
+        
+        # Can combine IS NULL with partition key restriction
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE p = 1 AND v IS NULL ALLOW FILTERING"))
+        assert len(result) == 1
+        assert result[0].c == 3
+        
+        # Regular EQ query on indexed column should work without ALLOW FILTERING
+        result = list(cql.execute(f"SELECT * FROM {table} WHERE v = 10"))
+        assert len(result) == 2
