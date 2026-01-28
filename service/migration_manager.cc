@@ -56,6 +56,9 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
             service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
           _notifier(notifier)
+        , _background_tasks("migration_manager::background_tasks")
+        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _ss("migration_manager::storage_service"), _gossiper(gossiper), _group0_client(group0_client)
+        , _sys_ks(sysks)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
                 if ((co_await _group0_client.get_group0_upgrade_state()).second == group0_upgrade_state::use_pre_raft_procedures) {
@@ -74,9 +77,6 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
                 });
             })
         )
-        , _background_tasks("migration_manager::background_tasks")
-        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _ss("migration_manager::storage_service"), _gossiper(gossiper), _group0_client(group0_client)
-        , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _concurrent_ddl_retries{10}
 {
