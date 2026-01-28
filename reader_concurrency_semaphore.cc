@@ -1046,6 +1046,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
         ssize_t needed_from_shared = r.memory - _resources.memory;
         if (_shared_pool->try_consume(needed_from_shared)) {
             _borrowed_from_shared += needed_from_shared;
+            _stats.total_memory_borrowed_from_shared_pool += needed_from_shared;
             _resources.memory += needed_from_shared;
         }
     }
@@ -1150,6 +1151,14 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
                 sm::make_counter("total_reads_failed", _stats.total_failed_reads,
                                sm::description("Counts the total number of failed user read operations. "
                                                "Add the total_reads to this value to get the total amount of reads issued on this shard."),
+                               {class_label(_name)}),
+
+                sm::make_gauge("reads_memory_borrowed_from_shared_pool", [this] { return _borrowed_from_shared; },
+                               sm::description("Holds the current amount of memory borrowed from the shared pool."),
+                               {class_label(_name)}),
+
+                sm::make_counter("total_reads_memory_borrowed_from_shared_pool", _stats.total_memory_borrowed_from_shared_pool,
+                               sm::description("Counts the total amount of memory borrowed from the shared pool."),
                                {class_label(_name)}),
                 });
     }

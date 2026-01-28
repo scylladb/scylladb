@@ -126,6 +126,8 @@ public:
         uint64_t sstables_read = 0;
         // Permits waiting on something: admission, memory or execution
         uint64_t waiters = 0;
+        // Total amount of memory borrowed from the shared pool.
+        uint64_t total_memory_borrowed_from_shared_pool = 0;
 
         friend auto operator<=>(const stats&, const stats&) = default;
     };
