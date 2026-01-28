@@ -34,8 +34,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - run: |
-          sudo dnf -y install clang-tools-extra
       - name: Generate compilation database
         run: |
           cmake                                         \
