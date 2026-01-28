@@ -886,9 +886,43 @@ static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_
         dirs.emplace_back(std::move(dir));
     }
     co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
-        co_await io_check([&dir] { return recursive_touch_directory(dir); });
-        co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-        co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+        std::exception_ptr eptr;
+        try {
+            co_await io_check([&dir] { return recursive_touch_directory(dir); });
+            co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+            co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+        } catch (const storage_io_error& e) {
+            // TODO(#28259): remove this extra handling and extended logging once the root cause is found
+            if (e.code().value() != EPERM) {
+                throw;
+            }
+
+            eptr = std::current_exception();
+
+            // Log detailed state for EPERM errors
+            sstlog.error("mkdir EPERM for {}/upload or {}/staging", dir, dir);
+            sstlog.error("  errno: {} ({})", e.code().value(), e.what());
+            sstlog.error("  shard_id: {}", this_shard_id());
+        }
+
+        if (eptr) {
+            // Check if directories actually exist and their permissions
+            auto log_stat = [] (sstring path, sstring label) -> future<> {
+                try {
+                    auto stat = co_await file_stat(path);
+                    sstlog.error("  {} exists: mode={:o}, uid={}, gid={}", 
+                                label, stat.mode, stat.uid, stat.gid);
+                } catch (...) {
+                    sstlog.error("  {} does not exist or stat failed: {}", label, std::current_exception());
+                }
+            };
+            
+            co_await log_stat(dir, format("parent {}", dir));
+            co_await log_stat(dir + "/upload", format("{}/upload", dir));
+            co_await log_stat(dir + "/staging", format("{}/staging", dir));
+                
+            std::rethrow_exception(eptr);
+        }
     });
 
     data_dictionary::storage_options nopts;
