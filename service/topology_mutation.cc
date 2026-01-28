@@ -362,6 +362,10 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return _set_type ? builder_base::set(cell, value) : *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::abort(sstring error) {
+    return set("error", error);
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error) {
     set("end_time", db_clock::now());
     if (error) {

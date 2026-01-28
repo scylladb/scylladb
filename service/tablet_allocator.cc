@@ -516,7 +516,7 @@ struct hash<migration_tablet_set> {
 namespace service {
 
 // Subtract right from left. The result contains only keys from left.
-static std::unordered_map<sstring, std::vector<sstring>> substract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right) {
+std::unordered_map<sstring, std::vector<sstring>> substract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right) {
     std::unordered_map<sstring, std::vector<sstring>> res;
     for (const auto& [dc, rf_value] : left) {
         auto it = right.find(dc);

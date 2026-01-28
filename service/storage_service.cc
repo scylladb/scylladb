@@ -5147,13 +5147,22 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
-future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
+static std::unordered_map<sstring, std::vector<sstring>> substract_strategy_config_options(const locator::replication_strategy_config_options& left, const locator::replication_strategy_config_options& right) {
+    return substract_replication(left | std::views::transform([] (const auto& p) -> std::pair<sstring, std::vector<sstring>> {
+        return std::pair(p.first, std::get<std::vector<sstring>>(p.second));
+    }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>(),
+    right | std::views::transform([] (const auto& p) -> std::pair<sstring, std::vector<sstring>> {
+        return std::pair(p.first, std::get<std::vector<sstring>>(p.second));
+    }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>());
+}
+
+future<> storage_service::abort_rf_change(utils::UUID request_id) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.abort_paused_rf_change(request_id);
+            return ss.abort_rf_change(request_id);
         });
     }
 
@@ -5164,18 +5173,32 @@ future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
-        bool found = std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id);
-        if (!found) {
-            slogger.warn("RF change request with id '{}' is not paused, so it can't be aborted", request_id);
+        utils::chunked_vector<canonical_mutation> updates;
+        if (std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id)) {    // keyspace_rf_change_kind::conversion_to_rack_list
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
+            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                .done("Aborted by user request")
+                                .build()));
+        } else if (std::ranges::contains(_topology_state_machine._topology.ongoing_rf_changes, request_id)) {    // keyspace_rf_change_kind::multi_rf_change
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+            sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+            if (!_db.local().has_keyspace(ks_name)) {
+                co_return;
+            }
+            auto& ks = _db.local().find_keyspace(ks_name);
+            if (!substract_strategy_config_options(ks.metadata()->next_strategy_options_opt().value(), ks.metadata()->strategy_options()).empty()) {
+                updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                    .abort("Aborted by user request")
+                                    .build()));
+            } else {
+                slogger.warn("RF change request with id '{}' is ongoing, but it started removing replicas, so it can't be aborted", request_id);
+                co_return;
+            }
+        } else {
+            slogger.warn("RF change request with id '{}' can't be aborted", request_id);
             co_return;
         }
-
-        utils::chunked_vector<canonical_mutation> updates;
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
-        updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
-                                                    .done("Aborted by user request")
-                                                    .build()));
 
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,

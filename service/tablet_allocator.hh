@@ -19,10 +19,6 @@ namespace db {
 class system_keyspace;
 }
 
-namespace locator {
-class replication_strategy_config_options;
-}
-
 namespace service {
 
 class topology;
@@ -377,6 +373,7 @@ future<bool> requires_rack_list_colocation(
         utils::UUID request_id);
 
 bool rf_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next);
+std::unordered_map<sstring, std::vector<sstring>> substract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right);
 
 }
 

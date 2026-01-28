@@ -416,7 +416,7 @@ future<std::optional<tasks::task_status>> global_topology_request_virtual_task::
 }
 
 future<> global_topology_request_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
-    return _ss.abort_paused_rf_change(id.uuid());
+    return _ss.abort_rf_change(id.uuid());
 }
 
 future<std::vector<tasks::task_stats>> global_topology_request_virtual_task::get_stats() {
