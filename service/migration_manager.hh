@@ -57,7 +57,6 @@ private:
     migration_notifier& _notifier;
 
     std::unordered_map<locator::host_id, serialized_action> _schema_pulls;
-    serialized_action _group0_barrier;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::named_gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
@@ -69,6 +68,7 @@ private:
     seastar::abort_source _as;
     service::raft_group0_client& _group0_client;
     sharded<db::system_keyspace>& _sys_ks;
+    serialized_action _group0_barrier;
     serialized_action _schema_push;
     table_schema_version _schema_version_to_publish;
 

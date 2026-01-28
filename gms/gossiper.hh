@@ -153,6 +153,8 @@ public:
     }
     const std::set<inet_address>& get_seeds() const noexcept;
 
+    seastar::scheduling_group get_scheduling_group() const noexcept { return _gcfg.gossip_scheduling_group; }
+
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
