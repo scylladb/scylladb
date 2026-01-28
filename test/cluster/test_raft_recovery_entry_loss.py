@@ -8,6 +8,9 @@ import logging
 import time
 import pytest
 
+from cassandra.cluster import Session
+from cassandra.pool import Host
+from uuid import UUID
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
@@ -15,8 +18,17 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         reconnect_driver, wait_for_cdc_generations_publishing
-from test.cluster.test_group0_schema_versioning import get_group0_schema_version, get_local_schema_version
 
+async def get_group0_schema_version(cql: Session, h: Host) -> UUID | None:
+    rs = await cql.run_async("select value from system.scylla_local where key = 'group0_schema_version'", host=h)
+    if rs:
+        return UUID(rs[0].value)
+    return None
+
+async def get_local_schema_version(cql: Session, h: Host) -> UUID:
+    rs = await cql.run_async("select schema_version from system.local where key = 'local'", host=h)
+    assert(rs)
+    return rs[0].schema_version
 
 @pytest.mark.asyncio
 async def test_raft_recovery_entry_loss(manager: ManagerClient):

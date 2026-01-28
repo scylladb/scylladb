@@ -21,13 +21,6 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
     def get_pf(dc: str, rack: str) -> dict:
         return {'dc': dc, 'rack': rack}
 
-    logging.info("Trying to add a zero-token server in the gossip-based topology")
-    await manager.server_add(config={'join_ring': False,
-                                     'force_gossip_topology_changes': True,
-                                     'tablets_mode_for_new_keyspaces': 'disabled'},
-                             property_file={'dc': 'dc1', 'rack': 'rz'},
-                             expected_error='the raft-based topology is disabled')
-
     normal_cfg = {
         'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled',
         'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces
