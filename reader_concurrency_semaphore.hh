@@ -13,6 +13,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/util/log.hh>
 #include "reader_permit.hh"
 #include "utils/updateable_value.hh"
 #include "dht/i_partitioner_fwd.hh"
@@ -23,6 +24,60 @@ using namespace seastar;
 
 class mutation_reader;
 using mutation_reader_opt = optimized_optional<mutation_reader>;
+
+extern logger rcslog;
+
+// A shared pool of memory that can be used by multiple reader_concurrency_semaphores.
+// When a semaphore exhausts its dedicated memory, it can borrow from this pool.
+class reader_concurrency_semaphore_shared_pool {
+    ssize_t _available_memory;
+    ssize_t _total_memory;
+public:
+    explicit reader_concurrency_semaphore_shared_pool(ssize_t memory) noexcept
+        : _available_memory(memory)
+        , _total_memory(memory) {}
+
+    // Take memory from the pool. The caller must not borrow more than
+    // available_memory(); overdrawing is a bug, so it is logged and clamped
+    // rather than silently producing negative availability.
+    void borrow(ssize_t amount) noexcept {
+        _available_memory -= amount;
+        if (_available_memory < 0)  [[unlikely]] {
+            static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
+            rcslog.log(log_level::warn, rate_limit,
+                    "shared reader concurrency semaphore pool over-borrowed memory: available={}, total={}, borrowed={}; clamping available memory to 0",
+                    _available_memory, _total_memory, amount);
+            _available_memory = 0;
+        }
+    }
+
+    // Return previously borrowed memory to the pool. Repaying more than was
+    // borrowed is a bug, so it is logged and clamped to total_memory rather
+    // than inflating the pool.
+    void repay(ssize_t amount) noexcept;
+
+    ssize_t available_memory() const noexcept {
+        if (_available_memory < 0) {
+            return 0;
+        }
+        return _available_memory;
+    }
+
+    ssize_t total_memory() const noexcept {
+        return _total_memory;
+    }
+
+    // Resize the pool, applying the change to the available memory too. If the
+    // pool shrinks below the amount currently borrowed, _available_memory goes
+    // negative; available_memory() clamps that to 0 on read, and the borrowed
+    // memory is reconciled as borrowers repay. Callers must serialize resizes
+    // (the group does so via adjust()) so the accounting stays consistent.
+    void set_total_memory(ssize_t memory) noexcept {
+        const auto diff = memory - _total_memory;
+        _total_memory = memory;
+        _available_memory += diff;
+    }
+};
 
 /// Specific semaphore for controlling reader concurrency
 ///

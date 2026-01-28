@@ -8,6 +8,17 @@
 
 #include "reader_concurrency_semaphore_group.hh"
 
+void reader_concurrency_semaphore_shared_pool::repay(ssize_t amount) noexcept {
+    _available_memory += amount;
+    if (_available_memory > _total_memory)  [[unlikely]] {
+        static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
+        rcslog.log(log_level::warn, rate_limit,
+                "shared reader concurrency semaphore pool over-repaid memory: available={}, total={}, repaid={}; clamping available memory to total",
+                _available_memory, _total_memory, amount);
+        _available_memory = _total_memory;
+    }
+}
+
 // Calling adjust is serialized since 2 adjustments can't happen simultaneously,
 // if they did the behaviour would be undefined.
 future<> reader_concurrency_semaphore_group::adjust() {
