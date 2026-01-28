@@ -149,22 +149,22 @@ db::tablet_options combine_tablet_options(R&& opts) {
 
 static std::unordered_set<locator::tablet_id> split_string_to_tablet_id(std::string_view s, char delimiter) {
     auto tokens_view = s | std::views::split(delimiter)
-		 | std::views::transform([](auto&& range) {
-			 return std::string_view(&*range.begin(), std::ranges::distance(range));
-		 })
-		 | std::views::transform([](std::string_view sv) {
-			 return locator::tablet_id(std::stoul(std::string(sv)));
-		 });
+         | std::views::transform([](auto&& range) {
+             return std::string_view(&*range.begin(), std::ranges::distance(range));
+         })
+         | std::views::transform([](std::string_view sv) {
+             return locator::tablet_id(std::stoul(std::string(sv)));
+         });
     return std::unordered_set<locator::tablet_id>{tokens_view.begin(), tokens_view.end()};
 }
 
 struct repair_plan {
-	locator::global_tablet_id gid;
-	locator::tablet_info tinfo;
-	dht::token_range range;
-	dht::token last_token;
-	db_clock::duration repair_time_diff;
-	bool is_user_reuqest;
+    locator::global_tablet_id gid;
+    locator::tablet_info tinfo;
+    dht::token_range range;
+    dht::token last_token;
+    db_clock::duration repair_time_diff;
+    bool is_user_reuqest;
 };
 
 // Used to compare different migration choices in regard to impact on load imbalance.
@@ -458,7 +458,7 @@ struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::repair_plan& p, FormatContext& ctx) const {
         auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
-		fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
+        fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
         return ctx.out();
     }
 };
