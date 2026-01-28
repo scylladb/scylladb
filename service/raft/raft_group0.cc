@@ -742,26 +742,22 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
         // migration_manager schema pulls.
         auto start_state = (co_await _client.get_group0_upgrade_state()).second;
-        if (start_state == group0_upgrade_state::use_post_raft_procedures) {
-            group0_log.info(
-                "Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
-            co_await mm.disable_schema_pulls();
-        } else {
-            // We'll disable them once we complete the upgrade procedure.
+        if (start_state != group0_upgrade_state::use_post_raft_procedures) {
+            throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
+                " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
+        }
+        group0_log.info("Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
+        co_await mm.disable_schema_pulls();
+        if (!ss.raft_topology_change_enabled()) {
+            throw std::runtime_error("The cluster uses gossip based topology operations. "
+                "This is no longer supported. To upgrade a node please enable topology coordinator");
         }
     } else if (qp.db().get_config().recovery_leader.is_set()) {
         group0_log.info("Disabling migration_manager schema pulls in the Raft-based recovery procedure");
         co_await mm.disable_schema_pulls();
     } else {
-        // Scylla has bootstrapped earlier but group 0 ID is not present and we are not recovering from majority loss
-        // using the Raft-based procedure. This means we're upgrading.
-        // Upgrade will start through a feature listener created after we enter NORMAL state.
-        //
-        // See `raft_group0::finish_setup_after_join`.
-        upgrade_log.info(
-            "setup_group0: Scylla bootstrap completed before but group 0 ID not present."
-            " Internal upgrade-to-raft procedure will automatically start after every node finishes"
-            " upgrading to the new Scylla version.");
+        throw std::runtime_error("The node is bootstrapped already but Raft group0 is not present. This means that you try to upgrade"
+            " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
     }
 }
 
