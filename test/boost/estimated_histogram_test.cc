@@ -141,3 +141,94 @@ BOOST_AUTO_TEST_CASE(test_summary_infinite_bucket) {
     BOOST_CHECK_EQUAL(sc.summary()[2], 33554432);
 }
 
+BOOST_AUTO_TEST_CASE(test_histogram_min_1_bucket_limits) {
+    // Test Min=1 mode with hybrid linear/exponential bucketing
+    std::vector<size_t> limits{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024};
+    utils::approx_exponential_histogram<1, 1024, 4> hist;
+
+    // NUM_BUCKETS = Precision + log2(Max/Precision) * Precision + 1
+    //             = 4 + log2(1024/4) * 4 + 1 = 4 + 8*4 + 1 = 37
+    BOOST_CHECK_EQUAL(hist.NUM_BUCKETS, 37);
+    BOOST_CHECK_EQUAL(hist.EFFECTIVE_MIN, 4);
+    BOOST_CHECK_EQUAL(hist.NUM_EXP_RANGES, 8); // log2(1024/4)
+    BOOST_CHECK_EQUAL(hist.PRECISION_BITS, 2);
+    BOOST_CHECK_EQUAL(hist.BASESHIFT, 2); // log2(4)
+
+    for (size_t i = 0; i < limits.size(); i++) {
+        BOOST_CHECK_EQUAL(hist.get_bucket_lower_limit(i), limits[i]);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_histogram_min_1_basic) {
+    utils::approx_exponential_histogram<1, 1024, 4> hist;
+
+    // Test linear range (values 0-3)
+    hist.add(0);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1}), "");
+
+    hist.add(1);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1}), "");
+
+    hist.add(2);
+    hist.add(2);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2}), "");
+
+    hist.add(3);
+    hist.add(3);
+    hist.add(3);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2, 3}), "");
+
+    // Test exponential range (values 4+)
+    hist.add(4);
+    hist.add(4);
+    hist.add(4);
+    hist.add(4);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2, 3, 4}), "");
+
+    hist.add(5);
+    hist.add(6);
+    hist.add(7);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2, 3, 4, 1, 1, 1}), "");
+
+    hist.add(8);
+    hist.add(8);
+    hist.add(9);
+    hist.add(9);
+    hist.add(10);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2, 3, 4, 1, 1, 1, 4, 1}), "");
+
+    // Test larger values
+    hist.add(128);
+    hist.add(256);
+    hist.add(1023);
+    hist.add(1024);
+    hist.add(1025);
+    BOOST_CHECK_EQUAL(validate_histogram(hist, {1, 1, 2, 3, 4, 1, 1, 1, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 2}), "");
+}
+
+BOOST_AUTO_TEST_CASE(test_histogram_min_1_statistics) {
+    utils::approx_exponential_histogram<1, 1024, 4> hist;
+
+    // Test min/max with linear range
+    hist.add(1);
+    BOOST_CHECK_EQUAL(hist.min(), 1);
+    BOOST_CHECK_EQUAL(hist.max(), 2);
+
+    hist.add(3);
+    BOOST_CHECK_EQUAL(hist.min(), 1);
+    BOOST_CHECK_EQUAL(hist.max(), 4);
+
+    // Test with exponential range
+    hist.add(10);
+    hist.add(10);
+    BOOST_CHECK_EQUAL(hist.min(), 1);
+    BOOST_CHECK_EQUAL(hist.max(), 12);
+
+    // Test quantile
+    BOOST_CHECK_EQUAL(hist.quantile(0.5), 3);
+
+    // Test mean
+    // Values: 1, 3, 10, 10 (bucket limits used for calculation)
+    // Mean = (1 + 3 + 10 + 10) / 4 = 6
+    BOOST_CHECK_EQUAL(hist.mean(), 6);
+}
