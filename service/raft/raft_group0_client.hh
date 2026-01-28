@@ -200,8 +200,6 @@ public:
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 
-    db::system_keyspace& sys_ks();
-
     bool in_recovery() const;
 
     gc_clock::duration get_history_gc_duration() const;
@@ -212,6 +210,7 @@ public:
     query_result_guard create_result_guard(utils::UUID query_id);
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
     static utils::UUID generate_group0_state_id(utils::UUID prev_state_id);
+    future<utils::UUID> get_last_group0_state_id();
 };
 
 using mutations_generator = coroutine::experimental::generator<mutation>;

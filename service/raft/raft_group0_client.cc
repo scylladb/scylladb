@@ -245,6 +245,10 @@ utils::UUID raft_group0_client::generate_group0_state_id(utils::UUID prev_state_
     return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
 }
 
+future<utils::UUID> raft_group0_client::get_last_group0_state_id() {
+    return _sys_ks.get_last_group0_state_id();
+}
+
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "start_group0_operation: must run on shard 0");
@@ -282,7 +286,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
             auto read_apply_holder = co_await hold_read_apply_mutex(as);
 
-            auto observed_group0_state_id = co_await _sys_ks.get_last_group0_state_id();
+            auto observed_group0_state_id = co_await get_last_group0_state_id();
             auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
 
             co_return group0_guard {
@@ -465,10 +469,6 @@ future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source
     }
 
     return get_units(_read_apply_mutex, 1, as);
-}
-
-db::system_keyspace& raft_group0_client::sys_ks() {
-    return _sys_ks;
 }
 
 bool raft_group0_client::in_recovery() const {
