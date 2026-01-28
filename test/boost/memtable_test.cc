@@ -1185,6 +1185,13 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 }
 
 SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
+#ifdef DEBUG
+    // This test was observed to take multiple minutes to run in debug mode on CI machines.
+    // This test checks that a certain behaviour is triggered when compaction falls behind.
+    // Not critical to run in debug mode. Both compaction and memtable have their own
+    // correctness tests, which do run in debug mode.
+    return make_ready_future<>();
+#else
     BOOST_ASSERT(smp::count == 2);
     // The test simulates a situation where 2 threads issue flushes to 2
     // tables. Both issue small flushes, but one has injected reactor stalls.
@@ -1259,6 +1266,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
             sleep_ms *= 2;
         }
     });
+#endif
 }
 
 static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail, const schema*& schema_filter, bool expect_isolate) {
