@@ -542,6 +542,19 @@ static std::unordered_map<sstring, std::vector<sstring>> subtract_replication(co
     return res;
 }
 
+bool rf_count_per_dc_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next) {
+    if (current.size() != next.size()) {
+        return false;
+    }
+    for (const auto& [dc, current_rf_value] : current) {
+        auto it = next.find(dc);
+        if (it == next.end() || get_replication_factor(it->second) != get_replication_factor(current_rf_value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// The algorithm aims to equalize tablet count on each shard.
 /// This goal is based on the assumption that every shard has similar processing power and space capacity,
 /// and that each tablet has equal consumption of those resources. So by equalizing tablet count per shard we

@@ -10,6 +10,7 @@
 
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
@@ -345,6 +346,8 @@ future<bool> requires_rack_list_colocation(
         locator::token_metadata_ptr tmptr,
         db::system_keyspace* sys_ks,
         utils::UUID request_id);
+
+bool rf_count_per_dc_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next);
 
 }
 

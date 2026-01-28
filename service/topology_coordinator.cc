@@ -977,6 +977,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     enum class keyspace_rf_change_kind {
         default_rf_change,
         conversion_to_rack_list,
+        multi_rf_change
     };
 
     future<keyspace_rf_change_kind> choose_keyspace_rf_change_kind(utils::UUID req_id,
@@ -998,12 +999,34 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             co_return rack_list_conversion ? co_await requires_rack_list_colocation(_db, get_token_metadata_ptr(), &_sys_ks, req_id) : false;
         };
+        auto all_changes_are_0_N = [&] {
+            auto all_dcs = old_replication_strategy_config | std::views::keys;
+            auto new_dcs = new_replication_strategy_config | std::views::keys;
+            std::set<sstring> dcs(all_dcs.begin(), all_dcs.end());
+            dcs.insert(new_dcs.begin(), new_dcs.end());
+            for (const auto& dc : dcs) {
+                auto old_it = old_replication_strategy_config.find(dc);
+                auto new_it = new_replication_strategy_config.find(dc);
+                size_t old_rf = (old_it != old_replication_strategy_config.end()) ? locator::get_replication_factor(old_it->second) : 0;
+                size_t new_rf = (new_it != new_replication_strategy_config.end()) ? locator::get_replication_factor(new_it->second) : 0;
+                if (old_rf == new_rf) {
+                    continue;
+                }
+                if (old_rf != 0 && new_rf != 0) {
+                    return false;
+                }
+            }
+            return true;
+        };
 
         if (tables_with_mvs.empty()) {
             co_return keyspace_rf_change_kind::default_rf_change;
         }
         if (co_await check_needs_colocation()) {
             co_return keyspace_rf_change_kind::conversion_to_rack_list;
+        }
+        if (_feature_service.keyspace_multi_rf_change && locator::uses_rack_list_exclusively(old_replication_strategy_config) && locator::uses_rack_list_exclusively(new_replication_strategy_config) && !rf_count_per_dc_equals(old_replication_strategy_config, new_replication_strategy_config) && all_changes_are_0_N()) {
+            co_return keyspace_rf_change_kind::multi_rf_change;
         }
         co_return keyspace_rf_change_kind::default_rf_change;
     }
@@ -1148,6 +1171,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("keyspace_rf_change for keyspace {} postponed for colocation", ks_name);
                             topology_mutation_builder tbuilder = tbuilder_with_request_drop();
                             tbuilder.pause_rf_change_request(req_id);
+                            updates.push_back(canonical_mutation(tbuilder.build()));
+                            break;
+                      }
+                      case keyspace_rf_change_kind::multi_rf_change: {
+                            rtlogger.info("keyspace_rf_change for keyspace {} will use multi-rf change procedure", ks_name);
+                            ks_md->set_next_strategy_options(ks_md->strategy_options());
+                            ks_md->set_strategy_options(ks.metadata()->strategy_options()); // start from the old strategy
+                            auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                            for (auto& m: schema_muts) {
+                                updates.emplace_back(m);
+                            }
+
+                            topology_mutation_builder tbuilder = tbuilder_with_request_drop();
+                            tbuilder.start_rf_change_migrations(req_id);
                             updates.push_back(canonical_mutation(tbuilder.build()));
                             break;
                       }
