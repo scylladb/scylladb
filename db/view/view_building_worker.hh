@@ -140,7 +140,7 @@ private:
 public:
     view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier,
             service::raft_group0& group0, view_update_generator& vug, netw::messaging_service& ms,
-            view_building_state_machine& vbsm);
+            view_building_state_machine& vbsm, scheduling_group background_sg);
     future<> init();
 
     future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id);
@@ -174,7 +174,7 @@ private:
     future<> discover_existing_staging_sstables();
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
 
-    void init_messaging_service();
+    void init_messaging_service(scheduling_group sg);
     future<> uninit_messaging_service();
     future<std::vector<utils::UUID>> work_on_tasks(raft::term_t term, std::vector<utils::UUID> ids);
 };
