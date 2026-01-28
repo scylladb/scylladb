@@ -673,5 +673,11 @@ public:
 inline estimated_histogram estimated_histogram_merge(estimated_histogram a, const estimated_histogram& b) {
     return a.merge(b);
 }
+/**
+ * bytes_histogram is an estimated histogram for byte values.
+ * It covers the range of 1KB to 1GB with exponential (power-of-2) buckets.
+ * Min backet is set to 512 bytes so the bucket upper limit will be 1024B.
+ */
+using bytes_histogram = approx_exponential_histogram<512, 1024*1024*1024, 1>;
 
 }
