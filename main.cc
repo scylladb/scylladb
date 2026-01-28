@@ -906,6 +906,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
             auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200).get();
+            debug::streaming_scheduling_group = maintenance_scheduling_group;
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;

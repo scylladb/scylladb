@@ -11,5 +11,6 @@
 namespace debug {
 
 seastar::sharded<replica::database>* volatile the_database = nullptr;
+seastar::scheduling_group streaming_scheduling_group;
 
 }
