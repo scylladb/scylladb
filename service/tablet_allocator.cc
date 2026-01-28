@@ -534,7 +534,7 @@ static std::unordered_map<sstring, std::vector<sstring>> substract_replication(c
     return res;
 }
 
-static bool rf_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next) {
+bool rf_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next) {
     if (current.size() != next.size()) {
         return false;
     }

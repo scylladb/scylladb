@@ -19,6 +19,10 @@ namespace db {
 class system_keyspace;
 }
 
+namespace locator {
+class replication_strategy_config_options;
+}
+
 namespace service {
 
 class topology;
@@ -371,6 +375,8 @@ future<bool> requires_rack_list_colocation(
         locator::token_metadata_ptr tmptr,
         db::system_keyspace* sys_ks,
         utils::UUID request_id);
+
+bool rf_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next);
 
 }
 
