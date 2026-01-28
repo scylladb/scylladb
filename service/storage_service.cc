@@ -3186,13 +3186,13 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
-future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
+future<> storage_service::abort_rf_change(utils::UUID request_id) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.abort_paused_rf_change(request_id);
+            return ss.abort_rf_change(request_id);
         });
     }
 
@@ -3203,20 +3203,77 @@ future<> storage_service::abort_paused_rf_change(utils::UUID request_id) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
-        bool found = std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id);
-        if (!found) {
-            slogger.warn("RF change request with id '{}' is not paused, so it can't be aborted", request_id);
+        utils::chunked_vector<canonical_mutation> updates;
+        if (std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id)) {    // keyspace_rf_change_kind::conversion_to_rack_list
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
+            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                .done("Aborted by user request")
+                                .build()));
+        } else if (std::ranges::contains(_topology_state_machine._topology.ongoing_rf_changes, request_id)) {    // keyspace_rf_change_kind::multi_rf_change
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+            sstring ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+            if (!_db.local().has_keyspace(ks_name)) {
+                co_return;
+            }
+            auto& ks = _db.local().find_keyspace(ks_name);
+            // Check the tablet maps: if any tablet still has a missing replica
+            // (i.e., needs extending), we can abort. Otherwise, we're in the
+            // replica removal phase and aborting would require a rollback.
+            auto next_replication = ks.metadata()->next_strategy_options_opt().value()
+                | std::views::transform([] (const auto& pair) {
+                    return std::make_pair(pair.first, std::get<locator::rack_list>(pair.second));
+                }) | std::ranges::to<std::unordered_map<sstring, std::vector<sstring>>>();
+
+            const auto& tm = *get_token_metadata_ptr();
+            bool has_missing_replica = false;
+            auto all_tables = ks.metadata()->tables();
+            auto all_views = ks.metadata()->views()
+                | std::views::transform([] (const auto& view) { return schema_ptr(view); })
+                | std::ranges::to<std::vector<schema_ptr>>();
+            all_tables.insert(all_tables.end(), all_views.begin(), all_views.end());
+            for (const auto& table : all_tables) {
+                if (!tm.tablets().has_tablet_map(table->id()) || !tm.tablets().is_base_table(table->id())) {
+                    continue;
+                }
+                const auto& tmap = tm.tablets().get_tablet_map(table->id());
+                for (const auto& ti : tmap.tablets()) {
+                    std::unordered_map<sstring, std::vector<sstring>> dc_to_racks;
+                    for (const auto& r : ti.replicas) {
+                        const auto& node_dc_rack = tm.get_topology().get_node(r.host).dc_rack();
+                        dc_to_racks[node_dc_rack.dc].push_back(node_dc_rack.rack);
+                    }
+                    auto diff = subtract_replication(next_replication, dc_to_racks);
+                    if (!diff.empty()) {
+                        has_missing_replica = true;
+                        break;
+                    }
+                }
+                if (has_missing_replica) {
+                    break;
+                }
+            }
+
+            if (has_missing_replica) {
+                auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+                ks_md->set_next_strategy_options(ks_md->strategy_options());
+                auto schema_muts = prepare_keyspace_update_announcement(_db.local(), ks_md, guard.write_timestamp());
+                for (auto& m : schema_muts) {
+                    updates.push_back(canonical_mutation(m));
+                }
+                updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
+                                    .abort("Aborted by user request")
+                                    .build()));
+            } else {
+                slogger.warn("RF change request with id '{}' is ongoing, but it started removing replicas, so it can't be aborted", request_id);
+                co_return;
+            }
+        } else {
+            slogger.warn("RF change request with id '{}' can't be aborted", request_id);
             co_return;
         }
 
-        utils::chunked_vector<canonical_mutation> updates;
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
-        updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
-                                                    .done("Aborted by user request")
-                                                    .build()));
-
-        topology_change change{std::move(updates)};
+        mixed_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("aborting rf change request {}", request_id));
 

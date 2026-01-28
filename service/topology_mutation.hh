@@ -157,6 +157,7 @@ public:
     using builder_base::del;
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
     topology_request_tracking_mutation_builder& set(const char* cell, global_topology_request value);
+    topology_request_tracking_mutation_builder& abort(sstring error);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);

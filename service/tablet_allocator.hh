@@ -348,6 +348,7 @@ future<bool> requires_rack_list_colocation(
         utils::UUID request_id);
 
 bool rf_count_per_dc_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next);
+std::unordered_map<sstring, std::vector<sstring>> subtract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right);
 
 }
 
