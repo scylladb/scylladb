@@ -3693,7 +3693,7 @@ public:
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
         , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] {
-            return with_scheduling_group(_db.get_gossip_scheduling_group(), [this] {
+            return with_scheduling_group(_gossiper.get_scheduling_group(), [this] {
                 return refresh_tablet_load_stats();
             });
         })

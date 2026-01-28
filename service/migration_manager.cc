@@ -66,7 +66,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
                 }
 
                 // This will run raft barrier and will sync schema with the leader
-                co_await with_scheduling_group(_storage_proxy.get_db().local().get_gossip_scheduling_group(), [this] {
+                co_await with_scheduling_group(_gossiper.get_scheduling_group(), [this] {
                     return start_group0_operation().discard_result();
                 });
             }) :
