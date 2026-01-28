@@ -129,7 +129,7 @@ int64_t compaction_group::get_sstables_repaired_at() const noexcept {
             return 0;
         }
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_t.schema()->id());
-        auto& tinfo = tmap.get_tablet_info(tid);
+        auto& tinfo = tmap.get_tablet_repair_info(tid);
         return tinfo.sstables_repaired_at;
     } catch (locator::no_such_tablet_map) {
         return 0;
@@ -2999,7 +2999,7 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
             auto group_id = first_new_id + i;
             auto old_range = old_tmap.get_token_range(locator::tablet_id(id));
             auto new_range = new_tmap.get_token_range(locator::tablet_id(group_id));
-            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
+            auto sstables_repaired_at = new_tmap.get_tablet_repair_info(locator::tablet_id(group_id)).sstables_repaired_at;
             tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
                     sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
             split_ready_groups[i]->update_id_and_range(group_id, new_range);
