@@ -2135,7 +2135,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         auto filter_json = _prepared_filter.to_json(options);
         uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
         auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, aoe.abort_source());
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, std::move(filter_json), aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
