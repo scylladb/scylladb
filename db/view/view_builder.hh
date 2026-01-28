@@ -11,13 +11,13 @@
 #include "query/query-request.hh"
 #include "service/migration_listener.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "utils/serialized_action.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "replica/database.hh"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/condition-variable.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -174,7 +174,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     reader_permit _permit;
     base_to_build_step_type _base_to_build_step;
     base_to_build_step_type::iterator _current_step = _base_to_build_step.end();
-    serialized_action _build_step{std::bind(&view_builder::do_build_step, this)};
+    condition_variable _build_step;
     static constexpr size_t view_builder_semaphore_units = 1;
     // Ensures bookkeeping operations are serialized, meaning that while we execute
     // a build step we don't consider newly added or removed views. This simplifies
@@ -191,7 +191,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     // `on_drop_view`, `on_create_view`, or `on_update_view` events.
     seastar::named_semaphore _sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder"}};
     seastar::abort_source _as;
-    future<> _started = make_ready_future<>();
+    future<> _step_fiber = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<table_id> _built_views;
     // Used for testing.
@@ -278,7 +278,7 @@ private:
     void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace_view_name>, std::vector<system_keyspace_view_build_progress>);
     future<> calculate_shard_build_step(view_builder_init_state& vbi);
     future<> add_new_view(view_ptr, build_step&);
-    future<> do_build_step();
+    future<> run_in_background();
     void execute(build_step&, exponential_backoff_retry);
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
     future<> mark_as_built(view_ptr);

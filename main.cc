@@ -2494,7 +2494,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "starting view builders");
-                view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm), utils::cross_shard_barrier()).get();
+                with_scheduling_group(maintenance_scheduling_group, [&mm] {
+                    return view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm), utils::cross_shard_barrier());
+                }).get();
             }
             auto drain_view_builder = defer_verbose_shutdown("draining view builders", [&] {
                 view_builder.invoke_on_all(&db::view::view_builder::drain).get();
