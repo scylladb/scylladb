@@ -122,6 +122,7 @@ public:
     static constexpr uint64_t LOWER_BITS_MASK = Precision - 1;
 private:
     std::array<uint64_t, NUM_BUCKETS> _buckets;
+    uint64_t _total_sum = 0;
 public:
     approx_exponential_histogram() {
         clear();
@@ -181,6 +182,7 @@ public:
      * Increments the count of the bucket holding that value
      */
     void add(uint64_t n) {
+        _total_sum += n;
         _buckets.at(find_bucket_index(n))++;
     }
 
@@ -304,6 +306,13 @@ public:
             sum += _buckets[i];
         }
         return sum;
+    }
+
+    /*!
+     * \brief returns the total sum of all values inserted
+     */
+    uint64_t sum() const {
+        return _total_sum;
     }
 
     /*!
