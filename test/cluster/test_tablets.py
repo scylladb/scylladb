@@ -327,7 +327,7 @@ async def test_singledc_alter_tablets_rf(manager: ManagerClient):
             await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
 
 @pytest.mark.asyncio
-async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
+async def test_arbitrary_multi_rf_changes(manager: ManagerClient):
     config = {"rf_rack_valid_keyspaces": "false", "enable_tablets": "true", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ['--logger-log-level', 'raft_topology=debug']
     await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
@@ -369,23 +369,19 @@ async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
 
     # RF change by more than 1 in a single DC using rack lists (1->3)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}") as ks:
-        with pytest.raises(InvalidRequest, match=err_msg):
-            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']}}")
 
     # RF change by more than 1 in a single DC using rack lists (3->1)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']}") as ks:
-        with pytest.raises(InvalidRequest, match=err_msg):
-            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}}")
 
     # Adding a DC while also changing RF in another DC, using rack lists
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}") as ks:
-        with pytest.raises(InvalidRequest, match=err_msg):
-            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r4']}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r4']}}")
 
     # Removing a DC while also changing RF in another DC, using rack lists
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r4']}") as ks:
-        with pytest.raises(InvalidRequest, match=err_msg):
-            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0}}")
 
     # Adding one DC and removing another at the same time (with rack lists)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': ['r4']}") as ks:

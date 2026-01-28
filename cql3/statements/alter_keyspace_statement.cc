@@ -89,20 +89,6 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 auto& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
-                // Check if multi-RF change is allowed: all DC changes must be 0->N or N->0.
-                auto all_changes_are_0_N = [&] {
-                    for (const auto& [dc, new_rf] : new_rf_per_dc) {
-                        auto old_rf_val = size_t(0);
-                        if (auto it = current_rf_per_dc.find(dc); it != current_rf_per_dc.end()) {
-                            old_rf_val = locator::get_replication_factor(it->second);
-                        }
-                        auto new_rf_val = locator::get_replication_factor(new_rf);
-                        if (old_rf_val != new_rf_val && old_rf_val != 0 && new_rf_val != 0) {
-                            return false;
-                        }
-                    }
-                    return true;
-                };
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
                     auto old_rf = locator::replication_strategy_config_option(sstring("0"));
@@ -118,7 +104,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                     }
                     if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2 &&
                             !(qp.proxy().features().keyspace_multi_rf_change && locator::uses_rack_list_exclusively(current_rf_per_dc)
-                            && locator::uses_rack_list_exclusively(new_ks->strategy_options()) && all_changes_are_0_N())) {
+                            && locator::uses_rack_list_exclusively(new_ks->strategy_options()))) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
                 }
