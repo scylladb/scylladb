@@ -547,6 +547,84 @@ uint64_t compaction_progress_monitor::get_progress() const {
     return _progress;
 }
 
+uint64_t owned_ranges::calculate_hash(const dht::token_range_vector& ranges) noexcept {
+    simple_xx_hasher hasher;
+    appending_hash<dht::token_range_vector>{}(hasher, ranges);
+    return hasher.finalize();
+}
+
+future<uint64_t> owned_ranges::calculate_hash_gently(const dht::token_range_vector& ranges) noexcept {
+    simple_xx_hasher hasher;
+    co_await appending_hash<dht::token_range_vector>{}.hash_gently(hasher, ranges);
+    co_return hasher.finalize();
+}
+
+owned_ranges owned_ranges::clone() const {
+    return owned_ranges(_ranges ? make_lw_shared<const dht::token_range_vector>(*_ranges) : nullptr,
+        _hash);
+}
+
+future<owned_ranges> owned_ranges::clone_gently() const {
+    if (!_ranges || _ranges->size() < 1000) {
+        co_return clone();
+    }
+    dht::token_range_vector cloned_ranges;
+    cloned_ranges.reserve(_ranges->size());
+    for (const auto& r : *_ranges) {
+        cloned_ranges.emplace_back(r);
+        co_await coroutine::maybe_yield();
+    }
+    co_return owned_ranges(make_lw_shared<const dht::token_range_vector>(std::move(cloned_ranges)),
+        _hash);
+}
+
+owned_ranges make_owned_ranges(dht::token_range_vector&& ranges) noexcept {
+    auto hash = owned_ranges::calculate_hash(ranges);
+    return owned_ranges(make_lw_shared<const dht::token_range_vector>(std::move(ranges)), hash);
+}
+
+future<owned_ranges> make_owned_ranges_gently(dht::token_range_vector&& ranges_) noexcept {
+    auto ranges = std::move(ranges_);
+    auto hash = co_await owned_ranges::calculate_hash_gently(ranges);
+    co_return owned_ranges(make_lw_shared<const dht::token_range_vector>(std::move(ranges)), hash);
+}
+
+compaction_descriptor::compaction_descriptor(std::vector<sstables::shared_sstable> sstables,
+        int level, uint64_t max_sstable_bytes, sstables::run_id run_identifier, compaction_type_options options,
+        ::compaction::owned_ranges owned_ranges)
+    : sstables(std::move(sstables))
+    , level(level)
+    , max_sstable_bytes(max_sstable_bytes)
+    , run_identifier(run_identifier)
+    , options(options)
+    , owned_ranges(std::move(owned_ranges))
+{
+    if (!owned_ranges.hash()) {
+        // See if all sstables have the same owned_ranges_hash and if so, carry it over to the output sstable(s).
+        bool all_same = true;
+        std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash;
+        for (const auto& sst : this->sstables) {
+            auto sst_owned_ranges_hash = sst->get_owned_ranges_hash();
+            if (sst_owned_ranges_hash) {
+                if (owned_ranges_hash) {
+                    if (*owned_ranges_hash != *sst_owned_ranges_hash) {
+                        all_same = false;
+                        break;
+                    }
+                } else {
+                    owned_ranges_hash = *sst_owned_ranges_hash;
+                }
+            } else {
+                all_same = false;
+                break;
+            }
+        }
+        if (all_same && owned_ranges_hash) {
+            this->owned_ranges.set_hash(*owned_ranges_hash);
+        }
+    }
+}
+
 class compaction {
 protected:
     compaction_data& _cdata;
@@ -589,7 +667,7 @@ protected:
     std::optional<sstables::sstable_set::incremental_selector> _selector;
     std::unordered_set<sstables::shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
-    const owned_ranges_ptr _owned_ranges = {};
+    const owned_ranges _owned_ranges = {};
     // required for reshard compaction.
     const dht::sharder* _sharder = nullptr;
     const std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;
@@ -615,10 +693,10 @@ private:
     get_ranges_for_invalidation(const std::vector<sstables::shared_sstable>& sstables) {
         // If owned ranges is disengaged, it means no cleanup work was done and
         // so nothing needs to be invalidated.
-        if (!_owned_ranges) {
+        if (!_owned_ranges.ranges()) {
             return dht::partition_range_vector{};
         }
-        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
+        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges.ranges(), utils::can_yield::yes);
 
         auto non_owned_ranges = sstables
                 | std::views::transform([] (const sstables::shared_sstable& sst) {
@@ -648,7 +726,7 @@ protected:
         , _compacting_for_max_purgeable_func(std::unordered_set<sstables::shared_sstable>(_sstables.begin(), _sstables.end()))
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
-        , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
+        , _owned_ranges_checker(_owned_ranges.ranges() ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges.ranges()) : std::nullopt)
         , _tombstone_gc_state_with_commitlog_check_disabled(descriptor.gc_check_only_compacting_sstables ? std::make_optional(_table_s.get_tombstone_gc_state().with_commitlog_check_disabled()) : std::nullopt)
         , _progress_monitor(progress_monitor)
     {
@@ -691,12 +769,12 @@ protected:
         _new_partial_sstables.erase(writer->sst);
     }
 
-    sstables::sstable_writer_config make_sstable_writer_config(compaction_type type) {
+    sstables::sstable_writer_config make_sstable_writer_config(compaction_type type, std::optional<sstables::owned_ranges_hash_type::value_type> owned_ranges_hash) {
         auto s = compaction_name(type);
         std::transform(s.begin(), s.end(), s.begin(), [] (char c) {
             return std::tolower(c);
         });
-        sstables::sstable_writer_config cfg = _table_s.configure_writer(std::move(s));
+        sstables::sstable_writer_config cfg = _table_s.configure_writer(std::move(s), owned_ranges_hash);
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &sstables::default_write_monitor();
         cfg.run_identifier = _run_identifier;
@@ -732,7 +810,7 @@ protected:
         auto sst = _sstable_creator(this_shard_id());
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
-        sstables::sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
+        sstables::sstable_writer_config cfg = _table_s.configure_writer("garbage_collection", std::nullopt);
         cfg.run_identifier = gc_run;
         cfg.monitor = monitor.get();
         uint64_t estimated_partitions = std::max(1UL, uint64_t(ceil(partitions_per_sstable() * _estimated_droppable_tombstone_ratio)));
@@ -1291,7 +1369,7 @@ public:
         setup_new_sstable(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type, _owned_ranges.hash());
         cfg.monitor = monitor.get();
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
@@ -1440,7 +1518,7 @@ public:
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape, _owned_ranges.hash());
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
 
@@ -1516,7 +1594,7 @@ public:
         const auto estimated_keys = _sstables[0]->estimated_keys_for_range(token_range_of_new_sst).get();
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type, std::nullopt);
         cfg.monitor = monitor.get();
 
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, estimated_keys, cfg, get_encoding_stats()), sst};
@@ -2006,7 +2084,7 @@ public:
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
-        auto cfg = make_sstable_writer_config(compaction_type::Reshard);
+        auto cfg = make_sstable_writer_config(compaction_type::Reshard, _owned_ranges.hash());
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), shard), sst};

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/hashing.hh"
 #include <algorithm>
 #include <list>
 #include <vector>
@@ -1047,6 +1048,36 @@ std::ostream& operator<<(std::ostream& out, const interval<U>& r) {
 
 template<template<typename> typename T, typename U>
 concept Interval = std::is_same<T<U>, wrapping_interval<U>>::value || std::is_same<T<U>, interval<U>>::value;
+
+template <typename T>
+struct appending_hash<interval_bound_const_ref<T>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const interval_bound_const_ref<T>& b) const noexcept {
+        feed_hash(h, b.value());
+        feed_hash(h, b.is_inclusive());
+    }
+};
+
+template <typename T>
+struct appending_hash<wrapping_interval<T>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const wrapping_interval<T>& i) const noexcept {
+        appending_hash<std::optional<typename wrapping_interval<T>::bound_const_ref>>{}(h, i.start());
+        appending_hash<std::optional<typename wrapping_interval<T>::bound_const_ref>>{}(h, i.end());
+    }
+};
+
+template <typename T>
+struct appending_hash<interval<T>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const interval<T>& i) const noexcept {
+        appending_hash<std::optional<typename wrapping_interval<T>::bound_const_ref>>{}(h, i.start());
+        appending_hash<std::optional<typename wrapping_interval<T>::bound_const_ref>>{}(h, i.end());
+    }
+};
 
 // Allow using interval<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().

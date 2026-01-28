@@ -11,6 +11,7 @@
 
 #include "compaction/task_manager_module.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/owned_ranges.hh"
 #include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
@@ -48,7 +49,7 @@ namespace compaction {
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
 future<sstables::sstable_directory::sstable_open_info_vector>
-collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges_ptr owned_ranges_ptr) {
+collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges owned_ranges) {
     auto info_vec = sstables::sstable_directory::sstable_open_info_vector();
 
     // We want to make sure that each distributed object reshards about the same amount of data.
@@ -60,13 +61,12 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
     auto coordinator = this_shard_id();
     // We will first move all of the foreign open info to temporary storage so that we can sort
     // them. We want to distribute bigger sstables first.
-    const auto* sorted_owned_ranges_ptr = owned_ranges_ptr.get();
     co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
         auto shared_sstables = d.retrieve_shared_sstables();
         sstables::sstable_directory::sstable_open_info_vector need_cleanup;
-        if (sorted_owned_ranges_ptr) {
+        if (owned_ranges.ranges() || owned_ranges.hash()) {
             co_await d.filter_sstables([&] (sstables::shared_sstable sst) -> future<bool> {
-                if (needs_cleanup(sst, *sorted_owned_ranges_ptr)) {
+                if (needs_cleanup(sst, owned_ranges)) {
                     need_cleanup.push_back(co_await sst->get_open_info());
                     co_return false;
                 }
@@ -132,7 +132,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, tasks::task_info parent_info)
+                           compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges owned_ranges, tasks::task_info parent_info)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -169,7 +169,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             desc.options = compaction_type_options::make_reshard();
             desc.creator = creator;
             desc.sharder = &erm->get_sharder(*table.schema());
-            desc.owned_ranges = owned_ranges_ptr;
+            desc.owned_ranges = owned_ranges;
 
             auto result = co_await compact_sstables(std::move(desc), info, t, progress_monitor);
             // input sstables are moved, to guarantee their resources are released once we're done
@@ -577,14 +577,14 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     // Since clenaup is an admin operation required for vnodes,
     // it is the responsibility of the system operator to not
     // perform additional incompatible range movements during cleanup.
-    auto get_owned_ranges = [&] (std::string_view ks_name) -> future<owned_ranges_ptr> {
+    auto get_owned_ranges = [&] (std::string_view ks_name) -> future<owned_ranges> {
         const auto& erm = _db.find_keyspace(ks_name).get_static_effective_replication_map();
-        co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
+        co_return co_await compaction::make_owned_ranges_gently(co_await _db.get_keyspace_local_ranges(erm));
     };
-    auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
+    auto owned_ranges = co_await get_owned_ranges(_status.keyspace);
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
         // skip the flush, as cleanup_keyspace_compaction_task_impl::run should have done this.
-        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
+        return t.perform_cleanup_compaction(owned_ranges, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
     });
 }
 
@@ -677,20 +677,20 @@ future<std::optional<double>> shard_upgrade_sstables_compaction_task_impl::expec
 
 future<> table_upgrade_sstables_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    auto get_owned_ranges = [&] (std::string_view keyspace_name) -> future<owned_ranges_ptr> {
+    auto get_owned_ranges = [&] (std::string_view keyspace_name) -> future<owned_ranges> {
         const auto& ks = _db.find_keyspace(keyspace_name);
         if (ks.get_replication_strategy().is_per_table()) {
-            co_return nullptr;
+            co_return compaction::owned_ranges();
         }
         const auto& erm = ks.get_static_effective_replication_map();
-        co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
+        co_return co_await compaction::make_owned_ranges_gently(co_await _db.get_keyspace_local_ranges(erm));
     };
-    auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
+    auto owned_ranges = co_await get_owned_ranges(_status.keyspace);
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
             auto lock_holder = co_await t.get_compaction_manager().get_incremental_repair_read_lock(ts, "upgrade_sstables_compaction");
-            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
+            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges, ts, _exclude_current_version, info);
         });
     });
 }
@@ -886,7 +886,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
 }
 
 future<> table_resharding_compaction_task_impl::run() {
-    auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges_ptr);
+    auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
 
     uint64_t total_size = std::ranges::fold_left(destinations | std::views::transform(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0), std::plus{});
@@ -902,11 +902,8 @@ future<> table_resharding_compaction_task_impl::run() {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
         // make shard-local copy of owned_ranges
-        compaction::owned_ranges_ptr local_owned_ranges_ptr;
-        if (_owned_ranges_ptr) {
-            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
-        }
-        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, std::move(local_owned_ranges_ptr), destinations);
+        compaction::owned_ranges local_owned_ranges = co_await _owned_ranges.clone_gently();
+        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, std::move(local_owned_ranges), destinations);
         co_await task->done();
     }));
 
@@ -925,13 +922,13 @@ shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tas
         sharded<sstables::sstable_directory>& dir,
         replica::database& db,
         compaction_sstable_creator_fn creator,
-        compaction::owned_ranges_ptr local_owned_ranges_ptr,
+        compaction::owned_ranges local_owned_ranges,
         std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
     : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
     , _dir(dir)
     , _db(db)
     , _creator(std::move(creator))
-    , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
+    , _local_owned_ranges(std::move(local_owned_ranges))
     , _destinations(destinations)
 {
     _expected_workload = _destinations[this_shard_id()].size();
@@ -941,7 +938,7 @@ future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
     tasks::task_info info{_status.id, _status.shard};
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges), info);
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 

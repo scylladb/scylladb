@@ -547,6 +547,7 @@ enum class scylla_metadata_type : uint32_t {
     ExtTimestampStats = 9,
     SSTableIdentifier = 10,
     Schema = 11,
+    OwnedRangesHash = 12,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -568,6 +569,15 @@ using sstable_id = utils::tagged_uuid<struct sstable_id_tag>;
 // or a time-UUID otherwise.
 struct sstable_identifier_type {
     sstable_id value;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(value); }
+};
+
+// Hash of the owned ranges used when writing the SSTable.
+struct owned_ranges_hash_type {
+    using value_type = uint64_t;
+    value_type value;
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(value); }
@@ -644,6 +654,7 @@ struct scylla_metadata {
     using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
     using sstable_identifier = sstable_identifier_type;
     using sstable_schema = sstable_schema_type;
+    using owned_ranges_hash = owned_ranges_hash_type;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -656,7 +667,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::OwnedRangesHash, owned_ranges_hash>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -690,6 +702,11 @@ struct scylla_metadata {
     sstable_id get_optional_sstable_identifier() const {
         auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
         return sid ? sid->value : sstable_id::create_null_id();
+    }
+
+    std::optional<owned_ranges_hash_type::value_type> get_optional_owned_ranges_hash() const {
+        auto* h = data.get<scylla_metadata_type::OwnedRangesHash, owned_ranges_hash_type>();
+        return h ? std::make_optional(h->value) : std::nullopt;
     }
 
     template <typename Describer>
