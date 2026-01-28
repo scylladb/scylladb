@@ -61,24 +61,30 @@ BOOST_AUTO_TEST_CASE(test_histogram_bucket_limits) {
 
 BOOST_AUTO_TEST_CASE(test_basic_estimated) {
     utils::approx_exponential_histogram<128, 1024, 4> hist;
+    auto total = 0;
     hist.add(1);
+    total += 1;
     validate_histogram(hist, {1});
     hist.add(100);
     hist.add(128);
     hist.add(129);
     hist.add(159);
+    total += 100 + 128 + 129 + 159;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5}), "");
     hist.add(160);
     hist.add(161);
     hist.add(191);
     hist.add(192);
+    total += 160 + 161 + 191 + 192;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5, 3, 1}), "");
     hist.add(223);
+    total += 223;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5, 3, 2}), "");
     hist.add(224);
     hist.add(225);
     hist.add(255);
     hist.add(253);
+    total += 224 + 225 + 255 + 253;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5, 3, 2, 4}), "");
     hist.add(256);
     hist.add(260);
@@ -86,14 +92,16 @@ BOOST_AUTO_TEST_CASE(test_basic_estimated) {
     hist.add(258);
     hist.add(260);
     hist.add(319);
+    total += 256 + 260 + 258 + 258 + 260 + 319;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5, 3, 2, 4, 6}), "");
     hist.add(1023);
     hist.add(1024);
     hist.add(1025);
+    total += 1023 + 1024 + 1025;
     BOOST_CHECK_EQUAL(validate_histogram(hist, {5, 3, 2, 4, 6, 0, 0, 0, 0, 0, 0, 1, 2}), "");
     auto res = to_metrics_histogram(hist);
     BOOST_CHECK_EQUAL(res.sample_count, 23);
-    BOOST_CHECK_EQUAL(res.sample_sum, 7840);
+    BOOST_CHECK_EQUAL(res.sample_sum, total);
     BOOST_CHECK_EQUAL(validate_histogram(res, {5, 8, 10, 14, 20, 20, 20, 20, 20, 20, 20, 21}, {160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024}), "");
 }
 
@@ -140,4 +148,3 @@ BOOST_AUTO_TEST_CASE(test_summary_infinite_bucket) {
     BOOST_CHECK_EQUAL(sc.summary()[1], 33554432);
     BOOST_CHECK_EQUAL(sc.summary()[2], 33554432);
 }
-
