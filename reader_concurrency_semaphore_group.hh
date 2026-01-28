@@ -12,6 +12,43 @@
 #include <optional>
 #include "reader_concurrency_semaphore.hh"
 
+// A shared pool of memory that can be used by multiple reader_concurrency_semaphores.
+// When a semaphore exhausts its dedicated memory, it can borrow from this pool.
+class shared_memory_pool {
+    ssize_t _available_memory;
+    ssize_t _total_memory;
+public:
+    explicit shared_memory_pool(ssize_t memory) noexcept
+        : _available_memory(memory)
+        , _total_memory(memory) {}
+
+    bool try_consume(ssize_t amount) noexcept {
+        if (_available_memory >= amount) {
+            _available_memory -= amount;
+            return true;
+        }
+        return false;
+    }
+
+    void signal(ssize_t amount) noexcept {
+        _available_memory += amount;
+    }
+
+    ssize_t available_memory() const noexcept {
+        return _available_memory;
+    }
+
+    ssize_t total_memory() const noexcept {
+        return _total_memory;
+    }
+
+    void set_total_memory(ssize_t memory) noexcept {
+        auto diff = memory - _total_memory;
+        _total_memory = memory;
+        _available_memory += diff;
+    }
+};
+
 // The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory,
 // the memory is dynamically divided between them according to a relative slice of shares each semaphore
 // is given.
