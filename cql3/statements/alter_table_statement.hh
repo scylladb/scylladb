@@ -32,6 +32,7 @@ public:
         drop,
         opts,
         rename,
+        ttl,
     };
     using renames_type = std::vector<std::pair<shared_ptr<column_identifier::raw>,
                                                shared_ptr<column_identifier::raw>>>;
@@ -50,6 +51,7 @@ private:
     const std::optional<cf_prop_defs> _properties;
     const renames_type _renames;
     const std::unique_ptr<attributes> _attrs;
+    shared_ptr<column_identifier::raw> _ttl_change;
 public:
     alter_table_statement(uint32_t bound_terms,
                           cf_name name,
@@ -57,7 +59,8 @@ public:
                           std::vector<column_change> column_changes,
                           std::optional<cf_prop_defs> properties,
                           renames_type renames,
-                          std::unique_ptr<attributes> attrs);
+                          std::unique_ptr<attributes> attrs,
+                          shared_ptr<column_identifier::raw> ttl_change);
 
     virtual uint32_t get_bound_terms() const override;
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
@@ -78,6 +81,7 @@ class alter_table_statement::raw_statement : public raw::cf_statement {
     const std::optional<cf_prop_defs> _properties;
     const alter_table_statement::renames_type _renames;
     const std::unique_ptr<attributes::raw> _attrs;
+    shared_ptr<column_identifier::raw> _ttl_change;
 
 public:
     raw_statement(cf_name name,
@@ -85,7 +89,8 @@ public:
                   std::vector<column_change> column_changes,
                   std::optional<cf_prop_defs> properties,
                   renames_type renames,
-                  std::unique_ptr<attributes::raw> attrs);
+                  std::unique_ptr<attributes::raw> attrs,
+                  shared_ptr<column_identifier::raw> ttl_change);
     
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
