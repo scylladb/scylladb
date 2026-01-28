@@ -142,7 +142,8 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
-                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> initial_tablets,
+                                      std::optional<db::tablet_options> per_table_tablet_options) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -176,7 +177,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             else {
                 opts["replication_factor"] = replication_factor;
             }
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, std::nullopt, true);
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), initial_tablets, std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));
@@ -194,7 +195,13 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         utils::chunked_vector<mutation> table_mutations;
 
         co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
-            auto schema = parse_new_cf_statement(qp, table->_create_cql);
+            auto create_cql = table->_create_cql;
+            auto schema = parse_new_cf_statement(qp, create_cql);
+            if (per_table_tablet_options) {
+                schema_builder builder{schema};
+                builder.set_tablet_options(per_table_tablet_options->to_map());
+                schema = builder.build();
+            }
             if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
             }

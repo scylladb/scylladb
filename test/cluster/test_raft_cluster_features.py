@@ -41,7 +41,11 @@ async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) 
 
 @pytest.mark.asyncio
 async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
-    await manager.servers_add(3, auto_rack_dc="dc1")
+    # Unlike the above tests, this test places all nodes under the same rack.
+    # The reason is to allow removing a node without removing an entire rack.
+    # If system keyspaces use tablets, removing an entire rack may not be allowed
+    # if it makes the keyspace RF-rack-invalid.
+    await manager.servers_add(3, property_file={"dc": "dc1", "rack": "rack1"})
     await test_cluster_features.test_partial_upgrade_can_be_finished_with_removenode(manager)
 
 

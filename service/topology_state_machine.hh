@@ -200,6 +200,10 @@ struct topology {
     // It may happen during altering from numerical RF to rack list.
     std::unordered_set<utils::UUID> paused_rf_change_requests;
 
+    // Racks that should not be considered in auto-RF expansions.
+    // Keyed by DC name.
+    std::unordered_map<sstring, std::unordered_set<sstring>> auto_rf_blacklisted_racks;
+
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 

@@ -118,6 +118,7 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
+#include "service/topology_utils.hh"
 #include "cql3/query_processor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -1434,29 +1435,7 @@ public:
 };
 
 future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstring ks) const {
-    auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
-        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
-        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
-            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::keyspace_rf_change &&
-            req_entry.new_keyspace_rf_change_ks_name.has_value() && req_entry.new_keyspace_rf_change_ks_name.value() == ks;
-    };
-    if (_topology_state_machine._topology.global_request_id.has_value()) {
-        auto req_id = _topology_state_machine._topology.global_request_id.value();
-        if (co_await ongoing_ks_rf_change(req_id)) {
-            co_return true;
-        }
-    }
-    for (auto request_id : _topology_state_machine._topology.paused_rf_change_requests) {
-        if (co_await ongoing_ks_rf_change(request_id)) {
-            co_return true;
-        }
-    }
-    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
-        if (co_await ongoing_ks_rf_change(request_id)) {
-            co_return true;
-        }
-    }
-    co_return false;
+    return service::ongoing_rf_change(_topology_state_machine._topology, _sys_ks.local(), guard, ks);
 }
 
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
