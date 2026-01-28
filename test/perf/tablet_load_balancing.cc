@@ -154,13 +154,13 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto prev_lb_stats = talloc.stats().for_dc(dc);
+        auto prev_lb_stats = *talloc.stats().for_dc(dc);
         auto start_time = std::chrono::steady_clock::now();
 
         auto plan = talloc.balance_tablets(stm.get(), nullptr, nullptr, load_stats, skiplist).get();
 
         auto end_time = std::chrono::steady_clock::now();
-        auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
+        auto lb_stats = *talloc.stats().for_dc(dc) - prev_lb_stats;
 
         auto elapsed = std::chrono::duration_cast<seconds_double>(end_time - start_time);
         rebalance_stats iteration_stats = {
