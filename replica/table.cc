@@ -1746,10 +1746,12 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 }
 
 future<>
-table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit_) {
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
-    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
+    auto permit = make_lw_shared(std::move(permit_));
+    co_await coroutine::switch_to(_config.memtable_scheduling_group);
+    {
         // Note that due to our sharded architecture, it is possible that
         // in the face of a value change some shards will backup sstables
         // while others won't.
@@ -1800,7 +1802,8 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
-        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
+        co_await coroutine::switch_to(default_scheduling_group());
+        {
             try {
                 co_await std::move(f);
                 co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
@@ -1837,9 +1840,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
                 throw;
             }
         };
-        co_return co_await with_scheduling_group(default_scheduling_group(), std::ref(post_flush));
     };
-    co_return co_await with_scheduling_group(_config.memtable_scheduling_group, std::ref(try_flush));
 }
 
 void
