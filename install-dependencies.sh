@@ -31,6 +31,7 @@ fi
 
 debian_base_packages=(
     clang
+    clang-tools
     gdb
     cargo
     wabt
@@ -72,6 +73,7 @@ debian_base_packages=(
 
 fedora_packages=(
     clang
+    clang-tools-extra
     compiler-rt
     libasan
     libubsan
