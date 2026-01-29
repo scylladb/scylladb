@@ -11,12 +11,16 @@
 #include "schema/schema_fwd.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
+#include "utils/chunked_vector.hh"
 #include "cdc/generation_id.hh"
+#include "db/consistency_level_type.hh"
 #include "locator/host_id.hh"
+#include "dht/token.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
+#include <optional>
 #include <unordered_map>
 
 namespace cql3 {
@@ -34,7 +38,16 @@ namespace service {
     class migration_manager;
 }
 
+
 namespace db {
+
+struct sstable_info {
+    utils::UUID sstable_id;
+    dht::token first_token;
+    dht::token last_token;
+    sstring toc_name;
+    sstring prefix;
+};
 
 class system_distributed_keyspace {
 public:
@@ -61,6 +74,10 @@ public:
      * We use it in the upgrade procedure to ensure that CDC generations appearing
      * in the old table also appear in the new table, if necessary. */
     static constexpr auto CDC_DESC_V1 = "cdc_streams_descriptions";
+
+    /* This table is used by the backup and restore code to store per-sstable metadata.
+     * The data the coordinator node puts in this table comes from the snapshot manifests. */
+    static constexpr auto SNAPSHOT_SSTABLES = "snapshot_sstables";
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
@@ -118,6 +135,8 @@ public:
     future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const;
     future<> drop_service_level(sstring service_level_name) const;
     bool workload_prioritization_tables_exists();
+    future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, utils::UUID sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<utils::chunked_vector<sstable_info>> get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM, std::optional<dht::token> start_token = std::nullopt, std::optional<dht::token> end_token = std::nullopt) const;
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
