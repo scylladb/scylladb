@@ -933,7 +933,6 @@ def testToJsonFct(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, toJson(durationval) FROM %s WHERE k = ?", 0), [0, "\"1y1mo2d10h5m\""])
 
 # Reproduces issue #8077
-@pytest.mark.xfail(reason="issues #8077")
 def testJsonWithGroupBy(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         # tests SELECT JSON statements
@@ -954,7 +953,6 @@ def testJsonWithGroupBy(cql, test_keyspace):
                 ["{\"count\": 1}"])
 
 # Reproduces issues #8077, #8078
-@pytest.mark.xfail(reason="issues #8077")
 def testSelectJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         # tests SELECT JSON statements
