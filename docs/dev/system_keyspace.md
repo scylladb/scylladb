@@ -563,22 +563,26 @@ CREATE TABLE system.clients (
     address inet,
     port int,
     client_type text,
+    client_options frozen<map<text, text>>,
     connection_stage text,
     driver_name text,
     driver_version text,
     hostname text,
     protocol_version int,
+    scheduling_group text,
     shard_id int,
     ssl_cipher_suite text,
     ssl_enabled boolean,
     ssl_protocol text,
     username text,
-    scheduling_group text,
     PRIMARY KEY (address, port, client_type)
 ) WITH CLUSTERING ORDER BY (port ASC, client_type ASC)
 ~~~
 
 Currently only CQL clients are tracked. The table used to be present on disk (in data
 directory) before and including version 4.5.
+
+`client_options` column stores all data sent by the client in the STARTUP request.
+This column is useful for debugging and monitoring purposes.
 
 ## TODO: the rest
