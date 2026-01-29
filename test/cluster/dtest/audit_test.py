@@ -782,12 +782,12 @@ class TestCQLAudit(AuditTester):
 
     def test_audit_type_none(self):
         """
-        'audit': None
+        'audit': none
          CREATE KEYSPACE, USE KEYSPACE, ALTER KEYSPACE, DROP KEYSPACE statements
          check audit KS not created
         """
 
-        audit_settings = {"audit": None, "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+        audit_settings = {"audit": "none", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
 
         session = self.prepare(create_keyspace=False, audit_settings=audit_settings)
 
