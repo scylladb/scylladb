@@ -38,6 +38,15 @@ async def test_different_group0_ids(manager: ManagerClient):
     await manager.server_stop(scylla_b.server_id)
     await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr, scylla_b.ip_addr])
 
+    # Since scylla_a and scylla_b have different group0 IDs and didn't join each other,
+    # they are separate clusters. We need to set audit keyspace RF=0 on scylla_b (the node
+    # being decommissioned) to prevent its audit replicas from interfering with the expected
+    # "zero replica after the removal" error from the repair service.
+    cql_b = await manager.get_cql_exclusive(scylla_b)
+    result_b = await cql_b.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+    if result_b:
+        await cql_b.run_async("DROP KEYSPACE audit")
+
     log_file_a = await manager.server_open_log(scylla_a.server_id)
     log_file_b = await manager.server_open_log(scylla_b.server_id)
 
@@ -51,7 +60,7 @@ async def test_different_group0_ids(manager: ManagerClient):
     # Check if decommissioning the second node fails.
     # Repair service throws a runtime exception "zero replica after the removal"
     # when it tries to remove the only one node from the cluster.
-    # If it is not thrown, it means that the second node successfully send a gossip
+    # If it is not thrown, it means that the second node successfully sent a gossip
     # to the first node and they merged their tokens metadata.
     with pytest.raises(Exception, match='zero replica after the removal'):
         await manager.decommission_node(scylla_b.server_id)
