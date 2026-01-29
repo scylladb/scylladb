@@ -150,7 +150,6 @@ fedora_packages=(
     llvm
     openldap-servers
     openldap-devel
-    toxiproxy
     cyrus-sasl
     fipscheck
     cpp-jwt-devel
@@ -295,6 +294,7 @@ print_usage() {
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
     echo "  --print-node-exporter-filename Print node_exporter filename"
+    echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
     exit 1
 }
 
@@ -302,6 +302,7 @@ PRINT_PYTHON3=false
 PRINT_PIP=false
 PRINT_PIP_SYMLINK=false
 PRINT_NODE_EXPORTER=false
+FUTURE=false
 while [ $# -gt 0 ]; do
     case "$1" in
         "--print-python3-runtime-packages")
@@ -318,6 +319,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-node-exporter-filename")
             PRINT_NODE_EXPORTER=true
+            shift 1
+            ;;
+        "--future")
+            FUTURE=true
             shift 1
             ;;
          *)
@@ -348,6 +353,10 @@ fi
 if $PRINT_NODE_EXPORTER; then
     node_exporter_fullpath
     exit 0
+fi
+
+if ! $FUTURE; then
+    fedora_packages+=(toxiproxy)
 fi
 
 umask 0022
@@ -446,4 +455,12 @@ if [ ! -z "${CURL_ARGS}" ]; then
     chmod +x "${MINIO_BINARIES_DIR}/mc"
 else
     echo "Minio server and client are up-to-date, skipping download"
+fi
+
+if $FUTURE ; then
+    toxyproxy_version="v2.12.0"
+    for bin in toxiproxy-cli toxiproxy-server; do
+        curl -fSL -o "/usr/local/bin/${bin}" "https://github.com/Shopify/toxiproxy/releases/download/${toxyproxy_version}/${bin}-linux-$(go_arch)"
+        chmod +x "/usr/local/bin/${bin}"
+    done
 fi
