@@ -27,6 +27,12 @@ class query_processor;
 
 } // namespace cql3
 
+namespace gms {
+
+class feature_service;
+
+} // namespace gms
+
 namespace db {
 
 class system_keyspace;
@@ -64,6 +70,7 @@ private:
 
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
+    gms::feature_service& _fs;
     db_clock::duration _replay_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
@@ -89,7 +96,7 @@ public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
     // shard qp (which is what you feed here).
-    batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, batchlog_manager_config config);
+    batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, gms::feature_service& fs, batchlog_manager_config config);
 
     // abort the replay loop and return its future.
     future<> drain();
