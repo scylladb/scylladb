@@ -137,11 +137,11 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit:
     try:
         proxy_name = f'p{port}'
         subprocess.check_output(
-            ['toxiproxy-cli', '-h', f'{host}:{tp_port}', 'c', proxy_name, '--listen', f'{host}:{port + 2}', '--upstream',
-             f'{host}:{port}'], stderr=subprocess.STDOUT)
+            ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'create', '--listen', f'{host}:{port + 2}', '--upstream',
+             f'{host}:{port}', proxy_name], stderr=subprocess.STDOUT)
         subprocess.check_output(
-            ['toxiproxy-cli', '-h', f'{host}:{tp_port}', 't', 'a', proxy_name, '-t', 'limit_data', '-n', 'limiter', '-a',
-             f'bytes={toxiproxy_byte_limit}'], stderr=subprocess.STDOUT)
+            ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'toxic', 'add', '-t', 'limit_data', '-n', 'limiter', '-a',
+             f'bytes={toxiproxy_byte_limit}', proxy_name], stderr=subprocess.STDOUT)
         # Change the data folder in the default config.
         replace_expression = f"s/olcDbDirectory:.*/olcDbDirectory: {str(instance_path).replace('/', r'\/')}/g"
         subprocess.check_output(
