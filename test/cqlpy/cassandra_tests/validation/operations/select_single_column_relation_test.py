@@ -577,7 +577,6 @@ def testInvalidColumnNames(cql, test_keyspace):
         assert_invalid(cql, table, "SELECT c AS d FROM %s WHERE d CONTAINS KEY 0")
         assert_invalid_message(cql, table, "name d", "SELECT d FROM %s WHERE a = 0")
 
-@pytest.mark.xfail(reason="#10632 - strange error message")
 def testInvalidNonFrozenUDTRelation(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as type:
         with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b {type})") as table:
