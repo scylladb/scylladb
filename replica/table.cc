@@ -1746,100 +1746,97 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 }
 
 future<>
-table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit_) {
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
-    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
-        // Note that due to our sharded architecture, it is possible that
-        // in the face of a value change some shards will backup sstables
-        // while others won't.
-        //
-        // This is, in theory, possible to mitigate through a rwlock.
-        // However, this doesn't differ from the situation where all tables
-        // are coming from a single shard and the toggle happens in the
-        // middle of them.
-        //
-        // The code as is guarantees that we'll never partially backup a
-        // single sstable, so that is enough of a guarantee.
+    auto permit = make_lw_shared(std::move(permit_));
+    co_await coroutine::switch_to(_config.memtable_scheduling_group);
+    // Note that due to our sharded architecture, it is possible that
+    // in the face of a value change some shards will backup sstables
+    // while others won't.
+    //
+    // This is, in theory, possible to mitigate through a rwlock.
+    // However, this doesn't differ from the situation where all tables
+    // are coming from a single shard and the toggle happens in the
+    // middle of them.
+    //
+    // The code as is guarantees that we'll never partially backup a
+    // single sstable, so that is enough of a guarantee.
 
-        auto newtabs = std::vector<sstables::shared_sstable>();
-        auto metadata = mutation_source_metadata{};
-        metadata.min_timestamp = old->get_min_timestamp();
-        metadata.max_timestamp = old->get_max_timestamp();
-        auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
+    auto newtabs = std::vector<sstables::shared_sstable>();
+    auto metadata = mutation_source_metadata{};
+    metadata.min_timestamp = old->get_min_timestamp();
+    metadata.max_timestamp = old->get_max_timestamp();
+    auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
 
-        if (!cg.async_gate().is_closed()) {
-            co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
-        }
+    if (!cg.async_gate().is_closed()) {
+        co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
+    }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
-          std::exception_ptr ex;
-          try {
-            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
-            cfg.backup = incremental_backups_enabled();
+    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
+      std::exception_ptr ex;
+      try {
+        sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+        cfg.backup = incremental_backups_enabled();
 
-            auto newtab = make_sstable();
-            newtabs.push_back(newtab);
-            tlogger.debug("Flushing to {}", newtab->get_filename());
+        auto newtab = make_sstable();
+        newtabs.push_back(newtab);
+        tlogger.debug("Flushing to {}", newtab->get_filename());
 
-            auto monitor = database_sstable_write_monitor(permit, newtab, cg,
-                old->get_max_timestamp());
+        auto monitor = database_sstable_write_monitor(permit, newtab, cg,
+            old->get_max_timestamp());
 
-            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
-          } catch (...) {
-            ex = std::current_exception();
-          }
-          co_await reader.close();
-          co_await coroutine::return_exception_ptr(std::move(ex));
+        co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
+      } catch (...) {
+        ex = std::current_exception();
+      }
+      co_await reader.close();
+      co_await coroutine::return_exception_ptr(std::move(ex));
+    });
+
+    auto f = consumer(old->make_flush_reader(
+        old->schema(),
+        compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+
+    // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
+    // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
+    // priority inversion.
+    co_await coroutine::switch_to(default_scheduling_group());
+    try {
+        co_await std::move(f);
+        co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
+            co_await newtab->open_data();
+            tlogger.debug("Flushing to {} done", newtab->get_filename());
         });
 
-        auto f = consumer(old->make_flush_reader(
-            old->schema(),
-            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+        co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
+            return update_cache(cg, old, newtabs);
+        });
 
-        // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
-        // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
-        // priority inversion.
-        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
-            try {
-                co_await std::move(f);
-                co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
-                    co_await newtab->open_data();
-                    tlogger.debug("Flushing to {} done", newtab->get_filename());
-                });
-
-                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
-                    return update_cache(cg, old, newtabs);
-                });
-
-                co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
-                    const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                    if (this_table_name == handler.get("table_name")) {
-                        tlogger.info("error injection handler replica_post_flush_after_update_cache: suspending flush for table {}", this_table_name);
-                        handler.set("suspended", true);
-                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-                        tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
-                    }
-                });
-
-                cg.memtables()->erase(old);
-                tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
-                co_return;
-            } catch (const std::exception& e) {
-                for (auto& newtab : newtabs) {
-                    newtab->mark_for_deletion();
-                    tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
-                }
-                _config.cf_stats->failed_memtables_flushes_count++;
-                // If we failed this write we will try the write again and that will create a new flush reader
-                // that will decrease dirty memory again. So we need to reset the accounting.
-                old->revert_flushed_memory();
-                throw;
+        co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
+            const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
+            if (this_table_name == handler.get("table_name")) {
+                tlogger.info("error injection handler replica_post_flush_after_update_cache: suspending flush for table {}", this_table_name);
+                handler.set("suspended", true);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
             }
-        };
-        co_return co_await with_scheduling_group(default_scheduling_group(), std::ref(post_flush));
-    };
-    co_return co_await with_scheduling_group(_config.memtable_scheduling_group, std::ref(try_flush));
+        });
+
+        cg.memtables()->erase(old);
+        tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
+        co_return;
+    } catch (const std::exception& e) {
+        for (auto& newtab : newtabs) {
+            newtab->mark_for_deletion();
+            tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
+        }
+        _config.cf_stats->failed_memtables_flushes_count++;
+        // If we failed this write we will try the write again and that will create a new flush reader
+        // that will decrease dirty memory again. So we need to reset the accounting.
+        old->revert_flushed_memory();
+        throw;
+    }
 }
 
 void
