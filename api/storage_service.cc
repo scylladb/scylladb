@@ -1565,16 +1565,7 @@ rest_reload_raft_topology_state(sharded<service::storage_service>& ss, service::
 static
 future<json::json_return_type>
 rest_upgrade_to_raft_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        apilog.info("Requested to schedule upgrade to raft topology");
-        try {
-            co_await ss.invoke_on(0, [] (auto& ss) {
-                return ss.start_upgrade_to_raft_topology();
-            });
-        } catch (...) {
-            auto ex = std::current_exception();
-            apilog.error("Failed to schedule upgrade to raft topology: {}", ex);
-            std::rethrow_exception(std::move(ex));
-        }
+        apilog.info("Requested to schedule upgrade to raft topology, but this version does not need it since it uses raft topology by default.");
         co_return json_void();
 }
 
