@@ -658,7 +658,6 @@ public:
                             sstables::component_type::CRC,
                             sstables::component_type::Filter,
                             sstables::component_type::Statistics,
-                            sstables::component_type::TemporaryStatistics,
                             sstables::component_type::Partitions,
                             sstables::component_type::Rows,
                             sstables::component_type::TemporaryHashes,
@@ -827,7 +826,6 @@ public:
         case sstables::component_type::CRC:
         case sstables::component_type::Filter:
         case sstables::component_type::Statistics:
-        case sstables::component_type::TemporaryStatistics:
         case sstables::component_type::Partitions:
         case sstables::component_type::Rows:
         case sstables::component_type::TemporaryHashes:
@@ -856,7 +854,6 @@ public:
         case sstables::component_type::Index:
         case sstables::component_type::Statistics:
         case sstables::component_type::Summary:
-        case sstables::component_type::TemporaryStatistics:
         case sstables::component_type::Rows:
         case sstables::component_type::Partitions:
         case sstables::component_type::TemporaryHashes:

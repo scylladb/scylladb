@@ -959,16 +959,22 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
         });
 }
 
+future<std::unique_ptr<crc32_digest_file_writer>> sstable::make_digests_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
+    return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([this, comp = component_name(*this, c)] (data_sink sink) mutable {
+        return std::make_unique<crc32_digest_file_writer>(std::move(sink), sstable_buffer_size, comp);
+    });
+}
+
 void sstable::open_sstable(const sstring& origin) {
     _origin = origin;
     generate_toc();
     _storage->open(*this);
 }
 
-void sstable::write_toc(file_writer w) {
+void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
-    do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
+    do_write_simple(*w, [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
@@ -976,6 +982,8 @@ void sstable::write_toc(file_writer w) {
             write(v, w, b);
         }
     });
+
+    _components_digests.toc_digest = w->full_checksum();
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -992,6 +1000,7 @@ void sstable::write_digest(uint32_t full_checksum) {
         auto digest = to_sstring<bytes>(full_checksum);
         write(v, w, digest);
     }, buffer_size);
+    _components_digests.data_digest = full_checksum;
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1048,7 +1057,7 @@ future<> sstable::read_simple(T& component) {
     });
 }
 
-void sstable::do_write_simple(file_writer&& writer,
+void sstable::do_write_simple(file_writer& writer,
                               noncopyable_function<void (version_types, file_writer&)> write_component) {
     write_component(_version, writer);
     _metadata_size_on_disk += writer.offset();
@@ -1063,7 +1072,7 @@ void sstable::do_write_simple(component_type type,
     file_output_stream_options options;
     options.buffer_size = buffer_size;
     auto w = make_component_file_writer(type, std::move(options)).get();
-    do_write_simple(std::move(w), std::move(write_component));
+    do_write_simple(w, std::move(write_component));
 }
 
 template <component_type Type, typename T>
@@ -1073,10 +1082,30 @@ void sstable::write_simple(const T& component) {
     }, sstable_buffer_size);
 }
 
+uint32_t sstable::do_write_simple_with_digest(component_type type,
+        noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
+    auto file_path = filename(type);
+    sstlog.debug("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+
+    file_output_stream_options options;
+    options.buffer_size = buffer_size;
+    auto w = make_digests_component_file_writer(type, std::move(options)).get();
+    do_write_simple(*w, std::move(write_component));
+    return w->full_checksum();
+}
+
+template <component_type Type, typename T>
+uint32_t sstable::write_simple_with_digest(const T& component) {
+    return do_write_simple_with_digest(Type, [&component] (version_types v, file_writer& w) {
+        write(v, w, component);
+    }, sstable_buffer_size);
+}
+
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f);
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&);
+template uint32_t sstable::write_simple_with_digest<component_type::Summary>(const sstables::summary_ka&);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
@@ -1095,7 +1124,8 @@ void sstable::write_compression() {
         return;
     }
 
-    write_simple<component_type::CompressionInfo>(_components->compression);
+    uint32_t digest = write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
+    _components_digests.compression_digest = digest;
 }
 
 void sstable::validate_partitioner() {
@@ -1320,7 +1350,8 @@ future<> sstable::read_partitions_db_footer() {
 }
 
 void sstable::write_statistics() {
-    write_simple<component_type::Statistics>(_components->statistics);
+    auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
+    _components_digests.statistics_digest = digest;
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
@@ -1335,23 +1366,67 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     }
     auto stats = std::make_unique<stats_metadata>(old_stats);
     stats->repaired_at = repaired_at;
-     _components->statistics.contents[metadata_type::Stats] = std::move(stats);
-    rewrite_statistics();
+    _components->statistics.contents[metadata_type::Stats] = std::move(stats);
     return old_repaired_at;
 }
 
-void sstable::rewrite_statistics() {
-    sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
+future<> sstable::copy_components(const sstable& src) {
+    _components = co_await src._components.copy();
+    _recognized_components = src._recognized_components;
+}
 
-    auto lock = get_units(_mutate_sem, 1).get();
-    file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
-    auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::truncate).get();
-    write(_version, w, _components->statistics);
-    w.close();
-    // rename() guarantees atomicity when renaming a file into place.
-    sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+bool sstable::should_update_repaired_at(int64_t repaired_at) const {
+    const stats_metadata& stats = get_stats_metadata();
+    return stats.repaired_at != repaired_at;
+}
+
+future<shared_sstable> sstable::link_with_rewritten_component(
+    std::function<shared_sstable()> sstable_creator,
+    component_type component,
+    std::function<void(sstable&)> modifier) {
+    auto new_sst = sstable_creator();
+    auto generation = new_sst->generation();
+
+    co_await _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla});
+    co_await new_sst->copy_components(*this);
+
+    modifier(*new_sst);
+
+    std::optional<scylla_metadata> metadata;
+    if (has_scylla_component()) {
+        scylla_metadata md;
+        co_await read_simple<component_type::Scylla>(md);
+        metadata = std::move(md);
+    }
+    co_await seastar::async([&] {
+        new_sst->write_component_with_metadata(component, std::move(metadata));
+    });
+    new_sst->_shards = {this_shard_id()};
+    co_await new_sst->seal_sstable(false);
+    co_await new_sst->load_metadata();
+    co_await new_sst->open_data();
+
+    co_return new_sst;
+}
+
+void sstable::write_component_with_metadata(component_type type, std::optional<scylla_metadata> metadata_opt) {
+    if (type != component_type::Statistics) {
+        throw std::invalid_argument("Only Statistics component can be written with metadata");
+    }
+    write_statistics();
+
+    if (!metadata_opt) {
+        return;
+    }
+    auto& metadata = *metadata_opt;
+    auto cd = metadata.data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+    if (cd) {
+        cd->statistics_digest = _components_digests.statistics_digest;
+    } else {
+        metadata.data.set<scylla_metadata_type::ComponentsDigests>(components_digests{.statistics_digest = _components_digests.statistics_digest});
+    }
+    write_simple<component_type::Scylla>(metadata);
+    _components->scylla_metadata = std::move(metadata);
 }
 
 future<> sstable::read_summary() noexcept {
@@ -1543,7 +1618,8 @@ void sstable::write_filter() {
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    write_simple<component_type::Filter>(filter_ref);
+    uint32_t digest = write_simple_with_digest<component_type::Filter>(filter_ref);
+    _components_digests.filter_digest = digest;
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
@@ -2002,6 +2078,8 @@ sstable::read_scylla_metadata() noexcept {
         }
         return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] {
             _features = _components->scylla_metadata->get_features();
+            _components_digests = _components->scylla_metadata->get_components_digests();
+            _components->digest = _components_digests.data_digest;
         });
     });
 }
@@ -2091,6 +2169,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(components_digests(_components_digests));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
@@ -2492,19 +2571,15 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<> sstable::snapshot(const sstring& name) const {
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name));
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
-    // just in case, not really needed as the sstable is not yet in use while in the upload dir
-    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3078,37 +3153,51 @@ void sstable::set_sstable_level(uint32_t new_level) {
     s.sstable_level = new_level;
 }
 
-future<> sstable::mutate_sstable_level(uint32_t new_level) {
+std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
+    switch (c) {
+    case component_type::Index:
+        return _components_digests.index_digest;
+    case component_type::Summary:
+        return _components_digests.summary_digest;
+    case component_type::TOC:
+        return _components_digests.toc_digest;
+    case component_type::CompressionInfo:
+        return _components_digests.compression_digest;
+    case component_type::Filter:
+        return _components_digests.filter_digest;
+    case component_type::Partitions:
+        return _components_digests.partitions_digest;
+    case component_type::Rows:
+        return _components_digests.rows_digest;
+    case component_type::Data:
+        return _components_digests.data_digest;
+    case component_type::Statistics:
+        return _components_digests.statistics_digest;
+    default:
+        return std::nullopt;
+    }
+}
+
+void sstable::mutate_sstable_level(uint32_t new_level) {
     if (!has_component(component_type::Statistics)) {
-        return make_ready_future<>();
+        return;
     }
 
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        return make_ready_future<>();
+        return;
     }
 
     auto& p = entry->second;
     if (!p) {
-        return make_exception_future<>(std::runtime_error("Statistics is malformed"));
+        throw std::runtime_error("Statistics is malformed");
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
-        return make_ready_future<>();
+        return;
     }
 
     s.sstable_level = new_level;
-    // Technically we don't have to write the whole file again. But the assumption that
-    // we will always write sequentially is a powerful one, and this does not merit an
-    // exception.
-    return seastar::async([this] {
-        // This is not part of the standard memtable flush path, but there is no reason
-        // to come up with a class just for that. It is used by the snapshot/restore mechanism
-        // which comprises mostly hard link creation and this operation at the end + this operation,
-        // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
-        // priority enough so we will use the default priority
-        rewrite_statistics();
-    });
 }
 
 int sstable::compare_by_max_timestamp(const sstable& other) const {
@@ -3414,9 +3503,6 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 
 future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
-    // Serialize with other calls to unlink or potentially ongoing mutations.
-    auto lock = co_await get_units(_mutate_sem, 1);
-
     _unlinked = true;
     _on_delete(*this);
 

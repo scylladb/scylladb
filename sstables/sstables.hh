@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "sstables/writer.hh"
 #include "version.hh"
 #include "shared_sstable.hh"
 #include "open_info.hh"
@@ -629,9 +630,7 @@ private:
     size_t _total_memory_reclaimed{0};
     bool _unlinked{false};
 
-    // The mutate semaphore is used to serialize operations like rewrite_statistics
-    // with linking or moving the sstable between directories.
-    mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
+    components_digests _components_digests;
 public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -652,9 +651,15 @@ private:
 
     template <component_type Type, typename T>
     void write_simple(const T& comp);
-    void do_write_simple(file_writer&& writer,
+    void do_write_simple(file_writer& writer,
                          noncopyable_function<void (version_types, file_writer&)> write_component);
     void do_write_simple(component_type type,
+            noncopyable_function<void (version_types version, file_writer& writer)> write_component,
+            unsigned buffer_size);
+
+    template <component_type Type, typename T>
+    uint32_t write_simple_with_digest(const T& comp);
+    uint32_t do_write_simple_with_digest(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);
 
@@ -667,6 +672,9 @@ private:
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
+
+    future<std::unique_ptr<crc32_digest_file_writer>> make_digests_component_file_writer(component_type c, file_output_stream_options options,
+        open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     void generate_toc();
     void open_sstable(const sstring& origin);
@@ -698,7 +706,8 @@ private:
     future<> read_summary() noexcept;
 
     void write_summary() {
-        write_simple<component_type::Summary>(_components->summary);
+        uint32_t digest = write_simple_with_digest<component_type::Summary>(_components->summary);
+        _components_digests.summary_digest = digest;
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -709,9 +718,6 @@ private:
 
     future<> read_statistics();
     void write_statistics();
-    // Rewrite statistics component by creating a temporary Statistics and
-    // renaming it into place of existing one.
-    void rewrite_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -828,7 +834,7 @@ private:
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
     // runs in async context (called from storage::open)
-    void write_toc(file_writer w);
+    void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
     static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
 public:
@@ -1004,7 +1010,7 @@ public:
         return _components->compression;
     }
 
-    future<> mutate_sstable_level(uint32_t);
+    void mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
         return _components->summary;
@@ -1017,6 +1023,12 @@ public:
     std::optional<uint32_t> get_digest() const {
         return _components->digest;
     }
+
+    components_digests& get_components_digests() {
+        return _components_digests;
+    }
+
+    std::optional<uint32_t> get_component_digest(component_type c) const;
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
@@ -1119,9 +1131,19 @@ public:
     service::session_id being_repaired;
 public:
     void mark_as_being_repaired(const service::session_id& id);
-    // This function must run inside a seastar thread since it calls
-    // rewrite_statistics which must run inside a seastar thread.
     int64_t update_repaired_at(int64_t repaired_at);
+    future<> copy_components(const sstable& src);
+    bool should_update_repaired_at(int64_t repaired_at) const;
+    void write_component_with_metadata(component_type type, std::optional<scylla_metadata> metadata_opt);
+
+    // Creates a new sstable by linking all sstable components except for the specified component,
+    // which is created by calling the provided sstable_creator function and then written to the disc.
+    // The modifier function is called on the new sstable before writing the component
+    // Returns the newly created and sealed sstable.
+    future<shared_sstable> link_with_rewritten_component(
+            std::function<shared_sstable()> sstable_creator,
+            component_type component,
+            std::function<void(sstable&)> modifier);
 };
 
 // Validate checksums

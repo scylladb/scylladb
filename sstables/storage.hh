@@ -93,6 +93,12 @@ class storage {
     }
 
 public:
+    // Clone an sstable to a new generation, hard-linking all components except those in excluded_components.
+    // The new sstable is created with a TemporaryTOC, so it will be removed on restart if not sealed.
+    virtual future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
+            const std::unordered_set<component_type>& excluded_components) const {
+        SCYLLA_ASSERT(false && "link_with_excluded_components not implemented");
+    }
     virtual ~storage() {}
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage

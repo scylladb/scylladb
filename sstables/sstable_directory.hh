@@ -110,8 +110,8 @@ public:
             scan_descriptors temp_toc_found;
             scan_descriptors_map descriptors;
 
-            // SSTable files to be deleted: things with a Temporary TOC, missing TOC files,
-            // TemporaryStatistics, etc. Not part of the scan state, because we want to do a 2-phase
+            // SSTable files to be deleted: things with a Temporary TOC, missing TOC files, etc.
+            // Not part of the scan state, because we want to do a 2-phase
             // delete: maybe one of the shards will have signaled an error. And in the case of an error
             // we don't want to delete anything.
             std::unordered_set<sstring> files_for_removal;
