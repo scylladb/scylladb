@@ -67,6 +67,12 @@ Note that participation in this is opt-in for reads, in that there is a separate
 
 When reaching the kill limit, the semaphore will start throwing `std::bad_alloc` from all memory consumption registering API calls. This is a drastic measure which will result in reads being killed. This is meant to provide a hard upper limit on the memory consumption of all reads.
 
+## Shared Memory Pool
+
+Semaphores can be configured to borrow memory from a shared pool (`reader_concurrency_semaphore_shared_pool`) managed by the `reader_concurrency_semaphore_group` when their dedicated memory is exhausted. This feature is optional, allowing some semaphores to use the shared pool while others remain restricted to their dedicated limits.
+
+Borrowing also raises the anti-OOM thresholds. The serialize and kill limits are evaluated against the consumption a semaphore must cover from its own dedicated memory, i.e. its total consumption minus the pool memory still available to it (its current borrow plus the still-free pool). Equivalently, the effective serialize and kill limits are raised additively by that available pool memory (the multiplier is not applied to the raised amount). This keeps the pool useful for concurrency rather than just eviction-avoidance: serialization only engages once consumption exceeds the serialize limit even after the pool has been fully drawn down. Because the available pool memory fluctuates as other semaphores borrow and repay, the point at which a semaphore starts serializing fluctuates too.
+
 ## Permit States
 
 Permits are in one of the following states:
