@@ -475,10 +475,36 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
 }
 
 tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
-        : _log2_tablets(log2ceil(tablet_count)) {
-    if (tablet_count != 1ul << _log2_tablets) {
+    : tablet_map(dht::get_uniform_tokens(tablet_count), with_raft_info)
+{ }
+
+tablet_map::tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool with_raft_info)
+    : _tablet_ids(last_tokens.size())
+    , _last_tokens(std::move(last_tokens))
+{
+    if (_last_tokens.size() != 1ul << _tablet_ids.log2_count()) {
+        on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", _last_tokens.size()));
+    }
+
+    _tablets.resize(_last_tokens.size());
+    if (with_raft_info) {
+        _raft_info.resize(_last_tokens.size());
+    }
+
+    std::optional<tablet_id> tid = first_tablet();
+    for (auto t : _last_tokens) {
+        _tablet_ids.push_back(t, *tid);
+        tid = next_tablet(*tid);
+    }
+}
+
+tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::initialized_later)
+    : _tablet_ids(tablet_count)
+{
+    if (tablet_count != 1ul << _tablet_ids.log2_count()) {
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
+    _last_tokens.reserve(tablet_count);
     _tablets.resize(tablet_count);
     if (with_raft_info) {
         _raft_info.resize(tablet_count);
@@ -486,11 +512,20 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, 
-        _repair_scheduler_config, _raft_info);
+    return tablet_map(_tablet_ids, _last_tokens, _tablets, _transitions, _resize_decision, _resize_task_info,
+                      _repair_scheduler_config, _raft_info);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
+    auto ids = co_await _tablet_ids.clone_gently();
+
+    auto last_tokens = utils::chunked_vector<dht::raw_token>();
+    last_tokens.reserve(_last_tokens.size());
+    for (const auto& t : _last_tokens) {
+        last_tokens.push_back(t);
+        co_await coroutine::maybe_yield();
+    }
+
     tablet_container tablets;
     tablets.reserve(_tablets.size());
     for (const auto& t : _tablets) {
@@ -512,8 +547,8 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, 
-        _resize_task_info, _repair_scheduler_config, std::move(raft_info));
+    co_return tablet_map(std::move(ids), std::move(last_tokens), std::move(tablets), std::move(transitions),
+                         _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info));
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -528,7 +563,7 @@ const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
 }
 
 tablet_id tablet_map::get_tablet_id(token t) const {
-    return tablet_id(dht::compaction_group_of(_log2_tablets, t));
+    return _tablet_ids.get_tablet_id(t);
 }
 
 dht::token tablet_map::get_split_token(tablet_id id) const {
@@ -543,13 +578,9 @@ std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side
     return {id, tablet_range_side(id_after_split & 0x1)};
 }
 
-dht::token tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
-    return dht::last_token_of_compaction_group(log2_tablets, size_t(id));
-}
-
 dht::token tablet_map::get_last_token(tablet_id id) const {
     check_tablet_id(id);
-    return get_last_token(id, _log2_tablets);
+    return dht::token(_last_tokens[size_t(id)]);
 }
 
 dht::token tablet_map::get_first_token(tablet_id id) const {
@@ -653,6 +684,13 @@ void tablet_map::set_tablet(tablet_id id, tablet_info info) {
     _tablets[size_t(id)] = std::move(info);
 }
 
+void tablet_map::emplace_tablet(tablet_id id, dht::token last_token, tablet_info info) {
+    check_tablet_id(id);
+    _tablet_ids.push_back(last_token, id);
+    _last_tokens.emplace_back(last_token);
+    _tablets[size_t(id)] = std::move(info);
+}
+
 void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info info) {
     check_tablet_id(id);
     _transitions.insert_or_assign(id, std::move(info));
@@ -718,7 +756,9 @@ bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
 }
 
 future<> tablet_map::clear_gently() {
-    return utils::clear_gently(_tablets);
+    co_await utils::clear_gently(_tablets);
+    co_await utils::clear_gently(_last_tokens);
+    co_await utils::clear_gently(_tablet_ids);
 }
 
 const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id id) const {
@@ -875,8 +915,18 @@ tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const 
     return tablet_repair_incremental_mode_from_name.at(name);
 }
 
+size_t tablet_id_map::external_memory_usage() const {
+    auto result = _buckets.external_memory_usage();
+    for (auto&& bucket : _buckets) {
+        result += bucket.external_memory_usage();
+    }
+    return result;
+}
+
 size_t tablet_map::external_memory_usage() const {
     size_t result = _tablets.external_memory_usage();
+    result += _tablet_ids.external_memory_usage();
+    result += _last_tokens.external_memory_usage();
     for (auto&& tablet : _tablets) {
         result += tablet.replicas.external_memory_usage();
     }
@@ -1706,6 +1756,86 @@ rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc
             | std::ranges::to<std::vector<sstring>>();
     }
     return {};
+}
+
+void tablet_id_map::push_back(dht::token last_token, tablet_id id) {
+    auto i = dht::compaction_group_of(_log2_tablets, last_token);
+
+    if (i + 1 < _buckets.size()) {
+        on_internal_error(tablet_logger, fmt::format("tablet_id_map::push_back: Order violated: last_token={}, id={}, bucket={}, buckets={}", last_token, id, i,
+                fmt::join(_buckets | std::views::transform([](auto&& b) {
+                    return fmt::format("[{}]", fmt::join(b | std::views::transform([](auto&& e) {
+                        return fmt::format("({}, {})", e.last_token.value, e.id);
+                    }), ", "));
+                }), ", ")));
+    }
+
+    // There are 3 cases:
+    // 1) last_token falls into the last bucket
+    // 2) last_token falls into a new bucket, which is the next after the last one
+    // 3) last_token falls into a new bucket, covering whole buckets in between
+
+    // Maybe close an unclosed bucket
+    if (_buckets.size() > 0 && i >= _buckets.size()) {
+        auto last = dht::last_token_of_compaction_group(_log2_tablets, _buckets.size() - 1);
+        if (_buckets.back().back().last_token < last) {
+            _buckets.back().push_back(tablet_range{dht::raw_token(last), id});
+        }
+    }
+
+    // Close middle buckets covered fully.
+    while (_buckets.size() < i) {
+        _buckets.push_back({tablet_range{dht::raw_token(dht::last_token_of_compaction_group(_log2_tablets, _buckets.size())), id}});
+    }
+
+    if (_buckets.size() == i) {
+        _buckets.push_back({tablet_range{dht::raw_token(last_token), id}});
+    } else {
+        assert(_buckets.size() - 1 == i);
+        _buckets.back().push_back(tablet_range{dht::raw_token(last_token), id});
+    }
+}
+
+tablet_id tablet_id_map::get_tablet_id(dht::token t) const {
+    auto i = dht::compaction_group_of(_log2_tablets, t);
+    if (i >= _buckets.size()) {
+        throw std::out_of_range(fmt::format("token_id_map: No mapping for {}, bucket: {} bucket count: {}", t, i, _buckets.size()));
+    }
+    auto& bucket = _buckets[i];
+    if (bucket.size() <= 8) { // linear search
+        for (auto&& e: bucket) {
+            if (t <= e.last_token) {
+                return e.id;
+            }
+        }
+    } else { // binary search
+        auto it = std::lower_bound(bucket.begin(), bucket.end(), t, [] (const tablet_range& tr, dht::token token) {
+            return tr.last_token < token;
+        });
+        if (it != bucket.end()) {
+            return it->id;
+        }
+    }
+    if (t.is_maximum()) {
+        return bucket.back().id;
+    }
+    throw std::out_of_range(fmt::format("token_id_map: No mapping for {} in bucket {}", t, i));
+}
+
+future<tablet_id_map> tablet_id_map::clone_gently() const {
+    tablet_id_map result(_buckets.size());
+    for (auto&& bucket : _buckets) {
+        result._buckets.emplace_back(bucket);
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(result);
+}
+
+future<> tablet_id_map::clear_gently() {
+    while (!_buckets.empty()) {
+        _buckets.pop_back();
+        co_await coroutine::maybe_yield();
+    }
 }
 
 }

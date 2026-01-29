@@ -191,6 +191,29 @@ void mutate_tablets(cql_test_env& e, seastar::noncopyable_function<future<>(tabl
     mutate_tablets(e, guard, std::move(mutator));
 }
 
+SEASTAR_TEST_CASE(test_tablet_id_map) {
+    // TODO: Test more corner cases
+
+    // Exercise different density of buckets by scaling token space, out of which we pick only first few tokens.
+    for (int num_tokens : {7, 8, 11, 16}) {
+        auto tokens = dht::get_uniform_tokens(num_tokens);
+
+        auto map = tablet_id_map(3);
+        map.push_back(tokens[1], tablet_id(0));
+        map.push_back(tokens[3], tablet_id(1));
+        map.push_back(tokens[5], tablet_id(2));
+
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[0]), tablet_id(0));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[1]), tablet_id(0));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[2]), tablet_id(1));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[3]), tablet_id(1));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[4]), tablet_id(2));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[5]), tablet_id(2));
+        BOOST_REQUIRE_THROW((void) map.get_tablet_id(tokens[6]), std::out_of_range);
+    }
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
