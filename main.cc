@@ -1150,6 +1150,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
             dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
             dbcfg.gossip_scheduling_group = create_scheduling_group("gossip", "gms", 1000).get();
+            debug::gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
             dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
             dbcfg.available_memory = memory::stats().total_memory();

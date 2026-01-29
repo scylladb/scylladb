@@ -125,6 +125,7 @@
 #include "utils/labels.hh"
 #include "view_info.hh"
 #include "raft/raft.hh"
+#include "debug.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -173,11 +174,10 @@ void check_raft_rpc_scheduling_group(const replica::database& db, const gms::fea
         return;
     }
 
-    const auto gossip_scheduling_group = db.get_gossip_scheduling_group();
-    if (current_scheduling_group() != gossip_scheduling_group) {
+    if (current_scheduling_group() != debug::gossip_scheduling_group) {
         on_internal_error_noexcept(
-                slogger, seastar::format("Raft group0 RPCs should be executed in the gossip scheduling group [{}], current group is [{}], operation [{}].",
-                                 gossip_scheduling_group.name(), current_scheduling_group().name(), rpc_name));
+                slogger, seastar::format("Raft group0 RPCs should be executed in the gossip scheduling group, current group is [{}], operation [{}].",
+                                 current_scheduling_group().name(), rpc_name));
     }
 }
 
