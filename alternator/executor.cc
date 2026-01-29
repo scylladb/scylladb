@@ -164,7 +164,7 @@ static map_type attrs_type() {
 
 static const column_definition& attrs_column(const schema& schema) {
     const column_definition* cdef = schema.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME));
-    SCYLLA_ASSERT(cdef);
+    throwing_assert(cdef);
     return *cdef;
 }
 
@@ -1649,7 +1649,7 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
 }
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization, const db::tablets_mode_t::mode tablets_mode) {
-    SCYLLA_ASSERT(this_shard_id() == 0);
+    throwing_assert(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
@@ -2837,14 +2837,12 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+        throwing_assert(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
-    if (!cas_shard) {
-        on_internal_error(elogger, "cas_shard is not set");
-    }
+    throwing_assert(cas_shard);
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -5413,7 +5411,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
-    SCYLLA_ASSERT(total_segments > 1 && segment >= 0 && segment < total_segments);
+    throwing_assert(total_segments > 1 && segment >= 0 && segment < total_segments);
     uint64_t delta = std::numeric_limits<uint64_t>::max() / total_segments;
     return dht::token::from_int64(std::numeric_limits<int64_t>::min() + delta * segment);
 }
