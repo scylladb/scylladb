@@ -18,7 +18,7 @@ RUN echo install_weak_deps=False >> /etc/dnf/dnf.conf
 # Install dependencies using bind-mounted source tree (read-only from build context)
 RUN --mount=type=bind,source=.,target=/src \
     dnf -y update && \
-    cd /src && ./install-dependencies.sh
+    cd /src && ./install-dependencies.sh --future
 
 # Build dependencies for GCC and Clang
 RUN dnf -y install git flex texinfo gmp-devel mpfr-devel libmpc-devel zlib-devel \
