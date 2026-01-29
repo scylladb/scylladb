@@ -124,6 +124,7 @@ There are several test directories that are excluded from orchestration by `test
 - test/cql
 - test/cqlpy
 - test/rest_api
+- test/scylla_gdb
 
 This means that `test.py` will not run tests directly, but will delegate all work to `pytest`.
 That's why all these directories do not have `suite.yaml` files.

@@ -1,0 +1,85 @@
+# Copyright 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+"""
+Tests for commands, that need a some task to work on.
+Each only checks that the command does not fail - but not what it does or returns.
+"""
+
+import re
+
+import pytest
+
+from test.scylla_gdb.conftest import execute_gdb_command
+
+pytestmark = [
+    pytest.mark.skip_mode(
+        mode=["dev", "debug"],
+        reason="Scylla was built without debug symbols; use release mode",
+    ),
+    pytest.mark.skip_mode(
+        mode=["dev", "debug", "release"],
+        platform_key="aarch64",
+        reason="GDB is broken on aarch64: https://sourceware.org/bugzilla/show_bug.cgi?id=27886",
+    ),
+]
+
+
+@pytest.fixture(scope="module")
+def task(gdb_process):
+    """
+    Finds a Scylla fiber task using a `find_vptrs()` loop.
+
+    Since Scylla is fresh‑booted, `get_local_tasks()` returns nothing.
+    Nevertheless, a `find_vptrs()` scan can still discover the first task
+    skeleton created by `http_server::do_accept_one` (often the earliest
+    “Scylla fiber” to appear).
+    """
+    result = execute_gdb_command(gdb_process, full_command="python get_task()")
+    match = re.search(r"task=(\d+)", result)
+    assert match is not None, f"No task was present in {result.stdout}"
+    task = match.group(1) if match else None
+    return task
+
+
+def test_fiber(gdb_process, task):
+    execute_gdb_command(gdb_process, f"fiber {task}")
+
+
+@pytest.fixture(scope="module")
+def coroutine_task(gdb_process, scylla_server):
+    """
+    Finds a coroutine task, similar to the `task` fixture.
+
+    This fixture executes the `coroutine_config` script in GDB to locate a
+    specific coroutine task. If the task is not found, the `coroutine_debug_config`
+    debugging script is called which checks if scylla_find agrees with find_vptrs.
+
+    This debugging script then forces a coredump to capture additional
+    diagnostic information before the test is marked as failed.
+    Coredump is saved to `testlog/release/{scylla}`.
+    """
+    result = execute_gdb_command(gdb_process, full_command="python get_coroutine()")
+    match = re.search(r"coroutine_config=\s*(.*)", result)
+    if not match:
+        result = execute_gdb_command(
+            gdb_process,
+            full_command=f"python coroutine_debug_config('{scylla_server.workdir}')",
+        )
+        pytest.fail(
+            f"Failed to find coroutine task. Debugging logs have been collected\n"
+            f"Debugging code result: {result}\n"
+        )
+
+    return match.group(1).strip()
+
+
+def test_coroutine_frame(gdb_process, coroutine_task):
+    """
+    Offsets the pointer by two words to shift from the outer coroutine frame
+    to the inner `seastar::task`, as required by `$coro_frame`, which expects
+    a `seastar::task*`.
+    """
+    execute_gdb_command(
+        gdb_process, full_command=f"p *$coro_frame({coroutine_task} + 16)"
+    )
