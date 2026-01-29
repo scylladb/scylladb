@@ -15,9 +15,14 @@
 #include "alternator/serialization.hh"
 
 #include "alternator/expressions.hh"
+#include "cdc/generation.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
+
+namespace alternator {
+    const cdc::stream_id &find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id> &prev_streams, const cdc::stream_id &child);
+}
 
 static std::map<std::string, std::string> strings {
     {"", ""},
@@ -431,4 +436,40 @@ SEASTAR_TEST_CASE(test_parsed_expression_cache_resize) {
     cache.cache.reset();
 
     co_return;
+}
+
+static cdc::stream_id generate_stream_id_from_int(std::int64_t val)
+{
+    auto token = dht::token::from_int64(val);
+    return cdc::stream_id{ token, 1 };
+}
+
+static utils::chunked_vector<cdc::stream_id> generate_streams_generation(std::initializer_list<std::int64_t> vals)
+{
+    utils::chunked_vector<cdc::stream_id> gen;
+    for (auto val : vals) {
+        gen.push_back(generate_stream_id_from_int(val));
+    }
+    return gen;
+}
+
+BOOST_AUTO_TEST_CASE(find_parent_shard_in_previous_generation) {
+
+    auto gen = generate_streams_generation({ -10, 10 });
+
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(-20)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(-10)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(0)) == gen[1]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(10)) == gen[1]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(20)) == gen[0]);
+}
+
+BOOST_AUTO_TEST_CASE(find_parent_shard_in_previous_generation_one_value) {
+    auto gen = generate_streams_generation({ -10 });
+
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(-20)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(-10)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(0)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(10)) == gen[0]);
+    BOOST_CHECK(alternator::find_parent_shard_in_previous_generation({}, gen, generate_stream_id_from_int(20)) == gen[0]);
 }
