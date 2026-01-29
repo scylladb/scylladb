@@ -520,7 +520,6 @@ def test_tojson_decimal_high_mantissa2(cql, table1):
 
 # Reproducers for issue #8077: SELECT JSON on a function call should result
 # in the same JSON strings as it does on Cassandra.
-@pytest.mark.xfail(reason="issue #8077")
 def test_select_json_function_call(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, 17) USING TIMESTAMP 1234")
