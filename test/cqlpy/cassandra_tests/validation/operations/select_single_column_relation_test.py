@@ -494,7 +494,6 @@ def testLimitWithUnset(cql, test_keyspace):
                 [2]
         )
 
-@pytest.mark.xfail(reason="#10358 - comparison with unset doesn't generate error")
 def testWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, i int, j int, s text, PRIMARY KEY (k,i,j))") as table:
         execute(cql, table, "CREATE INDEX ON %s (s)")
