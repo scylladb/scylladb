@@ -257,4 +257,17 @@ token last_token_of_compaction_group(unsigned most_significant_bits, size_t grou
     return bias(n);
 }
 
+utils::chunked_vector<dht::raw_token> get_uniform_tokens(size_t count) {
+    utils::chunked_vector<dht::raw_token> tokens;
+    tokens.reserve(count);
+
+    for (size_t i = 1; i <= count; ++i) {
+        uint64_t n = (uint128_t(i) * std::numeric_limits<uint64_t>::max()) / count;
+        tokens.push_back(raw_token{bias(n)});
+        assert(tokens.back().value != std::numeric_limits<int64_t>::min()); // See token::normalize()
+    }
+
+    return tokens;
+}
+
 } // namespace dht

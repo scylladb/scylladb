@@ -4853,6 +4853,21 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
     return make_ready_future<>();
 }
 
+// We want to generate the same uniform boundaries if tablet count is a power-of-two as
+// we did before implementing support for arbitrary token boundaries.
+// So that when advertising a "power of two" layout, e.g in the snapshot descriptor,
+// it means the same thing for all scylla versions.
+SEASTAR_THREAD_TEST_CASE(test_get_uniform_tokens_is_compatible_with_dht_last_token_of_compaction_group) {
+    for (auto log2count : {0ul, 1ul, 2ul, 3ul, 10ul}) {
+        auto tokens = dht::get_uniform_tokens(1ul << log2count);
+        for (size_t i = 0; i < tokens.size(); i++) {
+            testlog.debug("i {}, token {}", i, tokens[i]);
+            BOOST_REQUIRE_EQUAL(tokens[i], dht::last_token_of_compaction_group(log2count, i));
+            thread::maybe_yield();
+        }
+    }
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);

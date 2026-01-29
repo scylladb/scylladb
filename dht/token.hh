@@ -358,6 +358,10 @@ inline constexpr token bias(uint64_t n) {
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
 token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
+// Generates 'count' tokens uniformly distributed in the token ring. Sorted.
+// All values are in the range [first_token(), last_token()]
+utils::chunked_vector<dht::raw_token> get_uniform_tokens(size_t count);
+
 struct token_comparator {
     // Return values are those of a trichotomic comparison.
     constexpr std::strong_ordering operator()(const token& t1, const token& t2) const noexcept {
