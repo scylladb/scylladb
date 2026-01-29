@@ -4901,6 +4901,20 @@ SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     return make_ready_future<>();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
+    for (auto tablet_count : {1ul, 2ul, 128ul, 1ul << log2ceil(100'000ul)}) {
+        locator::tablet_map tmap(tablet_count);
+
+        for (size_t id = 0; id < tablet_count; id++) {
+            testlog.debug("tablet_count {}, id {}", tablet_count, id);
+            auto split_tok = tmap.get_split_token(tablet_id(id));
+            BOOST_REQUIRE_EQUAL(split_tok, dht::last_token_of_compaction_group(log2ceil(tablet_count * 2), id * 2));
+        }
+
+        thread::maybe_yield();
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
     auto cfg = tablet_cql_test_config();
     cfg.initial_tablets = std::bit_floor(smp::count);

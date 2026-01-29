@@ -531,19 +531,21 @@ tablet_id tablet_map::get_tablet_id(token t) const {
     return tablet_id(dht::compaction_group_of(_log2_tablets, t));
 }
 
-std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side(token t) const {
-    auto id_after_split = dht::compaction_group_of(_log2_tablets + 1, t);
-    auto current_id = id_after_split >> 1;
-    return {tablet_id(current_id), tablet_range_side(id_after_split & 0x1)};
+dht::token tablet_map::get_split_token(tablet_id id) const {
+    auto last = get_last_token(id);
+    auto prev_last = id == first_tablet() ? dht::minimum_token() : get_last_token(tablet_id(size_t(id) - 1));
+    return token::midpoint(prev_last, last);
 }
 
-dht::token tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
-    return dht::last_token_of_compaction_group(log2_tablets, size_t(id));
+std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side(token t) const {
+    auto id = get_tablet_id(t);
+    auto id_after_split = t > get_split_token(id);
+    return {id, tablet_range_side(id_after_split & 0x1)};
 }
 
 dht::token tablet_map::get_last_token(tablet_id id) const {
     check_tablet_id(id);
-    return get_last_token(id, _log2_tablets);
+    return dht::last_token_of_compaction_group(_log2_tablets, size_t(id));
 }
 
 dht::token tablet_map::get_first_token(tablet_id id) const {
@@ -554,24 +556,24 @@ dht::token tablet_map::get_first_token(tablet_id id) const {
     }
 }
 
-dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) const {
+dht::token_range tablet_map::get_token_range(tablet_id id) const {
+    check_tablet_id(id);
     if (id == first_tablet()) {
-        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id, log2_tablets), true});
+        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id), true});
     } else {
-        return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1), log2_tablets), false}, {get_last_token(id, log2_tablets), true});
+       return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1)), false}, {get_last_token(id), true});
     }
 }
 
-dht::token_range tablet_map::get_token_range(tablet_id id) const {
-    check_tablet_id(id);
-    return get_token_range(id, _log2_tablets);
-}
-
 dht::token_range tablet_map::get_token_range_after_split(const token& t) const noexcept {
-    // when the tablets are split, the tablet count doubles, (i.e.) _log2_tablets increases by 1
-    const auto log2_tablets_after_split = _log2_tablets + 1;
-    auto id_after_split = tablet_id(dht::compaction_group_of(log2_tablets_after_split, t));
-    return get_token_range(id_after_split, log2_tablets_after_split);
+    auto id = get_tablet_id(t);
+    auto split_point = get_split_token(id);
+    auto r = get_token_range(id);
+    if (t <= split_point) {
+        return dht::token_range::make(*r.start_copy(), {split_point, true});
+    } else {
+        return dht::token_range::make({split_point, false}, *r.end_copy());
+    }
 }
 
 auto tablet_replica_comparator(const locator::topology& topo) {

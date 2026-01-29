@@ -586,13 +586,6 @@ private:
         , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
     {}
-
-    /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
-    dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
-
-    /// Returns token_range which contains all tokens owned by the specified tablet
-    /// when the tablet_count is `1 << log2_tablets`.
-    dht::token_range get_token_range(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
     ///
@@ -730,6 +723,10 @@ public:
 
     /// Returns the token_range in which the given token will belong to after a tablet split
     dht::token_range get_token_range_after_split(const token& t) const noexcept;
+
+    /// Returns the token which will become the last token of the lower sibling post-split.
+    /// The higher sibling will own (get_split_token(id), get_last_token(id)].
+    dht::token get_split_token(tablet_id id) const;
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
