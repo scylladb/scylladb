@@ -94,6 +94,8 @@ private:
 
     future<> maybe_migrate_v1_to_v2();
 
+    future<all_batches_replayed> replay_all_failed_batches_v1(post_replay_cleanup cleanup);
+    future<all_batches_replayed> replay_all_failed_batches_v2(post_replay_cleanup cleanup);
     future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
