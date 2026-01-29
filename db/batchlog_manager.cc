@@ -310,7 +310,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
-    auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
+    utils::rate_limiter limiter(throttle);
 
     auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
 
@@ -325,7 +325,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
-    auto batch = [this, cleanup, limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         const auto stage = static_cast<batchlog_stage>(row.get_as<int8_t>("stage"));
         const auto batch_shard = row.get_as<int32_t>("shard");
         auto written_at = row.get_as<db_clock::time_point>("written_at");
@@ -403,7 +403,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
                     // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
                     // in both cases.
                     // FIXME: verify that the above is reasonably true.
-                    co_await limiter->reserve(size);
+                    co_await limiter.reserve(size);
                     _stats.write_attempts += mutations.size();
                     auto timeout = db::timeout_clock::now() + write_timeout;
                     if (cleanup) {
