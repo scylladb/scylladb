@@ -67,6 +67,7 @@ struct raw_cql_test_config {
     bool use_prepared = true;
     bool create_non_superuser = false;
     unsigned tables = 1;
+    std::string json_result_file;
 
     sharded<abort_source>* as = nullptr;
 };
@@ -726,7 +727,26 @@ static void workload_main(raw_cql_test_config cfg) {
             co_await do_request(c, cfg);
         }
     }, cfg.concurrency_per_connection * cfg.connections_per_shard, cfg.duration_in_seconds, cfg.operations_per_shard, !cfg.continue_after_error);
-    std::cout << aggregated_perf_results(results) << std::endl;
+    aggregated_perf_results agg(results);
+    std::cout << agg << std::endl;
+    if (!cfg.json_result_file.empty()) {
+        Json::Value params;
+        params["workload"] = cfg.workload;
+        params["partitions"] = cfg.partitions;
+        params["tables"] = cfg.tables;
+        params["duration"] = cfg.duration_in_seconds;
+        params["operations_per_shard"] = cfg.operations_per_shard;
+        params["concurrency_per_connection"] = cfg.concurrency_per_connection;
+        params["connections_per_shard"] = cfg.connections_per_shard;
+        params["username"] = cfg.username;
+        params["remote_host"] = cfg.remote_host;
+        params["connection_per_request"] = cfg.connection_per_request;
+        params["use_prepared"] = cfg.use_prepared;
+        params["create_non_superuser"] = cfg.create_non_superuser;
+        params["cpus"] = smp::count;
+
+        perf::write_json_result(cfg.json_result_file, agg, params, cfg.workload);
+    }
 }
 
 static future<> run_standalone(raw_cql_test_config c) {
@@ -778,7 +798,8 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
             ("create-non-superuser", bpo::value<bool>()->default_value(false), "create a non-superuser role using username/password as superuser credentials")
             ("remote-host", bpo::value<std::string>()->default_value(""), "remote host to connect to, leave empty to run in-process server")
             ("connection-per-request", bpo::value<bool>()->default_value(false), "create a fresh connection for every request")
-            ("use-prepared", bpo::value<bool>()->default_value(true), "use prepared statements");
+            ("use-prepared", bpo::value<bool>()->default_value(true), "use prepared statements")
+            ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to");
         bpo::variables_map vm;
         bpo::store(bpo::command_line_parser(ac,av).options(opts_desc).allow_unregistered().run(), vm);
 
@@ -796,6 +817,7 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
         c.remote_host = vm["remote-host"].as<std::string>();
         c.connection_per_request = vm["connection-per-request"].as<bool>();
         c.use_prepared = vm["use-prepared"].as<bool>();
+        c.json_result_file = vm["json-result"].as<std::string>();
 
         if (!c.username.empty() && c.password.empty()) {
             std::cerr << "--username specified without --password" << std::endl;
