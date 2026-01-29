@@ -90,6 +90,12 @@ public:
 
 private:
     enum class membership_change { add, remove };
+    struct record final {
+        sstring name;
+        bool is_superuser;
+        bool can_login;
+        role_set member_of;
+    };
 
     future<> create_legacy_metadata_tables_if_missing() const;
 
@@ -107,6 +113,14 @@ private:
     future<> legacy_modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
 
     future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change, ::service::group0_batch& mc);
+
+    future<std::optional<record>> legacy_find_record(std::string_view role_name);
+    future<std::optional<record>> find_record(std::string_view role_name);
+    future<record> require_record(std::string_view role_name);
+    future<> collect_roles(
+            std::string_view grantee_name,
+            bool recurse,
+            role_set& roles);
 };
 
 } // namespace auth
