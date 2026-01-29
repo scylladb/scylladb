@@ -3,7 +3,7 @@
 Incremental Repair
 ==================
 
-ScyllaDB's standard repair process scans and processes all the data on a node, regardless of whether it has changed since the last repair. This operation can be resource-intensive and time-consuming. The Incremental Repair feature provides a much more efficient and lightweight alternative for maintaining data consistency.
+ScyllaDB's standard `repair </operating-scylla/procedures/maintenance/repair>`_ process scans and processes all the data on a node, regardless of whether it has changed since the last repair. This operation can be resource-intensive and time-consuming. The Incremental Repair feature provides a much more efficient and lightweight alternative for maintaining data consistency.
 
 The core idea of incremental repair is to repair only the data that has been written or changed since the last repair was run. It intelligently skips data that has already been verified, dramatically reducing the time, I/O, and CPU resources required for the repair operation.
 
@@ -37,7 +37,12 @@ The available modes are:
 *   ``disabled``: Completely disables the incremental repair logic for the current operation. The repair behaves like a classic, non-incremental repair, and it does not read or update any incremental repair status markers.
 
 
-The incremental_mode parameter can be specified using nodetool cluster repair, e.g., nodetool cluster repair --incremental-mode incremental. It can also be specified with the REST API, e.g., curl -X POST "http://127.0.0.1:10000/storage_service/tablets/repair?ks=ks1&table=tb1&tokens=all&incremental_mode=incremental"
+The incremental_mode parameter can be specified using nodetool cluster repair, e.g., nodetool cluster repair --incremental-mode incremental.
+It can also be specified with the REST API, e.g.:
+
+.. code::
+
+    curl -X POST "http://127.0.0.1:10000/storage_service/tablets/repair?ks=ks1&table=tb1&tokens=all&incremental_mode=incremental"
 
 Benefits of Incremental Repair
 ------------------------------
@@ -45,6 +50,8 @@ Benefits of Incremental Repair
 *   **Faster Repairs:** By targeting only new or changed data, repair operations complete in a fraction of the time.
 *   **Reduced Resource Usage:** Consumes significantly less CPU, I/O, and network bandwidth compared to a full repair.
 *   **More Frequent Repairs:** The efficiency of incremental repair allows you to run it more frequently, ensuring a higher level of data consistency across your cluster at all times.
+
+Tables using Incremental Repair can schedule repairs in ScyllaDB itself, with `Automatic Repair </features/automatic-repair>`_.
 
 Notes
 -----
