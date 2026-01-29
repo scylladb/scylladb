@@ -262,21 +262,8 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
     auto [upgrade_lock_holder, upgrade_state] = std::move(upgrade_lock_and_state);
     switch (upgrade_state) {
         case group0_upgrade_state::synchronize:
-            logger.info("start_operation: waiting until local node leaves synchronize state to start a group 0 operation");
-            upgrade_lock_holder.release();
-            co_await when_any(wait_until_group0_upgraded(as), sleep_abortable(std::chrono::seconds{10}, as));
-            // Checks whether above wait returned due to sleep timeout, which confirms the upgrade procedure stuck case.
-            // Returns the corresponding runtime error in such cases.
-            upgrade_lock_and_state = co_await get_group0_upgrade_state();
-            upgrade_lock_holder = std::move(upgrade_lock_and_state.first);
-            upgrade_state = std::move(upgrade_lock_and_state.second);
-            upgrade_lock_holder.release();
-            if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
-                throw std::runtime_error{
-                    "Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations."
-                    " If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck"
-                    " if there was a node failure."};
-            }
+            // The version no longer support upgrade to group0, so the state should be unused
+            on_internal_error(logger, "unexpected group0 upgrade state 'synchronize' in start_operation");
             [[fallthrough]];
         case group0_upgrade_state::use_post_raft_procedures: {
             auto operation_holder = co_await get_units(_operation_mutex, 1, as);
@@ -445,21 +432,6 @@ future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state
     _upgrade_state = state;
     if (_upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
         _upgraded.broadcast();
-    }
-}
-
-future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
-    auto sub = as.subscribe([this] () noexcept { _upgraded.broadcast(); });
-    if (!sub) {
-        throw abort_requested_exception{};
-    }
-
-    co_await _upgraded.wait([this, &as, sub = std::move(sub)] {
-        return _upgrade_state == group0_upgrade_state::use_post_raft_procedures || as.abort_requested();
-    });
-
-    if (as.abort_requested()) {
-        throw abort_requested_exception{};
     }
 }
 
