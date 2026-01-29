@@ -1797,6 +1797,44 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
+async def test_crash_on_missing_table_from_load_stats(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--smp', '2',
+    ]
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+    ])
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        # Make sure load_stats has been refreshed and that the coordinator has cached load_stats
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        await manager.api.enable_injection(servers[0].ip_addr, "wait_refresh_tablet_load_stats", one_shot=True)
+        await s0_log.wait_for(f"waiting for message: wait_refresh_tablet_load_stats")
+        await manager.api.message_injection(servers[0].ip_addr, "wait_refresh_tablet_load_stats")
+
+        # Kill the non-coordinator node
+        await manager.server_stop_gracefully(servers[1].server_id)
+
+        # Drop the table; this leaves the table size in the cached load_stats on the coordinator
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        # Wait for the next load_stats refresh
+        s0_mark = await s0_log.mark()
+        await s0_log.wait_for('raft topology: Refreshed table load stats for all DC', from_mark=s0_mark)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
