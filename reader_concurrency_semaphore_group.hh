@@ -97,7 +97,7 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
-            uint32_t shared_pool_percent = 0,
+            uint32_t shared_pool_percent,
             std::optional<sstring> name_prefix = std::nullopt)
             : _total_memory(memory)
             , _total_weight(0)
