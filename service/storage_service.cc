@@ -2265,16 +2265,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
-    // Waited on during stop()
-    (void)([] (storage_service& me, sharded<service::storage_proxy>& proxy) -> future<> {
-        try {
-            co_await me.track_upgrade_progress_to_topology_coordinator(proxy);
-        } catch (const abort_requested_exception&) {
-            // Ignore
-        }
-        // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
-    })(*this, proxy);
-
     std::unordered_set<locator::host_id> ids;
     _gossiper.for_each_endpoint_state([this, &ids] (const gms::endpoint_state& ep) {
         if (_gossiper.is_normal(ep.get_host_id())) {
@@ -2283,73 +2273,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     });
 
     co_await _gossiper.notify_nodes_on_up(std::move(ids));
-}
-
-future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<service::storage_proxy>& proxy) {
-    SCYLLA_ASSERT(_group0);
-
-    while (true) {
-        _group0_as.check();
-        try {
-            co_await _group0->client().wait_until_group0_upgraded(_group0_as);
-
-            // First, wait for the feature to become enabled
-            shared_promise<> p;
-            auto sub = _feature_service.supports_consistent_topology_changes.when_enabled([&] () noexcept { p.set_value(); });
-            rtlogger.debug("Waiting for cluster feature `SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES`");
-            co_await p.get_shared_future(_group0_as);
-            rtlogger.info("The cluster is ready to start upgrade to the raft topology. The procedure needs to be manually triggered. Refer to the documentation");
-
-            // Wait until upgrade is started
-            co_await _topology_state_machine.event.when([this] {
-                return !legacy_topology_change_enabled();
-            });
-            rtlogger.info("upgrade to raft topology has started");
-            break;
-        } catch (const seastar::abort_requested_exception&) {
-            throw;
-        } catch (...) {
-            rtlogger.error("the fiber tracking readiness of upgrade to raft topology got an unexpected error: {}", std::current_exception());
-        }
-
-        co_await sleep_abortable(std::chrono::seconds(1), _group0_as);
-    }
-
-    // Start the topology coordinator monitor fiber. If we are the leader, this will start
-    // the topology coordinator which is responsible for driving the upgrade process.
-    try {
-        _raft_state_monitor = raft_state_monitor_fiber(_group0->group0_server(), _group0->hold_group0_gate());
-    } catch (...) {
-        // The calls above can theoretically fail due to coroutine frame allocation failure.
-        // Abort in this case as the node should be in a pretty bad shape anyway.
-        rtlogger.error("failed to start the topology coordinator: {}", std::current_exception());
-        abort();
-    }
-
-    while (true) {
-        _group0_as.check();
-        try {
-            // Wait until upgrade is finished
-            co_await _topology_state_machine.event.when([this] {
-                return raft_topology_change_enabled();
-            });
-            rtlogger.info("upgrade to raft topology has finished");
-            break;
-        } catch (const seastar::abort_requested_exception&) {
-            throw;
-        } catch (...) {
-            rtlogger.error("the fiber tracking progress of upgrade to raft topology got an unexpected error. "
-                    "Will not report in logs when upgrade has completed. Error: {}", std::current_exception());
-        }
-    }
-
-    try {
-        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(_group0->group0_server(), _group0->hold_group0_gate(), proxy);
-        start_tablet_split_monitor();
-    } catch (...) {
-        rtlogger.error("failed to start one of the raft-related background fibers: {}", std::current_exception());
-        abort();
-    }
 }
 
 // Runs inside seastar::async context
@@ -8074,13 +7997,8 @@ void storage_service::init_messaging_service() {
     ser::join_node_rpc_verbs::register_join_node_query(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_query_params) {
         return handle_raft_rpc(dst_id, [] (auto& ss) -> future<join_node_query_result> {
             check_raft_rpc_scheduling_group(ss._db.local(), ss._feature_service, "join_node_query");
-            if (!ss.legacy_topology_change_enabled() && !ss.raft_topology_change_enabled()) {
-                throw std::runtime_error("The cluster is upgrading to raft topology. Nodes cannot join at this time.");
-            }
             auto result = join_node_query_result{
-                .topo_mode = ss.raft_topology_change_enabled()
-                        ? join_node_query_result::topology_mode::raft
-                        : join_node_query_result::topology_mode::legacy,
+                .topo_mode = join_node_query_result::topology_mode::raft
             };
             return make_ready_future<join_node_query_result>(std::move(result));
         });
@@ -8577,13 +8495,6 @@ bool storage_service::raft_topology_change_enabled() const {
         on_internal_error(slogger, "raft_topology_change_enabled() must run on shard 0");
     }
     return _topology_change_kind_enabled == topology_change_kind::raft;
-}
-
-bool storage_service::legacy_topology_change_enabled() const {
-    if (this_shard_id() != 0) {
-        on_internal_error(slogger, "legacy_topology_change_enabled() must run on shard 0");
-    }
-    return _topology_change_kind_enabled == topology_change_kind::legacy;
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {
