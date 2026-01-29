@@ -1394,6 +1394,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Start killing reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , reader_concurrency_semaphore_cpu_concurrency(this, "reader_concurrency_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 2,
             "Admit new reads while there are less than this number of requests that need CPU.")
+    , reader_concurrency_semaphore_shared_pool_percent(this, "reader_concurrency_semaphore_shared_pool_percent", liveness::MustRestart, value_status::Used, 0,
+            "Percentage of memory to allocate to the shared pool for reader concurrency semaphores. Valid values are 0-100.")
     , view_update_reader_concurrency_semaphore_serialize_limit_multiplier(this, "view_update_reader_concurrency_semaphore_serialize_limit_multiplier", liveness::LiveUpdate, value_status::Used, 2,
             "Start serializing view update reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , view_update_reader_concurrency_semaphore_kill_limit_multiplier(this, "view_update_reader_concurrency_semaphore_kill_limit_multiplier", liveness::LiveUpdate, value_status::Used, 4,
