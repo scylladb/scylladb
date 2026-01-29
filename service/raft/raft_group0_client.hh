@@ -195,9 +195,6 @@ public:
     // and follow the correct sequence of states.
     future<> set_group0_upgrade_state(group0_upgrade_state s);
 
-    // Wait until group 0 upgrade enters the `use_post_raft_procedures` state.
-    future<> wait_until_group0_upgraded(abort_source&);
-
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 
     bool in_recovery() const;

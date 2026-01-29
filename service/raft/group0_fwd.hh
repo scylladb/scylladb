@@ -57,7 +57,7 @@ enum class group0_upgrade_state : uint8_t {
     // Schema changes may still arrive from other nodes for some time. However, if no failures occur
     // during the upgrade procedure, eventually all nodes should enter `synchronize` state. Then
     // the nodes ensure that schema is synchronized across the entire cluster before entering `use_post_raft_procedures`.
-    synchronize = 2,
+    synchronize = 2, // Deprecated
 
     // In `use_post_raft_procedures` state the upgrade is finished. The node performs schema changes
     // using group 0, i.e. by constructing appropriate Raft commands and sending them to the Raft group 0 cluster.
