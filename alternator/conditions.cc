@@ -244,7 +244,10 @@ static bool is_set_of(const rjson::value& type1, const rjson::value& type2) {
 
 // Check if two JSON-encoded values match with the CONTAINS relation
 bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2, bool v1_from_query, bool v2_from_query) {
-    if (!v1) {
+    if (!v1 || !v1->IsObject() || v1->MemberCount() == 0) {
+        return false;
+    }
+    if (!v2.IsObject() || v2.MemberCount() == 0) {
         return false;
     }
     const auto& kv1 = *v1->MemberBegin();

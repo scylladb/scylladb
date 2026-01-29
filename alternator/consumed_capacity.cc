@@ -45,7 +45,7 @@ bool consumed_capacity_counter::should_add_capacity(const rjson::value& request)
 }
 
 void consumed_capacity_counter::add_consumed_capacity_to_response_if_needed(rjson::value& response) const noexcept {
-    if (_should_add_to_reponse) {
+    if (_should_add_to_response) {
         auto consumption = rjson::empty_object();
         rjson::add(consumption, "CapacityUnits", get_consumed_capacity_units());
         rjson::add(response, "ConsumedCapacity", std::move(consumption));
@@ -53,7 +53,9 @@ void consumed_capacity_counter::add_consumed_capacity_to_response_if_needed(rjso
 }
 
 static uint64_t calculate_half_units(uint64_t unit_block_size, uint64_t total_bytes, bool is_quorum) {
-    uint64_t half_units = (total_bytes + unit_block_size -1) / unit_block_size; //divide by unit_block_size and round up
+    // Avoid potential integer overflow when total_bytes is close to UINT64_MAX
+    // by using division with modulo instead of addition before division
+    uint64_t half_units = total_bytes / unit_block_size + (total_bytes % unit_block_size != 0 ? 1 : 0);
 
     if (is_quorum) {
         half_units *= 2;

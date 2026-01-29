@@ -834,11 +834,13 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
             total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
             const auto expiry = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_cache_validity_in_seconds() };
             // Note: we don't care when the notification of other shards will finish, as long as it will be done
-            // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
-            // the size yet, so it will calculate it again) - this is not a problem, because it will call cache_newly_calculated_size_on_all_shards
-            // with expiry, which is extremely unlikely to be exactly the same as the previous one, all shards will keep the size coming with expiry that is further into the future.
-            // In case of the same expiry, some shards will have different size, which means DescribeTable will return different values depending on the shard
-            // which is also fine, as the specification doesn't give precision guarantees of any kind.
+            // A race condition is possible: if a DescribeTable request arrives on a different shard before
+            // that shard receives the cached size, it will recalculate independently. This is acceptable because:
+            // 1. Both calculations will cache their results with an expiry time
+            // 2. Expiry times are unlikely to be identical, so eventually all shards converge to the most recent value
+            // 3. Even if expiry times match, different shards may briefly return different table sizes
+            // 4. This temporary inconsistency is acceptable per DynamoDB specification, which doesn't guarantee
+            //    exact precision for DescribeTable size information
             co_await cache_newly_calculated_size_on_all_shards(schema, total_size, expiry);
         }
     }
