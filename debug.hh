@@ -18,6 +18,7 @@ namespace debug {
 
 extern seastar::sharded<replica::database>* volatile the_database;
 extern seastar::scheduling_group streaming_scheduling_group;
+extern seastar::scheduling_group gossip_scheduling_group;
 
 }
 

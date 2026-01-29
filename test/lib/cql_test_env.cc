@@ -578,6 +578,7 @@ private:
 
             auto scheduling_groups = get_scheduling_groups().get();
             debug::streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            debug::gossip_scheduling_group = scheduling_groups.streaming_scheduling_group;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
