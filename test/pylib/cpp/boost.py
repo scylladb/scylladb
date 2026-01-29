@@ -91,7 +91,7 @@ class BoostTestFile(CppFile):
         if return_code := process.returncode:
             allure.attach(stdout_file_path.read_bytes(), name="output", attachment_type=allure.attachment_type.TEXT)
             return [CppTestFailure(
-                file_name=self.path.name,
+                file_name=results[0].file_name if results else self.path.name,
                 line_num=results[0].line_num if results else -1,
                 content=dedent(f"""\
                     working_dir: {os.getcwd()}
