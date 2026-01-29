@@ -12,6 +12,7 @@
 #include <random>
 #include <ranges>
 #include <boost/lexical_cast.hpp>
+#include <seastar/core/bitops.hh>
 
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
