@@ -55,8 +55,21 @@ int32_t batchlog_shard_of(db_clock::time_point written_at) {
     return hash & ((1ULL << batchlog_shard_bits) - 1);
 }
 
+bool is_batchlog_v1(const schema& schema) {
+    return schema.cf_name() == system_keyspace::BATCHLOG;
+}
+
 std::pair<partition_key, clustering_key>
 get_batchlog_key(const schema& schema, int32_t version, db::batchlog_stage stage, int32_t batchlog_shard, db_clock::time_point written_at, std::optional<utils::UUID> id) {
+    if (is_batchlog_v1(schema)) {
+        if (!id) {
+            on_internal_error(blogger, "get_batchlog_key(): key for batchlog v1 requires batchlog id");
+        }
+        auto pkey = partition_key::from_single_value(schema, {serialized(*id)});
+        auto ckey = clustering_key::make_empty();
+        return std::pair(std::move(pkey), std::move(ckey));
+    }
+
     auto pkey = partition_key::from_exploded(schema, {serialized(version), serialized(int8_t(stage)), serialized(batchlog_shard)});
 
     std::vector<bytes> ckey_components;
@@ -84,6 +97,14 @@ mutation get_batchlog_mutation_for(schema_ptr schema, managed_bytes data, int32_
     // Avoid going through data_value and therefore `bytes`, as it can be large (#24809).
     auto cdef_data = schema->get_column_definition(to_bytes("data"));
     m.set_cell(ckey, *cdef_data, atomic_cell::make_live(*cdef_data->type, timestamp, std::move(data)));
+
+    if (is_batchlog_v1(*schema)) {
+        auto cdef_version = schema->get_column_definition(to_bytes("version"));
+        m.set_cell(ckey, *cdef_version, atomic_cell::make_live(*cdef_version->type, timestamp, serialized(version)));
+
+        auto cdef_written_at = schema->get_column_definition(to_bytes("written_at"));
+        m.set_cell(ckey, *cdef_written_at, atomic_cell::make_live(*cdef_written_at->type, timestamp, serialized(now)));
+    }
 
     return m;
 }
@@ -323,8 +344,9 @@ static future<db::all_batches_replayed> process_batch(
         db_clock::duration replay_timeout,
         std::chrono::seconds write_timeout,
         const cql3::untyped_result_set::row& row) {
-    const auto stage = static_cast<db::batchlog_stage>(row.get_as<int8_t>("stage"));
-    const auto batch_shard = row.get_as<int32_t>("shard");
+    const bool is_v1 = db::is_batchlog_v1(*schema);
+    const auto stage = is_v1 ? db::batchlog_stage::initial : static_cast<db::batchlog_stage>(row.get_as<int8_t>("stage"));
+    const auto batch_shard = is_v1 ? 0 : row.get_as<int32_t>("shard");
     auto written_at = row.get_as<db_clock::time_point>("written_at");
     auto id = row.get_as<utils::UUID>("id");
     // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -419,7 +441,7 @@ static future<db::all_batches_replayed> process_batch(
         // Do _not_ remove the batch, assuning we got a node write error.
         // Since we don't have hints (which origin is satisfied with),
         // we have to resort to keeping this batch to next lap.
-        if (!cleanup || stage == db::batchlog_stage::failed_replay) {
+        if (is_v1 || !cleanup || stage == db::batchlog_stage::failed_replay) {
             co_return db::all_batches_replayed::no;
         }
         send_failed = true;
@@ -442,7 +464,46 @@ static future<db::all_batches_replayed> process_batch(
     co_return db::all_batches_replayed(!send_failed);
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v1(post_replay_cleanup) {
+    db::all_batches_replayed all_replayed = all_batches_replayed::yes;
+    // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
+    // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
+    auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
+    utils::rate_limiter limiter(throttle);
+
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+
+    std::unordered_map<int32_t, replay_stats> replay_stats_per_shard;
+
+    // Use a stable `now` across all batches, so skip/replay decisions are the
+    // same across a while prefix of written_at (across all ids).
+    const auto now = db_clock::now();
+
+    auto batch = [this, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, post_replay_cleanup::no, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+        co_return stop_iteration::no;
+    };
+
+    co_await with_gate(_gate, [this, &all_replayed, batch = std::move(batch)] () mutable -> future<> {
+        blogger.debug("Started replayAllFailedBatches");
+        co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
+
+        auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+
+        co_await _qp.query_internal(
+                format("SELECT * FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
+                db::consistency_level::ONE,
+                {},
+                page_size,
+                batch);
+
+        blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
+    });
+
+    co_return all_replayed;
+}
+
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v2(post_replay_cleanup cleanup) {
     co_await maybe_migrate_v1_to_v2();
 
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
@@ -518,4 +579,11 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     });
 
     co_return all_replayed;
+}
+
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+    if (_fs.batchlog_v2) {
+        return replay_all_failed_batches_v2(cleanup);
+    }
+    return replay_all_failed_batches_v1(cleanup);
 }
