@@ -30,6 +30,31 @@ enum class token_kind {
     after_all_keys,
 };
 
+// Represents a token for partition keys.
+// Has a disengaged state, which sorts before all engaged states.
+struct raw_token {
+    int64_t value;
+
+    /// Constructs a disengaged token.
+    raw_token() : value(std::numeric_limits<int64_t>::min()) {}
+
+    /// Constructs an engaged token.
+    /// The token must be of token_kind::key kind.
+    explicit raw_token(const token&);
+
+    explicit raw_token(int64_t v) : value(v) {};
+
+    std::strong_ordering operator<=>(const raw_token& o) const noexcept = default;
+    std::strong_ordering operator<=>(const token& o) const noexcept;
+
+    /// Returns true iff engaged.
+    explicit operator bool() const noexcept {
+        return value != std::numeric_limits<int64_t>::min();
+    }
+};
+
+using raw_token_opt = seastar::optimized_optional<raw_token>;
+
 class token {
     // INT64_MIN is not a legal token, but a special value used to represent
     // infinity in token intervals.
@@ -51,6 +76,10 @@ public:
     constexpr token() noexcept : token(kind::before_all_keys, 0) {}
 
     constexpr explicit token(int64_t d) noexcept : token(kind::key, normalize(d)) {}
+
+    token(raw_token raw) noexcept
+        : token(raw ? kind::key : kind::before_all_keys, raw.value)
+    { }
 
     // This constructor seems redundant with the bytes_view constructor, but
     // it's necessary for IDL, which passes a deserialized_bytes_proxy here.
@@ -223,6 +252,29 @@ public:
     }
 };
 
+inline
+raw_token::raw_token(const token& t)
+    : value(t.raw())
+{
+#ifdef DEBUG
+    assert(t._kind == token::kind::key);
+#endif
+}
+
+inline
+std::strong_ordering raw_token::operator<=>(const token& o) const noexcept {
+    switch (o._kind) {
+        case token::kind::after_all_keys:
+            return std::strong_ordering::less;
+        case token::kind::before_all_keys:
+            // before_all_keys has a raw value set to the same raw value as a disengaged raw_token, and sorts before all keys.
+            // So we can order them by just comparing raw values.
+            [[fallthrough]];
+        case token::kind::key:
+            return value <=> o._data;
+    }
+}
+
 inline constexpr std::strong_ordering tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
     if (l1 == l2) {
         return std::strong_ordering::equal;
@@ -326,6 +378,17 @@ struct fmt::formatter<dht::token> : fmt::formatter<string_view> {
         } else {
             return fmt::format_to(ctx.out(), "{}", dht::token::to_int64(t));
         }
+    }
+};
+
+template <>
+struct fmt::formatter<dht::raw_token> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const dht::raw_token& t, FormatContext& ctx) const {
+        if (!t) {
+            return fmt::format_to(ctx.out(), "null");
+        }
+        return fmt::format_to(ctx.out(), "{}", t.value);
     }
 };
 
