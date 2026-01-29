@@ -312,13 +312,12 @@ struct replay_stats {
 
 } // anonymous namespace
 
-static future<stop_iteration> process_batch(
+static future<db::all_batches_replayed> process_batch(
         cql3::query_processor& qp,
         db::batchlog_manager::stats& stats,
         db::batchlog_manager::post_replay_cleanup cleanup,
         utils::rate_limiter& limiter,
         schema_ptr schema,
-        db::all_batches_replayed& all_replayed,
         std::unordered_map<int32_t, replay_stats>& replay_stats_per_shard,
         const db_clock::time_point now,
         db_clock::duration replay_timeout,
@@ -333,8 +332,7 @@ static future<stop_iteration> process_batch(
 
     if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
         blogger.debug("Skipping batch replay due to skip_batch_replay injection");
-        all_replayed = db::all_batches_replayed::no;
-        co_return stop_iteration::no;
+        co_return db::all_batches_replayed::no;
     }
 
     auto data = row.get_blob_unfragmented("data");
@@ -370,7 +368,7 @@ static future<stop_iteration> process_batch(
 
             shard_written_at.min_too_fresh = std::min(shard_written_at.min_too_fresh.value_or(written_at), written_at);
 
-            co_return stop_iteration::no;
+            co_return db::all_batches_replayed::no;
         }
 
         auto size = data.size();
@@ -417,13 +415,12 @@ static future<stop_iteration> process_batch(
         // As above -- we should drop the batch if the table doesn't exist anymore.
     } catch (...) {
         blogger.warn("Replay failed (will retry): {}", std::current_exception());
-        all_replayed = db::all_batches_replayed::no;
         // timeout, overload etc.
         // Do _not_ remove the batch, assuning we got a node write error.
         // Since we don't have hints (which origin is satisfied with),
         // we have to resort to keeping this batch to next lap.
         if (!cleanup || stage == db::batchlog_stage::failed_replay) {
-            co_return stop_iteration::no;
+            co_return db::all_batches_replayed::no;
         }
         send_failed = true;
     }
@@ -442,7 +439,7 @@ static future<stop_iteration> process_batch(
 
     shard_written_at.need_cleanup = true;
 
-    co_return stop_iteration::no;
+    co_return db::all_batches_replayed(!send_failed);
 }
 
 future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
@@ -463,7 +460,8 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     const auto now = db_clock::now();
 
     auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        return process_batch(_qp, _stats, cleanup, limiter, schema, all_replayed, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, cleanup, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+        co_return stop_iteration::no;
     };
 
     co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
