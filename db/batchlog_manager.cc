@@ -122,9 +122,10 @@ mutation get_batchlog_delete_mutation(schema_ptr schema, int32_t version, db_clo
 const std::chrono::seconds db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
-db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
+db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, gms::feature_service& fs, batchlog_manager_config config)
         : _qp(qp)
         , _sys_ks(sys_ks)
+        , _fs(fs)
         , _replay_timeout(config.replay_timeout)
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
