@@ -693,7 +693,7 @@ SEASTAR_TEST_CASE(test_batchlog_replay_write_time) {
 
         auto get_write_attempts = [&] () -> uint64_t {
             return env.batchlog_manager().map_reduce0([] (const db::batchlog_manager& bm) {
-                return bm.stats().write_attempts;
+                return bm.get_stats().write_attempts;
             }, uint64_t(0), std::plus<uint64_t>{}).get();
         };
 
