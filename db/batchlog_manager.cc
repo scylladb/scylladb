@@ -301,41 +301,39 @@ future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
     });
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
-    co_await maybe_migrate_v1_to_v2();
+namespace {
 
-    typedef db_clock::rep clock_type;
+using clock_type = db_clock::rep;
 
-    db::all_batches_replayed all_replayed = all_batches_replayed::yes;
-    // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
-    // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
-    auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
-    utils::rate_limiter limiter(throttle);
+struct replay_stats {
+    std::optional<db_clock::time_point> min_too_fresh;
+    bool need_cleanup = false;
+};
 
-    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
+} // anonymous namespace
 
-    struct replay_stats {
-        std::optional<db_clock::time_point> min_too_fresh;
-        bool need_cleanup = false;
-    };
-
-    std::unordered_map<int32_t, replay_stats> replay_stats_per_shard;
-
-    // Use a stable `now` across all batches, so skip/replay decisions are the
-    // same across a while prefix of written_at (across all ids).
-    const auto now = db_clock::now();
-
-    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
-        const auto stage = static_cast<batchlog_stage>(row.get_as<int8_t>("stage"));
+static future<stop_iteration> process_batch(
+        cql3::query_processor& qp,
+        db::batchlog_manager::stats& stats,
+        db::batchlog_manager::post_replay_cleanup cleanup,
+        utils::rate_limiter& limiter,
+        schema_ptr schema,
+        db::all_batches_replayed& all_replayed,
+        std::unordered_map<int32_t, replay_stats>& replay_stats_per_shard,
+        const db_clock::time_point now,
+        db_clock::duration replay_timeout,
+        std::chrono::seconds write_timeout,
+        const cql3::untyped_result_set::row& row) {
+        const auto stage = static_cast<db::batchlog_stage>(row.get_as<int8_t>("stage"));
         const auto batch_shard = row.get_as<int32_t>("shard");
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
-        auto timeout = _replay_timeout;
+        auto timeout = replay_timeout;
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
-            all_replayed = all_batches_replayed::no;
+            all_replayed = db::all_batches_replayed::no;
             co_return stop_iteration::no;
         }
 
@@ -353,7 +351,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
             auto in = ser::as_input_stream(data);
             while (in.size()) {
                 auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
-                const auto tbl = _qp.db().try_find_table(fm.column_family_id());
+                const auto tbl = qp.db().try_find_table(fm.column_family_id());
                 if (!tbl) {
                     continue;
                 }
@@ -404,12 +402,12 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
                     // in both cases.
                     // FIXME: verify that the above is reasonably true.
                     co_await limiter.reserve(size);
-                    _stats.write_attempts += mutations.size();
+                    stats.write_attempts += mutations.size();
                     auto timeout = db::timeout_clock::now() + write_timeout;
                     if (cleanup) {
-                        co_await _qp.proxy().send_batchlog_replay_to_all_replicas(mutations, timeout);
+                        co_await qp.proxy().send_batchlog_replay_to_all_replicas(mutations, timeout);
                     } else {
-                        co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
+                        co_await qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
                     }
                 }
             }
@@ -419,32 +417,54 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
             // As above -- we should drop the batch if the table doesn't exist anymore.
         } catch (...) {
             blogger.warn("Replay failed (will retry): {}", std::current_exception());
-            all_replayed = all_batches_replayed::no;
+            all_replayed = db::all_batches_replayed::no;
             // timeout, overload etc.
             // Do _not_ remove the batch, assuning we got a node write error.
             // Since we don't have hints (which origin is satisfied with),
             // we have to resort to keeping this batch to next lap.
-            if (!cleanup || stage == batchlog_stage::failed_replay) {
+            if (!cleanup || stage == db::batchlog_stage::failed_replay) {
                 co_return stop_iteration::no;
             }
             send_failed = true;
         }
 
-        auto& sp = _qp.proxy();
+        auto& sp = qp.proxy();
 
         if (send_failed) {
             blogger.debug("Moving batch {} to stage failed_replay", id);
-            auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, batchlog_stage::failed_replay, written_at, id);
+            auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, db::batchlog_stage::failed_replay, written_at, id);
             co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
         }
 
         // delete batch
         auto m = get_batchlog_delete_mutation(schema, netw::messaging_service::current_version, stage, written_at, id);
-        co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+        co_await qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
 
         shard_written_at.need_cleanup = true;
 
         co_return stop_iteration::no;
+    }
+
+
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+    co_await maybe_migrate_v1_to_v2();
+
+    db::all_batches_replayed all_replayed = all_batches_replayed::yes;
+    // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
+    // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
+    auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
+    utils::rate_limiter limiter(throttle);
+
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
+
+    std::unordered_map<int32_t, replay_stats> replay_stats_per_shard;
+
+    // Use a stable `now` across all batches, so skip/replay decisions are the
+    // same across a while prefix of written_at (across all ids).
+    const auto now = db_clock::now();
+
+    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        return process_batch(_qp, _stats, cleanup, limiter, schema, all_replayed, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
     };
 
     co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
