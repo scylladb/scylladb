@@ -9,9 +9,7 @@
 #pragma once
 
 #include "mutation/partition_version.hh"
-#include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
-#include "readers/range_tombstone_change_merger.hh"
 #include "keys/clustering_key_filter.hh"
 #include "query/query-request.hh"
 #include "db/partition_snapshot_row_cursor.hh"
@@ -19,8 +17,10 @@
 
 extern seastar::logger mplog;
 
+namespace replica {
+
 template <bool Reversing, typename Accounter>
-class partition_snapshot_flat_reader : public mutation_reader::impl, public Accounter {
+class partition_snapshot_reader : public mutation_reader::impl, public Accounter {
     struct row_info {
         mutation_fragment_v2 row;
         tombstone rt_for_row;
@@ -232,7 +232,7 @@ private:
     }
 public:
     template <typename... Args>
-    partition_snapshot_flat_reader(schema_ptr s, reader_permit permit, dht::decorated_key dk, partition_snapshot_ptr snp,
+    partition_snapshot_reader(schema_ptr s, reader_permit permit, dht::decorated_key dk, partition_snapshot_ptr snp,
                               query::clustering_key_filter_ranges crr, bool digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               std::any pointer_to_container, Args&&... args)
@@ -285,7 +285,7 @@ public:
 
 template <bool Reversing, typename Accounter, typename... Args>
 inline mutation_reader
-make_partition_snapshot_flat_reader(schema_ptr s,
+make_partition_snapshot_reader(schema_ptr s,
                                     reader_permit permit,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
@@ -297,7 +297,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_mutation_reader<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
+    auto res = make_mutation_reader<partition_snapshot_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
             snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
@@ -305,3 +305,5 @@ make_partition_snapshot_flat_reader(schema_ptr s,
         return res;
     }
 }
+
+} // namespace replica
