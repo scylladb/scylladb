@@ -17,6 +17,7 @@
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 #include "utils/rjson.hh"
+#include "utils/div_ceil.hh"
 #include "gms/feature_service.hh"
 
 #include <algorithm>
@@ -34,12 +35,29 @@ namespace locator {
 
 seastar::logger tablet_logger("tablets");
 
-std::optional<std::pair<tablet_id, tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
-    if (tablet_count() == 1) {
-        return std::nullopt;
+std::pair<tablet_id, std::optional<tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
+    check_tablet_id(t);
+
+    if (!needs_merge()) {
+        return std::make_pair(t, std::nullopt);
     }
-    auto first_sibling = tablet_id(t.value() & ~0x1);
-    return std::make_pair(first_sibling, *next_tablet(first_sibling));
+
+    auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
+
+    if (!merge_plan.isolated_tablet || t < *merge_plan.isolated_tablet) {
+        auto first_sibling = tablet_id(t.value() & ~0x1);
+        auto second_sibling = next_tablet(first_sibling);
+        return std::make_pair(first_sibling, second_sibling);
+    }
+
+    if (t == *merge_plan.isolated_tablet) {
+        return std::make_pair(t, std::nullopt);
+    }
+
+    // t is after the isolated_tablet here, which shifts the sibling pairs by one position.
+    auto first_sibling = tablet_id(((t.value() - 1) & ~0x1) + 1);
+    auto second_sibling = next_tablet(first_sibling);
+    return std::make_pair(first_sibling, second_sibling);
 }
 
 
@@ -481,10 +499,6 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
 tablet_map::tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool with_raft_info)
     : _tablet_ids(std::move(last_tokens))
 {
-    if (_last_tokens.size() != 1ul << _tablet_ids.log2_count()) {
-        on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", _last_tokens.size()));
-    }
-
     _tablets.resize(_tablet_ids.tablet_count());
     if (with_raft_info) {
         _raft_info.resize(_tablet_ids.tablet_count());
@@ -494,9 +508,6 @@ tablet_map::tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool w
 tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::initialized_later)
     : _tablet_ids(tablet_count)
 {
-    if (tablet_count != 1ul << _tablet_ids.log2_count()) {
-        on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
-    }
     _tablets.resize(tablet_count);
     if (with_raft_info) {
         _raft_info.resize(tablet_count);
@@ -709,16 +720,33 @@ future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<futu
     auto make_desc = [this] (tablet_id tid) {
         return tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
     };
-    if (_tablets.size() == 1) {
-        co_return co_await func(make_desc(first_tablet()), std::nullopt);
+
+    if (!needs_merge()) {
+        co_await for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) -> future<> {
+            return func(tablet_desc{tid, &tinfo, get_tablet_transition_info(tid)}, std::nullopt);
+        });
+        co_return;
     }
-    for (std::optional<tablet_id> tid = first_tablet(); tid; tid = next_tablet(*tid)) {
+
+    auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
+
+    std::optional<tablet_id> tid = first_tablet();
+    while (tid) {
         auto tid1 = tid;
-        auto tid2 = tid = next_tablet(*tid);
-        if (!tid2) {
-            // Cannot happen with power-of-two invariant.
-            throw std::logic_error(format("Cannot retrieve sibling tablet with tablet count {}", tablet_count()));
+        tid = next_tablet(*tid);
+
+        if (merge_plan.isolated_tablet && *tid1 == *merge_plan.isolated_tablet) {
+            co_await func(make_desc(*tid1), std::nullopt);
+            continue;
         }
+
+        auto tid2 = tid;
+        if (!tid2) {
+            // Shouldn't happen. If the count is odd, there must be isolated_tablet set which skips one tablet.
+            on_internal_error(tablet_logger, format("No sibling for tablet {}", *tid1));
+        }
+
+        tid = next_tablet(*tid);
         co_await func(make_desc(*tid1), make_desc(*tid2));
     }
 }
@@ -1003,6 +1031,24 @@ std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_ba
     return std::nullopt;
 }
 
+std::optional<uint64_t> load_stats::get_avg_tablet_size(const tablet_map& tmap, global_tablet_id tablet) const {
+    auto [table, tid] = tablet;
+    auto rbid = range_based_tablet_id{table, tmap.get_token_range(tid)};
+    auto& tinfo = tmap.get_tablet_info(tid);
+    auto* trinfo = tmap.get_tablet_transition_info(tid);
+
+    size_t tablet_size = 0;
+    for (auto&& r : tinfo.replicas) {
+        if (auto size = get_tablet_size_in_transition(r.host, rbid, tinfo, trinfo)) {
+            tablet_size += *size;
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    return tablet_size / std::max(1ul, tinfo.replicas.size());
+}
+
 std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const {
     std::optional<uint64_t> tablet_size_opt;
     tablet_size_opt = get_tablet_size(host, rb_tid);
@@ -1090,7 +1136,7 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
                                         replica.host, old_tablet_id, rb_tid.range, new_tablet_id, new_range, *tablet_size_opt);
                 }
             }
-        } else if (old_tablet_count == new_tablet_count / 2) {
+        } else if (old_tablet_count * 2 == new_tablet_count) {
             // Reconcile for split
             for (size_t i = 0; i < old_tablet_count; i++) {
                 range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
@@ -1828,7 +1874,7 @@ auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_
             fmt::format_to(ctx.out(), "split");
         },
         [&] (const locator::resize_decision::merge& merge) {
-            fmt::format_to(ctx.out(), "merge");
+            fmt::format_to(ctx.out(), "merge(isolated={})", merge.isolated_tablet);
         }), way);
     return ctx.out();
 }

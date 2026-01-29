@@ -15,6 +15,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/bitops.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/json/json_elements.hh>
@@ -34,6 +35,7 @@
 #include "utils/logalloc.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/div_ceil.hh"
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
@@ -727,9 +729,6 @@ public:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
         return get_compaction_group();
     }
-    size_t log2_storage_groups() const override {
-        return 0;
-    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return *_single_sg;
     }
@@ -812,8 +811,8 @@ private:
         auto idx = id.value();
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         if (idx >= tablet_count()) {
-            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
-                                                    idx, log2_storage_groups(), tablet_count(), t));
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size={} token={}",
+                                                    idx, tablet_count(), t));
         }
         auto& sg = storage_group_for_id(idx);
         if (!t.is_minimum() && !t.is_maximum() && !sg.token_range().contains(t, dht::token_comparator())) {
@@ -891,9 +890,6 @@ public:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
 
-    size_t log2_storage_groups() const override {
-        return log2ceil(tablet_map().tablet_count());
-    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return storage_group_for_id(storage_group_of(token).first);
     }

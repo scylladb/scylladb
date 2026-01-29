@@ -400,6 +400,9 @@ struct resize_decision {
         auto operator<=>(const split&) const = default;
     };
     struct merge {
+        // In case the current tablet count is odd, this is the id of the tablet
+        // which will not be merged.
+        std::optional<tablet_id> isolated_tablet;
         auto operator<=>(const merge&) const = default;
     };
     using way_type = std::variant<none, split, merge>;
@@ -451,6 +454,7 @@ struct resize_decision {
 using resize_decision_way = resize_decision::way_type;
 
 struct table_load_stats {
+    // Total size of the table if it had RF=1.
     uint64_t size_in_bytes = 0;
     // Stores the minimum seq number among all replicas, as coordinator wants to know if
     // all replicas have completed splitting, which happens when they all store the
@@ -509,6 +513,9 @@ struct load_stats {
     }
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
+
+    // Returns average size of tablet replica of a given tablet, or nullopt if information is incomplete.
+    std::optional<uint64_t> get_avg_tablet_size(const tablet_map&, global_tablet_id) const;
 
     // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
     // other hosts based on the tablet transition info:
@@ -665,14 +672,14 @@ public:
     /// Constructs a tablet map.
     /// Tablet boundaries will be uniformly distributed in token space.
     ///
-    /// \param tablet_count The desired tablets to allocate. Must be a power of two.
+    /// \param tablet_count The desired tablets to allocate.
     explicit tablet_map(size_t tablet_count, bool with_raft_info = false);
 
     /// Constructs a tablet map.
     /// Tablet boundaries are determined by the last_tokens parameter.
     /// last_tokens[i] is the last token (inclusive) of tablet_id(i), where i == 0 refers to the first tablet.
     ///
-    /// \param last_tokens The token boundaries of tablets. Size must be a power of two.
+    /// \param last_tokens The token boundaries of tablets.
     explicit tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool with_raft_info = false);
 
     /// Constructs a tablet map without initializing its contents, for incremental population.
@@ -766,9 +773,9 @@ public:
     }
 
     // Returns the pair of sibling tablets for a given tablet id.
-    // For example, if id 1 is provided, a pair of 0 and 1 is returned.
-    // Returns disengaged optional when sibling pair cannot be found.
-    std::optional<std::pair<tablet_id, tablet_id>> sibling_tablets(tablet_id t) const;
+    // If the tablet count is odd, the last tablet does not have a sibling and
+    // the second element of the pair will be disengaged.
+    std::pair<tablet_id, std::optional<tablet_id>> sibling_tablets(tablet_id t) const;
 
     /// Returns true iff tablet has a given replica.
     /// If tablet is in transition, considers both previous and next replica set.
@@ -782,7 +789,7 @@ public:
     future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
 
     /// Calls a given function for each sibling tablet in the map in token ownership order.
-    /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
+    /// If tablet count is odd, the last call will have the 2nd tablet_desc disengaged.
     future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {

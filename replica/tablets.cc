@@ -78,6 +78,7 @@ schema_ptr make_tablets_schema() {
             .with_column("session", uuid_type)
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
+            .with_column("isolated_tablet_for_merge", long_type, column_kind::static_column)
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
@@ -160,6 +161,12 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
+    if (tablets.resize_decision().is_merge()) {
+        auto& merge = std::get<resize_decision::merge>(tablets.resize_decision().way);
+        if (merge.isolated_tablet) {
+            m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), ts);
+        }
+    }
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
@@ -293,6 +300,12 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
     _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
     _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
     if (resize_decision.split_or_merge()) {
+        if (resize_decision.is_merge()) {
+            auto& merge = std::get<resize_decision::merge>(resize_decision.way);
+            if (merge.isolated_tablet) {
+                _m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), _ts);
+            }
+        }
         auto resize_task_info = std::holds_alternative<resize_decision::split>(resize_decision.way)
             ? locator::tablet_task_info::make_split_request()
             : locator::tablet_task_info::make_merge_request();
@@ -752,7 +765,10 @@ struct tablet_metadata_builder {
                     } else if (resize_type_name == "split") {
                         return locator::resize_decision(locator::resize_decision::split(), resize_seq_number);
                     } else if (resize_type_name == "merge") {
-                        return locator::resize_decision(locator::resize_decision::merge(), resize_seq_number);
+                        return locator::resize_decision(locator::resize_decision::merge {
+                            .isolated_tablet = row.get_opt<int64_t>("isolated_tablet_for_merge")
+                                    .transform([] (int64_t v) { return tablet_id(v); })
+                        }, resize_seq_number);
                     } else {
                         throw std::runtime_error(format("Unknown resize_type '{}' for table {}", resize_type_name, table));
                     }
