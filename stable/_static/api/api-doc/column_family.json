@@ -1,0 +1,3031 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/column_family",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/column_family/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a list of all column family info",
+               "type":"array",
+               "items":{
+                  "type":"column_family_info"
+               },
+               "nickname":"get_column_family",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/name",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a list of all column family names",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_column_family_name",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/name/keyspace",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a list of the key space names",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_column_family_name_keyspace",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/major_compaction/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force a major compaction of this column family",
+               "type":"void",
+               "nickname":"force_major_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"flush_memtables",
+                     "description":"Controls flushing of memtables before compaction (true by default). Set to \"false\" to skip automatic flushing of memtables before compaction, e.g. when the table is flushed explicitly before invoking the compaction api.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"consider_only_existing_data",
+                     "description":"Set to \"true\" to flush all memtables and force tombstone garbage collection to check only the sstables being compacted (false by default). The memtable, commitlog and other uncompacted sstables will not be checked during tombstone garbage collection.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"split_output",
+                     "description":"true if the output of the major compaction should be split in several sstables",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/minimum_compaction/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Sets the minimum number of sstables in queue before compaction kicks off",
+               "type":"string",
+               "nickname":"set_minimum_compaction_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"value",
+                     "description":"The minimum number of sstables in queue before compaction kicks off",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"get the minimum number of sstables in queue before compaction kicks off",
+               "type":"string",
+               "nickname":"get_minimum_compaction_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/maximum_compaction/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Sets the maximum number of sstables in queue before compaction kicks off",
+               "type":"string",
+               "nickname":"set_maximum_compaction_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"value",
+                     "description":"The maximum number of sstables in queue before compaction kicks off",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"get the maximum number of sstables in queue before compaction kicks off",
+               "type":"string",
+               "nickname":"get_maximum_compaction_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/compaction/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Sets the minimum and maximum number of sstables in queue before compaction kicks off",
+               "type":"string",
+               "nickname":"set_compaction_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"maximum",
+                     "description":"The maximum number of sstables in queue before compaction kicks off",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"minimum",
+                     "description":"The minimum number of sstables in queue before compaction kicks off",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/compaction_strategy/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Sets the compaction strategy by class name",
+               "type":"void",
+               "nickname":"set_compaction_strategy_class",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"class_name",
+                     "description":"The class name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Gets the compaction strategy class name",
+               "type":"string",
+               "nickname":"get_compaction_strategy_class",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/compression_parameters/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get the compression parameters",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_compression_parameters",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Sets the compression parameters",
+               "type":"void",
+               "nickname":"set_compression_parameters",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"opts",
+                     "description":"The options to set",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/crc_check_chance/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set new crc check chance",
+               "type":"void",
+               "nickname":"set_crc_check_chance",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"check_chance",
+                     "description":"CRC check chance",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/autocompaction/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"check if the auto_compaction property is enabled for a given table",
+               "type":"boolean",
+               "nickname":"get_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable table auto compaction",
+               "type":"void",
+               "nickname":"enable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable table auto compaction",
+               "type":"void",
+               "nickname":"disable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/tombstone_gc/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Check if tombstone GC is enabled for a given table",
+               "type":"boolean",
+               "nickname":"get_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable tombstone GC for a given table",
+               "type":"void",
+               "nickname":"enable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable tombstone GC for a given table",
+               "type":"void",
+               "nickname":"disable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/estimate_keys/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the estimate keys",
+               "type":"long",
+               "nickname":"estimate_keys",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/built_indexes/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns a list of the names of the built column indexes for current store",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_built_indexes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/sstables/by_key/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns a list of sstable filenames that contain the given partition key on this node",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_sstables_for_key",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"key",
+                     "description":"The partition key. In a composite-key scenario, use ':' to separate the columns in the key.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/load/sstable/{name}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Scan through Keyspace/ColumnFamily's data directory determine which SSTables should be loaded and load them",
+               "type":"string",
+               "nickname":"load_new_sstables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/sstables/unleveled/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"the number of SSTables in L0.  Always return 0 if Leveled compaction is not enabled.",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_unleveled_sstables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/sstables/per_level/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"sstable count for each level. empty unless leveled compaction is used",
+               "type":"array",
+               "items":{
+                  "type": "long"
+               },
+               "nickname":"get_sstable_count_per_level",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/droppable_ratio/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the ratio of droppable tombstones to real columns (and non-droppable tombstones)",
+               "type":"double",
+               "nickname":"get_droppable_tombstone_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_columns_count/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get memtable columns count",
+               "type":"long",
+               "nickname":"get_memtable_columns_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/toppartitions/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Toppartitions query",
+               "type":"toppartitions_query_results",
+               "nickname":"toppartitions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"duration",
+                     "description":"Duration (in milliseconds) of monitoring operation",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  },
+                  {
+                    "name":"list_size",
+                    "description":"number of the top partitions to list",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "long",
+                    "paramType":"query"
+                 },
+                 {
+                    "name":"capacity",
+                    "description":"capacity of stream summary: determines amount of resources used in query processing",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "long",
+                    "paramType":"query"
+                 }
+              ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_columns_count/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get all memtable columns count",
+               "type":"long",
+               "nickname":"get_all_memtable_columns_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_on_heap_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the column family active memtable on heap size",
+               "type":"long",
+               "nickname":"get_memtable_on_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_on_heap_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all active memtable of all column family on heap size",
+               "type":"long",
+               "nickname":"get_all_memtable_on_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_off_heap_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the column family active memtable off heap size",
+               "type":"long",
+               "nickname":"get_memtable_off_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_off_heap_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all active memtable of all column family off heap size",
+               "type":"long",
+               "nickname":"get_all_memtable_off_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_live_data_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the column family active memtable live data size",
+               "type":"long",
+               "nickname":"get_memtable_live_data_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_live_data_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all active memtable of all column family live data size",
+               "type":"long",
+               "nickname":"get_all_memtable_live_data_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_on_heap_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all of the column family active and not memtables on heap size",
+               "type":"long",
+               "nickname":"get_cf_all_memtables_on_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_on_heap_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all memtables active and not of all column family on heap size",
+               "type":"long",
+               "nickname":"get_all_cf_all_memtables_on_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_off_heap_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all of the column family active and not memtables off heap size",
+               "type":"long",
+               "nickname":"get_cf_all_memtables_off_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_off_heap_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all memtables active and not of all column family off heap size",
+               "type":"long",
+               "nickname":"get_all_cf_all_memtables_off_heap_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_live_data_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all of the column family active and not memtables live data size",
+               "type":"long",
+               "nickname":"get_cf_all_memtables_live_data_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/all_memtables_live_data_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all memtables active and not of all column family live data size",
+               "type":"long",
+               "nickname":"get_all_cf_all_memtables_live_data_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_switch_count/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get memtable switch count",
+               "type": "long",
+               "nickname":"get_memtable_switch_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/memtable_switch_count",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all memtable switch count",
+               "type": "long",
+               "nickname":"get_all_memtable_switch_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/estimated_row_size_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get estimated row size histogram",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_estimated_row_size_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/estimated_row_count/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get estimated row count",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_estimated_row_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/estimated_column_count_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get estimated column count histogram",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_estimated_column_count_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/compression_ratio/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get compression ratio",
+               "type":"double",
+               "nickname":"get_compression_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/compression_ratio",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all compression ratio",
+               "type":"double",
+               "nickname":"get_all_compression_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency",
+               "type": "long",
+               "nickname":"get_read_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of reads",
+               "type":"long",
+               "nickname":"get_read",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of reads from all column family, per shard",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_all_read",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency histogram",
+               "$ref": "#/utils/histogram",
+               "nickname":"get_read_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency histogram from all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_read_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/moving_average_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency moving avrage histogram",
+               "$ref": "#/utils/rate_moving_average_and_histogram",
+               "nickname":"get_read_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/moving_average_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency moving avrage histogram from all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/rate_moving_average_and_histogram"
+               },
+               "nickname":"get_all_read_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all read latency",
+               "type": "long",
+               "nickname":"get_all_read_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/range_latency/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range latency",
+               "type": "long",
+               "nickname":"get_range_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/range_latency",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all range latency",
+               "type": "long",
+               "nickname":"get_all_range_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency",
+               "type": "long",
+               "nickname":"get_write_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of writes",
+               "type":"long",
+               "nickname":"get_write",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of writes from all column family, per shard",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_all_write",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency histogram",
+               "$ref": "#/utils/histogram",
+               "nickname":"get_write_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency histogram of all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_write_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/moving_average_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency moving average histogram",
+               "$ref": "#/utils/rate_moving_average_and_histogram",
+               "nickname":"get_write_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/moving_average_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency moving average histogram of all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/rate_moving_average_and_histogram"
+               },
+               "nickname":"get_all_write_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all write latency",
+               "type": "long",
+               "nickname":"get_all_write_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/pending_flushes/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get pending flushes",
+               "type": "long",
+               "nickname":"get_pending_flushes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/pending_flushes",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all pending flushes",
+               "type": "long",
+               "nickname":"get_all_pending_flushes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/pending_compactions/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get pending compactions",
+               "type": "long",
+               "nickname":"get_pending_compactions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/pending_compactions",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all pending compactions",
+               "type": "long",
+               "nickname":"get_all_pending_compactions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/live_ss_table_count/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get live ss table count",
+               "type": "long",
+               "nickname":"get_live_ss_table_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/live_ss_table_count",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all live ss table count",
+               "type": "long",
+               "nickname":"get_all_live_ss_table_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/live_disk_space_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get live disk space used",
+               "type": "long",
+               "nickname":"get_live_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/live_disk_space_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all live disk space used",
+               "type": "long",
+               "nickname":"get_all_live_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/total_disk_space_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total disk space used",
+               "type": "long",
+               "nickname":"get_total_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/total_disk_space_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all total disk space used",
+               "type": "long",
+               "nickname":"get_all_total_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/min_row_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get min row size",
+               "type":"long",
+               "nickname":"get_min_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/min_row_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all min row size",
+               "type":"long",
+               "nickname":"get_all_min_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/max_row_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get max row size",
+               "type":"long",
+               "nickname":"get_max_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/max_row_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all max row size",
+               "type":"long",
+               "nickname":"get_all_max_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/mean_row_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get mean row size",
+               "type":"long",
+               "nickname":"get_mean_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/mean_row_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all mean row size",
+               "type":"long",
+               "nickname":"get_all_mean_row_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_false_positives/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get bloom filter false positives",
+               "type":"long",
+               "nickname":"get_bloom_filter_false_positives",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_false_positives",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all bloom filter false positives",
+               "type":"long",
+               "nickname":"get_all_bloom_filter_false_positives",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/recent_bloom_filter_false_positives/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get recent bloom filter false positives",
+               "type":"long",
+               "nickname":"get_recent_bloom_filter_false_positives",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/recent_bloom_filter_false_positives",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all recent bloom filter false positives",
+               "type":"long",
+               "nickname":"get_all_recent_bloom_filter_false_positives",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_false_ratio/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get bloom filter false ratio",
+               "type":"double",
+               "nickname":"get_bloom_filter_false_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_false_ratio",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all bloom filter false ratio",
+               "type":"double",
+               "nickname":"get_all_bloom_filter_false_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/recent_bloom_filter_false_ratio/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get recent bloom filter false ratio",
+               "type":"double",
+               "nickname":"get_recent_bloom_filter_false_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/recent_bloom_filter_false_ratio",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all recent bloom filter false ratio",
+               "type":"double",
+               "nickname":"get_all_recent_bloom_filter_false_ratio",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_disk_space_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get bloom filter disk space used",
+               "type":"long",
+               "nickname":"get_bloom_filter_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_disk_space_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all bloom filter disk space used",
+               "type":"long",
+               "nickname":"get_all_bloom_filter_disk_space_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_off_heap_memory_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get bloom filter off heap memory used",
+               "type":"long",
+               "nickname":"get_bloom_filter_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/bloom_filter_off_heap_memory_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all bloom filter off heap memory used",
+               "type":"long",
+               "nickname":"get_all_bloom_filter_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/index_summary_off_heap_memory_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get index summary off heap memory used",
+               "type":"long",
+               "nickname":"get_index_summary_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/index_summary_off_heap_memory_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all index summary off heap memory used",
+               "type":"long",
+               "nickname":"get_all_index_summary_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/compression_metadata_off_heap_memory_used/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get compression metadata off heap memory used",
+               "type":"long",
+               "nickname":"get_compression_metadata_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/compression_metadata_off_heap_memory_used",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all compression metadata off heap memory used",
+               "type":"long",
+               "nickname":"get_all_compression_metadata_off_heap_memory_used",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/speculative_retries/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get speculative retries",
+               "type": "long",
+               "nickname":"get_speculative_retries",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/speculative_retries",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all speculative retries",
+               "type": "long",
+               "nickname":"get_all_speculative_retries",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/key_cache_hit_rate/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get key cache hit rate",
+               "type":"double",
+               "nickname":"get_key_cache_hit_rate",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/snapshots_size/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get true snapshots size",
+               "type":"long",
+               "nickname":"get_true_snapshots_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/true_snapshots_size",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all true snapshots size",
+               "type":"long",
+               "nickname":"get_all_true_snapshots_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_hit_out_of_range/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get row cache hit out of range",
+               "type": "long",
+               "nickname":"get_row_cache_hit_out_of_range",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_hit_out_of_range",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all row cache hit out of range",
+               "type": "long",
+               "nickname":"get_all_row_cache_hit_out_of_range",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_hit/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get row cache hit",
+               "type": "long",
+               "nickname":"get_row_cache_hit",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_hit",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all row cache hit",
+               "type": "long",
+               "nickname":"get_all_row_cache_hit",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_miss/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get row cache miss",
+               "type": "long",
+               "nickname":"get_row_cache_miss",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/row_cache_miss",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all row cache miss",
+               "type": "long",
+               "nickname":"get_all_row_cache_miss",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_prepare/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas prepare",
+               "type": "long",
+               "nickname":"get_cas_prepare",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_propose/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas propose",
+               "type": "long",
+               "nickname":"get_cas_propose",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_commit/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas commit",
+               "type": "long",
+               "nickname":"get_cas_commit",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/sstables_per_read_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get sstables per read histogram",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               },
+               "nickname":"get_sstables_per_read_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/tombstone_scanned_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get tombstone scanned histogram",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               },
+               "nickname":"get_tombstone_scanned_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/live_scanned_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get live scanned histogram",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               },
+               "nickname":"get_live_scanned_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/col_update_time_delta_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get col update time delta histogram",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               },
+               "nickname":"get_col_update_time_delta_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/column_family/metrics/coordinator/read",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get coordinator read latency",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_coordinator_read_latency",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/column_family/metrics/coordinator/scan",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get coordinator scan latency",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_coordinator_scan_latency",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/column_family/metrics/waiting_on_free_memtable",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get waiting on free memtable space",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_waiting_on_free_memtable_space",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+         "path":"/column_family/metrics/read_latency/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_read_latency_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_read_latency_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/range_latency/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_range_latency_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/range_latency/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_range_latency_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_write_latency_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_write_latency_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_prepare/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas prepare",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_prepare_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_prepare/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas prepare",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_prepare_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_propose/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas propose",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_propose_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_propose/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas propose",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_propose_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_commit/estimated_recent_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas commit",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_commit_estimated_recent_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/cas_commit/estimated_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get cas commit",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_commit_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "mapper":{
+         "id":"mapper",
+         "description":"A key value mapping",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"string",
+               "description":"The value"
+            }
+         }
+      },
+      "column_family_info":{
+         "id":"column_family_info",
+         "description":"Information about column family",
+         "properties":{
+            "ks":{
+               "type":"string",
+               "description":"The Keyspace"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family"
+            },
+            "type":{
+               "type":"string",
+               "description":"The column family type"
+            }
+         }
+      },
+      "toppartitions_record":{
+         "id":"toppartitions_record",
+         "description":"nodetool toppartitions query record",
+         "properties":{
+            "partition":{
+               "type":"string",
+               "description":"Partition key"
+            },
+            "count":{
+               "type":"long",
+               "description":"Number of read/write operations"
+            },
+            "error":{
+               "type":"long",
+               "description":"Indication of inaccuracy in counting PKs"
+            }
+         }
+      },
+      "toppartitions_query_results":{
+         "id":"toppartitions_query_results",
+         "description":"nodetool toppartitions query results",
+         "properties":{
+            "read_cardinality":{
+               "type":"long",
+               "description":"Number of the unique operations in the sample set"
+            },
+            "read":{
+               "type":"array",
+               "items":{
+                  "type":"toppartitions_record"
+               },
+               "description":"Read results"
+            },
+            "write_cardinality":{
+               "type":"long",
+               "description":"Number of the unique operations in the sample set"
+            },
+            "write":{
+               "type":"array",
+               "items":{
+                  "type":"toppartitions_record"
+               },
+               "description":"Write results"
+            }
+         }
+      }
+   }
+}
