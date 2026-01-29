@@ -1296,6 +1296,30 @@
          ]
       },
       {
+         "path":"/storage_service/logstor_compaction",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Trigger compaction of the key-value storage",
+               "type":"void",
+               "nickname":"logstor_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"major",
+                     "description":"When true, perform a major compaction",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/active_repair/",
          "operations":[
             {

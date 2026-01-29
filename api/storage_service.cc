@@ -844,6 +844,19 @@ rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req)
 
 static
 future<json::json_return_type>
+rest_logstor_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
+        bool major = false;
+        if (auto major_param = req->get_query_param("major"); !major_param.empty()) {
+            major = validate_bool(major_param);
+        }
+        apilog.info("logstor_compaction: major={}", major);
+        auto& db = ctx.db;
+        co_await replica::database::trigger_logstor_compaction_on_all_shards(db, major);
+        co_return json_void();
+}
+
+static
+future<json::json_return_type>
 rest_decommission(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("decommission");
         return ss.local().decommission().then([] {
@@ -1820,6 +1833,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
+    ss::logstor_compaction.set(r, rest_bind(rest_logstor_compaction, ctx));
     ss::decommission.set(r, rest_bind(rest_decommission, ss));
     ss::move.set(r, rest_bind(rest_move, ss));
     ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
@@ -1899,6 +1913,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::reset_cleanup_needed.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
+    ss::logstor_compaction.unset(r);
     ss::decommission.unset(r);
     ss::move.unset(r);
     ss::remove_node.unset(r);

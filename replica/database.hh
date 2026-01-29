@@ -2017,6 +2017,9 @@ public:
     // a wrapper around flush_all_tables, allowing the caller to express intent more clearly
     future<> flush_commitlog() { return flush_all_tables(); }
 
+    static future<> trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major);
+    future<> trigger_logstor_compaction(bool major);
+
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 
     static future<> drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id);
