@@ -356,6 +356,7 @@ inline constexpr token bias(uint64_t n) {
     return token::bias(n);
 }
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
+size_t compaction_group_of(unsigned most_significant_bits, dht::raw_token);
 token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
 // Generates 'count' tokens uniformly distributed in the token ring. Sorted.

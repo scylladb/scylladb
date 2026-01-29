@@ -231,6 +231,15 @@ dht::token find_first_token_for_shard(
 }
 
 size_t
+compaction_group_of(unsigned most_significant_bits, dht::raw_token t) {
+    if (!most_significant_bits) {
+        return 0;
+    }
+    uint64_t adjusted = unbias(t);
+    return adjusted >> (64 - most_significant_bits);
+}
+
+size_t
 compaction_group_of(unsigned most_significant_bits, const token& t) {
     if (!most_significant_bits) {
         return 0;

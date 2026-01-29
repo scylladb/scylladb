@@ -4056,7 +4056,7 @@ private:
     future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() * 2);
+        tablet_map new_tablets(tablets.tablet_count() * 2, tablets.has_raft_info(), tablet_map::initialized_later());
 
         for (tablet_id tid : tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -4066,8 +4066,8 @@ private:
 
             auto& tablet_info = tablets.get_tablet_info(tid);
 
-            new_tablets.set_tablet(new_left_tid, tablet_info);
-            new_tablets.set_tablet(new_right_tid, tablet_info);
+            new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
+            new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4080,7 +4080,7 @@ private:
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() / 2);
+        tablet_map new_tablets(tablets.tablet_count() / 2, tablets.has_raft_info(), tablet_map::initialized_later());
 
         for (tablet_id tid : new_tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -4108,7 +4108,7 @@ private:
             }
             lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
-            new_tablets.set_tablet(tid, *merged_tablet_info);
+            new_tablets.emplace_tablet(tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",

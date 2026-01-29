@@ -598,7 +598,12 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
 
 namespace {
 
-tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
+using updating = bool_class<struct updating_tag>;
+
+// is_updating == updating::yes means we're making random updates of an already populated tablet_map.
+// Otherwise, we're populating a tablet_map constructed with tablet_map::initialized_later.
+tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
+                          const cql3::untyped_result_set_row& row, updating is_updating) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
         tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -657,7 +662,20 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
+
+    auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
+    auto info = tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at};
+    if (is_updating) {
+        auto old_last_token = map.get_last_token(tid);
+        if (last_token != old_last_token) {
+            // Boundary changes require a full tablet_map refresh.
+            on_internal_error(tablet_logger, format("Inconsistent last_token for table {} tablet {}: {} != {}",
+                    table, tid, last_token, old_last_token));
+        }
+        map.set_tablet(tid, std::move(info));
+    } else {
+        map.emplace_tablet(tid, last_token, std::move(info));
+    }
 
     if (row.has("raft_group_id")) {
         if (!map.has_raft_info()) {
@@ -685,14 +703,6 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                 break;
             }
         }
-    }
-
-    auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-    auto current_last_token = map.get_last_token(tid);
-    if (current_last_token != persisted_last_token) {
-        tablet_logger.debug("current tablet_map: {}", map);
-        throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
-                                        persisted_last_token, current_last_token, table, tid));
     }
 
     return *map.next_tablet(tid);
@@ -727,7 +737,7 @@ struct tablet_metadata_builder {
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
                 auto with_raft_info = db->features().strongly_consistent_tables && row.has("raft_group_id");
-                auto tmap = tablet_map(tablet_count, with_raft_info);
+                auto tmap = tablet_map(tablet_count, with_raft_info, tablet_map::initialized_later());
                 auto first_tablet = tmap.first_tablet();
                 current = active_tablet_map{table, std::move(tmap), first_tablet};
             }
@@ -751,7 +761,7 @@ struct tablet_metadata_builder {
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+            current->tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no);
         }
     }
 
@@ -860,7 +870,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
-            process_one_row(&db, hint.table_id, tmap, tid, res->one());
+            process_one_row(&db, hint.table_id, tmap, tid, res->one(), updating::yes);
         }
     }
 }
