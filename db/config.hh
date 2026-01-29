@@ -446,6 +446,7 @@ public:
     named_value<uint32_t> reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_cpu_concurrency;
+    named_value<float> reader_concurrency_semaphore_preemptive_abort_factor;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_cpu_concurrency;

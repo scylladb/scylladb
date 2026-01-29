@@ -2152,6 +2152,7 @@ struct scoped_execption_log_level {
 
 SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
     cql_test_config cfg;
+    cfg.db_config->reader_concurrency_semaphore_preemptive_abort_factor.set(0.0);
     const auto read_timeout = 10ms;
     const auto write_timeout = 10s;
     cfg.query_timeout.emplace(timeout_config{
