@@ -561,6 +561,7 @@ scylla_tests = set([
     'test/boost/crc_test',
     'test/boost/dict_trainer_test',
     'test/boost/dirty_memory_manager_test',
+    'test/boost/tablet_aware_restore_test',
     'test/boost/double_decker_test',
     'test/boost/duration_test',
     'test/boost/dynamic_bitset_test',
