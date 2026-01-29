@@ -60,6 +60,24 @@ async def safe_rolling_restart(manager, servers, with_down):
     cql = await reconnect_driver(manager)
     return cql
 
+async def wait_for_valid_load_stats(cql, table_id, timeout=120):
+    started = time.time()
+    # Wait until the given table has no missing tablet sizes
+    while True:
+        missing_cnt = 0
+        found_cnt = 0
+        for r in await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table_id};"):
+            found_cnt += 1
+            if len(r.missing_replicas) > 0:
+                missing_cnt += 1
+
+        if missing_cnt == 0 and found_cnt > 0:
+            break
+
+        assert time.time() - started < timeout, "Timed out while waiting for valid load_stats"
+
+        await asyncio.sleep(0.2)
+
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
     """Test that you can create a table and insert and query data"""
@@ -1921,6 +1939,43 @@ async def test_update_load_stats_after_migration(manager: ManagerClient):
         logger.info(f'replica_hosts: {replica_hosts}')
         assert leaving_replica[0] not in replica_hosts, "Leaving replica tablet size is not in load_stats any more"
         assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_crash_on_missing_table_from_load_stats(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--smp', '2',
+    ]
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+    ])
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        # Make sure load_stats has been refreshed and that the coordinator has cached load_stats
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        await wait_for_valid_load_stats(cql, table_id)
+
+        # Kill the non-coordinator node
+        await manager.server_stop_gracefully(servers[1].server_id)
+
+        # Drop the table; this leaves the table size in the cached load_stats on the coordinator
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        # Wait for the next load_stats refresh
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await s0_log.wait_for('raft topology: Refreshed table load stats for all DC', from_mark=s0_mark)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
