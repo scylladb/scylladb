@@ -58,7 +58,7 @@ class BoostTestFile(CppFile):
     def list_test_cases(self) -> list[str]:
         if self.no_parallel:
             return [self.test_name]
-        return get_boost_test_list_json_content(executable=self.exe_path,combined=self.combined).get(self.test_name, [])
+        return get_boost_test_list_content(executable=self.exe_path,combined=self.combined).get(self.test_name, [])
 
     def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
         run_test = f"{self.test_name}/{test_case.test_case_name}" if self.combined else test_case.test_case_name

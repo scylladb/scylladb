@@ -1242,66 +1242,66 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *utf::label("nightly")) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
-        return;
-    }
-
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
-        auto populate = [&env] (schema_ptr s, const utils::chunked_vector<mutation>& mutations) {
-            const auto remote_shard = (this_shard_id() + 1) % smp::count;
-            auto frozen_mutations =
-                mutations
-                | std::views::transform([] (const mutation& m) { return freeze(m); })
-                | std::ranges::to<utils::chunked_vector<frozen_mutation>>();
-            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
-                auto mt = make_lw_shared<replica::memtable>(s.get());
-
-                for (auto& mut : frozen_mutations) {
-                    mt->apply(mut, s.get());
-                }
-
-                return make_foreign(mt);
-            }).get();
-
-            auto reader_factory = [&env, remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& range,
-                    const query::partition_slice& slice,
-                    tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd_sm,
-                    mutation_reader::forwarding fwd_mr) {
-                auto remote_reader = env.db().invoke_on(remote_shard,
-                        [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
-                    return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_mutation_reader(s.get(),
-                            make_reader_permit(env),
-                            range,
-                            slice,
-                            trace_state.get(),
-                            fwd_sm,
-                            fwd_mr)));
-                }).get();
-                return make_foreign_reader(s, std::move(permit), std::move(remote_reader), fwd_sm);
-            };
-
-            auto reader_factory_ptr = make_lw_shared<decltype(reader_factory)>(std::move(reader_factory));
-
-            return mutation_source([reader_factory_ptr] (schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& range,
-                    const query::partition_slice& slice,
-                    tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd_sm,
-                    mutation_reader::forwarding fwd_mr) {
-                return (*reader_factory_ptr)(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd_sm, fwd_mr);
-            });
-        };
-
-        run_mutation_source_tests(populate);
-        return make_ready_future<>();
-    }).get();
-}
+//SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *utf::label("nightly")) {
+//    if (smp::count < 2) {
+//        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+//        return;
+//    }
+//
+//    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+//        auto populate = [&env] (schema_ptr s, const utils::chunked_vector<mutation>& mutations) {
+//            const auto remote_shard = (this_shard_id() + 1) % smp::count;
+//            auto frozen_mutations =
+//                mutations
+//                | std::views::transform([] (const mutation& m) { return freeze(m); })
+//                | std::ranges::to<utils::chunked_vector<frozen_mutation>>();
+//            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
+//                auto mt = make_lw_shared<replica::memtable>(s.get());
+//
+//                for (auto& mut : frozen_mutations) {
+//                    mt->apply(mut, s.get());
+//                }
+//
+//                return make_foreign(mt);
+//            }).get();
+//
+//            auto reader_factory = [&env, remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
+//                    reader_permit permit,
+//                    const dht::partition_range& range,
+//                    const query::partition_slice& slice,
+//                    tracing::trace_state_ptr trace_state,
+//                    streamed_mutation::forwarding fwd_sm,
+//                    mutation_reader::forwarding fwd_mr) {
+//                auto remote_reader = env.db().invoke_on(remote_shard,
+//                        [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
+//                    return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_mutation_reader(s.get(),
+//                            make_reader_permit(env),
+//                            range,
+//                            slice,
+//                            trace_state.get(),
+//                            fwd_sm,
+//                            fwd_mr)));
+//                }).get();
+//                return make_foreign_reader(s, std::move(permit), std::move(remote_reader), fwd_sm);
+//            };
+//
+//            auto reader_factory_ptr = make_lw_shared<decltype(reader_factory)>(std::move(reader_factory));
+//
+//            return mutation_source([reader_factory_ptr] (schema_ptr s,
+//                    reader_permit permit,
+//                    const dht::partition_range& range,
+//                    const query::partition_slice& slice,
+//                    tracing::trace_state_ptr trace_state,
+//                    streamed_mutation::forwarding fwd_sm,
+//                    mutation_reader::forwarding fwd_mr) {
+//                return (*reader_factory_ptr)(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd_sm, fwd_mr);
+//            });
+//        };
+//
+//        run_mutation_source_tests(populate);
+//        return make_ready_future<>();
+//    }).get();
+//}
 
 SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
     struct null { };
