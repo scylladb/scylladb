@@ -207,33 +207,13 @@ void raft_group0::init_rpc_verbs(raft_group0& shard0_this) {
                 return shard0_this._raft_gr.get_server(gid).modify_config(std::move(add), std::move(del), nullptr);
             });
         });
-
-    ser::group0_rpc_verbs::register_get_group0_upgrade_state(&shard0_this._ms.local(),
-        [&shard0_this] (const rpc::client_info&) -> future<group0_upgrade_state> {
-            return smp::submit_to(0, [&shard0_this]() -> future<group0_upgrade_state> {
-                const auto [holder, state] = co_await shard0_this._client.get_group0_upgrade_state();
-                co_return state;
-            });
-        });
 }
 
 future<> raft_group0::uninit_rpc_verbs(netw::messaging_service& ms) {
     return when_all_succeed(
         ser::group0_rpc_verbs::unregister_group0_peer_exchange(&ms),
-        ser::group0_rpc_verbs::unregister_group0_modify_config(&ms),
-        ser::group0_rpc_verbs::unregister_get_group0_upgrade_state(&ms)
+        ser::group0_rpc_verbs::unregister_group0_modify_config(&ms)
     ).discard_result();
-}
-
-static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messaging_service& ms, const locator::host_id addr, abort_source& as) {
-    auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, addr, as);
-    auto state_int = static_cast<int8_t>(state);
-    if (state_int > group0_upgrade_state_last) {
-        on_internal_error(upgrade_log, format(
-            "send_get_group0_upgrade_state: unknown value for `group0_upgrade_state` received from node {}: {}",
-            addr, state_int));
-    }
-    co_return state;
 }
 
 const raft::server_id& raft_group0::load_my_id() {
@@ -1187,43 +1167,6 @@ struct sleep_with_exponential_backoff {
         _retry_period = std::min(_retry_period * 2, _max_retry_period);
     }
 };
-
-future<> raft_group0::wait_for_all_nodes_to_finish_upgrade(abort_source& as) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-    static constexpr auto max_concurrency = 10;
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        group0_members members0{_raft_gr.group0()};
-        auto current_config = members0.get_host_ids();
-        if (current_config.empty()) {
-            continue;
-        }
-
-        std::unordered_set<locator::host_id> pending_nodes{current_config.begin(), current_config.end()};
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
-            try {
-                upgrade_log.info("wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})`", node);
-                const auto upgrade_state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(_ms.local()), node));
-                if (upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
-                    pending_nodes.erase(node);
-                }
-            } catch (abort_requested_exception&) {
-                upgrade_log.warn("wait_for_everybody_to_finish_upgrade: abort requested during `send_get_group0_upgrade_state({})`", node);
-                throw;
-            } catch (...) {
-                upgrade_log.warn(
-                        "wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})` failed: {}",
-                        node, std::current_exception());
-            }
-        });
-
-        if (pending_nodes.empty()) {
-            co_return;
-        } else {
-            upgrade_log.warn("wait_for_everybody_to_finish_upgrade: nodes {} didn't finish upgrade yet", pending_nodes);
-        }
-    }
-}
 
 void raft_group0::register_metrics() {
     namespace sm = seastar::metrics;
