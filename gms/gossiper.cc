@@ -2424,8 +2424,8 @@ bool gossiper::is_enabled() const {
 void gossiper::add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time) {
     auto now_ = now();
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
-    logger.info("Node {} will be removed from gossip at [{:%Y-%m-%d %T}]: (expire = {}, now = {}, diff = {} seconds)",
-            endpoint, fmt::localtime(clk::to_time_t(expire_time)), expire_time.time_since_epoch().count(),
+    logger.info("Node {} will be removed from gossip at [{:%Y-%m-%d %T %z}]: (expire = {}, now = {}, diff = {} seconds)",
+            endpoint, fmt::gmtime(clk::to_time_t(expire_time)), expire_time.time_since_epoch().count(),
             now_.time_since_epoch().count(), diff);
     _expire_time_endpoint_map[endpoint] = expire_time;
 }
