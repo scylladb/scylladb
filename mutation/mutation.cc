@@ -316,7 +316,7 @@ auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ct
         ++column_iterator;
     }
 
-    return fmt::format_to(out, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
+    return fmt::format_to(out, "token: {}}}, {}\n}}", dk.token(), mutation_partition::printer(s, m.partition()));
 }
 
 namespace mutation_json {

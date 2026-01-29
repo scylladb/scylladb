@@ -95,7 +95,7 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
 
 bool
 decorated_key::equal(const schema& s, const decorated_key& other) const {
-    if (_token == other._token) {
+    if (_token_data == other._token_data) {
         return _key.legacy_equal(s, other._key);
     }
     return false;
@@ -103,7 +103,7 @@ decorated_key::equal(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
-    auto r = _token <=> other._token;
+    auto r = _token_data <=> other._token_data;
     if (r != 0) {
         return r;
     } else {
@@ -113,7 +113,7 @@ decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const ring_position& other) const {
-    auto r = _token <=> other.token();
+    auto r = _token_data <=> other.token()._data;
     if (r != 0) {
         return r;
     } else if (other.has_key()) {
