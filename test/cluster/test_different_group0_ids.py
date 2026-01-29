@@ -31,5 +31,14 @@ async def test_different_group0_ids(manager: ManagerClient):
     await manager.server_stop(scylla_b.server_id)
     await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr])
 
+    # Since scylla_a and scylla_b have different group0 IDs and didn't join each other,
+    # they are separate clusters. We need to set audit keyspace RF=0 on scylla_b (the node
+    # being decommissioned) to prevent its audit replicas from interfering with the expected
+    # "zero replica after the removal" error from the repair service.
+    cql_b = await manager.get_cql_exclusive(scylla_b)
+    result_b = await cql_b.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+    if result_b:
+        await cql_b.run_async("DROP KEYSPACE audit")
+
     log_file_a = await manager.server_open_log(scylla_a.server_id)
     await log_file_a.wait_for(f'Group0Id mismatch from {id_b}', timeout=30)
