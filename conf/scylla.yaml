@@ -566,10 +566,10 @@ commitlog_total_space_in_mb: -1
 # prometheus_address: 1.2.3.4
 
 # audit settings
-# By default, Scylla does not audit anything.
+# Table audit is enabled by default.
 # 'audit' config option controls if and where to output audited events:
-#   - "none": auditing is disabled (default)
-#   - "table": save audited events in audit.audit_log column family
+#   - "none": auditing is disabled
+#   - "table": save audited events in audit.audit_log column family (default)
 #   - "syslog": send audited events via syslog (depends on OS, but usually to /dev/log)
 audit: "table"
 #
