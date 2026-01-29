@@ -483,9 +483,9 @@ def test_get_records_nonexistent_iterator(dynamodbstreams):
 # these fixtures to module scope.
 
 @contextmanager
-def create_table_ss(dynamodb, dynamodbstreams, type):
+def create_table_ss(dynamodb, dynamodbstreams, type, additional_tags = []):
     table = create_test_table(dynamodb,
-        Tags=TAGS,
+        Tags=TAGS + additional_tags,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
@@ -541,6 +541,11 @@ def test_table_ss_new_image(dynamodb, dynamodbstreams):
 @pytest.fixture(scope="function")
 def test_table_ss_old_image(dynamodb, dynamodbstreams):
     with create_table_ss(dynamodb, dynamodbstreams, 'OLD_IMAGE') as stream:
+        yield stream
+
+@pytest.fixture(scope="function")
+def test_table_ss_new_and_old_images_isolation_always(dynamodb, dynamodbstreams):
+    with create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES', additional_tags = [{'Key': 'system:write_isolation', 'Value': 'always'}]) as stream:
         yield stream
 
 @pytest.fixture(scope="function")
@@ -830,6 +835,181 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbst
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+# send batch writes with puts and deletes into the same partition key
+# we try with deletes at every batch position and all deletes
+def test_streams_batchwrite_into_the_same_partition_deletes_non_existing_items(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        def P(i): return f'{p}___{i}'
+        def C(i): return f'{c}___{i}'
+        def KEY(p, c): return {'p': P(p), 'c': C(c)}
+        def ITEM(p, c, a): return {'p': P(p), 'c': C(c), 'a': a}
+
+        # delete, insert, insert
+        with table.batch_writer() as batch:
+            batch.delete_item(Key=KEY(0, 0))
+            events.append(['REMOVE', KEY(0, 0), None, None])
+
+            batch.put_item(Item=ITEM(0, 1, 101))
+            events.append(['INSERT', KEY(0, 1), None, ITEM(0, 1, 101)])
+
+            batch.put_item(Item=ITEM(0, 2, 102))
+            events.append(['INSERT', KEY(0, 2), None, ITEM(0, 2, 102)])
+
+        # insert, delete, insert
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(1, 0, 200))
+            events.append(['INSERT', KEY(1, 0), None, ITEM(1, 0, 200)])
+
+            batch.delete_item(Key=KEY(1, 1))
+            events.append(['REMOVE', KEY(1, 1), None, None])
+
+            batch.put_item(Item=ITEM(1, 2, 202))
+            events.append(['INSERT', KEY(1, 2), None, ITEM(1, 2, 202)])
+
+        # insert, insert, delete
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(2, 0, 300))
+            events.append(['INSERT', KEY(2, 0), None, ITEM(2, 0, 300)])
+
+            batch.put_item(Item=ITEM(2, 1, 301))
+            events.append(['INSERT', KEY(2, 1), None, ITEM(2, 1, 301)])
+
+            batch.delete_item(Key=KEY(2, 2))
+            events.append(['REMOVE', KEY(2, 2), None, None])
+
+        # delete, delete, delete
+        with table.batch_writer() as batch:
+            batch.delete_item(Key=KEY(3, 0))
+            events.append(['REMOVE', KEY(3, 0), None, None])
+
+            batch.delete_item(Key=KEY(3, 1))
+            events.append(['REMOVE', KEY(3, 1), None, None])
+
+            batch.delete_item(Key=KEY(3, 2))
+            events.append(['REMOVE', KEY(3, 2), None, None])
+
+        # insert, insert, insert
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(4, 0, 500))
+            events.append(['INSERT', KEY(4, 0), None, ITEM(4, 0, 500)])
+
+            batch.put_item(Item=ITEM(4, 1, 501))
+            events.append(['INSERT', KEY(4, 1), None, ITEM(4, 1, 501)])
+
+            batch.put_item(Item=ITEM(4, 2, 502))
+            events.append(['INSERT', KEY(4, 2), None, ITEM(4, 2, 502)])
+        return events
+    do_test(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# send a batch of a single item delete into a table without clustering key
+# we test it because in cdc tables without clustering keys are handled differently
+def test_streams_batchwrite_no_clustering_deletes_non_existing_items(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        with table.batch_writer() as batch:
+            batch.delete_item(Key={'p': p})
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# send batch writes with puts and deletes into the same partition key
+# we do it 5 times, for each time - first insert 4 items, then either delete single item or deleting all items
+def test_streams_batchwrite_into_the_same_partition_deletes_existing_items(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        def P(i): return f'{p}___{i}'
+        def C(i): return f'{c}___{i}'
+        def KEY(p, c): return {'p': P(p), 'c': C(c)}
+        def ITEM(p, c, a): return {'p': P(p), 'c': C(c), 'a': a}
+        def insert_initial_items(p, a_value_base):
+            with table.batch_writer() as batch:
+                batch.put_item(Item=ITEM(p, 0, a_value_base + 0))
+                events.append(['INSERT', KEY(p, 0), None, ITEM(p, 0, a_value_base + 0)])
+                batch.put_item(Item=ITEM(p, 1, a_value_base + 1))
+                events.append(['INSERT', KEY(p, 1), None, ITEM(p, 1, a_value_base + 1)])
+                batch.put_item(Item=ITEM(p, 2, a_value_base + 2))
+                events.append(['INSERT', KEY(p, 2), None, ITEM(p, 2, a_value_base + 2)])
+        
+        # delete, modify, modify
+        insert_initial_items(0, 100)
+        with table.batch_writer() as batch:
+            batch.delete_item(Key=KEY(0, 0))
+            events.append(['REMOVE', KEY(0, 0), ITEM(0, 0, 100), None])
+
+            batch.put_item(Item=ITEM(0, 1, 100101))
+            events.append(['MODIFY', KEY(0, 1), ITEM(0, 1, 101), ITEM(0, 1, 100101)])
+
+            batch.put_item(Item=ITEM(0, 2, 100102))
+            events.append(['MODIFY', KEY(0, 2), ITEM(0, 2, 102), ITEM(0, 2, 100102)])
+
+        # modify, delete, modify
+        insert_initial_items(1, 200)
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(1, 0, 200200))
+            events.append(['MODIFY', KEY(1, 0), ITEM(1, 0, 200), ITEM(1, 0, 200200)])
+
+            batch.delete_item(Key=KEY(1, 1))
+            events.append(['REMOVE', KEY(1, 1), ITEM(1, 1, 201), None])
+
+            batch.put_item(Item=ITEM(1, 2, 200202))
+            events.append(['MODIFY', KEY(1, 2), ITEM(1, 2, 202), ITEM(1, 2, 200202)])
+
+        # modify, modify, delete
+        insert_initial_items(2, 300)
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(2, 0, 300300))
+            events.append(['MODIFY', KEY(2, 0), ITEM(2, 0, 300), ITEM(2, 0, 300300)])
+
+            batch.put_item(Item=ITEM(2, 1, 300301))
+            events.append(['MODIFY', KEY(2, 1), ITEM(2, 1, 301), ITEM(2, 1, 300301)])
+            batch.delete_item(Key=KEY(2, 2))
+            events.append(['REMOVE', KEY(2, 2), ITEM(2, 2, 302), None])
+
+        # delete, delete, delete
+        insert_initial_items(3, 400)
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(3, 0, 400400))
+            events.append(['MODIFY', KEY(3, 0), ITEM(3, 0, 400), ITEM(3, 0, 400400)])
+
+            batch.put_item(Item=ITEM(3, 1, 400401))
+            events.append(['MODIFY', KEY(3, 1), ITEM(3, 1, 401), ITEM(3, 1, 400401)])
+            batch.delete_item(Key=KEY(3, 2))
+            events.append(['REMOVE', KEY(3, 2), ITEM(3, 2, 402), None])
+
+        # modify, modify, modify
+        insert_initial_items(4, 500)
+        with table.batch_writer() as batch:
+            batch.put_item(Item=ITEM(4, 0, 500500))
+            events.append(['MODIFY', KEY(4, 0), ITEM(4, 0, 500), ITEM(4, 0, 500500)])
+
+            batch.put_item(Item=ITEM(4, 1, 500501))
+            events.append(['MODIFY', KEY(4, 1), ITEM(4, 1, 501), ITEM(4, 1, 500501)])
+
+            batch.put_item(Item=ITEM(4, 2, 500502))
+            events.append(['MODIFY', KEY(4, 2), ITEM(4, 2, 502), ITEM(4, 2, 500502)])
+        return events
+    do_test(test_table_ss_new_and_old_images_isolation_always, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# send two batches of a single item (first insert, then delete) into a table without clustering key
+# we test it because in cdc tables without clustering keys are handled differently
+def test_streams_batchwrite_no_clustering_deletes_existing_items(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        # insert initial item
+        with table.batch_writer() as batch:
+            item = {'p': p, 'a': 1}
+            batch.put_item(Item=item)
+            events.append(['INSERT', {'p': p}, None, {'p': p, 'a': 1}])
+
+        with table.batch_writer() as batch:
+            prev_item = {'p': p, 'a': 1}
+            batch.delete_item(Key={'p': p})
+            events.append(['REMOVE', {'p': p}, prev_item, None])
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Replacing an item should result in a MODIFY, rather than REMOVE and MODIFY.
 # Moreover, the old item should be visible in OldImage. Reproduces #6930.
