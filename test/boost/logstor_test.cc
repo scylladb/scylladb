@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(test_single_write_and_read) {
         auto dk = dht::decorate_key(*s, m.key());
 
         // Write the mutation
-        co_await ls.write(m);
+        co_await ls.write(m, group_id{});
 
         // Read it back using the decorated key
         auto read_result = co_await ls.read(*s, dk);
@@ -113,8 +113,8 @@ SEASTAR_TEST_CASE(test_write_and_read_multiple_keys) {
         auto dk2 = dht::decorate_key(*s, m2.key());
 
         // Write both mutations
-        co_await ls.write(m1);
-        co_await ls.write(m2);
+        co_await ls.write(m1, group_id{});
+        co_await ls.write(m2, group_id{});
 
         // Read back first mutation
         auto read_result1 = co_await ls.read(*s, dk1);
@@ -141,13 +141,13 @@ SEASTAR_TEST_CASE(test_overwrite_same_key) {
         auto dk = dht::decorate_key(*s, m1.key());
 
         // Write first mutation
-        co_await ls.write(m1);
+        co_await ls.write(m1, group_id{});
 
         // Create second mutation with same key but different value and higher timestamp
         auto m2 = make_mutation(s, "test_key", "updated_value", 2);
 
         // Write second mutation (should overwrite the first)
-        co_await ls.write(m2);
+        co_await ls.write(m2, group_id{});
 
         // Read back and verify we get the updated value
         auto read_result = co_await ls.read(*s, dk);
@@ -176,8 +176,8 @@ SEASTAR_TEST_CASE(test_same_key_in_different_tables) {
         auto dk2 = dht::decorate_key(*s2, m2.key());
 
         // Write to both tables
-        co_await ls.write(m1);
-        co_await ls.write(m2);
+        co_await ls.write(m1, group_id{});
+        co_await ls.write(m2, group_id{});
 
         // Read from first table and verify
         auto read_result1 = co_await ls.read(*s1, dk1);

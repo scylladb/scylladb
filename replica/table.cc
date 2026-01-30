@@ -4301,7 +4301,11 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     }
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m);
+        logstor::group_id gid {
+            .table = _schema->id(),
+            .compaction_group_id = compaction_group_for_token(m.token()).group_id(),
+        };
+        return _logstor->write(m, gid);
     }
 
     auto& cg = compaction_group_for_token(m.token());
@@ -4319,7 +4323,11 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     }
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m.unfreeze(m_schema));
+        logstor::group_id gid {
+            .table = _schema->id(),
+            .compaction_group_id = compaction_group_for_key(m.key(), m_schema).group_id(),
+        };
+        return _logstor->write(m.unfreeze(m_schema), gid);
     }
 
     auto& cg = compaction_group_for_key(m.key(), m_schema);
