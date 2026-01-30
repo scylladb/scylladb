@@ -285,6 +285,7 @@ def test_desc_table(cql, test_keyspace, random_seed):
 def test_desc_table_with_tablet_options(cql, test_keyspace, random_seed, skip_without_tablets):
     tablet_options = {
         'min_tablet_count': '100',
+        'max_tablet_count': '200',  
         'min_per_shard_tablet_count': '0.8',   # Verify that a floating point value works for this hint
         'expected_data_size_in_gb': '50',
     }

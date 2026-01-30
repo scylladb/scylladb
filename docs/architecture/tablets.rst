@@ -106,6 +106,8 @@ The computed number of tablets a table will have is based on several parameters 
   tablets on average. See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
 * Table-level option ``'min_tablet_count'``. This option sets the minimal number of tablets for the given table.
   See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
+* Table-level option ``'max_tablet_count'``. This option sets the maximum number of tablets for the given table
+  See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
 * Config option ``'tablets_initial_scale_factor'``. This option sets the minimal number of tablets per shard
   per table globally. This option can be overridden by the table-level option: ``'min_per_shard_tablet_count'``.
   ``'tablets_initial_scale_factor'`` is ignored if either the keyspace option ``'initial'`` or table-level
@@ -118,6 +120,18 @@ half the target tablet size, it will be merged (the number of tablets will be ha
 
 Each of these factors is taken into consideration, and the one producing the largest number of tablets wins, and
 will be used as the number of tablets for the given table.
+
+.. note::
+
+    When both ``'min_tablet_count'`` and ``'max_tablet_count'`` are set together, ScyllaDB validates the
+    combination by computing **effective** bounds:
+
+    * The **effective minimum** is the smallest power of 2 that is greater than or equal to ``min_tablet_count``.
+    * The **effective maximum** is the largest power of 2 that is less than or equal to ``max_tablet_count``.
+
+    ScyllaDB validates that the effective minimum does not exceed the effective maximum. If it does,
+    the ``CREATE TABLE`` statement will be rejected with an error. To avoid ambiguity, it is recommended
+    to use power-of-2 values for both options.
 
 As the last step, in order to avoid having too many tablets per shard, which could potentially lead to overload
 and performance degradation, ScyllaDB will run the following algorithm to respect the ``tablets_per_shard_goal``
