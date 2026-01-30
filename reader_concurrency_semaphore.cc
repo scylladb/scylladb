@@ -1765,6 +1765,10 @@ class tracking_file_impl : public file_impl {
 private:
     template <std::invocable<file_impl&> Func>
     auto wrap_read_io(size_t read_size, Func&& func) -> std::invoke_result_t<Func, file_impl&> {
+        // Switch to active_await even before requesting memory -- the read
+        // doesn't really need CPU at this point: it needs memory and IO.
+        reader_permit::awaits_guard awaits_guard(_permit);
+
         auto units = co_await _permit.request_memory(read_size);
 
         auto res = co_await func(*get_file_impl(_tracked_file));
