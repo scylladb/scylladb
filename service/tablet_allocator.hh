@@ -100,7 +100,7 @@ class load_balancer_stats_manager {
     using host_id = locator::host_id;
 
     sstring group_name;
-    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
+    std::unordered_map<dc_name, lw_shared_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
     load_balancer_cluster_stats _cluster_stats;
     seastar::metrics::label dc_label{"target_dc"};
@@ -113,7 +113,7 @@ class load_balancer_stats_manager {
 public:
     load_balancer_stats_manager(sstring group_name);
 
-    load_balancer_dc_stats& for_dc(const dc_name& dc);
+    const lw_shared_ptr<load_balancer_dc_stats>& for_dc(const dc_name& dc);
     load_balancer_node_stats& for_node(const dc_name& dc, host_id node);
     load_balancer_cluster_stats& for_cluster();
 
@@ -196,7 +196,7 @@ public:
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size() && _drain_failures.empty(); }
+    bool empty() const { return !size(); }
     size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
