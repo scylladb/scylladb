@@ -1373,8 +1373,7 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
     }
     auto stats = std::make_unique<stats_metadata>(old_stats);
     stats->repaired_at = repaired_at;
-     _components->statistics.contents[metadata_type::Stats] = std::move(stats);
-    rewrite_statistics();
+    _components->statistics.contents[metadata_type::Stats] = std::move(stats);
     return old_repaired_at;
 }
 
@@ -1383,18 +1382,9 @@ future<> sstable::copy_components(const sstable& src) {
     _recognized_components = src._recognized_components;
 }
 
-void sstable::rewrite_statistics() {
-    sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-
-    auto lock = get_units(_mutate_sem, 1).get();
-    file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
-    auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::truncate).get();
-    write(_version, w, _components->statistics);
-    w.close();
-    // rename() guarantees atomicity when renaming a file into place.
-    sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+bool sstable::should_update_repaired_at(int64_t repaired_at) const {
+    const stats_metadata& stats = get_stats_metadata();
+    return stats.repaired_at != repaired_at;
 }
 
 // Creates a new SSTable generation by hard-linking existing components and rewriting a specific one.
@@ -3215,38 +3205,37 @@ void sstable::set_sstable_level(uint32_t new_level) {
     s.sstable_level = new_level;
 }
 
-future<> sstable::mutate_sstable_level(uint32_t new_level) {
+void sstable::mutate_sstable_level(uint32_t new_level) {
     if (!has_component(component_type::Statistics)) {
-        return make_ready_future<>();
+        return;
     }
 
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        return make_ready_future<>();
+        return;
     }
 
     auto& p = entry->second;
     if (!p) {
-        return make_exception_future<>(std::runtime_error("Statistics is malformed"));
+        throw std::runtime_error("Statistics is malformed");
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
-        return make_ready_future<>();
+        return;
     }
 
     s.sstable_level = new_level;
-    // Technically we don't have to write the whole file again. But the assumption that
-    // we will always write sequentially is a powerful one, and this does not merit an
-    // exception.
-    return seastar::async([this] {
-        // This is not part of the standard memtable flush path, but there is no reason
-        // to come up with a class just for that. It is used by the snapshot/restore mechanism
-        // which comprises mostly hard link creation and this operation at the end + this operation,
-        // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
-        // priority enough so we will use the default priority
-        rewrite_statistics();
-    });
 }
+
+bool sstable::should_mutate_sstable_level(uint32_t new_level) const {
+    try {
+        const auto& stats = get_stats_metadata();
+        return stats.sstable_level != new_level;
+    } catch (...) {
+        return false;
+    }
+}
+
 
 int sstable::compare_by_max_timestamp(const sstable& other) const {
     auto ts1 = get_stats_metadata().max_timestamp;

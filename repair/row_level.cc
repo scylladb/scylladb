@@ -2168,25 +2168,55 @@ public:
 public:
     future<> mark_sstable_as_repaired() {
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (_incremental_repair_meta.sst_set || !sstables.empty()) {
-            co_await seastar::async([&] {
-                auto do_mark_sstable_as_repaired = [&] (const sstables::shared_sstable& sst, const sstring& type) {
-                    auto filename = sst->toc_filename();
-                    auto name = sst->component_basename(component_type::Data);
-                    int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
-                    sst->update_repaired_at(repaired_at);
-                    rlogger.info("Marking filename={} name={} repaired_at={} being_repaired={} type={} for incremental repair",
-                            filename, name, repaired_at, sst->being_repaired, type);
-                };
-                _incremental_repair_meta.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
-                    seastar::thread::maybe_yield();
-                    do_mark_sstable_as_repaired(sst, "existing");
-                });
-                for (auto& sst : sstables) {
-                    seastar::thread::maybe_yield();
-                    do_mark_sstable_as_repaired(sst, "repair_produced");
+        if (!_incremental_repair_meta.sst_set && !sstables.empty()) {
+            co_return;
+        }
+
+        auto& table = _db.local().find_column_family(_schema->id());
+        auto& cm = table.get_compaction_manager();
+        int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
+
+        auto modifier = [repaired_at] (sstables::sstable& new_sst) {
+            new_sst.update_repaired_at(repaired_at);
+        };
+
+        std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_group;
+        auto add_sstable = [&] (const sstables::shared_sstable& sst) {
+            if (sst->should_update_repaired_at(repaired_at)) {
+                auto& view = table.compaction_group_view_for_sstable(sst);
+                sstables_by_group[&view].push_back(sst);
+            }
+        };
+
+        if (_incremental_repair_meta.sst_set) {
+            _incremental_repair_meta.sst_set->for_each_sstable(add_sstable);
+        }
+
+        for (auto& sst : sstables) {
+            add_sstable(sst);
+        }
+
+        for (auto& [view, ssts] : sstables_by_group) {
+            for (auto& sst : ssts) {
+                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
+                        sst->toc_filename(), repaired_at, sst->being_repaired);
+            }
+            auto rewritten_sstables = co_await cm.perform_component_rewrite(*view, tasks::task_info{}, std::move(ssts),
+                    sstables::component_type::Statistics, modifier);
+
+            // remove the old sstables from incremental repair meta and add the new ones
+            for (auto& ss : rewritten_sstables) {
+                bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
+                if (erased) {
+                    _incremental_repair_meta.sst_set->insert(ss.second);
                 }
-            });
+
+                auto it = sstables.find(ss.first);
+                if (it != sstables.end()) {
+                    sstables.erase(it);
+                    sstables.insert(ss.second);
+                }
+            }
         }
     }
 };

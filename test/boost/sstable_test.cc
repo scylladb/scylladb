@@ -13,14 +13,18 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
 
+#include "sstables/checksum_utils.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
+#include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
@@ -398,22 +402,43 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
+future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const std::string& dir_path, uint32_t new_level) {
+    auto modifier = [new_level] (sstables::sstable& sst) {
+        sst.mutate_sstable_level(new_level);
+    };
+    auto creator = [&env, &dir_path] (shared_sstable sstp) {
+        return env.make_sstable(sstp->get_schema(), dir_path, sstp->get_version());
+    };
+
+    auto new_sst = co_await sstp->link_with_rewritten_component(std::move(creator), component_type::Statistics, modifier, false);
+    co_await sstp->unlink();
+    sstp = new_sst;
+
+    sstp = co_await env.reusable_sst(uncompressed_schema(), dir_path, sstp->generation());
+    co_return sstp;
+}
+
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
-        auto uncompressed_dir_copy = env.tempdir().path();
-        for (const auto& entry : std::filesystem::directory_iterator(uncompressed_dir().c_str())) {
-            std::filesystem::copy(entry.path(), uncompressed_dir_copy / entry.path().filename());
-        }
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
 
-        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
-        auto file_path = sstable::filename(uncompressed_dir_copy.native(), "ks", "cf", la, generation_from_value(1), big, component_type::Data);
-        auto exists = file_exists(file_path).get();
-        BOOST_REQUIRE(exists);
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sstp = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts);
 
-        // mutate_sstable_level results in statistics rewrite
-        sstp->mutate_sstable_level(10).get();
+        auto toc_path = fmt::to_string(sstp->toc_filename());
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
 
-        sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
+        BOOST_REQUIRE(sstp->get_sstable_level() != 10);
+
+        sstp = mutate_sstable_level(env, sstp, dir_path, 10).get();
+        sstp = env.reusable_sst(schema, dir_path, sstp->generation()).get();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
