@@ -966,7 +966,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
         auto close_stream2 = deferred_close(stream2);
         auto scylla_data = util::read_entire_stream_contiguous(stream2).get();
         auto calc_scylla_digest = crc32_utils::checksum(scylla_data.begin(), scylla_data.size() - sizeof(uint32_t));
-        BOOST_REQUIRE_EQUAL(calc_scylla_digest, sst_reopened->get_scylla_metadata()->digest);
+        BOOST_REQUIRE_EQUAL(calc_scylla_digest, sst_reopened->get_component_digest(sstables::component_type::Scylla).value());
     });
 }
 
