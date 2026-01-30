@@ -138,6 +138,13 @@ db::tablet_options combine_tablet_options(R&& opts) {
             total_expected_data_size_in_gb += *opt.expected_data_size_in_gb;
             total_expected_data_size_in_gb_count++;
         }
+        if (opt.max_tablet_count) {
+            if (!combined_opts.max_tablet_count) {
+                combined_opts.max_tablet_count = *opt.max_tablet_count;
+            } else {
+                combined_opts.max_tablet_count = std::min(*combined_opts.max_tablet_count, *opt.max_tablet_count);
+            }
+        }
     }
 
     if (total_expected_data_size_in_gb_count) {
@@ -1784,10 +1791,10 @@ public:
             auto target_tablet_size = _target_tablet_size / tables.size();
 
             tablet_count_and_reason target_tablet_count = {1, ""};
-            auto maybe_apply = [&] (tablet_count_and_reason candidate) {
+            auto maybe_apply = [&] (tablet_count_and_reason candidate, bool force = false) {
                 lblogger.debug("Table {} ({}.{}) wants {} tablets due to {}", table, s->ks_name(), s->cf_name(),
                         candidate.tablet_count, candidate.reason);
-                if (candidate.tablet_count > target_tablet_count.tablet_count) {
+                if (candidate.tablet_count > target_tablet_count.tablet_count || force) {
                     target_tablet_count = candidate;
                 }
             };
@@ -1853,6 +1860,13 @@ public:
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
                 maybe_apply({table_plan.current_tablet_count, "current count"});
+            }
+
+            // Apply max_tablet_count cap after all other factors have been considered.
+            if (tablet_options.max_tablet_count) {
+                if (target_tablet_count.tablet_count > static_cast<size_t>(*tablet_options.max_tablet_count)) {
+                    maybe_apply({static_cast<size_t>(*tablet_options.max_tablet_count), "max_tablet_count"}, true);
+                }
             }
 
             if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {

@@ -255,14 +255,20 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     await manager.disable_tablet_balancing()
     hosts = { await manager.get_host_id(s.server_id): s.ip_addr for s in servers }
     cql = manager.get_cql()
+    expected_tablet_count = 4
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': 4}};")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': {expected_tablet_count}, 'max_tablet_count': {expected_tablet_count}}};")
+
 
         def columnar(lst):
             return f"\n    {'\n    '.join([f'{x}' for x in lst])}"
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, "test")
         logger.info(f'system.tablets: {columnar(replicas)}')
+        # replicas contain the list of replicas for each tablet
+        # with load balancing disabled and min_tablet_count being equal to max_tablet_count, 
+        # we expect the same number of tablets as the min/max_tablet_count value 
+        assert len(replicas) == expected_tablet_count, f"Expected {expected_tablet_count} tablets, got {len(replicas)}"
 
         if endpoint == 'describe_ring':
             ring_info = await manager.api.describe_ring(servers[0].ip_addr, ks, "test")
