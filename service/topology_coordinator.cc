@@ -73,6 +73,7 @@
 #include "idl/repair.dist.hh"
 
 #include "service/topology_coordinator.hh"
+#include "service/tablet_migration_rpc_handler.hh"
 
 #include <boost/range/join.hpp>
 #include <seastar/core/metrics_registration.hh>
@@ -117,6 +118,51 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
     // it's versioned_value::value(), not std::optional::value() - it does not throw
     return it->second.value();
 }
+
+/// Real implementation of tablet_migration_rpc_handler that sends RPCs via messaging_service.
+/// Used by the production topology coordinator to perform actual network communication.
+class messaging_tablet_rpc_handler : public tablet_migration_rpc_handler {
+    netw::messaging_service& _messaging;
+    abort_source& _as;
+
+public:
+    messaging_tablet_rpc_handler(netw::messaging_service& messaging, abort_source& as)
+        : _messaging(messaging), _as(as) {}
+
+    future<tablet_operation_repair_result> tablet_repair(
+            locator::host_id dst,
+            raft::server_id dst_id,
+            locator::global_tablet_id tablet,
+            session_id sid) override {
+        co_return co_await ser::storage_service_rpc_verbs::send_tablet_repair(
+            &_messaging, dst, _as, dst_id, tablet, sid);
+    }
+
+    future<> tablet_stream_data(
+            locator::host_id dst,
+            raft::server_id dst_id,
+            locator::global_tablet_id tablet) override {
+        co_return co_await ser::storage_service_rpc_verbs::send_tablet_stream_data(
+            &_messaging, dst, _as, dst_id, tablet);
+    }
+
+    future<> tablet_cleanup(
+            locator::host_id dst,
+            raft::server_id dst_id,
+            locator::global_tablet_id tablet) override {
+        co_return co_await ser::storage_service_rpc_verbs::send_tablet_cleanup(
+            &_messaging, dst, _as, dst_id, tablet);
+    }
+
+    future<> repair_update_compaction_ctrl(
+            locator::host_id dst,
+            locator::global_tablet_id tablet,
+            session_id sid) override {
+        co_return co_await ser::repair_rpc_verbs::send_repair_update_compaction_ctrl(
+            &_messaging, dst, tablet, sid);
+    }
+};
+
 } // namespace
 
 class topology_coordinator : public endpoint_lifecycle_subscriber
@@ -144,6 +190,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     tablet_allocator& _tablet_allocator;
     std::unique_ptr<db::view::view_building_coordinator> _vb_coordinator;
+    std::unique_ptr<tablet_migration_rpc_handler> _tablet_rpc_handler;
 
     cdc::generation_service& _cdc_gens;
 
@@ -1603,8 +1650,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
                         return do_with(gids, [this, dst, session_id = trinfo.session_id] (const auto& gids) {
                             return do_for_each(gids, [this, dst, session_id] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                        dst, _as, raft::server_id(dst.uuid()), gid, session_id).discard_result();
+                                return _tablet_rpc_handler->tablet_repair(dst, raft::server_id(dst.uuid()), gid, session_id).discard_result();
                             });
                         });
                     })) {
@@ -1676,8 +1722,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto dst = trinfo.pending_replica->host;
                         return do_with(gids, [this, dst] (const auto& gids) {
                             return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                           dst, _as, raft::server_id(dst.uuid()), gid);
+                                return _tablet_rpc_handler->tablet_stream_data(dst, raft::server_id(dst.uuid()), gid);
                             });
                         });
                     })) {
@@ -1746,8 +1791,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return do_with(gids, [this, dst] (const auto& gids) {
                             return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                           dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                                return _tablet_rpc_handler->tablet_cleanup(dst.host, raft::server_id(dst.host.uuid()), gid);
                             });
                         }).then([] {
                             return utils::get_local_injector().inject("wait_after_tablet_cleanup", [] (auto& handler) -> future<> {
@@ -1775,8 +1819,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
                             return do_with(gids, [this, dst] (const auto& gids) {
                                 return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                    return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                            dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                                    return _tablet_rpc_handler->tablet_cleanup(dst.host, raft::server_id(dst.host.uuid()), gid);
                                 });
                             });
                         })) {
@@ -1868,8 +1911,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
-                        auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid, session_id);
+                        auto res = co_await _tablet_rpc_handler->tablet_repair(dst, raft::server_id(dst.uuid()), gid, session_id);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
@@ -1935,7 +1977,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             tablet_state.repair_update_compaction_ctrl_retried++;
                         }
                         bool feature = _feature_service.tablet_incremental_repair;
-                        if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [this, ms = &_messaging,
+                        if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [this,
                                     gid = gid, sid = tablet_state.session_id, feature, &tmap] () -> future<> {
                             if (feature) {
                                 if (utils::get_local_injector().enter("fail_rpc_repair_update_compaction_ctrl")) {
@@ -1944,9 +1986,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                     throw std::runtime_error(msg);
                                 }
                                 auto& replicas = tmap.get_tablet_info(gid.tablet).replicas;
-                                co_await coroutine::parallel_for_each(replicas, [this, ms, gid, sid] (locator::tablet_replica r) -> future<> {
+                                co_await coroutine::parallel_for_each(replicas, [this, gid, sid] (locator::tablet_replica r) -> future<> {
                                     if (!is_excluded(raft::server_id(r.host.uuid()))) {
-                                        co_await ser::repair_rpc_verbs::send_repair_update_compaction_ctrl(ms, r.host, gid, sid);
+                                        co_await _tablet_rpc_handler->repair_update_compaction_ctrl(r.host, gid, sid);
                                     }
                                 });
                             }
@@ -3694,6 +3736,7 @@ public:
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
+        , _tablet_rpc_handler(std::make_unique<messaging_tablet_rpc_handler>(_messaging, _as))
         , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] {
             return with_scheduling_group(_db.get_gossip_scheduling_group(), [this] {
