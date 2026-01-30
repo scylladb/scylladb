@@ -47,7 +47,7 @@ class TestGuardrails(Tester):
         #   scylladb/scylladb#23071 and scylladb/scylla-dtest#5633.
         cluster.set_configuration_options(values={"rf_rack_valid_keyspaces": False})
 
-        cluster.populate([1, 1, 1]).start()
+        cluster.populate([1, 1, 1]).start(wait_other_notice=True)
         session_dc1: Session = self.patient_cql_connection(cluster.nodelist()[0])
 
         ks_name = "ks"
