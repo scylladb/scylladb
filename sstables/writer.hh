@@ -65,6 +65,32 @@ serialized_size(sstable_version_types v, const T& object) {
     return size;
 }
 
+class null_data_sink : public data_sink_impl {
+private:
+    size_t _bs;
+public:
+    null_data_sink(size_t bs) : _bs(bs) {}
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
+        return temporary_buffer<char>(size);
+    }
+    virtual future<> put(std::span<temporary_buffer<char>> data) override {
+        return make_ready_future<>();
+    }
+    virtual future<> flush() override {
+        return make_ready_future<>();
+    }
+    virtual future<> close() override {
+        return make_ready_future<>();
+    }
+    virtual size_t buffer_size() const noexcept override {
+        return _bs;
+    }
+};
+
+inline data_sink make_null_data_sink(size_t bs) {
+    return data_sink(std::make_unique<null_data_sink>(bs));
+}
+
 template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink_impl : public data_sink_impl {
@@ -139,6 +165,11 @@ public:
             : file_writer(make_checksummed_file_output_stream<ChecksumType, calculate_chunk_checksums>(std::move(out), _c, _full_checksum), std::move(c))
             , _c(uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size)), {})
             , _full_checksum(ChecksumType::init_checksum()) {}
+
+    checksummed_file_writer(data_sink out, size_t buffer_size)
+        : file_writer(make_checksummed_file_output_stream<ChecksumType, calculate_chunk_checksums>(std::move(out), _c, _full_checksum))
+        , _c(uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size)), {})
+        , _full_checksum(ChecksumType::init_checksum()) {}
 
     // Since we are exposing a reference to _full_checksum, we delete the move
     // constructor.  If it is moved, the reference will refer to the old
