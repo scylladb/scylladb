@@ -223,7 +223,7 @@ With these tables, one may get the relevant traces using a query like the one be
 
 .. code-block:: cql
 
-   SELECT * from system_traces.sessions_time_idx where minutes in ('2016-09-07 16:56:00-0700') and started_at > '2016-09-07 16:56:30-0700';
+   SELECT * from system_traces.sessions_time_idx where minute in ('2016-09-07 16:56:00-0700') and started_at > '2016-09-07 16:56:30-0700';
 
 Storing 
 ^^^^^^^
