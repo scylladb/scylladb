@@ -39,7 +39,7 @@ async def test_maintenance_mode(manager: ManagerClient):
 
         # Token ranges of the server A
         # [(start_token, end_token)]
-        ranges = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"""SELECT start_token, end_token, endpoint
+        ranges = [(int(row[0]), int(row[1])) for row in await cql.run_async(f"""SELECT start_token, end_token
                                                                                 FROM system.token_ring WHERE keyspace_name = '{ks}'
                                                                                 AND endpoint = '{server_a.ip_addr}' ALLOW FILTERING""")]
 
