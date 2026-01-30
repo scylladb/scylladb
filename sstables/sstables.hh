@@ -677,8 +677,13 @@ private:
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = sstable_write_open_flags) noexcept;
 
+    std::unique_ptr<crc32_digest_file_writer> make_calculate_digest_writer() noexcept;
+
     future<std::unique_ptr<crc32_digest_file_writer>> make_digests_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = sstable_write_open_flags) noexcept;
+
+    template <typename T>
+    uint32_t serialized_checksum(sstable_version_types v, const T& object);
 
     void generate_toc();
     void open_sstable(const sstring& origin);
