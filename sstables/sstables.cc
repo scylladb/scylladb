@@ -965,6 +965,18 @@ future<std::unique_ptr<crc32_digest_file_writer>> sstable::make_digests_componen
     co_return std::make_unique<crc32_digest_file_writer>(std::move(sink), sstable_buffer_size, std::move(comp));
 }
 
+std::unique_ptr<crc32_digest_file_writer> sstable::make_calculate_digest_writer() noexcept {
+    return std::make_unique<crc32_digest_file_writer>(make_null_data_sink(sstable_buffer_size), sstable_buffer_size);
+}
+
+template <typename T>
+uint32_t sstable::serialized_checksum(sstable_version_types v, const T& object) {
+    auto writer = make_calculate_digest_writer();
+    write(v, *writer, object);
+    writer->close();
+    return writer->full_checksum();
+}
+
 void sstable::open_sstable(const sstring& origin) {
     _origin = origin;
     generate_toc();
