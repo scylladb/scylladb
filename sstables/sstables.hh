@@ -722,9 +722,6 @@ private:
 
     future<> read_statistics();
     void write_statistics();
-    // Rewrite statistics component by creating a temporary Statistics and
-    // renaming it into place of existing one.
-    void rewrite_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -1019,7 +1016,8 @@ public:
         return _components->compression;
     }
 
-    future<> mutate_sstable_level(uint32_t);
+    void mutate_sstable_level(uint32_t);
+    bool should_mutate_sstable_level(uint32_t) const;
 
     const summary& get_summary() const {
         return _components->summary;
@@ -1134,10 +1132,9 @@ public:
     service::session_id being_repaired;
 public:
     void mark_as_being_repaired(const service::session_id& id);
-    // This function must run inside a seastar thread since it calls
-    // rewrite_statistics which must run inside a seastar thread.
     int64_t update_repaired_at(int64_t repaired_at);
     future<> copy_components(const sstable& src);
+    bool should_update_repaired_at(int64_t repaired_at) const;
 
     // Creates a new sstable by linking all sstable components except for the specified component,
     // which is created by calling the provided sstable_creator function and then written to the disc.
