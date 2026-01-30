@@ -1770,6 +1770,9 @@ private:
         auto res = co_await func(*get_file_impl(_tracked_file));
 
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(res)>, temporary_buffer<uint8_t>>) {
+            // Read could have returned less data than requested, reduce memory usage accordingly.
+            units.reset_to(reader_resources::with_memory(res.size()));
+
             co_return make_tracked_temporary_buffer(std::move(res), std::move(units));
         } else {
             // We currently have two return types: temporary_buffer<uint8_t> (above) and size_t.
