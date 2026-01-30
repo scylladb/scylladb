@@ -167,6 +167,18 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
+std::unique_ptr<crc32_digest_file_writer> make_calculate_digest_writer() noexcept {
+    return std::make_unique<crc32_digest_file_writer>(make_null_data_sink(default_sstable_buffer_size), default_sstable_buffer_size);
+}
+
+template <typename T>
+uint32_t serialized_checksum(sstable_version_types v, const T& object) {
+    auto writer = make_calculate_digest_writer();
+    write(v, *writer, object);
+    writer->close();
+    return writer->full_checksum();
+}
+
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) const noexcept {
   try {
     auto f = _storage->open_component(*this, type, flags, options, _manager.get_config().enable_data_integrity_check);
