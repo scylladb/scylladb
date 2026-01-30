@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "sstables/writer.hh"
 #include "version.hh"
 #include "shared_sstable.hh"
 #include "open_info.hh"
@@ -652,9 +653,15 @@ private:
 
     template <component_type Type, typename T>
     void write_simple(const T& comp);
-    void do_write_simple(file_writer&& writer,
+    void do_write_simple(file_writer& writer,
                          noncopyable_function<void (version_types, file_writer&)> write_component);
     void do_write_simple(component_type type,
+            noncopyable_function<void (version_types version, file_writer& writer)> write_component,
+            unsigned buffer_size);
+
+    template <component_type Type, typename T>
+    uint32_t write_simple_with_digest(const T& comp);
+    uint32_t do_write_simple_with_digest(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);
 
@@ -666,6 +673,9 @@ private:
     future<> unlink_component(component_type type) noexcept;
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
+            open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
+
+    future<std::unique_ptr<crc32_digest_file_writer>> make_digests_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     void generate_toc();

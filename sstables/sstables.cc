@@ -959,6 +959,12 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
         });
 }
 
+future<std::unique_ptr<crc32_digest_file_writer>> sstable::make_digests_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
+    auto comp = component_name(*this, c);
+    auto sink = co_await _storage->make_component_sink(*this, c, oflags, std::move(options));
+    co_return std::make_unique<crc32_digest_file_writer>(std::move(sink), sstable_buffer_size, std::move(comp));
+}
+
 void sstable::open_sstable(const sstring& origin) {
     _origin = origin;
     generate_toc();
@@ -968,7 +974,7 @@ void sstable::open_sstable(const sstring& origin) {
 void sstable::write_toc(file_writer w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
-    do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
+    do_write_simple(w, [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
@@ -1048,7 +1054,7 @@ future<> sstable::read_simple(T& component) {
     });
 }
 
-void sstable::do_write_simple(file_writer&& writer,
+void sstable::do_write_simple(file_writer& writer,
                               noncopyable_function<void (version_types, file_writer&)> write_component) {
     write_component(_version, writer);
     _metadata_size_on_disk += writer.offset();
@@ -1063,7 +1069,7 @@ void sstable::do_write_simple(component_type type,
     file_output_stream_options options;
     options.buffer_size = buffer_size;
     auto w = make_component_file_writer(type, std::move(options)).get();
-    do_write_simple(std::move(w), std::move(write_component));
+    do_write_simple(w, std::move(write_component));
 }
 
 template <component_type Type, typename T>
@@ -1073,10 +1079,30 @@ void sstable::write_simple(const T& component) {
     }, sstable_buffer_size);
 }
 
+uint32_t sstable::do_write_simple_with_digest(component_type type,
+        noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
+    auto file_path = filename(type);
+    sstlog.debug("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+
+    file_output_stream_options options;
+    options.buffer_size = buffer_size;
+    auto w = make_digests_component_file_writer(type, std::move(options)).get();
+    do_write_simple(*w, std::move(write_component));
+    return w->full_checksum();
+}
+
+template <component_type Type, typename T>
+uint32_t sstable::write_simple_with_digest(const T& component) {
+    return do_write_simple_with_digest(Type, [&component] (version_types v, file_writer& w) {
+        write(v, w, component);
+    }, sstable_buffer_size);
+}
+
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f);
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&);
+template uint32_t sstable::write_simple_with_digest<component_type::Summary>(const sstables::summary&);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
