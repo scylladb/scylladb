@@ -3725,7 +3725,8 @@ public:
             gms::feature_service& feature_service,
             endpoint_lifecycle_notifier& lifecycle_notifier,
             qos::service_level_controller& sl_controller,
-            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
+            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+            std::unique_ptr<tablet_migration_rpc_handler> tablet_rpc_handler)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
@@ -3736,7 +3737,7 @@ public:
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
-        , _tablet_rpc_handler(std::make_unique<messaging_tablet_rpc_handler>(_messaging, _as))
+        , _tablet_rpc_handler(tablet_rpc_handler ? std::move(tablet_rpc_handler) : std::make_unique<messaging_tablet_rpc_handler>(_messaging, _as))
         , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] {
             return with_scheduling_group(_db.get_gossip_scheduling_group(), [this] {
@@ -4409,7 +4410,8 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
-        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+        std::unique_ptr<tablet_migration_rpc_handler> tablet_rpc_handler) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
@@ -4420,7 +4422,8 @@ future<> run_topology_coordinator(
             ring_delay,
             feature_service, lifecycle_notifier,
             sl_controller,
-            topology_cmd_rpc_tracker};
+            topology_cmd_rpc_tracker,
+            std::move(tablet_rpc_handler)};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);

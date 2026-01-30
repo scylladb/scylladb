@@ -58,6 +58,7 @@ namespace service {
 
 class raft_group0;
 class tablet_allocator;
+class tablet_migration_rpc_handler;
 
 extern logging::logger rtlogger;
 
@@ -100,7 +101,8 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
-        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+        std::unique_ptr<tablet_migration_rpc_handler> tablet_rpc_handler = nullptr);
 
 class tablet_ops_metrics {
 private:
