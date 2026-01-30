@@ -1762,6 +1762,24 @@ class tracking_file_impl : public file_impl {
     file _tracked_file;
     reader_permit _permit;
 
+private:
+    template <std::invocable<file_impl&> Func>
+    auto wrap_read_io(size_t read_size, Func&& func) -> std::invoke_result_t<Func, file_impl&> {
+        auto units = co_await _permit.request_memory(read_size);
+
+        auto res = co_await func(*get_file_impl(_tracked_file));
+
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(res)>, temporary_buffer<uint8_t>>) {
+            co_return make_tracked_temporary_buffer(std::move(res), std::move(units));
+        } else {
+            // We currently have two return types: temporary_buffer<uint8_t> (above) and size_t.
+            // This assert ensures that any mistake in the above if constexpr condition results in a
+            // compile-time error, instead of temporary buffer silently being returned without tracking.
+            static_assert(std::is_same_v<std::remove_cvref_t<decltype(res)>, size_t>);
+            co_return std::move(res);
+        }
+    }
+
 public:
     tracking_file_impl(file file, reader_permit permit)
         : file_impl(*get_file_impl(file))
@@ -1783,11 +1801,18 @@ public:
     }
 
     virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
-        return get_file_impl(_tracked_file)->read_dma(pos, buffer, len, intent);
+        return wrap_read_io(len, [pos, buffer, len, intent] (file_impl& impl) {
+            return impl.read_dma(pos, buffer, len, intent);
+        });
     }
 
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
-        return get_file_impl(_tracked_file)->read_dma(pos, iov, intent);
+        const auto size = std::ranges::fold_left(iov, size_t(0), [] (size_t acc, const iovec& v) {
+            return acc + v.iov_len;
+        });
+        return wrap_read_io(size, [pos, iov = std::move(iov), intent] (file_impl& impl) mutable {
+            return impl.read_dma(pos, std::move(iov), intent);
+        });
     }
 
     virtual future<> flush(void) override {
@@ -1827,10 +1852,8 @@ public:
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
-        return _permit.request_memory(range_size).then([this, offset, range_size, intent] (reader_permit::resource_units units) {
-            return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, intent).then([units = std::move(units)] (temporary_buffer<uint8_t> buf) mutable {
-                return make_ready_future<temporary_buffer<uint8_t>>(make_tracked_temporary_buffer(std::move(buf), std::move(units)));
-            });
+        return wrap_read_io(range_size, [offset, range_size, intent] (file_impl& impl) {
+            return impl.dma_read_bulk(offset, range_size, intent);
         });
     }
 };
