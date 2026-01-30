@@ -67,6 +67,7 @@ public:
         return schema_builder(system_keyspace::NAME, "cluster_status", std::make_optional(id))
             .with_column("peer", inet_addr_type, column_kind::partition_key)
             .with_column("dc", utf8_type)
+            .with_column("rack", utf8_type)
             .with_column("up", boolean_type)
             .with_column("draining", boolean_type)
             .with_column("excluded", boolean_type)
@@ -111,7 +112,9 @@ public:
                     // Not all entries in gossiper are present in the topology
                     auto& node = tm.get_topology().get_node(hostid);
                     sstring dc = node.dc_rack().dc;
+                    sstring rack = node.dc_rack().rack;
                     set_cell(cr, "dc", dc);
+                    set_cell(cr, "rack", rack);
                     set_cell(cr, "draining", node.is_draining());
                     set_cell(cr, "excluded", node.is_excluded());
                 }
