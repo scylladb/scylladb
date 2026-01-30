@@ -2102,24 +2102,36 @@ std::vector<sstables::shared_sstable> compaction_group::all_sstables() const {
 
 future<>
 compaction_group::update_repaired_at_for_merge() {
-    auto sstables = all_sstables();
     auto sstables_repaired_at = get_sstables_repaired_at();
-    co_await seastar::async([&] {
-        for (auto& sst : sstables) {
-            thread::maybe_yield();
-            auto& stats = sst->get_stats_metadata();
-            if (stats.repaired_at > sstables_repaired_at) {
-                auto neww = 0;
-                auto old = sst->update_repaired_at(neww);
-                tlogger.info("Finished repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                        sst->get_filename(), old, neww, sstables_repaired_at, group_id(), token_range());
-            } else {
-                auto old = stats.repaired_at;
-                tlogger.debug("Skipped repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                        sst->get_filename(), old, old, sstables_repaired_at, group_id(), token_range());
-            }
+    constexpr int64_t new_repaired_at = 0;
+
+    auto modifier = [] (sstables::sstable& new_sst) {
+        new_sst.update_repaired_at(new_repaired_at);
+    };
+
+    std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_view;
+    for (auto& sst : all_sstables()) {
+        auto& stats = sst->get_stats_metadata();
+        if (stats.repaired_at > sstables_repaired_at) {
+            auto& view = view_for_sstable(sst);
+            sstables_by_view[&view].push_back(sst);
+        } else {
+            tlogger.debug("Skipped repaired_at update for tablet merge sstable={} repaired_at={} sstables_repaired_at={} group_id={} range={}",
+                    sst->get_filename(), stats.repaired_at, sstables_repaired_at, group_id(), token_range());
         }
-    });
+    }
+
+    auto& cm = get_compaction_manager();
+    for (auto& [view, ssts] : sstables_by_view) {
+        for (auto& sst : ssts) {
+            tlogger.info("Updating repaired_at for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
+                    sst->get_filename(), sst->get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, group_id(), token_range());
+        }
+        co_await cm.perform_component_rewrite(*view, tasks::task_info{}, std::move(ssts),
+                sstables::component_type::Statistics, modifier);
+    }
+    tlogger.info("Completed updating repaired_at={} for tablet merge in compaction group_id={} range={}",
+            new_repaired_at, group_id(), token_range());
 }
 
 future<std::vector<compaction::compaction_group_view*>> table::get_compaction_group_views_for_repair(dht::token_range range) {

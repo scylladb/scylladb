@@ -381,6 +381,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
         .data_file_directories = cfg.data_file_directories(),
         .format = cfg.sstable_format,
+        .incremental_backups_enabled = cfg.incremental_backups(),
     };
 }
 

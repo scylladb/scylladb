@@ -115,6 +115,7 @@ public:
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
         const std::vector<sstring>& data_file_directories;
         utils::updateable_value<sstring> format = utils::updateable_value<sstring>(fmt::to_string(sstable_version_types::me));
+        bool incremental_backups_enabled = false;
     };
 
 private:
