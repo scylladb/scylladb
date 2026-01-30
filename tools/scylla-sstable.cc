@@ -804,6 +804,7 @@ public:
     virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return do_make_sstable(); }
+    virtual sstables::shared_sstable make_sstable(sstables::sstable_state, sstables::sstable_version_types) const override { return do_make_sstable(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }

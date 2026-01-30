@@ -94,6 +94,9 @@ public:
     sstables::shared_sstable make_sstable(sstables::sstable_state) const override {
         return table().make_sstable();
     }
+    sstables::shared_sstable make_sstable(sstables::sstable_state, sstables::sstable_version_types version) const override {
+        return table().make_sstable(sstables::sstable_state::normal, version);
+    }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _sstables_manager.configure_writer(std::move(origin));
     }

@@ -597,6 +597,7 @@ private:
 
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
+    sstables::shared_sstable make_sstable(sstables::sstable_state state, sstables::sstable_version_types version);
 
 public:
     void on_flush_timer();
