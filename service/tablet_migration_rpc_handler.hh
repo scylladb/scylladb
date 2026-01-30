@@ -1,4 +1,4 @@
-// Copyright (C) 2024-present ScyllaDB
+// Copyright (C) 2026-present ScyllaDB
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once

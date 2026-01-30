@@ -37,7 +37,6 @@ run_topology_coordinator(
 #### Testing (Local Simulation)
 ```cpp
 // In test code
-local_tablet_rpc_simulator simulator(storage_service);
 run_topology_coordinator(
     sys_dist_ks, gossiper, messaging, shared_tm,
     sys_ks, db, group0, topo_sm, vb_sm, as, raft,
@@ -45,7 +44,7 @@ run_topology_coordinator(
     tablet_allocator, cdc_gens, ring_delay,
     lifecycle_notifier, feature_service,
     sl_controller, topology_cmd_rpc_tracker,
-    std::make_unique<local_tablet_rpc_simulator>(simulator)  // Use test simulator
+    std::make_unique<local_tablet_rpc_simulator>(storage_service)  // Create unique_ptr directly
 );
 ```
 

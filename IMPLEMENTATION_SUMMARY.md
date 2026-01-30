@@ -52,8 +52,7 @@ The topology coordinator creates a `messaging_tablet_rpc_handler` that sends act
 
 ### Test Mode
 ```cpp
-local_tablet_rpc_simulator simulator(storage_service);
-run_topology_coordinator(..., std::make_unique<local_tablet_rpc_simulator>(simulator));
+run_topology_coordinator(..., std::make_unique<local_tablet_rpc_simulator>(storage_service));
 ```
 
 Tests can provide a `local_tablet_rpc_simulator` that calls local RPC handlers directly, bypassing the network layer.
