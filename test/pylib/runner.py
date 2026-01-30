@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 import xdist
 import yaml
+from _pytest.junitxml import xml_key
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT
 from test.pylib.scylla_cluster import merge_cmdline_options
@@ -209,12 +210,6 @@ def pytest_runtest_logreport(report):
 
     Uses trylast=True to run after LogXML's hook has created the node_reporter.
     """
-    from _pytest.junitxml import xml_key
-
-    # Only process call phase
-    if report.when != "call":
-        return
-
     # Get the XML reporter
     config = _pytest_config
     if config is None:
@@ -226,19 +221,22 @@ def pytest_runtest_logreport(report):
 
     node_reporter = xml.node_reporter(report)
 
-    nodeid = report.nodeid
-    function_path = f'test/{nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
+    # Only wrap once to avoid multiple wrapping (check on the node_reporter object itself)
+    if not getattr(node_reporter, '__reporter_modified', False):
 
-    # Wrap the to_xml method to add custom attributes to the element
-    original_to_xml = node_reporter.to_xml
+        function_path = f'test/{report.nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
 
-    def custom_to_xml():
-        """Wrapper that adds custom attributes to the testcase element."""
-        element = original_to_xml()
-        element.set("function_path", function_path)
-        return element
+        # Wrap the to_xml method to add custom attributes to the element
+        original_to_xml = node_reporter.to_xml
 
-    node_reporter.to_xml = custom_to_xml
+        def custom_to_xml():
+            """Wrapper that adds custom attributes to the testcase element."""
+            element = original_to_xml()
+            element.set("function_path", function_path)
+            return element
+
+        node_reporter.to_xml = custom_to_xml
+        node_reporter.__reporter_modified = True
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
