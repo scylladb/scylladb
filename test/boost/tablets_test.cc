@@ -3999,7 +3999,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
             keyspaces.push_back(add_keyspace(e, {{topo.dc(), rf}}, initial_tablets));
             auto table = add_table(e, keyspaces.back()).get();
             mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
-                tablet_map tmap(initial_tablets);
+                tablet_map tmap(tmeta.get_tablet_map(table).tablet_count());
                 for (auto tid : tmap.tablet_ids()) {
                     // Choose replicas randomly while loading racks evenly.
                     std::vector<host_id> replica_hosts = allocate_replicas_in_racks(racks, rf, hosts_by_rack);
@@ -5107,7 +5107,7 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
         auto guard = e.get_raft_group0_client().start_operation(as).get();
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             tablet_metadata& tmeta = tm.tablets();
-            tablet_map tmap(initial_tablets);
+            tablet_map tmap(tmeta.get_tablet_map(table1).tablet_count());
             locator::resize_decision decision;
             // leaves growing mode, allowing for merge decision.
             decision.sequence_number = decision.next_sequence_number();
