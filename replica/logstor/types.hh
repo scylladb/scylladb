@@ -28,6 +28,14 @@ struct log_location {
     bool operator==(const log_location& other) const noexcept = default;
 };
 
+struct group_id {
+    table_id table;
+    size_t compaction_group_id;
+
+    bool operator==(const group_id& other) const noexcept = default;
+    auto operator<=>(const group_id& other) const noexcept = default;
+};
+
 struct index_key {
     static constexpr size_t digest_size = 20;
 
@@ -49,6 +57,7 @@ struct index_entry {
 struct log_record {
     index_key key;
     record_generation generation;
+    group_id group;
     canonical_mutation mut;
 };
 
@@ -77,5 +86,13 @@ struct fmt::formatter<replica::logstor::index_key> : fmt::formatter<string_view>
     template <typename FormatContext>
     auto format(const replica::logstor::index_key& key, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{:02x}", fmt::join(key.digest, ""));
+    }
+};
+
+template <>
+struct fmt::formatter<replica::logstor::group_id> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const replica::logstor::group_id& gid, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}", gid.table, gid.compaction_group_id);
     }
 };

@@ -54,7 +54,7 @@ public:
 
     static index_key calculate_key(const schema&, const dht::decorated_key&);
 
-    future<> write(const mutation&);
+    future<> write(const mutation&, group_id);
 
     future<std::optional<log_record>> read(index_key);
 

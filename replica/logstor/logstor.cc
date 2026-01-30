@@ -60,7 +60,7 @@ future<> logstor::trigger_compaction(bool major) {
     return _segment_manager.trigger_compaction(major);
 }
 
-future<> logstor::write(const mutation& m) {
+future<> logstor::write(const mutation& m, group_id group) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 
     // TODO ?
@@ -72,6 +72,7 @@ future<> logstor::write(const mutation& m) {
     log_record record {
         .key = key,
         .generation = gen,
+        .group = group,
         .mut = canonical_mutation(m)
     };
 
