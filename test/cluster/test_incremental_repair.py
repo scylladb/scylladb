@@ -541,7 +541,8 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     s1_mark = await logs[0].mark()
     await trigger_tablet_merge(manager, servers, logs)
     # The merge process will set the unrepaired sstable with repaired_at=3 to repaired_at=0 during merge
-    await logs[0].wait_for('Finished repaired_at update for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
+    await logs[0].wait_for('Updating repaired_at for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
+    await logs[0].wait_for('Completed updating repaired_at=.* for tablet merge', from_mark=s1_mark)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)

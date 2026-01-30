@@ -268,7 +268,16 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
 
     if (flags.need_mutate_level) {
         dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-        co_await sst->mutate_sstable_level(0);
+        auto modifier = [] (sstable& new_sst) {
+            new_sst.mutate_sstable_level(0);
+        };
+        auto sst_creator = [&](shared_sstable) {
+            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+        };
+        auto new_sst = co_await sst->link_with_rewritten_component(std::move(sst_creator), component_type::Statistics, std::move(modifier));
+        co_await sst->unlink();
+        sst = std::move(new_sst);
+        desc.generation = sst->generation();
     }
 
     if (flags.sort_sstables_according_to_owner) {
