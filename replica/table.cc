@@ -484,7 +484,12 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, sstm.get_preferred_sstable_version(), sstables::sstable::format_types::big);
+    return make_sstable(state, sstm.get_preferred_sstable_version());
+}
+
+sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {
+    auto& sstm = get_sstables_manager();
+    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, version, sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {
@@ -2718,6 +2723,9 @@ public:
     }
     sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
         return _t.make_sstable(state);
+    }
+    sstables::shared_sstable make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) const override {
+        return _t.make_sstable(state, version);
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
