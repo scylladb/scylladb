@@ -654,6 +654,17 @@ def fetch_more(dynamodbstreams, iterators, output):
     assert len(set(new_iterators)) == len(new_iterators)
     return new_iterators
 
+def print_events(expected_events, output, failed_at=None):
+    if failed_at is None:
+        print(f'compare_events: timeouted')
+    else:
+        print(f'compare_events: failed at output event {failed_at}')
+    for index, event in enumerate(expected_events):
+        expected_type, expected_key, expected_old_image, expected_new_image = event
+        print(f'expected event {index}: type={expected_type}, key={expected_key}, old_image={expected_old_image}, new_image={expected_new_image}')
+    for index, event in enumerate(output):
+        print(f'output event {index}: type={event["eventName"]}, key={event["dynamodb"]["Keys"]}, old_image={event["dynamodb"].get("OldImage")}, new_image={event["dynamodb"].get("NewImage")}')
+
 # Utility function for comparing "output" as fetched by fetch_more(), to a list
 # expected_events, each of which looks like:
 #   [type, keys, old_image, new_image]
@@ -686,70 +697,75 @@ def compare_events(expected_events, output, mode, expected_region):
     # Iterate over the events in output. An event for a certain key needs to
     # be the *first* remaining event for this key in expected_events_map (and
     # then we remove this matched even from expected_events_map)
-    for event in output:
-        # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
-        # a *different* value - 'scylladb:alternator'. Issue #6931.
-        assert 'eventSource' in event
-        # For lack of a direct equivalent of a region, Alternator provides the
-        # DC name instead. Reproduces #6931.
-        assert 'awsRegion' in event
-        assert event['awsRegion'] == expected_region
-        # Reproduces #6931.
-        assert 'eventVersion' in event
-        assert event['eventVersion'] in ['1.0', '1.1']
-        # Check that eventID appears, but can't check much on what it is.
-        assert 'eventID' in event
-        op = event['eventName']
-        record = event['dynamodb']
-        # record['Keys'] is "serialized" JSON, ({'S', 'thestring'}), so we
-        # want to deserialize it to match our expected_events content.
-        deserializer = TypeDeserializer()
-        key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
-        expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
-        assert op == expected_type
-        assert record['StreamViewType'] == mode
-        # We don't know what ApproximateCreationDateTime should be, but we do
-        # know it needs to be a timestamp - there is conflicting documentation
-        # in what format (ISO 8601?). In any case, boto3 parses this timestamp
-        # for us, so we can't check it here, beyond checking it exists.
-        assert 'ApproximateCreationDateTime' in record
-        # We don't know what SequenceNumber is supposed to be, but the DynamoDB
-        # documentation requires that it contains only numeric characters and
-        # some libraries rely on this. This reproduces issue #7158:
-        assert 'SequenceNumber' in record
-        assert record['SequenceNumber'].isdecimal()
-        # Alternator doesn't set the SizeBytes member. Issue #6931.
-        #assert 'SizeBytes' in record
-        if mode == 'KEYS_ONLY':
-            assert not 'NewImage' in record
-            assert not 'OldImage' in record
-        elif mode == 'NEW_IMAGE':
-            assert not 'OldImage' in record
-            if expected_new_image == None:
+    for e, event in enumerate(output):
+        try:
+            # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
+            # a *different* value - 'scylladb:alternator'. Issue #6931.
+            assert 'eventSource' in event
+            # For lack of a direct equivalent of a region, Alternator provides the
+            # DC name instead. Reproduces #6931.
+            assert 'awsRegion' in event
+            assert event['awsRegion'] == expected_region
+            # Reproduces #6931.
+            assert 'eventVersion' in event
+            assert event['eventVersion'] in ['1.0', '1.1']
+            # Check that eventID appears, but can't check much on what it is.
+            assert 'eventID' in event
+            op = event['eventName']
+            record = event['dynamodb']
+            # record['Keys'] is "serialized" JSON, ({'S', 'thestring'}), so we
+            # want to deserialize it to match our expected_events content.
+            deserializer = TypeDeserializer()
+            key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
+            expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
+            assert op == expected_type
+            assert record['StreamViewType'] == mode
+            # We don't know what ApproximateCreationDateTime should be, but we do
+            # know it needs to be a timestamp - there is conflicting documentation
+            # in what format (ISO 8601?). In any case, boto3 parses this timestamp
+            # for us, so we can't check it here, beyond checking it exists.
+            assert 'ApproximateCreationDateTime' in record
+            # We don't know what SequenceNumber is supposed to be, but the DynamoDB
+            # documentation requires that it contains only numeric characters and
+            # some libraries rely on this. This reproduces issue #7158:
+            assert 'SequenceNumber' in record
+            assert record['SequenceNumber'].isdecimal()
+            # Alternator doesn't set the SizeBytes member. Issue #6931.
+            #assert 'SizeBytes' in record
+            if mode == 'KEYS_ONLY':
                 assert not 'NewImage' in record
-            else:
-                new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
-                assert expected_new_image == new_image
-        elif mode == 'OLD_IMAGE':
-            assert not 'NewImage' in record
-            if expected_old_image == None:
                 assert not 'OldImage' in record
-            else:
-                old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
-                assert expected_old_image == old_image
-        elif mode == 'NEW_AND_OLD_IMAGES':
-            if expected_new_image == None:
+            elif mode == 'NEW_IMAGE':
+                assert not 'OldImage' in record
+                if expected_new_image == None:
+                    assert not 'NewImage' in record
+                else:
+                    new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
+                    assert expected_new_image == new_image
+            elif mode == 'OLD_IMAGE':
                 assert not 'NewImage' in record
+                if expected_old_image == None:
+                    assert not 'OldImage' in record
+                else:
+                    old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
+                    assert expected_old_image == old_image
+            elif mode == 'NEW_AND_OLD_IMAGES':
+                if expected_new_image == None:
+                    assert not 'NewImage' in record
+                else:
+                    new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
+                    assert expected_new_image == new_image
+                if expected_old_image == None:
+                    assert not 'OldImage' in record
+                else:
+                    old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
+                    assert expected_old_image == old_image
             else:
-                new_image = {x:deserializer.deserialize(y) for (x,y) in record['NewImage'].items()}
-                assert expected_new_image == new_image
-            if expected_old_image == None:
-                assert not 'OldImage' in record
-            else:
-                old_image = {x:deserializer.deserialize(y) for (x,y) in record['OldImage'].items()}
-                assert expected_old_image == old_image
-        else:
-            pytest.fail('cannot happen')
+                pytest.fail('cannot happen')
+        except AssertionError:
+            print_events(expected_events, output, failed_at=e)
+            raise
+            
     # After the above loop, expected_events_map should remain empty arrays.
     # If it isn't, one of the expected events did not yet happen. Return False.
     for entry in expected_events_map.values():
@@ -778,6 +794,7 @@ def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_even
             return
         time.sleep(0.5)
     # If we're still here, the last compare_events returned false.
+    print_events(expected_events, output)
     pytest.fail('missing events in output: {}'.format(output))
 
 # Convenience function used to implement several tests below. It runs a given
