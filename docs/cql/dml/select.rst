@@ -32,6 +32,7 @@ Querying data from data is done using a ``SELECT`` statement:
    relation: `column_name` `operator` `term`
            : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
            : TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
+           : `column_name` IS [ NOT ] NULL
    operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY
    ordering_clause: `column_name` [ ASC | DESC ] ( ',' `column_name` [ ASC | DESC ] )*
    timeout: `duration`
@@ -618,6 +619,51 @@ This table contains some commonly used ``LIKE`` filters and the matches you can 
    * - a%t
      - asphalt, adapt, at
 
+
+.. _is-null-operator:
+
+IS NULL and IS NOT NULL Operators
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``IS NULL`` and ``IS NOT NULL`` operators allow you to filter rows based on whether a column value is present or absent.
+
+- ``IS NULL`` returns rows where the column has no value (is null).
+- ``IS NOT NULL`` returns rows where the column has a value.
+
+These operators require ``ALLOW FILTERING`` to be specified, as they must scan the data to check for null values.
+
+.. note:: Primary key columns are never null in CQL. Using ``IS NULL`` on a primary key column will always
+   return no rows, while ``IS NOT NULL`` will match all rows.
+
+**Example**
+
+.. code-block:: cql
+
+   CREATE TABLE users (id int PRIMARY KEY, name text, email text);
+   INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
+   INSERT INTO users (id, name) VALUES (2, 'Bob');
+
+   SELECT * FROM users WHERE email IS NULL ALLOW FILTERING;
+
+    id | email | name
+   ----+-------+------
+     2 |  null |  Bob
+
+   SELECT * FROM users WHERE email IS NOT NULL ALLOW FILTERING;
+
+    id | email             | name
+   ----+-------------------+-------
+     1 | alice@example.com | Alice
+
+**Usage in Materialized Views**
+
+The ``IS NOT NULL`` restriction is required in materialized view definitions for all columns that are part of the
+view's primary key, as primary key columns cannot be null. See :ref:`Materialized Views <materialized-views>` for
+more details. This usage does not require ``ALLOW FILTERING``.
+
+**Limitations**
+
+- ``IS NULL`` and ``IS NOT NULL`` cannot be combined with other restrictions on the same column.
 
 
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
