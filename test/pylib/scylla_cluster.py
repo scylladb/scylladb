@@ -112,6 +112,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
                                   'views-with-tablets'],
 
         'skip_wait_for_gossip_to_settle': 0,
+        'shutdown_announce_in_ms': 0,
         'ring_delay_ms': 0,
         'num_tokens': 16,
         'flush_schema_tables_after_modification': False,
