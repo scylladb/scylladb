@@ -780,6 +780,9 @@ static future<> run_standalone(raw_cql_test_config c) {
 // handcrafted CQL binary frames (no driver). Similar to perf_alternator
 // (runs inside the server process) and perf_simple_query (similar workload types), but
 // exercises the full networking + protocol parsing path.
+//
+// Example usage:
+// ./build/dev/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
 std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config>, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         raw_cql_test_config c;

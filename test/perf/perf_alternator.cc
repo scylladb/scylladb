@@ -437,6 +437,9 @@ void workload_main(const test_config& c) {
     }
 }
 
+// This benchmark runs the whole Scylla so it needs scylla config and
+// commandline. Example usage:
+// ./build/dev/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
