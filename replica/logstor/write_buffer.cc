@@ -41,13 +41,15 @@ write_buffer::write_buffer(size_t buffer_size)
 
 void write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
+    _header_stream = _stream.write_substream(buffer_header_size);
+    _buffer_header = {};
     _net_data_size = 0;
     _record_count = 0;
     _written = {};
 }
 
 size_t write_buffer::get_max_write_size() const noexcept {
-    return _buffer_size - record_header_size;
+    return _buffer_size - (buffer_header_size + record_header_size);
 }
 
 bool write_buffer::can_fit(size_t data_size) const noexcept {
@@ -57,6 +59,10 @@ bool write_buffer::can_fit(size_t data_size) const noexcept {
     return aligned_size <= _stream.size();
 }
 
+bool write_buffer::has_data() const noexcept {
+    return offset_in_buffer() > buffer_header_size;
+}
+
 future<log_location> write_buffer::write(log_record_writer writer) {
     const auto data_size = writer.size();
 
@@ -64,9 +70,10 @@ future<log_location> write_buffer::write(log_record_writer writer) {
         throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", data_size, _stream.size()));
     }
 
-    // Write header
-    auto header_out = _stream.write_substream(record_header_size);
-    ser::serialize<uint32_t>(header_out, data_size);
+    auto rh = record_header {
+        .data_size = data_size
+    };
+    ser::serialize(_stream, rh);
 
     // Write actual data
     size_t data_offset_in_buffer = offset_in_buffer();
@@ -98,7 +105,13 @@ void write_buffer::pad_to_alignment(size_t alignment) {
 }
 
 void write_buffer::finalize(size_t alignment) {
+    _buffer_header.data_size = static_cast<uint32_t>(offset_in_buffer() - buffer_header_size);
     pad_to_alignment(alignment);
+}
+
+void write_buffer::write_header() {
+    _buffer_header.magic = buffer_header_magic;
+    ser::serialize<buffer_header>(_header_stream, _buffer_header);
 }
 
 void write_buffer::complete_writes(log_location base_location) {

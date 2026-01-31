@@ -759,6 +759,9 @@ future<log_location> segment_manager_impl::write(write_buffer& wb, bool from_com
 
     auto alloc = seg->allocate(data.size());
     auto loc = alloc.location;
+
+    wb.write_header();
+
     co_await seg->write(std::move(alloc), data);
 
     auto& desc = get_segment_descriptor(loc);
@@ -940,7 +943,26 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
             current_position += skip_bytes;
         }
 
-        while (current_position < _cfg.segment_size) {
+        if (current_position >= _cfg.segment_size) {
+            break;
+        }
+
+        // read buffer header
+        auto buffer_header_buf = co_await fin.read_exactly(write_buffer::buffer_header_size);
+        current_position += write_buffer::buffer_header_size;
+        if (buffer_header_buf.size() < write_buffer::buffer_header_size) {
+            break;
+        }
+        seastar::simple_memory_input_stream buffer_header_stream(buffer_header_buf.get(), buffer_header_buf.size());
+        auto bh = ser::deserialize(buffer_header_stream, std::type_identity<write_buffer::buffer_header>{});
+
+        // if buffer header is not valid, skip to next block
+        if (bh.magic != write_buffer::buffer_header_magic) {
+            continue;
+        }
+
+        const auto buffer_data_end_position = current_position + bh.data_size;
+        while (current_position < buffer_data_end_position) {
             // Read record header
             auto size_buf = co_await fin.read_exactly(write_buffer::record_header_size);
             current_position += write_buffer::record_header_size;
@@ -948,20 +970,19 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
                 break;
             }
             seastar::simple_memory_input_stream size_stream(size_buf.get(), size_buf.size());
-            auto data_size = ser::deserialize(size_stream, std::type_identity<uint32_t>{});
-
-            if (data_size == 0) {
+            auto rh = ser::deserialize(size_stream, std::type_identity<write_buffer::record_header>{});
+            if (rh.data_size == 0) {
                 // End of records in this block
                 break;
             }
 
             logstor_logger.trace("Found record of size {} bytes in segment {}",
-                                data_size, segment_id);
+                                rh.data_size, segment_id);
 
             auto record_offset = current_position;
-            auto record_buf = co_await fin.read_exactly(data_size);
-            current_position += data_size;
-            if (record_buf.size() < data_size) {
+            auto record_buf = co_await fin.read_exactly(rh.data_size);
+            current_position += rh.data_size;
+            if (record_buf.size() < rh.data_size) {
                 break;
             }
 
@@ -971,7 +992,7 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
             log_location loc {
                 .segment = segment_id,
                 .offset = record_offset,
-                .size = data_size
+                .size = rh.data_size
             };
 
             co_await callback(loc, std::move(record));
@@ -982,6 +1003,13 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
                 co_await fin.skip(padding);
                 current_position += padding;
             }
+        }
+
+        if (current_position < buffer_data_end_position) {
+            // skip remaining buffer data
+            auto bytes_to_skip = buffer_data_end_position - current_position;
+            co_await fin.skip(bytes_to_skip);
+            current_position += bytes_to_skip;
         }
     }
 

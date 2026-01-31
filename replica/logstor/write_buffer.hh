@@ -18,6 +18,7 @@
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
 #include "types.hh"
+#include "serializer.hh"
 
 namespace replica::logstor {
 
@@ -73,7 +74,28 @@ public:
 
     using ostream = seastar::simple_memory_output_stream;
 
+    // buffer: buffer_header | record_1 | ... | record_n | 0-padding
+    // record: record_header | record_data | 0-padding
+    //
+    // buffer_header and record are aligned by record_alignment
+    // buffer_header and record_header have explicit sizes and serialization below
+
+    static constexpr uint32_t buffer_header_magic = 0x4c475342;
     static constexpr size_t record_alignment = 8;
+
+    struct buffer_header {
+        uint32_t magic;
+        uint32_t data_size; // size of all records data following the buffer_header
+        uint32_t reserved1;
+        uint32_t reserved2;
+    };
+    static constexpr size_t buffer_header_size = 4 * sizeof(uint32_t);
+
+    static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
+
+    struct record_header {
+        uint32_t data_size; // size of the record data following the record_header
+    };
     static constexpr size_t record_header_size = sizeof(uint32_t);
 
 private:
@@ -83,6 +105,8 @@ private:
     size_t _buffer_size;
     aligned_buffer_type _buffer;
     seastar::simple_memory_output_stream _stream;
+    buffer_header _buffer_header;
+    seastar::simple_memory_output_stream _header_stream;
 
     size_t _net_data_size{0};
     size_t _record_count{0};
@@ -110,7 +134,7 @@ public:
         return can_fit(writer.size());
     }
 
-    bool has_data() const noexcept { return offset_in_buffer() > 0; }
+    bool has_data() const noexcept;
 
     size_t get_max_write_size() const noexcept;
 
@@ -127,7 +151,9 @@ private:
 
     const char* data() const noexcept { return _buffer.get(); }
 
-    // Complete all tracked writes with their locations when the buffer is flushed to base_location
+    void write_header();
+
+    /// Complete all tracked writes with their locations when the buffer is flushed to base_location
     void complete_writes(log_location base_location);
     void abort_writes(std::exception_ptr) noexcept;
 
@@ -174,3 +200,51 @@ private:
 };
 
 }
+
+namespace ser {
+
+template <>
+struct serializer<replica::logstor::write_buffer::buffer_header> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::write_buffer::buffer_header& h) {
+        serializer<uint32_t>::write(out, h.magic);
+        serializer<uint32_t>::write(out, h.data_size);
+        serializer<uint32_t>::write(out, h.reserved1);
+        serializer<uint32_t>::write(out, h.reserved2);
+    }
+    template <typename Input>
+    static replica::logstor::write_buffer::buffer_header read(Input& in) {
+        replica::logstor::write_buffer::buffer_header h;
+        h.magic = serializer<uint32_t>::read(in);
+        h.data_size = serializer<uint32_t>::read(in);
+        h.reserved1 = serializer<uint32_t>::read(in);
+        h.reserved2 = serializer<uint32_t>::read(in);
+        return h;
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        serializer<uint32_t>::skip(in);
+        serializer<uint32_t>::skip(in);
+        serializer<uint32_t>::skip(in);
+        serializer<uint32_t>::skip(in);
+    }
+};
+
+template <>
+struct serializer<replica::logstor::write_buffer::record_header> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::write_buffer::record_header& h) {
+        serializer<uint32_t>::write(out, h.data_size);
+    }
+    template <typename Input>
+    static replica::logstor::write_buffer::record_header read(Input& in) {
+        replica::logstor::write_buffer::record_header h;
+        h.data_size = serializer<uint32_t>::read(in);
+        return h;
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        serializer<uint32_t>::skip(in);
+    }
+};
+} // namespace ser
