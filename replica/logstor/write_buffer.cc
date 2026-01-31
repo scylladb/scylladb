@@ -30,6 +30,8 @@ void log_record_writer::write(ostream& out) const {
     ser::serialize(out, _record);
 }
 
+// write_buffer
+
 write_buffer::write_buffer(size_t buffer_size)
         : _buffer_size(buffer_size)
         , _buffer(allocate_aligned_buffer<char>(buffer_size, 4096)) {
@@ -42,11 +44,14 @@ void write_buffer::reset() noexcept {
 
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
 
+    _buffer_header = buffer_header{};
+    _header_stream = _stream.write_substream(buffer_header_size);
+
     _written = shared_promise<log_location>();
 }
 
 size_t write_buffer::get_max_write_size() const noexcept {
-    return _buffer_size - record_header_size;
+    return _buffer_size - (buffer_header_size + record_header_size);
 }
 
 bool write_buffer::can_fit(size_t data_size) const noexcept {
@@ -56,6 +61,10 @@ bool write_buffer::can_fit(size_t data_size) const noexcept {
     return aligned_size <= _stream.size();
 }
 
+bool write_buffer::has_data() const noexcept {
+    return offset_in_buffer() > buffer_header_size;
+}
+
 future<log_location> write_buffer::write(log_record_writer writer) {
     const auto data_size = writer.size();
 
@@ -63,9 +72,10 @@ future<log_location> write_buffer::write(log_record_writer writer) {
         throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", data_size, _stream.size()));
     }
 
-    // Write header
-    auto header_out = _stream.write_substream(record_header_size);
-    ser::serialize<uint32_t>(header_out, data_size);
+    auto rh = record_header {
+        .data_size = data_size
+    };
+    ser::serialize(_stream, rh);
 
     // Write actual data
     size_t data_offset_in_buffer = offset_in_buffer();
@@ -97,7 +107,13 @@ void write_buffer::pad_to_alignment(size_t alignment) {
 }
 
 void write_buffer::finalize(size_t alignment) {
+    _buffer_header.data_size = static_cast<uint32_t>(offset_in_buffer() - buffer_header_size);
     pad_to_alignment(alignment);
+}
+
+void write_buffer::write_header() {
+    _buffer_header.magic = buffer_header_magic;
+    ser::serialize<buffer_header>(_header_stream, _buffer_header);
 }
 
 void write_buffer::complete_writes(log_location base_location) {
@@ -120,6 +136,8 @@ size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t rec
     return align_up(total_size, segment_size) / segment_size;
 
 }
+
+// buffered_writer
 
 buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg)
         : _sm(sm)

@@ -15,6 +15,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/shared_ptr.hh>
+#include "bytes_fwd.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "types.hh"
 
