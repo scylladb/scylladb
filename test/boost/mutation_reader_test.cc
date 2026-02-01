@@ -42,6 +42,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 
+#include <boost/test/unit_test.hpp>
 #include "dht/sharder.hh"
 #include "schema/schema_builder.hh"
 #include "replica/cell_locking.hh"
@@ -68,6 +69,8 @@
 #include "readers/queue.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_reader_test)
+
+namespace test_label = boost::unit_test;
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1239,7 +1242,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::label("nightly")) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
