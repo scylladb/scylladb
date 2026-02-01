@@ -26,7 +26,7 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def task(gdb_process):
+def task(gdb_cmd):
     """
     Finds a Scylla fiber task using a `find_vptrs()` loop.
 
@@ -35,19 +35,14 @@ def task(gdb_process):
     skeleton created by `http_server::do_accept_one` (often the earliest
     “Scylla fiber” to appear).
     """
-    result = execute_gdb_command(gdb_process, full_command="python get_task()")
+    result = execute_gdb_command(gdb_cmd, full_command="python get_task()").stdout
     match = re.search(r"task=(\d+)", result)
-    assert match is not None, f"No task was present in {result.stdout}"
     task = match.group(1) if match else None
     return task
 
 
-def test_fiber(gdb_process, task):
-    execute_gdb_command(gdb_process, f"fiber {task}")
-
-
 @pytest.fixture(scope="module")
-def coroutine_task(gdb_process, scylla_server):
+def coroutine_task(gdb_cmd, scylla_server):
     """
     Finds a coroutine task, similar to the `task` fixture.
 
@@ -59,11 +54,11 @@ def coroutine_task(gdb_process, scylla_server):
     diagnostic information before the test is marked as failed.
     Coredump is saved to `testlog/release/{scylla}`.
     """
-    result = execute_gdb_command(gdb_process, full_command="python get_coroutine()")
+    result = execute_gdb_command(gdb_cmd, full_command="python get_coroutine()").stdout
     match = re.search(r"coroutine_config=\s*(.*)", result)
     if not match:
         result = execute_gdb_command(
-            gdb_process,
+            gdb_cmd,
             full_command=f"python coroutine_debug_config('{scylla_server.workdir}')",
         )
         pytest.fail(
@@ -74,12 +69,26 @@ def coroutine_task(gdb_process, scylla_server):
     return match.group(1).strip()
 
 
-def test_coroutine_frame(gdb_process, coroutine_task):
+def test_coroutine_frame(gdb_cmd, coroutine_task):
     """
     Offsets the pointer by two words to shift from the outer coroutine frame
     to the inner `seastar::task`, as required by `$coro_frame`, which expects
     a `seastar::task*`.
     """
-    execute_gdb_command(
-        gdb_process, full_command=f"p *$coro_frame({coroutine_task} + 16)"
+    assert coroutine_task, "No coroutine task was found"
+
+    result = execute_gdb_command(
+        gdb_cmd, full_command=f"p *$coro_frame({coroutine_task} + 16)"
+    )
+    assert result.returncode == 0, (
+        f"GDB command `coro_frame` failed. stdout: {result.stdout} stderr: {result.stderr}"
+    )
+
+
+def test_fiber(gdb_cmd, task):
+    assert task, f"No task was found using `find_vptrs()`"
+
+    result = execute_gdb_command(gdb_cmd, f"fiber {task}")
+    assert result.returncode == 0, (
+        f"GDB command `fiber` failed. stdout: {result.stdout} stderr: {result.stderr}"
     )
