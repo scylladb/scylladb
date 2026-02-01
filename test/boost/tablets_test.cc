@@ -3342,6 +3342,95 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_rack_balancing_with_new_node) {
+    // Verifies that load balancer moves tablets to the new node even though
+    // the most-loaded node is in a different rack.
+
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+        inet_address ip4("192.168.0.4");
+        inet_address ip5("192.168.0.5");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+        auto host4 = host_id(next_uuid());
+        auto host5 = host_id(next_uuid());
+
+        std::vector<endpoint_dc_rack> racks = {
+                endpoint_dc_rack{ "dc1", "rack-1" },
+                endpoint_dc_rack{ "dc1", "rack-2" }
+        };
+
+        auto table1 = table_id(next_uuid());
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+                locator::topology::config {
+                        .this_endpoint = ip1,
+                        .local_dc_rack = racks[0]
+                }
+        });
+
+        stm.mutate_token_metadata([&](token_metadata& tm) {
+            const unsigned shard_count = 1;
+
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_host_id(host4, ip4);
+            tm.update_host_id(host4, ip5);
+            tm.update_topology(host1, racks[0], std::nullopt, shard_count);
+            tm.update_topology(host2, racks[0], std::nullopt, shard_count);
+            tm.update_topology(host3, racks[1], std::nullopt, shard_count);
+            tm.update_topology(host4, racks[1], std::nullopt, shard_count);
+            tm.update_topology(host5, racks[1], std::nullopt, shard_count);
+
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host3, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host3, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host2, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        load_sketch load(stm.get());
+        load.populate().get();
+        BOOST_REQUIRE_GE(load.get_avg_shard_load(host5), 1);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
     // Verifies that load balancer moves tablets out of the decommissioned node.
     // The scenario is such that replication factor of tablets can be satisfied after decommission.
