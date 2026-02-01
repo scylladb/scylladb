@@ -62,6 +62,7 @@
 #include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
+#include "api/validate.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -112,41 +113,6 @@ static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
 
     auto keyspaces = db.get_all_keyspaces();
     return std::any_of(std::begin(keyspaces), std::end(keyspaces), uses_tablets);
-}
-
-locator::host_id validate_host_id(const sstring& param) {
-    auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
-    return hoep.id();
-}
-
-bool validate_bool(const sstring& param) {
-    if (param == "true") {
-        return true;
-    } else if (param == "false") {
-        return false;
-    } else {
-        throw std::runtime_error("Parameter must be either 'true' or 'false'");
-    }
-}
-
-bool validate_bool_x(const sstring& param, bool default_value) {
-    if (param.empty()) {
-        return default_value;
-    }
-
-    if (strcasecmp(param.c_str(), "true") == 0 || strcasecmp(param.c_str(), "yes") == 0 || param == "1") {
-        return true;
-    }
-    if (strcasecmp(param.c_str(), "false") == 0 || strcasecmp(param.c_str(), "no") == 0 || param == "0") {
-        return false;
-    }
-
-    throw std::runtime_error("Invalid boolean parameter value");
-}
-
-static
-int64_t validate_int(const sstring& param) {
-    return std::atoll(param.c_str());
 }
 
 std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value) {
