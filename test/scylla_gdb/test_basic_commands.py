@@ -26,6 +26,7 @@ pytestmark = [
 @pytest.mark.parametrize(
     "command",
     [
+        "timers",
         "features",
         "compaction-tasks",
         "databases",
@@ -58,19 +59,20 @@ pytestmark = [
         "task_histogram -a",
         "tasks",
         "threads",
-        "timers",
         "get-config-value compaction_static_shares",
         "read-stats",
         "prepared-statements",
     ],
 )
-def test_scylla_commands(gdb_process, command):
-    execute_gdb_command(gdb_process, command)
+def test_scylla_commands(gdb_cmd, command):
+    result = execute_gdb_command(gdb_cmd, command)
+    assert result.returncode == 0, (
+        f"GDB command {command} failed. stdout: {result.stdout} stderr: {result.stderr}"
+    )
 
 
-def test_nonexistent_scylla_command(gdb_process):
+def test_nonexistent_scylla_command(gdb_cmd):
     """Verifies that running unknown command will produce correct error message"""
-    with pytest.raises(
-        AssertionError, match=r'Undefined scylla command: "nonexistent_command"'
-    ):
-        execute_gdb_command(gdb_process, "nonexistent_command")
+    result = execute_gdb_command(gdb_cmd, "nonexistent_command")
+    assert result.returncode == 1
+    assert  "Undefined scylla command: \"nonexistent_command\"" in result.stderr
