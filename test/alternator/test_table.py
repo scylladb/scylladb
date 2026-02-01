@@ -679,3 +679,48 @@ def test_create_table_spurious_attribute_definitions(dynamodb):
             AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' },
                                   { 'AttributeName': 'c', 'AttributeType': 'S' }]) as table:
                 pass
+
+# DynamoDB supports many different types, but the documentation claims that
+# for keys, "The only data types allowed for primary key attributes are
+# string, number, or binary.". We have many tests for these types (and
+# shared test tables with those key types defined in conftest.py) - in this
+# test we verify that indeed all other types are NOT allowed - for neither
+# partition key nor sort key.
+# See also test_gsi.py::test_gsi_invalid_key_types which checks that the
+# same types are also forbidden as GSI keys.
+def test_forbidden_key_types(dynamodb):
+    for t in ['BOOL', 'BS', 'L', 'M', 'NS', 'NULL', 'SS']:
+        # Check that partition key of type t is forbidden.
+        # The specific error message is different in DynamoDB and Alternator,
+        # but both mention the requested type in the message in single quotes.
+        with pytest.raises(ClientError, match=f"ValidationException.*'{t}'"):
+            with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': t}]):
+                    pass
+        # Check that sort key of type t is forbidden.
+        with pytest.raises(ClientError, match=f"ValidationException.*'{t}'"):
+            with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                           {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                      {'AttributeName': 'c', 'AttributeType': t}]):
+                    pass
+
+# Although as we tested in the previous test (test_forbidden_key_types) most
+# DynamoDB types are not allowed as key types (only S, B and N are allowed),
+# strangely the GetItem documentation claims that the Key parameter can
+# actually allow any type. This is a mistake in the documentation - this
+# test shows that when you try to GetItem with one of the forbidden types,
+# it fails. Note that actually what both DynamoDB and Alternator test is
+# whether the Key type is the same as the one in the table's schema - so
+# because we can't create a table with these types, GetItem with those
+# types is bound to fail.
+def test_forbidden_key_types_getitem(test_table_s):
+    for p in [False, {b'hi', b'there'}, ['hi',3], {'hi': 3}, {1,2}, None, {'hi', 'there'}]:
+        # Unfortunately the error message in DynamoDB ("The provided key
+        # element does not match the schema") and Alternator ("Type mismatch:
+        # expected type S for key column p, got type "BOOL") doesn't have
+        # anything in common except the word "match".
+        with pytest.raises(ClientError, match='ValidationException.*match'):
+            test_table_s.get_item(Key={'p': p})
