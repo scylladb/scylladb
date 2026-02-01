@@ -212,7 +212,11 @@ public:
     }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
-        auto it = std::find_if(_selectors.begin(), _selectors.end(), [&c](const expr::expression& e) {
+        return add_column(c).index;
+    }
+
+    virtual uint32_t add_column_for_ordering(const column_definition& c) override {
+        auto it = std::ranges::find_if(_selectors.begin(), _selectors.end(), [&c](const expr::expression& e) {
             auto col = expr::as_if<expr::column_value>(&e);
             return col && col->col == &c;
         });
@@ -482,10 +486,10 @@ std::vector<const column_definition*> selection::wildcard_columns(schema_ptr sch
 selection::add_column_result selection::add_column(const column_definition& c) {
     auto index = index_of(c);
     if (index != -1) {
-        return {index, false};
+        return {.index = uint32_t(index), .added = false};
     }
     _columns.push_back(&c);
-    return {_columns.size() - 1, true};
+    return {.index = uint32_t(_columns.size() - 1), .added = true};
 }
 
 uint32_t selection::add_column_for_post_processing(const column_definition& c) {

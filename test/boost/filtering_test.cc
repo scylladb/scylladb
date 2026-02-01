@@ -768,9 +768,13 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
 
         eventually([&] {
             auto msg = cquery_nofail(e, "SELECT SUM(e) FROM t WHERE c = 5 AND b = 911 ALLOW FILTERING;");
-            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(0), {} }});
+            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(0) }});
             msg = cquery_nofail(e, "SELECT e FROM t WHERE c = 5 AND b = 3 ALLOW FILTERING;");
-            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(9), int32_type->decompose(3) }});
+            // This query uses simplified processing and there is an extra column that is used for the filtering.
+            // Since we are dealing with the result set before serializing to the client, this column
+            // will not be present in the response to the client and with_serialized_columns_count() verifies exactly that.
+            assert_that(msg).is_rows().with_serialized_columns_count(1).with_rows(
+                {{ int32_type->decompose(9), int32_type->decompose(3) }});
         });
     });
 }
@@ -1144,10 +1148,11 @@ SEASTAR_TEST_CASE(test_filtering) {
             });
         }
         //test filtering with count
+        // With aggregation function final result set is transformed and there is no extra column for filtering.
         {
             auto msg = e.execute_cql("SELECT COUNT(k) FROM cf WHERE n>3 ALLOW FILTERING;").get();
             assert_that(msg).is_rows().with_serialized_columns_count(1).with_size(1).with_rows_ignore_order({
-                { long_type->decompose(4L), int32_type->decompose(5) },
+                { long_type->decompose(4L) },
             });
         }
 

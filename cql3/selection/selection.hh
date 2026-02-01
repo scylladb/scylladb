@@ -125,6 +125,11 @@ public:
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
     // Adds a column to the selection and result set. Returns an index within the result set row.
+    virtual uint32_t add_column_for_ordering(const column_definition& c) {
+        return add_column_for_post_processing(c);
+    }
+
+    // Adds a column to the selection. Returns an index within the query result row.
     virtual uint32_t add_column_for_post_processing(const column_definition& c);
 
     virtual std::vector<shared_ptr<functions::function>> used_functions() const { return {}; }
