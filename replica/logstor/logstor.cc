@@ -63,14 +63,22 @@ future<> logstor::trigger_compaction(bool major) {
 future<> logstor::write(const mutation& m) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 
+    // TODO ?
+    record_generation gen = _index.get(key)
+        .transform([](const index_entry& entry) {
+            return entry.generation + 1;
+         }).value_or(record_generation(1));
+
     log_record record {
         .key = key,
+        .generation = gen,
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record)).then([this, key = std::move(key)] (log_location location) {
+    return _write_buffer.write(std::move(record)).then([this, gen, key = std::move(key)] (log_location location) {
         index_entry new_entry {
             .location = location,
+            .generation = gen,
         };
 
         auto old_entry = _index.exchange(key, std::move(new_entry));

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include "mutation/canonical_mutation.hh"
+#include "replica/logstor/utils.hh"
 
 namespace replica::logstor {
 
@@ -36,14 +37,18 @@ struct index_key {
     auto operator<=>(const index_key& other) const noexcept = default;
 };
 
+using record_generation = generation_base<uint16_t>;
+
 struct index_entry {
     log_location location;
+    record_generation generation;
 
     bool operator==(const index_entry& other) const noexcept = default;
 };
 
 struct log_record {
     index_key key;
+    record_generation generation;
     canonical_mutation mut;
 };
 
