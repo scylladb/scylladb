@@ -525,9 +525,6 @@ public:
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
 
-    // Wait for `n` live nodes to show up in gossip (including ourself).
-    future<> wait_for_live_nodes_to_show_up(size_t n);
-
     // Get live members synchronized to all shards
     future<std::set<inet_address>> get_live_members_synchronized();
 

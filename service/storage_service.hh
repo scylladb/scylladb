@@ -873,10 +873,7 @@ public:
     auto run_with_api_lock_in_gossiper_mode_only(sstring operation, Func&& func) {
         return container().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            if (ss.raft_topology_change_enabled()) {
-                return func(ss);
-            }
-            return ss.run_with_api_lock_internal(ss, std::forward<Func>(func), operation);
+            return func(ss);
        });
     }
 
@@ -899,7 +896,6 @@ public:
 private:
     std::unordered_set<locator::host_id> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(locator::host_id);
-    future<> wait_for_normal_state_handled_on_boot();
 
     friend class group0_state_machine;
 

@@ -2448,11 +2448,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_backlog_broker.stop().get();
             });
 
-            if (!ss.local().raft_topology_change_enabled()) {
-                startlog.info("Waiting for gossip to settle before accepting client requests...");
-                gossiper.local().wait_for_gossip_to_settle().get();
-            }
-
             checkpoint(stop_signal, "allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
