@@ -236,3 +236,179 @@ async def test_compaction(manager: ManagerClient):
             assert len(rows) == 1
             assert rows[0].pk == i
             assert rows[0].v == large_value
+
+@pytest.mark.asyncio
+async def test_recovery_basic(manager: ManagerClient):
+    """
+    Test that logstor data persists across server restarts.
+
+    This test:
+    1. Writes initial data to several keys with large values (~40KB each) to fill multiple segments
+    2. Overwrites some keys with new large values
+    3. Stops the server
+    4. Starts the server again
+    5. Verifies all data is correctly recovered
+    6. Performs additional writes and reads to verify system continues functioning
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace']
+    cfg = {'enable_kv_storage': True, 'experimental_features': ['kv-storage']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        # Create large values (~40KB each) to fill multiple segments
+        value_size = 40 * 1024
+
+        # Phase 1: Write initial data
+        logger.info(f"Phase 1: Writing initial data with {value_size} byte values")
+        initial_data = {}
+        for pk in [1, 2, 3, 4, 5]:
+            value = f"initial_{pk}_" + ('x' * (value_size - 20))
+            initial_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Phase 2: Overwrite some keys with new large values
+        logger.info("Phase 2: Overwriting some keys with new large values")
+        overwrites = {}
+        for pk in [2, 4]:
+            value = f"updated_{pk}_" + ('y' * (value_size - 20))
+            overwrites[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Expected final state combines initial data with overwrites
+        expected_data = {**initial_data, **overwrites}
+
+        # Verify data before restart
+        logger.info("Phase 3: Verifying data before restart")
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1
+            assert rows[0].pk == pk
+            assert rows[0].v == expected_v
+
+        # Phase 3: Stop the server
+        logger.info("Phase 4: Stopping server")
+        await manager.server_stop_gracefully(servers[0].server_id)
+
+        # Phase 4: Start the server again
+        logger.info("Phase 5: Starting server")
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # Phase 5: Verify data after restart
+        logger.info("Phase 6: Verifying data after restart")
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value: length expected {len(expected_v)}, got {len(rows[0].v)}"
+
+        # Phase 6: Perform additional writes after recovery
+        logger.info("Phase 7: Performing additional writes after recovery")
+        new_writes = {}
+        for pk in [6, 7, 8]:
+            value = f"post_recovery_{pk}_" + ('z' * (value_size - 30))
+            new_writes[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Also overwrite one of the recovered keys
+        pk = 1
+        value = f"post_recovery_overwrite_{pk}_" + ('w' * (value_size - 40))
+        new_writes[pk] = value
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Update expected data with new writes
+        expected_data.update(new_writes)
+
+        # Phase 7: Verify all data including new writes
+        logger.info("Phase 8: Verifying all data including new writes")
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after additional writes"
+            assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
+
+        logger.info("Recovery test completed successfully")
+
+@pytest.mark.asyncio
+async def test_recovery_with_segment_reuse(manager: ManagerClient):
+    """
+    Test recovery after segments have been compacted and reused.
+
+    This test:
+    1. Writes to 10 keys multiple times with overwrites
+    2. Fills the disk approximately twice to trigger compaction and segment reuse
+    3. Tracks the last written value for each key
+    4. Stops and restarts the server
+    5. Verifies all last values are correctly recovered
+    """
+    disk_size_mb = 16
+    file_size_mb = 4
+    value_size = 50 * 1024
+    num_keys = 10
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'enable_kv_storage': True,
+        'kv_storage_disk_size_in_mb': disk_size_mb,
+        'kv_storage_file_size_in_mb': file_size_mb,
+        'experimental_features': ['kv-storage']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        # Track the last value written to each key
+        last_values = {}
+
+        # Calculate how many writes needed to fill disk twice
+        disk_size_bytes = disk_size_mb * 1024 * 1024
+        writes_to_fill_disk = disk_size_bytes // (value_size + 1024)  # Account for overhead
+        total_writes = 2 * writes_to_fill_disk
+
+        logger.info(f"Writing {total_writes} times to {num_keys} keys to fill disk twice")
+
+        # Write with overwrites to fill disk twice
+        for i in range(total_writes):
+            pk = i % num_keys  # Rotate through the 10 keys
+            value = f"value_{i}_" + ('x' * (value_size - 20))
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+            last_values[pk] = value
+
+            if (i + 1) % 50 == 0:
+                logger.info(f"Written {i + 1}/{total_writes} values")
+
+        # Verify data before restart
+        logger.info(f"Verifying {num_keys} keys before restart")
+        for pk, expected_v in last_values.items():
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1
+            assert rows[0].v == expected_v
+
+        # Verify compaction ran
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        logger.info(f"Segments compacted: {segments_compacted}")
+        assert segments_compacted > 0, "Compaction should have run when filling disk twice"
+
+        # Stop the server
+        logger.info("Stopping server")
+        await manager.server_stop_gracefully(servers[0].server_id)
+
+        # Start the server again
+        logger.info("Starting server")
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # Verify all data after restart
+        logger.info(f"Verifying {num_keys} keys after restart")
+        for pk, expected_v in last_values.items():
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
+
+        logger.info(f"Recovery test completed successfully: verified {num_keys} keys after segment reuse")
