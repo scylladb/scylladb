@@ -260,7 +260,7 @@ class PythonTest(Test):
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
 
-            yield
+            yield cluster
 
             if self.shortname in self.suite.dirties_cluster:
                 cluster.is_dirty = True
