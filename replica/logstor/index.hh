@@ -56,6 +56,22 @@ public:
         return false;
     }
 
+    std::pair<bool, std::optional<index_entry>> insert_if_newer(const index_key& key, index_entry new_entry) {
+        auto it = _index.find(key);
+        if (it != _index.end()) {
+            if (it->generation < new_entry.generation) {
+                auto old_entry = *it;
+                *it = std::move(new_entry);
+                return {true, std::make_optional(old_entry)};
+            } else {
+                return {false, std::make_optional(*it)};
+            }
+        } else {
+            _index.emplace(key, std::move(new_entry));
+            return {true, std::nullopt};
+        }
+    }
+
     auto begin() const { return _index.begin(); }
     auto end() const { return _index.end(); }
 };
@@ -93,6 +109,10 @@ public:
 
     bool update_record_location(const index_key& key, log_location old_location, log_location new_location) {
         return get_bucket(key).update_record_location(key, old_location, new_location);
+    }
+
+    std::pair<bool, std::optional<index_entry>> insert_if_newer(const index_key& key, index_entry new_entry) {
+        return get_bucket(key).insert_if_newer(key, std::move(new_entry));
     }
 
     class const_iterator {

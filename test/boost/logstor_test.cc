@@ -468,4 +468,61 @@ SEASTAR_TEST_CASE(test_overwrites_with_compaction) {
     });
 }
 
+// write multiple mutations with single key and different generations.
+// then start a new segment manager with the same directory to trigger recovery,
+// and verify the index is populated with the record with the newest generation and we can read it back correctly.
+SEASTAR_TEST_CASE(test_segment_manager_recovery) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
+    tmpdir tmp;
+    segment_manager_config cfg = {
+        .base_dir = tmp.path(),
+        .segment_size = 8 * 1024,
+        .file_size = 32 * 8 * 1024,
+        .disk_size = 512 * 1024 * 1024
+    };
+
+    auto s = make_kv_schema();
+
+    auto m = make_mutation(s, "recovery_key", "recovery_value", 1);
+    auto key = logstor::calculate_key(*s, dht::decorate_key(*s, m.key()));
+
+    log_location loc;
+
+    // First run: write a record
+    co_await do_segment_manager_test(cfg, [&](segment_manager& sm, log_index&) -> future<> {
+        // write the record and overwrite few times with different generations.
+        write_buffer wb(sm.get_segment_size());
+        std::vector<future<log_location>> locs;
+        for (int i = 0; i < 3; i++) {
+            // the write with i=1 has the newest generation
+            record_generation gen(i == 1 ? 10 : i);
+            log_record_writer writer(log_record {
+                .key = key,
+                .generation = gen,
+                .group = group_id{},
+                .mut = canonical_mutation(m)
+            });
+
+            locs.push_back(wb.write(writer));
+        }
+        co_await sm.write(wb);
+        loc = co_await std::move(locs[1]);
+    });
+
+    // Second run: verify recovery by reading the record back
+    co_await do_segment_manager_test(cfg, [&](segment_manager& sm, log_index& index) -> future<> {
+        // read the record back using the index. verify the index is populated with the record
+        // with the newest generation.
+        auto index_entry = index.get(key);
+        BOOST_REQUIRE(index_entry.has_value());
+        BOOST_REQUIRE_EQUAL(index_entry->location, loc);
+
+        auto read_record = co_await sm.read(index_entry->location);
+        auto read_mutation = read_record.mut.to_mutation(s);
+        assert_that(read_mutation).is_equal_to(m);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

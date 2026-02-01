@@ -17,8 +17,10 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/circular_buffer.hh>
@@ -33,6 +35,7 @@
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
 #include "utils/serialized_action.hh"
+#include "utils/lister.hh"
 
 namespace replica::logstor {
 
@@ -237,6 +240,7 @@ public:
 
     future<> format_file_region(seastar::file file, uint64_t offset, size_t size);
     future<> format_file(size_t file_id);
+    void recover_next_file_id(size_t next_file_id);
 
     size_t allocated_file_count() const noexcept { return _next_file_id; }
 
@@ -258,12 +262,6 @@ public:
 
 future<> file_manager::start() {
     co_await seastar::recursive_touch_directory(_base_dir.string());
-
-    _next_file_formatter = with_gate(_async_gate, [this] {
-        return with_scheduling_group(_sched_group, [this] {
-            return format_file(_next_file_id);
-        });
-    });
 }
 
 future<> file_manager::stop() {
@@ -287,6 +285,18 @@ future<> file_manager::format_file(size_t file_id) {
 
         // move the temp file to the final location
         co_await seastar::rename_file(tmp_path, file_path);
+    }
+}
+
+void file_manager::recover_next_file_id(size_t next_file_id) {
+    _next_file_id = next_file_id;
+
+    if (_next_file_id < _max_files) {
+        _next_file_formatter = with_gate(_async_gate, [this] {
+            return with_scheduling_group(_sched_group, [this] {
+                return format_file(_next_file_id);
+            });
+        });
     }
 }
 
@@ -565,6 +575,7 @@ class segment_manager_impl {
         uint64_t compaction_data_bytes_written{0};
     };
 
+    log_index& _index;
     file_manager _file_mgr;
     compaction_manager _compaction_mgr;
 
@@ -613,6 +624,10 @@ public:
 
     future<> for_each_record(const std::vector<log_segment_id>&,
                             std::function<future<>(log_location, log_record)>);
+
+    future<> do_recovery();
+    future<> recover_segment(log_segment_id);
+    future<std::optional<segment_generation>> recover_segment_generation(log_segment_id);
 
     void enable_auto_compaction() {
         logstor_logger.info("Enabling automatic compaction");
@@ -720,7 +735,8 @@ private:
 };
 
 segment_manager_impl::segment_manager_impl(segment_manager_config config, log_index& index)
-    : _file_mgr(config)
+    : _index(index)
+    , _file_mgr(config)
     , _compaction_mgr(*this, index, compaction_manager::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
@@ -783,6 +799,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
 
 future<> segment_manager_impl::start() {
     co_await _file_mgr.start();
+
+    co_await do_recovery();
 
     // Start background replenisher before creating initial segment
     _reserve_replenisher = with_scheduling_group(_cfg.compaction_sg, [this] {
@@ -1089,6 +1107,8 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
             continue;
         }
 
+        // TODO crc, torn writes
+
         const auto buffer_data_end_position = current_position + bh.data_size;
         while (current_position < buffer_data_end_position) {
             // Read record header
@@ -1300,6 +1320,153 @@ future<> compaction_manager::compact_segments(std::vector<log_segment_id> segmen
     _stats.compaction_segments_freed += new_segments;
     _stats.compaction_records_rewritten += records_rewritten;
     _stats.compaction_records_skipped += records_skipped;
+}
+
+future<> segment_manager_impl::do_recovery() {
+    logstor_logger.info("Starting recovery for shard {} in directory {}", this_shard_id(), _cfg.base_dir.string());
+
+    // Scan the base directory for all files belonging to this shard.
+    std::set<size_t> found_file_ids;
+    std::vector<sstring> files_for_removal;
+    std::string file_prefix = _file_mgr.get_file_name_prefix();
+    co_await lister::scan_dir(_cfg.base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
+            [this, &found_file_ids, &files_for_removal, &file_prefix] (fs::path dir, directory_entry de) {
+        if (!de.name.starts_with(file_prefix)) {
+            // not our file
+            return make_ready_future<>();
+        }
+        auto file_id_opt = _file_mgr.file_name_to_file_id(de.name);
+        if (file_id_opt) {
+            found_file_ids.insert(*file_id_opt);
+        } else if (de.name.ends_with(".tmp")) {
+            files_for_removal.push_back((dir / de.name).string());
+        }
+        return make_ready_future<>();
+    });
+    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), _cfg.base_dir.string());
+
+    // Remove any leftover temp files
+    co_await coroutine::parallel_for_each(files_for_removal.begin(), files_for_removal.end(),
+        [] (const sstring& file_path) {
+            logstor_logger.info("Recovery: removing leftover temp file {}", file_path);
+            return seastar::remove_file(file_path);
+        }
+    );
+
+    // Verify all files are present
+    size_t next_file_id = 0;
+    for (auto file_id : found_file_ids) {
+        if (file_id != next_file_id) {
+            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", _file_mgr.get_file_path(next_file_id)));
+        }
+        next_file_id++;
+    }
+    _file_mgr.recover_next_file_id(next_file_id);
+
+    // populate index from all segments. keep the latest record for each key.
+    for (auto file_id : found_file_ids) {
+        co_await max_concurrent_for_each(segments_in_file(file_id), 32,
+            [this] (log_segment_id seg_id) {
+                return recover_segment(seg_id);
+            }
+        );
+    }
+
+    // go over the index and mark all segments that have live data as used.
+    size_t allocated_segment_count = next_file_id * _segments_per_file;
+    utils::dynamic_bitset used_segments(allocated_segment_count);
+    for (const auto& entry : _index) {
+        used_segments.set(entry.location.segment.value);
+        co_await coroutine::maybe_yield();
+    }
+
+    // put used segments in the histogram, and put the rest in the free list.
+    size_t free_segment_count = 0;
+    size_t used_segment_count = 0;
+    for (size_t seg_idx = 0; seg_idx < allocated_segment_count; ++seg_idx) {
+        log_segment_id seg_id(seg_idx);
+        auto& desc = get_segment_descriptor(seg_id);
+        if (!used_segments.test(seg_idx)) {
+            desc.on_free_segment();
+            _free_segments.push_back(seg_id);
+            free_segment_count++;
+        } else {
+            _compaction_mgr.add_segment(desc);
+            used_segment_count++;
+            _stats.segments_in_use++;
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    _next_new_segment_id = allocated_segment_count;
+
+    logstor_logger.trace("Recovery: found {} used segments and {} free segments",
+                        used_segment_count, free_segment_count);
+
+    logstor_logger.info("Recovery complete");
+}
+
+future<> segment_manager_impl::recover_segment(log_segment_id segment_id) {
+    auto& desc = get_segment_descriptor(segment_id);
+    desc.reset(_cfg.segment_size);
+
+    auto seg_gen_opt = co_await recover_segment_generation(segment_id);
+    if (!seg_gen_opt) {
+        co_return;
+    }
+    desc.seg_gen = *seg_gen_opt;
+
+    co_await for_each_record(segment_id, [this, &desc] (log_location loc, log_record record) -> future<> {
+        logstor_logger.trace("Recovery: read record at {} gen {}", loc, record.generation);
+
+        index_entry new_entry {
+            .location = loc,
+            .generation = record.generation
+        };
+
+        if (auto [inserted, prev_entry] = _index.insert_if_newer(record.key, new_entry); inserted) {
+            desc.on_write(loc);
+            if (prev_entry) {
+                get_segment_descriptor(prev_entry->location).on_free(prev_entry->location);
+            }
+        } else {
+            desc.on_free(loc);
+        }
+
+        co_return;
+    });
+}
+
+future<std::optional<segment_generation>> segment_manager_impl::recover_segment_generation(log_segment_id segment_id) {
+    auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
+    auto file = co_await _file_mgr.get_file_for_read(file_id);
+
+    std::optional<segment_generation> max_gen;
+
+    for (size_t current_position = 0; current_position < _cfg.segment_size; current_position += block_alignment) {
+        auto buffer_header_buf = co_await file.dma_read_exactly<char>(
+            file_offset + current_position, write_buffer::buffer_header_size);
+
+        if (buffer_header_buf.size() < write_buffer::buffer_header_size) {
+            continue;
+        }
+
+        seastar::simple_memory_input_stream buffer_header_stream(
+            buffer_header_buf.begin(), buffer_header_buf.size());
+
+        auto bh = ser::deserialize(buffer_header_stream,
+            std::type_identity<write_buffer::buffer_header>{});
+
+        if (bh.magic != write_buffer::buffer_header_magic) {
+            continue;
+        }
+
+        if (!max_gen || bh.seg_gen > *max_gen) {
+            max_gen = bh.seg_gen;
+        }
+    }
+
+    co_return max_gen;
 }
 
 // segment_manager wrapper
