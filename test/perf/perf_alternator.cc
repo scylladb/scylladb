@@ -8,7 +8,6 @@
 
 #include <functional>
 #include <memory>
-#include <seastar/core/abort_source.hh>
 #include <signal.h>
 #include <seastar/core/future.hh>
 #include <seastar/core/thread.hh>
@@ -45,8 +44,6 @@ struct test_config {
     std::string remote_host;
     bool continue_after_error;
     std::string json_result_file;
-
-    sharded<abort_source>* as;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -411,7 +408,6 @@ void workload_main(const test_config& c) {
     fun_t fun = it->second;
 
     auto results = time_parallel([&] {
-        c.as->local().check();
         static thread_local auto sharded_cli_pool = make_client_pool(c); // for simplicity never closed as it lives for the whole process runtime
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
@@ -440,7 +436,7 @@ void workload_main(const test_config& c) {
 // This benchmark runs the whole Scylla so it needs scylla config and
 // commandline. Example usage:
 // ./build/dev/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
-std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
+std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config> cfg)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
        
@@ -498,10 +494,9 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             });
         }
 
-        *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
+        *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg) mutable {
             c.port = cfg->alternator_port();
-            c.as = &as;
-            return seastar::async([c = std::move(c)] {
+            (void)seastar::async([c = std::move(c)] {
                 try {
                     workload_main(c);
                 } catch(...) {
