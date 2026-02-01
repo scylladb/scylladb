@@ -2759,11 +2759,7 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
     // even if we don't
     // ultimately ship them to the client (CASSANDRA-4911).
     for (auto&& [column_def, is_descending] : orderings) {
-        auto index = selection.index_of(*column_def);
-        if (index < 0) {
-            index = selection.add_column_for_post_processing(*column_def);
-        }
-
+        auto index = selection.add_column_for_post_processing(*column_def);
         sorters.emplace_back(index, column_def->type);
     }
 
@@ -2866,9 +2862,7 @@ void select_statement::ensure_filtering_columns_retrieval(data_dictionary::datab
                                         selection::selection& selection,
                                         const restrictions::statement_restrictions& restrictions) {
     for (auto&& cdef : restrictions.get_column_defs_for_filtering(db)) {
-        if (!selection.has_column(*cdef)) {
-            selection.add_column_for_post_processing(*cdef);
-        }
+        selection.add_column_for_post_processing(*cdef);
     }
 }
 
