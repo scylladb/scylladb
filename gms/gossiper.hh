@@ -335,11 +335,6 @@ public:
 
 private:
     /**
-     * @param endpoint end point that is convicted.
-     */
-    future<> convict(locator::host_id endpoint);
-
-    /**
      * Removes the endpoint from gossip completely
      *
      * @param endpoint endpoint to be removed from the current membership.
@@ -354,6 +349,11 @@ public:
     future<> remove_endpoint(locator::host_id endpoint, permit_id);
     // Returns true if an endpoint was removed
     future<> force_remove_endpoint(locator::host_id id, permit_id);
+
+    /**
+     * @param endpoint endpoint that is convicted.
+     */
+    future<> convict(locator::host_id endpoint);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY
