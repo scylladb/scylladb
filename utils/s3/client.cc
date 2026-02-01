@@ -61,6 +61,32 @@ struct fmt::formatter<s3::tag> {
     }
 };
 
+struct s3_request_formatter {
+    const http::request& req;
+};
+
+template <>
+struct fmt::formatter<s3_request_formatter> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const s3_request_formatter& s3_req, FormatContext& ctx) const {
+        auto out = ctx.out();
+
+        fmt::format_to(out, "{}", s3_req.req.request_line());
+        fmt::format_to(out, "Headers:\n");
+        for (const auto& kv : s3_req.req._headers) {
+            if (kv.first == "Authorization") {
+                fmt::format_to(out, "  {}: <redacted>\n", kv.first);
+            } else {
+                fmt::format_to(out, "  {}: {}\n", kv.first, kv.second);
+            }
+        }
+
+        return out;
+    }
+};
+
 namespace utils {
 
 inline size_t iovec_len(const std::vector<iovec>& iov)
@@ -335,9 +361,10 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
         if (possible_error) {
             auto should_retry = possible_error->is_retryable();
             if (possible_error->get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
-                s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
+                s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}, request dump:\n{}",
                          utils::aws::format_time_point(db_clock::now()),
-                         request.get_header("x-amz-date"));
+                         request.get_header("x-amz-date"),
+                         s3_request_formatter(request));
                 should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
