@@ -137,6 +137,7 @@ private:
 
     select_statement::ordering_comparator_type get_ordering_comparator(
         const prepared_orderings_type&,
+        bool is_reversed,
         selection::selection& selection,
         const restrictions::statement_restrictions& restrictions);
 
