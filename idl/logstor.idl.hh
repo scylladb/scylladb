@@ -18,6 +18,7 @@ struct index_key {
 
 class log_record {
     replica::logstor::index_key key;
+    replica::logstor::record_generation generation;
     canonical_mutation mut;
 };
 
