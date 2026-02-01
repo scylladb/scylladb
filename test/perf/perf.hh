@@ -24,6 +24,7 @@
 #include <chrono>
 #include <iosfwd>
 #include <vector>
+#include <json/json.h>
 
 template <typename Func>
 static
@@ -321,6 +322,8 @@ public:
 };
 
 std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
+
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type);
 
 } // namespace perf
 

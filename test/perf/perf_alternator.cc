@@ -18,6 +18,7 @@
 #include <seastar/http/reply.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/smp.hh>
 #include <tuple>
 #include <boost/program_options.hpp>
 
@@ -43,6 +44,7 @@ struct test_config {
     bool flush;
     std::string remote_host;
     bool continue_after_error;
+    std::string json_result_file;
 
     sharded<abort_source>* as;
 };
@@ -416,9 +418,28 @@ void workload_main(const test_config& c) {
         return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
     }, c.concurrency, c.duration_in_seconds, c.operations_per_shard, !c.continue_after_error);
 
-    std::cout << aggregated_perf_results(results) << std::endl;
+    aggregated_perf_results agg(results);
+    std::cout << agg << std::endl;
+
+    if (!c.json_result_file.empty()) {
+        Json::Value params;
+        params["workload"] = c.workload;
+        params["partitions"] = c.partitions;
+        params["concurrency"] = c.concurrency;
+        params["duration"] = c.duration_in_seconds;
+        params["operations_per_shard"] = c.operations_per_shard;
+        params["remote_host"] = c.remote_host;
+        params["flush"] = c.flush;
+        params["scan_total_segments"] = c.scan_total_segments;
+        params["cpus"] = smp::count;
+
+        perf::write_json_result(c.json_result_file, agg, params, c.workload);
+    }
 }
 
+// This benchmark runs the whole Scylla so it needs scylla config and
+// commandline. Example usage:
+// ./build/dev/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
@@ -435,6 +456,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
+            ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
         ;
         bpo::variables_map opts;
         bpo::store(bpo::command_line_parser(ac, av).options(opts_desc).allow_unregistered().run(), opts);
@@ -449,6 +471,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.remote_host = opts["remote-host"].as<std::string>();
         c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
         c.continue_after_error = opts["continue-after-error"].as<bool>();
+        c.json_result_file = opts["json-result"].as<std::string>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
             throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");

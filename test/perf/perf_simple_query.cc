@@ -21,8 +21,6 @@
 
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
-#include "release.hh"
-#include <fstream>
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
@@ -240,8 +238,6 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
 }
 
 void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg) {
-    Json::Value results;
-
     Json::Value params;
     params["concurrency"] = cfg.concurrency;
     params["partitions"] = cfg.partitions;
@@ -251,21 +247,6 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.initial_tablets) {
         params["initial_tablets"] = cfg.initial_tablets.value();
     }
-    results["parameters"] = std::move(params);
-
-    Json::Value stats;
-    auto med = agg.median_by_throughput;
-    stats["median tps"] = med.throughput;
-    stats["allocs_per_op"] = med.mallocs_per_op;
-    stats["logallocs_per_op"] = med.logallocs_per_op;
-    stats["tasks_per_op"] = med.tasks_per_op;
-    stats["instructions_per_op"] = med.instructions_per_op;
-    stats["cpu_cycles_per_op"] = med.cpu_cycles_per_op;
-    const auto& tps = agg.stats.at("throughput");
-    stats["mad tps"] = tps.median_absolute_deviation;
-    stats["max tps"] = tps.max;
-    stats["min tps"] = tps.min;
-    results["stats"] = std::move(stats);
 
     std::string test_type;
     switch (cfg.mode) {
@@ -276,32 +257,8 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.counters) {
         test_type += "_counters";
     }
-    results["test_properties"]["type"] = test_type;
 
-    // <version>-<release>
-    auto version_components = std::vector<std::string>{};
-    auto sver = scylla_version();
-    boost::algorithm::split(version_components, sver, boost::is_any_of("-"));
-    // <scylla-build>.<date>.<git-hash>
-    auto release_components = std::vector<std::string>{};
-    boost::algorithm::split(release_components, version_components[1], boost::is_any_of("."));
-
-    Json::Value version;
-    version["commit_id"] = release_components[2];
-    version["date"] = release_components[1];
-    version["version"] = version_components[0];
-
-    // It'd be nice to have std::chrono::format(), wouldn't it?
-    auto current_time = std::time(nullptr);
-    char time_str[100];
-    ::tm time_buf;
-    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ::localtime_r(&current_time, &time_buf));
-    version["run_date_time"] = time_str;
-
-    results["versions"]["scylla-server"] = std::move(version);
-
-    auto out = std::ofstream(result_file);
-    out << results;
+    perf::write_json_result(result_file, agg, params, test_type);
 }
 
 /// If app configuration contains the named parameter, store its value into \p store.

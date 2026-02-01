@@ -13,6 +13,9 @@
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
 #include "utils/logalloc.hh"
+#include "release.hh"
+#include <boost/algorithm/string.hpp>
+#include <fstream>
 
 
 uint64_t perf_mallocs() {
@@ -150,6 +153,59 @@ std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_arg
         }
     }
     return std::make_tuple(ac, av);
+}
+
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type) {
+    Json::Value results;
+
+    results["parameters"] = params;
+
+    Json::Value stats;
+    auto med = agg.median_by_throughput;
+    stats["median tps"] = med.throughput;
+    stats["allocs_per_op"] = med.mallocs_per_op;
+    stats["logallocs_per_op"] = med.logallocs_per_op;
+    stats["tasks_per_op"] = med.tasks_per_op;
+    stats["instructions_per_op"] = med.instructions_per_op;
+    stats["cpu_cycles_per_op"] = med.cpu_cycles_per_op;
+    const auto& tps = agg.stats.at("throughput");
+    stats["mad tps"] = tps.median_absolute_deviation;
+    stats["max tps"] = tps.max;
+    stats["min tps"] = tps.min;
+    results["stats"] = std::move(stats);
+
+    results["test_properties"]["type"] = test_type;
+
+    // <version>-<release>
+    auto version_components = std::vector<std::string>{};
+    auto sver = scylla_version();
+    boost::algorithm::split(version_components, sver, boost::is_any_of("-"));
+
+    Json::Value version;
+    if (version_components.size() >= 2) {
+        // <scylla-build>.<date>.<git-hash>
+        auto release_components = std::vector<std::string>{};
+        boost::algorithm::split(release_components, version_components[1], boost::is_any_of("."));
+
+        if (release_components.size() >= 3) {
+            version["commit_id"] = release_components[2];
+            version["date"] = release_components[1];
+        }
+        version["version"] = version_components[0];
+    } else {
+        version["version"] = sver;
+    }
+
+    auto current_time = std::time(nullptr);
+    char time_str[100];
+    ::tm time_buf;
+    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ::localtime_r(&current_time, &time_buf));
+    version["run_date_time"] = time_str;
+
+    results["versions"]["scylla-server"] = std::move(version);
+
+    auto out = std::ofstream(filename);
+    out << results;
 }
 
 } // namespace perf
