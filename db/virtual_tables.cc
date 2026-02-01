@@ -98,14 +98,13 @@ public:
                 auto hostid = eps.get_host_id();
 
                 set_cell(cr, "up", gossiper.is_alive(hostid));
-                if (!ss.raft_topology_change_enabled() || gossiper.is_shutdown(endpoint)) {
+                if (gossiper.is_shutdown(endpoint)) {
                     set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                } else {
+                    set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
                 }
                 set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
-                    set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
-                }
                 set_cell(cr, "host_id", hostid.uuid());
 
                 if (tm.get_topology().has_node(hostid)) {

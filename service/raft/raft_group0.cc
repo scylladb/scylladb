@@ -740,14 +740,6 @@ future<> raft_group0::setup_group0(
         co_return;
     }
 
-    if (_sys_ks.bootstrap_complete() && !ss.raft_topology_change_enabled()) {
-        // The node is restarting in the gossip-based topology. There are two possible cases:
-        // - the node is performing a normal restart and group 0 has already been set up,
-        // - the node has just left the RECOVERY mode (a part of the gossip-based recovery procedure) and the internal
-        // upgrade-to-raft procedure will set up group 0 in finish_setup_after_join.
-        co_return;
-    }
-
     if (joined_group0()) {
         // Group 0 is already set up, there is nothing to do.
         co_return;
@@ -778,8 +770,8 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
-            if (!ss.raft_topology_change_enabled() || !_feat.group0_limited_voters) {
-                // still using the gossip topology, or limited voters feature not enabled yet
+            if (!_feat.group0_limited_voters) {
+                // limited voters feature not enabled yet
                 // - need to become a voter in here
                 group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
                 // Just bootstrapped and joined as non-voter. Become a voter.

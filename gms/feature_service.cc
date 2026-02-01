@@ -187,39 +187,6 @@ std::set<sstring> feature_service::to_feature_set(sstring features_string) {
     return features;
 }
 
-class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
-    gossiper& _g;
-    feature_service& _feat;
-    db::system_keyspace& _sys_ks;
-    service::storage_service& _ss;
-
-public:
-    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s, service::storage_service& ss)
-            : _g(g)
-            , _feat(f)
-            , _sys_ks(s)
-            , _ss(ss)
-    {
-    }
-    future<> on_join(inet_address ep, locator::host_id id, endpoint_state_ptr state, gms::permit_id) override {
-        return enable_features();
-    }
-    future<> on_change(inet_address ep, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) override {
-        if (states.contains(application_state::SUPPORTED_FEATURES)) {
-            return enable_features();
-        }
-        return make_ready_future();
-    }
-
-    future<> enable_features();
-};
-
-future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks, service::storage_service& ss) {
-    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks, ss);
-    g.register_(enabler);
-    return enabler->enable_features();
-}
-
 future<> feature_service::on_system_tables_loaded(db::system_keyspace& sys_ks) {
     return enable_features_on_startup(sys_ks);
 }
@@ -297,31 +264,6 @@ void feature_service::check_features(const std::set<sstring>& enabled_features,
             }
         }
     }
-}
-
-future<> persistent_feature_enabler::enable_features() {
-    if (_ss.raft_topology_change_enabled()) {
-        co_return;
-    }
-
-    auto loaded_peer_features = co_await _sys_ks.load_peer_features();
-    auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
-
-    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
-    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
-    // function to preserve readability.
-    std::set<sstring> feats_set = co_await _sys_ks.load_local_enabled_features();
-    for (feature& f : _feat.registered_features() | std::views::values) {
-        if (!f && features.contains(f.name())) {
-            feats_set.emplace(f.name());
-        }
-    }
-    co_await _sys_ks.save_local_enabled_features(std::move(feats_set), true);
-
-    co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
-        auto features_v = features | std::ranges::to<std::set<std::string_view>>();
-        co_await fs.enable(std::move(features_v));
-    });
 }
 
 future<> feature_service::enable(std::set<std::string_view> list) {
