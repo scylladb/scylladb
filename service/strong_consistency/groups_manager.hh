@@ -17,7 +17,7 @@ namespace service::strong_consistency {
 
 class raft_server;
 
-/// A sharded service (currently pinned to shard 0) responsible for the lifecycle and access
+/// A sharded service responsible for the lifecycle and access
 /// management of all Raft groups for strongly consistent tablets hosted on this node.
 ///
 /// Listens for token_metadata updates to automatically start Raft servers for tablets newly
