@@ -65,13 +65,21 @@ class TestGuardrails(Tester):
         """
         cluster = self.cluster
 
+        MIN_FAIL_THRESHOLD = 2
+        MIN_WARN_THRESHOLD = 3
+        MAX_WARN_THRESHOLD = 4
+        MAX_FAIL_THRESHOLD = 5
+
         # FIXME: This test verifies that guardrails work. However, if we set `rf_rack_valid_keyspaces` to true,
         # we'll get a different error, so let's disable it for now. For more context, see issues:
         #   scylladb/scylladb#23071 and scylladb/scylla-dtest#5633.
         cluster.set_configuration_options(values={"rf_rack_valid_keyspaces": False})
 
         cluster.set_configuration_options(
-            values={"minimum_replication_factor_fail_threshold": 2, "minimum_replication_factor_warn_threshold": 3, "maximum_replication_factor_warn_threshold": 4, "maximum_replication_factor_fail_threshold": 5}
+            values={
+                "minimum_replication_factor_fail_threshold": MIN_FAIL_THRESHOLD, "minimum_replication_factor_warn_threshold": MIN_WARN_THRESHOLD, "maximum_replication_factor_warn_threshold": MAX_WARN_THRESHOLD,
+                "maximum_replication_factor_fail_threshold": MAX_FAIL_THRESHOLD
+            }
         )
 
         query = "CREATE KEYSPACE %s WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'dc1': %s}"
@@ -79,26 +87,16 @@ class TestGuardrails(Tester):
         node = cluster.nodelist()[0]
         session = self.patient_cql_connection(node)
 
-        rf = 1
-        ks_name = "ks_a"
-        assert_creating_ks_fails(session, query % (ks_name, rf), ks_name)
+        def test_rf(rf):
+            ks_name = f"ks_{rf}"
+            if rf < MIN_FAIL_THRESHOLD or rf > MAX_FAIL_THRESHOLD:
+                assert_creating_ks_fails(session, query % (ks_name, rf), ks_name)
+            elif rf < MIN_WARN_THRESHOLD:
+                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "min", "replication", "factor", str(MIN_WARN_THRESHOLD), "dc1", "2"])
+            elif rf > MAX_WARN_THRESHOLD:
+                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "max", "replication", "factor", str(MAX_WARN_THRESHOLD), "dc1", "5"])
+            else:
+                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, [])
 
-        rf = 2
-        ks_name = "ks_b"
-        create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "min", "replication", "factor", "3", "dc1", "2"])
-
-        rf = 3
-        ks_name = "ks_c"
-        create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, [])
-
-        rf = 4
-        ks_name = "ks_d"
-        create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, [])
-
-        rf = 5
-        ks_name = "ks_e"
-        create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "max", "replication", "factor", "4", "dc1", "5"])
-
-        rf = 6
-        ks_name = "ks_f"
-        assert_creating_ks_fails(session, query % (ks_name, rf), ks_name)
+        for rf in range(MIN_FAIL_THRESHOLD - 1, MAX_FAIL_THRESHOLD + 1):
+            test_rf(rf)
