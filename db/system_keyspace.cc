@@ -52,6 +52,8 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/strong_consistency/raft_groups_partitioner.hh"
+#include "service/strong_consistency/raft_groups_sharder.hh"
 #include "message/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
@@ -466,6 +468,77 @@ schema_ptr system_keyspace::raft_snapshot_config() {
 
             .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+// Raft tables for strongly consistent tablets.
+// These tables have partition keys of the form (shard, group_id), allowing the data
+// to be co-located with the tablet replica that owns the raft group.
+// The raft_groups_partitioner creates tokens that map to the specified shard.
+
+schema_ptr system_keyspace::raft_groups() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT_GROUPS);
+        return schema_builder(NAME, RAFT_GROUPS, std::optional(id))
+            .with_column("shard", int32_type, column_kind::partition_key)
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            // raft log part
+            .with_column("index", long_type, column_kind::clustering_key)
+            .with_column("term", long_type)
+            .with_column("data", bytes_type) // decltype(raft::log_entry::data) - serialized variant
+            // persisted term and vote
+            .with_column("vote_term", long_type, column_kind::static_column)
+            .with_column("vote", uuid_type, column_kind::static_column)
+            // id of the most recent persisted snapshot
+            .with_column("snapshot_id", uuid_type, column_kind::static_column)
+            .with_column("commit_idx", long_type, column_kind::static_column)
+
+            .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
+            .with_hash_version()
+            .set_caching_options(caching_options::get_disabled_caching_options())
+            .with_partitioner(service::strong_consistency::raft_groups_partitioner::classname)
+            .with_sharder(service::strong_consistency::raft_groups_sharder::instance())
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::raft_groups_snapshots() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT_GROUPS_SNAPSHOTS);
+        return schema_builder(NAME, RAFT_GROUPS_SNAPSHOTS, std::optional(id))
+            .with_column("shard", int32_type, column_kind::partition_key)
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            .with_column("snapshot_id", uuid_type)
+            // Index and term of last entry in the snapshot
+            .with_column("idx", long_type)
+            .with_column("term", long_type)
+
+            .set_comment("Persisted RAFT snapshot descriptors info for strongly consistent tablets")
+            .with_hash_version()
+            .with_partitioner(service::strong_consistency::raft_groups_partitioner::classname)
+            .with_sharder(service::strong_consistency::raft_groups_sharder::instance())
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::raft_groups_snapshot_config() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_keyspace::NAME, RAFT_GROUPS_SNAPSHOT_CONFIG);
+        return schema_builder(system_keyspace::NAME, RAFT_GROUPS_SNAPSHOT_CONFIG, std::optional(id))
+            .with_column("shard", int32_type, column_kind::partition_key)
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+            .with_column("server_id", uuid_type, column_kind::clustering_key)
+            .with_column("can_vote", boolean_type)
+
+            .set_comment("RAFT configuration for strongly consistent tablets snapshot descriptor")
+            .with_hash_version()
+            .with_partitioner(service::strong_consistency::raft_groups_partitioner::classname)
+            .with_sharder(service::strong_consistency::raft_groups_sharder::instance())
             .build();
     }();
     return schema;
@@ -2296,6 +2369,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     commitlog_cleanups(),
                     cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
+                    raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
                     dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
     });
@@ -2317,7 +2391,10 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
     return (s.get() == system_keyspace::batchlog().get())
             || (s.get() == system_keyspace::batchlog_v2().get())
             || (s.get() == system_keyspace::paxos().get())
-            || s == system_keyspace::scylla_views_builds_in_progress();
+            || s == system_keyspace::scylla_views_builds_in_progress()
+            || s == system_keyspace::raft_groups()
+            || s == system_keyspace::raft_groups_snapshots()
+            || s == system_keyspace::raft_groups_snapshot_config();
 }
 
 future<> system_keyspace::make(
