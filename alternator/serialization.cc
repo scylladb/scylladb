@@ -485,7 +485,7 @@ std::optional<bytes> unwrap_bytes(const rjson::value& value, bool from_query) {
         return rjson::base64_decode(value);
     } catch (...) {
         if (from_query) {
-            throw api_error::serialization(format("Invalid base64 data"));
+            throw api_error::serialization("Invalid base64 data");
         }
         return std::nullopt;
     }
