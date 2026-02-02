@@ -524,3 +524,93 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 await repair_task
 
                 mark, _ = await log.wait_for(f"Detected tablet split for table {cf}", from_mark=mark)
+
+# Since we create 20M volumes, we need to reduce the commitlog segment size
+# otherwise we hit out of space.
+global_cmdline_with_disabled_monitor = [
+    "--disk-space-monitor-normal-polling-interval-in-seconds", "1",
+    "--critical-disk-utilization-level", "1.0",
+    "--commitlog-segment-size-in-mb", "2",
+    "--schema-commitlog-segment-size-in-mb", "4",
+    "--tablet-load-stats-refresh-interval-in-seconds", "1",
+]
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sstables_incrementally_released_during_streaming(manager: ManagerClient, volumes_factory: Callable) -> None:
+    """
+    Test that source node will not run out of space if major compaction rewrites the sstables being streamed.
+    Expects the file streaming and major will both release sstables incrementally, reducing chances of 2x
+    space amplification.
+
+    Scenario:
+      - Create a 2-node cluster with limited disk space.
+      - Create a table with 2 tablets, one in each node
+      - Write 20% of node capacity to each tablet.
+      - Start decommissioning one node.
+      - During streaming, create a large file on the source node to push it over 85%
+      - Run major expecting the file streaming released the sstables incrementally. Had it not, source node runs out of space.
+      - Unblock streaming
+      - Verify that the decommission operation succeeds.
+    """
+    cmdline = [*global_cmdline_with_disabled_monitor,
+               "--logger-log-level", "load_balancer=debug",
+               "--logger-log-level", "debug_error_injection=debug"
+               ]
+    # the coordinator needs more space, so creating a 40M volume for it.
+    async with space_limited_servers(manager, volumes_factory, ["40M", "20M"], cmdline=cmdline,
+                                     property_file=[{"dc": "dc1", "rack": "r1"}]*2) as servers:
+        cql, _ = await manager.get_ready_cql(servers)
+
+        workdir = await manager.server_get_workdir(servers[1].server_id)
+        log = await manager.server_open_log(servers[1].server_id)
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['{servers[1].rack}'] }}"
+                                              " AND tablets = {'initial': 2}") as ks:
+            await manager.disable_tablet_balancing()
+
+            # Needs 1mb fragments in order to stress incremental release in file streaming
+            extra_table_param = "WITH compaction = {'class' : 'IncrementalCompactionStrategy', 'sstable_size_in_mb' : '1'} and compression = {}"
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text", extra_table_param) as cf:
+                before_disk_info = psutil.disk_usage(workdir)
+                # About 4mb per tablet
+                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 8000)])
+
+                # split data into 1mb fragments
+                await manager.api.keyspace_flush(servers[1].ip_addr, ks)
+                await manager.api.keyspace_compaction(servers[1].ip_addr, ks)
+
+                after_disk_info = psutil.disk_usage(workdir)
+                percent_by_writes = after_disk_info.percent - before_disk_info.percent
+                logger.info(f"Percent taken by writes {percent_by_writes}")
+
+                # assert sstable data content account for more than 20% of node's storage.
+                assert percent_by_writes > 20
+
+                # We want to trap only migrations which happened during decommission
+                await manager.api.quiesce_topology(servers[0].ip_addr)
+
+                await manager.api.enable_injection(servers[1].ip_addr, "tablet_stream_files_end_wait", one_shot=True)
+                mark = await log.mark()
+
+                logger.info(f"Workdir {workdir}")
+
+                decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
+                await manager.enable_tablet_balancing()
+                mark, _ = await log.wait_for("tablet_stream_files_end_wait: waiting", from_mark=mark)
+
+                disk_info = psutil.disk_usage(workdir)
+                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                    disk_info = psutil.disk_usage(workdir)
+                    logger.info(f"Percent used before major {disk_info.percent}")
+
+                    # Run major in order to try to reproduce 2x space amplification if files aren't released
+                    # incrementally by streamer.
+                    await manager.api.keyspace_compaction(servers[1].ip_addr, ks)
+                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+
+                    disk_info = psutil.disk_usage(workdir)
+                    logger.info(f"Percent used after major {disk_info.percent}")
+
+                    await manager.api.message_injection(servers[1].ip_addr, "tablet_stream_files_end_wait")
+
+                    await decomm_task
