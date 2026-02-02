@@ -686,7 +686,6 @@ rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_servi
             table_id = validate_table(ctx.db.local(), keyspace, table);
         }
 
-        std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
