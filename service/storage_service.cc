@@ -2839,10 +2839,6 @@ future<> storage_service::uninit_address_map() {
     return _gossiper.unregister_(_ip_address_updater);
 }
 
-bool storage_service::is_topology_coordinator_enabled() const {
-    return raft_topology_change_enabled();
-}
-
 future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         start_hint_manager start_hm, gms::generation_type new_generation) {
     SCYLLA_ASSERT(this_shard_id() == 0);
