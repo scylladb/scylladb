@@ -8,7 +8,7 @@
 
 #include <utility>
 #include <algorithm>
-
+#include <unordered_set>
 #include <boost/range/irange.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
@@ -1068,6 +1068,14 @@ public:
         return create_ck(_batch_no - 1);
     }
 
+    api::timestamp_type get_timestamp() const {
+        return _ts;
+    }
+
+    ttl_opt get_ttl() const {
+        return _ttl;
+    }
+
     // A common pattern is to allocate a row and then immediately set its `cdc$operation` column.
     clustering_key allocate_new_log_row(operation op) {
         auto log_ck = allocate_new_log_row();
@@ -1210,24 +1218,35 @@ struct process_row_visitor {
 
     const bool _generate_delta_values = true; 
 
+    // true if we are in alternator mode - running a cdc generation for a change in an alternator table
+    const bool _alternator;
+
+    bool _anything_changed = false;
+
     process_row_visitor(
             const clustering_key& log_ck, stats::part_type_set& touched_parts, log_mutation_builder& builder,
             bool enable_updating_state, const clustering_key* base_ck, cell_map* row_state,
-            row_states_map& clustering_row_states, bool generate_delta_values)
+            row_states_map& clustering_row_states, bool generate_delta_values, bool alternator = false)
         : _log_ck(log_ck), _touched_parts(touched_parts), _builder(builder),
           _enable_updating_state(enable_updating_state), _base_ck(base_ck), _row_state(row_state),
           _clustering_row_states(clustering_row_states),
-          _generate_delta_values(generate_delta_values)
+          _generate_delta_values(generate_delta_values), _alternator(alternator)
     {}
 
-    void update_row_state(const column_definition& cdef, managed_bytes_opt value) {
+    // returns true if there's a change (either value is modified or existed and was deleted)
+    // this is important only for alternator mode
+    bool update_row_state(const column_definition& cdef, managed_bytes_opt value) {
         if (!_row_state) {
             // static row always has a valid state, so this must be a clustering row missing
             SCYLLA_ASSERT(_base_ck);
             auto [it, _] = _clustering_row_states.try_emplace(*_base_ck);
             _row_state = &it->second;
         }
-        (*_row_state)[&cdef] = std::move(value);
+        auto [ it, inserted ] = _row_state->insert({ &cdef, std::nullopt });
+
+        auto changed = it->second != value;
+        it->second = std::move(value);
+        return changed;
     }
 
     void live_atomic_cell(const column_definition& cdef, const atomic_cell_view& cell) {
@@ -1246,7 +1265,7 @@ struct process_row_visitor {
 
         // images
         if (_enable_updating_state) {
-            update_row_state(cdef, std::move(value));
+            _anything_changed = update_row_state(cdef, std::move(value)) || _anything_changed;
         }
     }
 
@@ -1257,7 +1276,7 @@ struct process_row_visitor {
         }
         // images
         if (_enable_updating_state) {
-            update_row_state(cdef, std::nullopt);
+            _anything_changed = update_row_state(cdef, std::nullopt) || _anything_changed;
         }
     }
 
@@ -1411,7 +1430,8 @@ struct process_row_visitor {
                 });
             }
 
-            update_row_state(cdef, std::move(next));
+            _anything_changed = update_row_state(cdef, std::move(next)) || _anything_changed;
+
         }
     }
 
@@ -1434,12 +1454,18 @@ struct process_change_visitor {
     const bool _enable_updating_state = false;
 
     row_states_map& _clustering_row_states;
+    std::unordered_set<bytes> &_rows_to_ignore;
     cell_map& _static_row_state;
 
     const bool _is_update = false;
 
     const bool _generate_delta_values = true;
 
+    void add_ckey_to_rows_to_ignore(const clustering_key& ckey) {
+        auto res = ckey.explode();
+        auto ckey_exploded = !res.empty() ? res[0] : bytes{};
+        _rows_to_ignore.insert(ckey_exploded);
+    }
     void static_row_cells(auto&& visit_row_cells) {
         _touched_parts.set<stats::part_type::STATIC_ROW>();
 
@@ -1471,14 +1497,21 @@ struct process_change_visitor {
             }
         };
 
+        auto row_state = get_row_state(_clustering_row_states, ckey);
         clustering_row_cells_visitor v(
                 log_ck, _touched_parts, _builder,
-                _enable_updating_state, &ckey, get_row_state(_clustering_row_states, ckey),
-                _clustering_row_states, _generate_delta_values);
+                _enable_updating_state, &ckey, row_state,
+                _clustering_row_states, _generate_delta_values, _request_options.alternator);
         if (_is_update && _request_options.alternator) {
-            v._marker_op = operation::update;
+            v._marker_op = row_state ? operation::update : operation::insert;
         }
         visit_row_cells(v);
+
+        if (_request_options.alternator) {
+            if (!v._anything_changed) {
+                add_ckey_to_rows_to_ignore(ckey);
+            }
+        }
 
         if (_enable_updating_state) {
             // #7716: if there are no regular columns, our visitor would not have visited any cells,
@@ -1497,8 +1530,13 @@ struct process_change_visitor {
         auto log_ck = _builder.allocate_new_log_row(_row_delete_op);
         _builder.set_clustering_columns(log_ck, ckey);
 
-        if (_enable_updating_state && get_row_state(_clustering_row_states, ckey)) {
-            _clustering_row_states.erase(ckey);
+        if (_enable_updating_state) {
+            if (get_row_state(_clustering_row_states, ckey)) {
+                _clustering_row_states.erase(ckey);
+            }
+            else if (_request_options.alternator) {
+                add_ckey_to_rows_to_ignore(ckey);
+            }
         }
     }
 
@@ -1540,6 +1578,9 @@ struct process_change_visitor {
         _touched_parts.set<stats::part_type::PARTITION_DELETE>();
         auto log_ck = _builder.allocate_new_log_row(_partition_delete_op);
         if (_enable_updating_state) {
+            if (_request_options.alternator && _clustering_row_states.empty()) {
+                add_ckey_to_rows_to_ignore({});
+            }
             _clustering_row_states.clear();
         }
     }
@@ -1630,6 +1671,7 @@ private:
      */
 
     row_states_map _clustering_row_states;
+    std::unordered_set<bytes> _rows_to_ignore;
     cell_map _static_row_state;
     // True if the mutated row existed before applying the mutation. In other
     // words, if the preimage is enabled and it isn't empty (otherwise, we
@@ -1637,6 +1679,7 @@ private:
     // #6918).
     bool _is_update = false;
 
+    bool _needs_postprocessing = false;
     const bool _uses_tablets;
 
     utils::chunked_vector<mutation> _result_mutations;
@@ -1647,6 +1690,58 @@ private:
 
     stats::part_type_set _touched_parts;
 
+    // the function will process mutations and remove rows that are in _rows_to_ignore
+    // we need to take care and reindex clustering keys (cdc$batch_seq_no)
+    mutation postprocess_mutation(mutation mut, const column_definition *ck_def) {
+        if (_rows_to_ignore.empty()) {
+            return mut;
+        }
+        auto after_mut = mutation(_log_schema, mut.key());
+        if (!ck_def) {
+            // only single row per partition - we drop everything
+            return after_mut;
+        }
+        int batch_seq = 0;
+        for(rows_entry &row : mut.partition().mutable_non_dummy_rows()) {
+            auto cell = row.row().cells().find_cell(ck_def->id);
+            if (cell) {
+                auto val = cell->as_atomic_cell(*ck_def).value().linearize();
+
+                if (_rows_to_ignore.contains(val)) {
+                    continue;
+                }
+            }
+            auto new_key = _builder->create_ck(batch_seq++);
+            after_mut.partition().clustered_row(*_log_schema, std::move(new_key)) = std::move(row.row());
+        }
+
+        if (batch_seq > 0) {
+            // update end_of_batch marker
+            // we don't need to clear previous one, as we only removed rows
+            // we need to set it on the last row, because original last row might have been deleted
+            // batch_seq == 0 -> no rows, after_mut is empty, all entries were dropped and there's nothing to write to cdc log
+            auto last_key = _builder->create_ck(batch_seq - 1);
+            after_mut.set_cell(last_key, log_meta_column_name_bytes("end_of_batch"), data_value(true), _builder->get_timestamp(), _builder->get_ttl());
+        }
+
+        return after_mut;
+    }
+    void postprocess_mutations() {
+        if (_needs_postprocessing) {
+            auto cks = _schema->clustering_key_columns();
+            const column_definition *ck_def = nullptr;
+            if (!cks.empty()) {
+                auto it = _log_schema->columns_by_name().find(cks.front().name());
+                SCYLLA_ASSERT(it != _log_schema->columns_by_name().end());
+                ck_def = it->second;
+            }
+
+            for (auto& mut : _result_mutations) {
+                mut = postprocess_mutation(std::move(mut), ck_def);
+            }
+            _needs_postprocessing = false;
+        }
+    }
 public:
     transformer(db_context ctx, schema_ptr s, dht::decorated_key dk, const per_request_options& options)
         : _ctx(ctx)
@@ -1655,6 +1750,7 @@ public:
         , _log_schema(_schema->cdc_schema() ? _schema->cdc_schema() : ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _options(options)
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
+        , _rows_to_ignore()
         , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())
     {
     }
@@ -1665,6 +1761,7 @@ public:
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
+        _needs_postprocessing = true;
     }
 
     void produce_preimage(const clustering_key* ck, const one_kind_column_set& columns_to_include) override {
@@ -1761,6 +1858,7 @@ public:
             ._builder = *_builder,
             ._enable_updating_state = _enable_updating_state,
             ._clustering_row_states = _clustering_row_states,
+            ._rows_to_ignore = _rows_to_ignore,
             ._static_row_state = _static_row_state,
             ._is_update = _is_update,
             ._generate_delta_values = generate_delta_values(_builder->base_schema())
@@ -1780,6 +1878,7 @@ public:
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
+        postprocess_mutations();
         return std::make_pair<utils::chunked_vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
     }
 

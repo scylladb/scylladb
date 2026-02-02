@@ -1486,6 +1486,10 @@ public:
         return std::ranges::subrange(_rows.begin(), _rows.end())
             | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
+    auto mutable_non_dummy_rows() {
+        return std::ranges::subrange(_rows.begin(), _rows.end())
+            | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
+    }
     void accept(const schema&, mutation_partition_visitor&) const;
 
     // Returns the number of live CQL rows in this partition.

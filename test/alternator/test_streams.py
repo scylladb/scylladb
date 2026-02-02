@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
+from test.alternator.util import is_aws, scylla_config_temporary, scylla_log, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
 
 # All tests in this file are expected to fail with tablets due to #23838.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -289,7 +289,6 @@ def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
 # Running update_item with UpdateExpression set to remove column emits spurious MODIFY event when item does not exist
 # The test tries all combinations (delete column from non-existing item, delete existing column from existing item, delete non-existing column from existing item)
 # only delete column from non-existing item emits spurious MODIFY event
-@pytest.mark.xfail(reason="temporary")
 def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     null = None
     def do_updates(table, p, c):
@@ -321,7 +320,6 @@ def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_ne
         do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
         
 # the same as test_streams_spurious_modify_when_update_expr_on_empty_item but for a table without clustering key
-@pytest.mark.xfail(reason="temporary")
 def test_streams_spurious_modify_when_update_expr_on_empty_item_on_no_clustering_key_table(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
     null = None
     def do_updates(table, p, c):
@@ -352,19 +350,20 @@ def test_streams_spurious_modify_when_update_expr_on_empty_item_on_no_clustering
         do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # the same as test_streams_spurious_modify_when_update_expr_on_empty_item but for a table without clustering key
-@pytest.mark.xfail(reason="temporary")
-def test_streams_spurious_modify_mixing_noop_with_real_changes_in_batch_write_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_spurious_modify_mixing_noop_with_real_changes_in_batch_write_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, rest_api):
     null = None
     def do_updates(table, p, c):
         events = [
-            ["INSERT",{"c":c + '0',"p":"p0"},null,{"c":c + '0',"a":0,"p":"p0"}],
-            ["INSERT",{"c":c + '2',"p":"p0"},null,{"c":c + '2',"a":2,"p":"p0"}],
+            ["INSERT",{"c":c + '0',"p":p},null,{"c":c + '0',"a":0,"p":p}],
+            ["INSERT",{"c":c + '2',"p":p},null,{"c":c + '2',"a":2,"p":p}],
         ]
 
+        scylla_log(rest_api, f"QWERTY starting", "info")
         with table.batch_writer() as batch:
             batch.put_item({'p': p, 'c': c + '0', 'a': 0})
             batch.delete_item(Key={'p': p, 'c': c + '1'})
             batch.put_item({'p': p, 'c': c + '2', 'a': 2})
+        scylla_log(rest_api, f"QWERTY completed", "info")
         return events
     
     with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
@@ -846,7 +845,7 @@ def compare_events(expected_events, output, mode, expected_region):
                     assert expected_old_image == old_image
             else:
                 pytest.fail('cannot happen')
-        except AssertionError:
+        except Exception:
             print_events(expected_events, output, failed_at=e)
             raise
             
