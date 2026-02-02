@@ -628,38 +628,6 @@ private:
     sharded<db::view::view_building_worker>& _view_building_worker;
     bool _isolated = false;
 private:
-    /**
-     * Handle node bootstrap
-     *
-     * @param endpoint bootstrapping node
-     */
-    future<> handle_state_bootstrap(inet_address endpoint, locator::host_id id, gms::permit_id);
-
-    /**
-     * Handle node move to normal state. That is, node is entering token ring and participating
-     * in reads.
-     *
-     * @param endpoint node
-     */
-    future<> handle_state_normal(inet_address endpoint, locator::host_id id, gms::permit_id);
-
-    /**
-     * Handle node leaving the ring. This will happen when a node is decommissioned
-     *
-     * @param endpoint If reason for leaving is decommission, endpoint is the leaving node.
-     * @param pieces STATE_LEFT,token
-     */
-    future<> handle_state_left(inet_address endpoint, locator::host_id id, std::vector<sstring> pieces, gms::permit_id);
-
-    /**
-     * Handle notification that a node being actively removed from the ring via 'removenode'
-     *
-     * @param endpoint node
-     * @param pieces is REMOVED_TOKEN (node is gone)
-     */
-    future<> handle_state_removed(inet_address endpoint, locator::host_id id, std::vector<sstring> pieces, gms::permit_id);
-
-private:
     future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
             gms::permit_id);
     future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
