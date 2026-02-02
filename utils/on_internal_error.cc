@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/log.hh>
 
 #include "on_internal_error.hh"
@@ -21,6 +22,11 @@ namespace utils {
 
 [[noreturn]] void on_fatal_internal_error(std::string_view reason) noexcept {
     seastar::on_fatal_internal_error(on_internal_error_logger, reason);
+}
+
+[[noreturn]] void __assert_fail_on_internal_error(const char* expr, const char* file, int line, const char* function) {
+    on_internal_error(fmt::format("Assertion '{}' failed at {}:{} in {}",
+        expr, file, line, function));
 }
 
 }
