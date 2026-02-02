@@ -247,6 +247,18 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2, bool v1_from
     if (!v1) {
         return false;
     }
+    if (!v1->IsObject() || v1->MemberCount() != 1) {
+        if (v1_from_query) {
+            throw api_error::serialization("CONTAINS operator encountered malformed AttributeValue");
+        }
+        return false;
+    }
+    if (!v2.IsObject() || v2.MemberCount() != 1) {
+        if (v2_from_query) {
+            throw api_error::serialization("CONTAINS operator encountered malformed AttributeValue");
+        }
+        return false;
+    }
     const auto& kv1 = *v1->MemberBegin();
     const auto& kv2 = *v2.MemberBegin();
     if (kv1.name == "S" && kv2.name == "S") {
@@ -265,9 +277,17 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2, bool v1_from
             }
         }
     } else if (kv1.name == "L") {
+        if (!kv1.value.IsArray()) {
+            if (v1_from_query) {
+                throw api_error::serialization("CONTAINS operator received a malformed list");
+            }
+            return false;
+        }
         for (auto i = kv1.value.Begin(); i != kv1.value.End(); ++i) {
             if (!i->IsObject() || i->MemberCount() != 1) {
-                clogger.error("check_CONTAINS received a list whose element is malformed");
+                if (v1_from_query) {
+                    throw api_error::serialization("CONTAINS operator received a list whose element is malformed");
+                }
                 return false;
             }
             const auto& el = *i->MemberBegin();
