@@ -600,6 +600,10 @@ private:
                 schema_builder::restore_schema_initializers_checkpoint(schema_initializer_checkpoint);
             });
 
+            replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
+            ));
+
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);
             _feature_service.start(fcfg).get();
