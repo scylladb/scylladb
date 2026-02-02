@@ -2553,62 +2553,6 @@ std::string_view gossiper::get_gossip_status(const locator::host_id& endpoint) c
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
-future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std::optional<int32_t> force_after) const {
-    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
-    static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
-
-    if (force_after && *force_after == 0) {
-        logger.warn("Skipped to wait for gossip to settle by user request since skip_wait_for_gossip_to_settle is set zero. Do not use this in production!");
-        co_return;
-    }
-
-    int32_t total_polls = 0;
-    int32_t num_okay = 0;
-    auto ep_size = _endpoint_state_map.size();
-
-    auto delay = initial_delay;
-
-    co_await sleep_abortable(GOSSIP_SETTLE_MIN_WAIT_MS, _abort_source);
-    while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-        co_await sleep_abortable(delay, _abort_source);
-        delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
-
-        auto current_size = _endpoint_state_map.size();
-        total_polls++;
-        if (current_size == ep_size && _msg_processing == 0) {
-            logger.debug("Gossip looks settled");
-            num_okay++;
-        } else {
-            logger.info("Gossip not settled after {} polls.", total_polls);
-            num_okay = 0;
-        }
-        ep_size = current_size;
-        if (force_after && *force_after > 0 && total_polls > *force_after) {
-            logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
-            break;
-        }
-    }
-    if (total_polls > GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-        logger.info("Gossip settled after {} extra polls; proceeding", total_polls - GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED);
-    } else {
-        logger.info("No gossip backlog; proceeding");
-    }
-}
-
-future<> gossiper::wait_for_gossip_to_settle() const {
-    auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
-    if (force_after != 0) {
-        co_await wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
-    }
-}
-
-future<> gossiper::wait_for_range_setup() const {
-    logger.info("Waiting for pending range setup...");
-    auto ring_delay = std::chrono::milliseconds(_gcfg.ring_delay_ms);
-    auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
-    return wait_for_gossip(ring_delay, force_after);
-}
-
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) const {
     // We allow to bootstrap a new node in only two cases:
     // 1) The node is a completely new node and no state in gossip at all
