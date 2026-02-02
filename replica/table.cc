@@ -790,9 +790,7 @@ private:
     // that were previously split.
     void handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
-    // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
-    // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
-    // are merged into a new storage group with id (X >> 1).
+    // Called when coordinator executes tablet merge.
     void handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
@@ -3060,40 +3058,60 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
     size_t new_tablet_count = new_tmap.tablet_count();
     storage_group_map new_storage_groups;
 
-    unsigned log2_reduce_factor = log2ceil(old_tablet_count / new_tablet_count);
-    unsigned merge_size = 1 << log2_reduce_factor;
+    // The algorithm assumes that every new tablet has a last token which is equal to the last token of some old tablet.
+    // The old and new counts can be arbitrary, given that this holds.
 
-    if (merge_size != 2) {
-        throw std::runtime_error(format("Tablet count was not reduced by a factor of 2 (old: {}, new {}) for table {}",
+    if (old_tablet_count < new_tablet_count) {
+        throw std::runtime_error(format("Tablet count should be smaller on merge (old: {}, new {}) for table {}",
                                  old_tablet_count, new_tablet_count, table_id));
     }
 
-    for (auto& [id, sg] : _storage_groups) {
-        // Pick first (even) tablet of each sibling pair.
-        if (id % merge_size != 0) {
-            continue;
-        }
-        auto new_tid = id >> log2_reduce_factor;
-        auto new_range = new_tmap.get_token_range(locator::tablet_id(new_tid));
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range, make_repair_sstable_classifier_func());
-        for (auto& view : new_cg->all_views()) {
+    locator::tablet_id current_new(0); // Valid when bool(new_sg)
+    lw_shared_ptr<storage_group> new_sg;
+
+    auto open_new_group = [&] (locator::tablet_id new_tid) {
+        current_new = new_tid;
+        new_sg = allocate_storage_group(new_tmap, new_tid, new_tmap.get_token_range(new_tid));
+        for (auto& view : new_sg->main_compaction_group()->all_views()) {
             auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
             _compaction_reenablers_for_merging.push_back(std::move(cre));
         }
-        auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
+    };
 
-        for (unsigned i = 0; i < merge_size; i++) {
-            auto group_id = id + i;
+    auto seal_new_group = [&] {
+        new_storage_groups[size_t(current_new)] = std::move(new_sg);
+    };
 
-            auto it = _storage_groups.find(group_id);
-            if (it == _storage_groups.end()) {
-                throw std::runtime_error(format("Unable to find sibling tablet of id {} for table {}", group_id, table_id));
+    std::optional<locator::tablet_id> tid = old_tmap.first_tablet();
+    while (tid) {
+        locator::tablet_id group_id = *tid;
+        tid = old_tmap.next_tablet(*tid);
+
+        auto it = _storage_groups.find(size_t(group_id));
+        if (it == _storage_groups.end()) {
+            continue;
+        }
+
+        auto old_first_token = old_tmap.get_first_token(group_id);
+        if (new_sg && old_first_token > new_tmap.get_last_token(current_new)) {
+            seal_new_group();
+        }
+
+        if (!new_sg) {
+            auto new_id = new_tmap.get_tablet_id(old_tmap.get_last_token(group_id));
+            if (old_first_token < new_tmap.get_first_token(new_id)) {
+                on_internal_error(tlogger, format("Old tablet {} (range: {}) is not enclosed in new tablet {} (range: {})",
+                                  group_id, old_tmap.get_token_range(group_id), new_id, new_tmap.get_token_range(new_id)));
             }
+            open_new_group(new_id);
+        }
+
+        {
             auto& sg = it->second;
-            sg->for_each_compaction_group([&new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
-                cg->update_id(new_tid);
+            sg->for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                cg->update_id(size_t(current_new));
                 tlogger.debug("Adding merging_group: sstables_repaired_at={} old_range={} new_range={} old_tid={} new_tid={} old_group_id={}",
-                        cg->get_sstables_repaired_at(), cg->token_range(), new_range, cg->group_id(), new_tid, group_id);
+                        cg->get_sstables_repaired_at(), cg->token_range(), new_sg->token_range(), cg->group_id(), current_new, group_id);
                 new_sg->add_merging_group(cg);
             });
             // Cannot wait for group to be closed, since it can only return after some long-running operation
@@ -3104,7 +3122,9 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
                });
             });
         }
-        new_storage_groups[new_tid] = std::move(new_sg);
+    }
+    if (new_sg) {
+        seal_new_group();
     }
     _storage_groups = std::move(new_storage_groups);
     _merge_completion_event.signal();
