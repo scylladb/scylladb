@@ -570,6 +570,16 @@ static future<json::json_return_type> describe_ring_as_json_for_table(const shar
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring_for_table(keyspace, table), token_range_endpoints_to_json));
 }
 
+namespace {
+template <typename Key, typename Value>
+storage_service_json::mapper map_to_json(const std::pair<Key, Value>& i) {
+    storage_service_json::mapper val;
+    val.key = fmt::to_string(i.first);
+    val.value = fmt::to_string(i.second);
+    return val;
+}
+}
+
 static
 future<json::json_return_type>
 rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
@@ -587,12 +597,7 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
             throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
         }
 
-        co_return json::json_return_type(stream_range_as_array(token_endpoints, [](const auto& i) {
-            storage_service_json::mapper val;
-            val.key = fmt::to_string(i.first);
-            val.value = fmt::to_string(i.second);
-            return val;
-        }));
+        co_return json::json_return_type(stream_range_as_array(token_endpoints, &map_to_json<dht::token, gms::inet_address>));
 }
 
 static
