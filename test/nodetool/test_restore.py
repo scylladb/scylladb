@@ -87,3 +87,17 @@ end: {end_time}
 """
         assert res.returncode == expected_returncode
         assert res.stdout == expected_output
+
+
+@pytest.mark.parametrize("scope_val", ["all", "dc", "rack"])
+@pytest.mark.parametrize("pro_val", ["--primary-replica-only", "-pro"])
+def test_restore_scope_primary_replica(nodetool, scylla_only, scope_val, pro_val):
+    nodetool("restore", "--endpoint", "s3.us-east-2.amazonaws.com", "--bucket", "test_bucket", "--prefix",
+             "test_prefix", "--keyspace", "ks", "--table", "tbl", f"--scope={scope_val}", pro_val,
+             "me-1-big-TOC.txt",
+             expected_requests=[
+                 expected_request("POST", "/storage_service/restore",
+                                  params={"endpoint": "s3.us-east-2.amazonaws.com", "bucket": "test_bucket",
+                                          "table": "tbl", "prefix": "test_prefix", "keyspace": "ks",
+                                          "scope": f"{scope_val}", "primary_replica_only": "true"}, body=["me-1-big-TOC.txt"])],
+             check_return_code=False)
