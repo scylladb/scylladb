@@ -14,8 +14,11 @@
 #include "keys/keys.hh"
 #include "keys/compound_compat.hh"
 #include "utils/xx_hasher.hh"
+#include "utils/log.hh"
 
 namespace service::strong_consistency {
+
+extern logging::logger rgslog;
 
 const sstring raft_groups_partitioner::classname = "com.scylladb.dht.RaftGroupsPartitioner";
 
@@ -55,6 +58,7 @@ static dht::token compute_token(bytes_view shard_bytes, bytes_view group_id_byte
     uint64_t group_id_bits = hasher.finalize_uint64();
 
     auto token = raft_groups_partitioner::token_for_shard(shard_value, group_id_bits);
+    rgslog.trace("compute_token: shard={}, token={}", shard_value, token);
     return token;
 }
 
