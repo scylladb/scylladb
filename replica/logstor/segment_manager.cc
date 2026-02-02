@@ -24,6 +24,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/condition-variable.hh>
 #include "replica/logstor/write_buffer.hh"
 #include "serializer_impl.hh"
 #include "idl/logstor.dist.hh"
@@ -472,6 +473,77 @@ future<> compaction_manager::stop() {
     }
 }
 
+enum class write_source {
+    normal_write,
+    compaction,
+};
+
+class segment_pool {
+
+    seastar::queue<seg_ptr> _segments;
+    size_t _reserved_for_compaction;
+    seastar::condition_variable _segment_available;
+
+public:
+
+    struct stats {
+        uint64_t segments_put{0};
+        uint64_t segments_get{0};
+        uint64_t compaction_segments_get{0};
+        uint64_t normal_segments_get{0};
+        uint64_t normal_segments_wait{0};
+    } _stats;
+
+    segment_pool(size_t pool_size, size_t reserved_for_compaction)
+        : _segments(pool_size)
+        , _reserved_for_compaction(reserved_for_compaction)
+    {}
+
+    future<> start() {
+        co_return;
+    }
+
+    future<> stop() {
+        _segments.abort(std::make_exception_ptr(abort_requested_exception()));
+        _segment_available.broken();
+        co_return;
+    }
+
+    future<> put(seg_ptr seg) {
+        co_await _segments.push_eventually(std::move(seg));
+        _segment_available.broadcast();
+        _stats.segments_put++;
+    }
+
+    future<seg_ptr> get_segment(write_source src) {
+        seg_ptr seg;
+        switch (src) {
+        case write_source::compaction:
+            _stats.compaction_segments_get++;
+            co_return co_await _segments.pop_eventually();
+        case write_source::normal_write:
+            if (_segments.size() <= _reserved_for_compaction) {
+                _stats.normal_segments_wait++;
+            }
+            while (_segments.size() <= _reserved_for_compaction) {
+                co_await _segment_available.wait([this] {
+                    return _segments.size() > _reserved_for_compaction;
+                });
+            }
+            _stats.normal_segments_get++;
+            co_return _segments.pop();
+        }
+    }
+
+    size_t size() const noexcept {
+        return _segments.size();
+    }
+
+    const stats& get_stats() const noexcept {
+        return _stats;
+    }
+};
+
 class segment_manager_impl {
 
     struct stats {
@@ -496,10 +568,10 @@ class segment_manager_impl {
     stats _stats;
     seastar::metrics::metric_groups _metrics;
 
-    static constexpr size_t reserve_segments_target = 128;
+    static constexpr size_t segment_pool_size = 128;
 
     seg_ptr _active_segment;
-    seastar::queue<seg_ptr> _reserve_segments{reserve_segments_target};
+    segment_pool _segment_pool;
     std::optional<shared_future<>> _switch_segment_fut;
 
     seastar::gate _async_gate;
@@ -520,7 +592,8 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location> write(write_buffer&, bool from_compaction = false);
+    future<log_location> write(write_buffer&);
+    future<log_location> write_from_compaction(write_buffer&);
 
     future<log_record> read(log_location);
 
@@ -591,6 +664,7 @@ private:
     future<> close_segment(seg_ptr seg);
 
     future<std::pair<segment_allocation_guard, seg_ptr>> allocate_and_create_new_segment();
+    future<seg_ptr> create_new_segment(segment_allocation_guard&);
     future<segment_allocation_guard> allocate_segment();
 
     future<> free_segment(log_segment_id);
@@ -642,6 +716,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
         })
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
+    , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
     , _segment_descs((config.disk_size / config.file_size) * _segments_per_file) {
 
     namespace sm = seastar::metrics;
@@ -651,8 +726,16 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
                        sm::description("Counts number of segments currently in use.")),
         sm::make_gauge("free_segments", [this]() { return _free_segments.size(); },
                        sm::description("Counts number of free segments currently available.")),
-        sm::make_gauge("reserve_segments", [this]() { return _reserve_segments.size(); },
-                       sm::description("Counts number of segments in the reserve pool.")),
+        sm::make_gauge("segment_pool_size", [this]() { return _segment_pool.size(); },
+                       sm::description("Counts number of segments in the segment pool.")),
+        sm::make_counter("segment_pool_segments_put", _segment_pool.get_stats().segments_put,
+                       sm::description("Counts number of segments returned to the segment pool.")),
+        sm::make_counter("segment_pool_normal_segments_get", _segment_pool.get_stats().normal_segments_get,
+                       sm::description("Counts number of segments taken from the segment pool for normal writes.")),
+        sm::make_counter("segment_pool_compaction_segments_get", _segment_pool.get_stats().compaction_segments_get,
+                       sm::description("Counts number of segments taken from the segment pool for compaction.")),
+        sm::make_counter("segment_pool_normal_segments_wait", _segment_pool.get_stats().normal_segments_wait,
+                       sm::description("Counts number of times normal writes had to wait for a segment to become available in the segment pool.")),
         sm::make_counter("bytes_written", _stats.bytes_written,
                        sm::description("Counts number of bytes written to the disk.")),
         sm::make_counter("data_bytes_written", _stats.data_bytes_written,
@@ -715,7 +798,7 @@ future<> segment_manager_impl::stop() {
 
     co_await _compaction_mgr.stop();
 
-    _reserve_segments.abort(std::make_exception_ptr(abort_requested_exception()));
+    co_await _segment_pool.stop();
 
     _segment_freed_cv.broken();
 
@@ -726,7 +809,7 @@ future<> segment_manager_impl::stop() {
     logstor_logger.info("Segment manager stopped");
 }
 
-future<log_location> segment_manager_impl::write(write_buffer& wb, bool from_compaction) {
+future<log_location> segment_manager_impl::write(write_buffer& wb) {
     auto holder = _async_gate.hold();
 
     wb.finalize(block_alignment);
@@ -753,16 +836,48 @@ future<log_location> segment_manager_impl::write(write_buffer& wb, bool from_com
     auto& desc = get_segment_descriptor(loc.segment);
     desc.on_write(wb.get_net_data_size(), wb.get_record_count());
 
-    if (from_compaction) {
-        _stats.compaction_bytes_written += data.size();
-        _stats.compaction_data_bytes_written += wb.get_net_data_size();
-    } else {
-        _stats.bytes_written += data.size();
-        _stats.data_bytes_written += wb.get_net_data_size();
-    }
+    _stats.bytes_written += data.size();
+    _stats.data_bytes_written += wb.get_net_data_size();
 
     // complete all buffered writes with their individual locations
     wb.complete_writes(loc);
+
+    co_return loc;
+}
+
+future<log_location> segment_manager_impl::write_from_compaction(write_buffer& wb) {
+    auto holder = _async_gate.hold();
+
+    wb.finalize(block_alignment);
+
+    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.offset_in_buffer());
+
+    if (data.size() > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
+    }
+
+    seg_ptr seg = co_await _segment_pool.get_segment(write_source::compaction);
+    _stats.segments_in_use++;
+
+    auto alloc = seg->allocate(data.size());
+    auto loc = alloc.location;
+
+    wb.write_header();
+
+    co_await seg->write(std::move(alloc), data);
+
+    auto& desc = get_segment_descriptor(loc.segment);
+    desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+
+    _stats.compaction_bytes_written += data.size();
+    _stats.compaction_data_bytes_written += wb.get_net_data_size();
+
+    // complete all buffered writes with their individual locations
+    wb.complete_writes(loc);
+
+    (void)with_gate(_async_gate, [this, seg] () {
+        return close_segment(std::move(seg));
+    });
 
     co_return loc;
 }
@@ -807,7 +922,7 @@ future<> segment_manager_impl::request_segment_switch() {
 future<> segment_manager_impl::switch_active_segment() {
     auto holder = _async_gate.hold();
 
-    auto new_seg = co_await _reserve_segments.pop_eventually();
+    auto new_seg = co_await _segment_pool.get_segment(write_source::normal_write);
 
     auto old_seg = std::exchange(_active_segment, std::move(new_seg));
     _stats.segments_in_use++;
@@ -832,7 +947,7 @@ future<> segment_manager_impl::replenish_reserve() {
         bool retry = false;
         try {
             auto [seg_guard, seg] = co_await allocate_and_create_new_segment();
-            co_await _reserve_segments.push_eventually(std::move(seg));
+            co_await _segment_pool.put(std::move(seg));
             seg_guard.release();
         } catch (abort_requested_exception&) {
             logstor_logger.debug("Reserve replenisher stopping due to abort");
@@ -857,15 +972,20 @@ future<> segment_manager_impl::replenish_reserve() {
 future<std::pair<segment_manager_impl::segment_allocation_guard, seg_ptr>>
 segment_manager_impl::allocate_and_create_new_segment() {
     auto seg_guard = co_await allocate_segment();
+    auto seg = co_await create_new_segment(seg_guard);
+    co_return std::make_pair(std::move(seg_guard), std::move(seg));
+}
 
-    auto seg_id = seg_guard.segment_id.value();
+future<seg_ptr>
+segment_manager_impl::create_new_segment(segment_allocation_guard& seg_guard) {
+    auto seg_id = *seg_guard.segment_id;
     auto seg_loc = segment_id_to_file_location(seg_id);
     auto file = co_await _file_mgr.get_file_for_write(seg_loc.file_id);
     auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
     get_segment_descriptor(seg_id).reset(_cfg.segment_size);
     _stats.segments_allocated++;
 
-    co_return std::make_pair(std::move(seg_guard), std::move(seg));
+    co_return std::move(seg);
 }
 
 future<segment_manager_impl::segment_allocation_guard>
@@ -1097,7 +1217,7 @@ future<> compaction_manager::compact_segments(std::vector<log_segment_id> segmen
                 co_return;
             }
 
-            auto base_location = co_await sm.write(buf, true);
+            auto base_location = co_await sm.write_from_compaction(buf);
             co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
 
             logstor_logger.trace("Compaction buffer flushed to {} with {} / {} bytes",
