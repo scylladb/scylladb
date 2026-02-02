@@ -103,10 +103,30 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 {
 }
 
+static void validate_shard_id(global_tablet_id tablet, token_metadata_ptr tm) {
+#ifdef SEASTAR_DEBUG
+    // The shard where we start the server must match the shard where this tablet replica is located
+    const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+
+    for (const auto& r: tablet_info.replicas) {
+        if (r.host == tm->get_my_id()) {
+            if (r.shard != this_shard_id()) {
+                on_internal_error(logger, format("tablet {} is located on shard {}, but trying to start raft server on shard {}",
+                    tablet, r.shard, this_shard_id()));
+            }
+            return;
+        }
+    }
+    on_internal_error(logger, format("tablet {} does not have a replica on this node according to the token metadata", tablet));
+#endif
+}
+
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
+    validate_shard_id(tablet, tm);
     const auto my_id = to_server_id(tm->get_my_id());
 
     auto state_machine = make_state_machine(tablet, group_id, _db);
