@@ -221,9 +221,9 @@ const raft::server_id& raft_group0::load_my_id() {
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-                                                            service::migration_manager& mm, bool topology_change_enabled) {
+                                                            service::migration_manager& mm) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, _gossiper, _feat, topology_change_enabled);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat);
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
@@ -444,13 +444,13 @@ void raft_group0::destroy() {
     }
 }
 
-future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     SCYLLA_ASSERT(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled);
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
     co_await with_scheduling_group(_sg, [this, &srv_for_group0] (this auto self) -> future<> {
@@ -509,14 +509,14 @@ utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> 
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
-                                  db::system_keyspace& sys_ks, bool topology_change_enabled, const join_node_request_params& params) {
+                                  db::system_keyspace& sys_ks, const join_node_request_params& params) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     SCYLLA_ASSERT(!joined_group0());
 
     auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
-        co_return co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+        co_return co_await start_server_for_group0(group0_id, ss, qp, mm);
     }
 
     raft::server* server = nullptr;
@@ -554,7 +554,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // created in the Raft-based recovery procedure). The persistent topology state is present on that node
                 // when it creates the new group 0. Also, it joins the new group 0 using legacy_handshaker, so there is
                 // no need to create a join request.
-                if (topology_change_enabled && !qp.db().get_config().recovery_leader.is_set()) {
+                if (!qp.db().get_config().recovery_leader.is_set()) {
                     co_await ss.raft_initialize_discovery_leader(params);
                 }
 
@@ -573,10 +573,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 [] { std::raise(SIGSTOP); });
 
             // Populates correct upgrade state value before starting raft server, so that reads always get correct values.
-            if (topology_change_enabled) {
-                co_await ss.initialize_done_topology_upgrade_state();
-            }
-            
+            co_await ss.initialize_done_topology_upgrade_state();
+
             // Bootstrap the initial configuration
             co_await raft_sys_table_storage(qp, group0_id, my_id)
                     .bootstrap(std::move(initial_configuration), nontrivial_snapshot);
@@ -584,7 +582,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             utils::get_local_injector().inject("stop_after_bootstrapping_initial_raft_configuration",
                 [] { std::raise(SIGSTOP); });
 
-            co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+            co_await start_server_for_group0(group0_id, ss, qp, mm);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
             // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
@@ -704,7 +702,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-        co_await start_server_for_group0(group0_id, ss, qp, mm, false);
+        co_await start_server_for_group0(group0_id, ss, qp, mm);
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
@@ -733,7 +731,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
+        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
         const join_node_request_params& params) {
     if (!co_await use_raft()) {
         // The node is in the RECOVERY mode. We are in Maintenance Mode or the gossip-based recovery procedure.
@@ -751,7 +749,7 @@ future<> raft_group0::setup_group0(
     std::vector<gms::inet_address> seeds(initial_contact_nodes.begin(), initial_contact_nodes.end());
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, topology_change_enabled, params);
+    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, params);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     // Start group 0 leadership monitor fiber.
@@ -765,7 +763,7 @@ future<> raft_group0::setup_group0(
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
 }
 
-future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
