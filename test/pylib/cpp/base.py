@@ -128,6 +128,11 @@ class CppFile(pytest.File, ABC):
         custom_args = self.suite_config.get("custom_args", {}).get(self.test_name, DEFAULT_CUSTOM_ARGS)
 
         for test_case in self.list_test_cases():
+            if isinstance(test_case, list):
+                test_labels = test_case[1]
+                test_case = test_case[0]
+            else:
+                test_labels = []
             # Start `index` from 1 if there are more than one custom_args item.  This allows us to create
             # test cases with unique names for each custom_args item and don't add any additional suffixes
             # if there is only one item (in this case `index` is 0.)
@@ -137,6 +142,7 @@ class CppFile(pytest.File, ABC):
                     name=f"{test_case}.{index}" if index else test_case,
                     test_case_name=test_case,
                     test_custom_args=shlex.split(args),
+                    own_markers=test_labels,
                 )
 
     @classmethod
@@ -149,14 +155,14 @@ class CppFile(pytest.File, ABC):
 class CppTestCase(pytest.Item):
     parent: CppFile
 
-    def __init__(self, *, test_case_name: str, test_custom_args: list[str], **kwargs: Any):
+    def __init__(self, *, test_case_name: str, test_custom_args: list[str], own_markers: list[str] | set[str], **kwargs: Any):
         super().__init__(**kwargs)
 
         self.test_case_name = test_case_name
         self.test_custom_args = test_custom_args
 
         self.fixturenames = []
-        self.own_markers = []
+        self.own_markers = [getattr(pytest.mark, mark_name) for mark_name in own_markers]
         self.add_marker(pytest.mark.cpp)
 
     def get_artifact_path(self, extra: str = "", suffix: str = "") -> pathlib.Path:
