@@ -1908,10 +1908,6 @@ public:
         }
     }
 
-    const row_states_map& clustering_row_states() const override {
-        return _clustering_row_states;
-    }
-
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
@@ -2148,7 +2144,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([alternator_increased_compatibility, trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
 
@@ -2166,10 +2162,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 if (should_split(m, options)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
-                    process_changes_with_splitting(m, trans, preimage, postimage, alternator_increased_compatibility);
+                    process_changes_with_splitting(m, trans, preimage, postimage);
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
-                    process_changes_without_splitting(m, trans, preimage, postimage, alternator_increased_compatibility);
+                    process_changes_without_splitting(m, trans, preimage, postimage);
                 }
                 auto [log_mut, touched_parts] = std::move(trans).finish();
                 const int generated_count = log_mut.size();
