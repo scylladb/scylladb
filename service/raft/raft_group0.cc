@@ -279,7 +279,8 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         .rpc = rpc_ref,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref,
-        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms
+        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms,
+        .shard = 0,
     };
 }
 

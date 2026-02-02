@@ -144,6 +144,20 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
 
+    shard_id local_shard = this_shard_id();
+#ifdef SEASTAR_DEBUG
+    // The shard where we start the server must match the shard where this tablet replica is located
+    const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+
+    for (const auto& r: tablet_info.replicas) {
+        if (r.host == tm->get_my_id()) {
+            SCYLLA_ASSERT(local_shard == r.shard);
+            break;
+        }
+    }
+#endif
+
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
     co_await _raft_gr.start_server_for_group(raft_server_for_group {
@@ -152,7 +166,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
-        .state_machine = state_machine_ref
+        .state_machine = state_machine_ref,
+        .shard = local_shard,
     });
 }
 

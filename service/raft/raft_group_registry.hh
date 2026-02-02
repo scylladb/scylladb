@@ -55,6 +55,7 @@ struct raft_server_for_group {
     raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
+    shard_id shard;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {
