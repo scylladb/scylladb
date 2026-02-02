@@ -169,25 +169,12 @@ void check_range_tombstone_end(const fragment& f, std::optional<bound_weight> bo
     }
 }
 
-} // anonymous namespace
+uint64_t prepare_batches(cql_test_env& env, uint64_t batch_count, bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
+        uint64_t failed_batches = 0;
 
-future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
-#ifndef SCYLLA_ENABLE_ERROR_INJECTION
-    return make_ready_future<>();
-#endif
-
-    cql_test_config cfg;
-    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
-    cfg.batchlog_replay_timeout = 0s;
-    cfg.batchlog_delay = 9999h;
-
-    return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
         auto& bm = env.batchlog_manager().local();
 
         env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
-
-        const uint64_t batch_count = 8;
-        uint64_t failed_batches = 0;
 
         for (uint64_t i = 0; i != batch_count; ++i) {
             std::vector<sstring> queries;
@@ -243,6 +230,27 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
         assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
             .is_rows()
             .with_size(replay_fails ? failed_batches : 0);
+
+        return failed_batches;
+}
+
+} // anonymous namespace
+
+future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
+    cfg.batchlog_delay = 9999h;
+
+    return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
+        const uint64_t batch_count = 8;
+        const uint64_t failed_batches = prepare_batches(env, batch_count, replay_fails, cleanup);
+
+        const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
 
         const auto fragment_results = cql3::untyped_result_set(env.execute_cql(fragments_query).get());
 
