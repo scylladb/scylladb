@@ -869,14 +869,6 @@ public:
         });
     }
 
-    template <typename Func>
-    auto run_with_api_lock_in_gossiper_mode_only(sstring operation, Func&& func) {
-        return container().invoke_on(0, [operation = std::move(operation),
-                func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            return func(ss);
-       });
-    }
-
 private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();

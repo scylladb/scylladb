@@ -3960,7 +3960,7 @@ future<> storage_service::mark_excluded(const std::vector<locator::host_id>& hos
 }
 
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
-    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+    return run_with_no_api_lock([host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
