@@ -1811,77 +1811,77 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
     co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
-        rtlogger.info("topology changes are using raft");
+    rtlogger.info("topology changes are using raft");
 
-        // Prevent shutdown hangs. We cannot count on wait_for_group0_stop while we are
-        // joining group 0.
-        auto sub = _abort_source.subscribe([this] () noexcept {
-            _group0_as.request_abort();
-            _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
+    // Prevent shutdown hangs. We cannot count on wait_for_group0_stop while we are
+    // joining group 0.
+    auto sub = _abort_source.subscribe([this] () noexcept {
+        _group0_as.request_abort();
+        _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
+    });
+
+    // start topology coordinator fiber
+    _raft_state_monitor = raft_state_monitor_fiber(raft_server, _group0->hold_group0_gate());
+    // start vnodes cleanup fiber
+    _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(raft_server, _group0->hold_group0_gate(), proxy);
+
+    // Need to start system_distributed_keyspace before bootstrap because bootstrapping
+    // process may access those tables.
+    co_await start_sys_dist_ks();
+
+    if (_sys_ks.local().bootstrap_complete()) {
+        if (_topology_state_machine._topology.left_nodes.contains(raft_server.id())) {
+            throw std::runtime_error("A node that already left the cluster cannot be restarted");
+        }
+    } else {
+        if (!_db.local().get_config().join_ring() && !_feature_service.zero_token_nodes) {
+            throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
+        }
+
+        co_await utils::get_local_injector().inject("crash_before_topology_request_completion", [] (auto& handler) -> future<> {
+            co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+            throw std::runtime_error("Crashed in crash_before_topology_request_completion");
         });
 
-        // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(raft_server, _group0->hold_group0_gate());
-        // start vnodes cleanup fiber
-        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(raft_server, _group0->hold_group0_gate(), proxy);
-
-        // Need to start system_distributed_keyspace before bootstrap because bootstrapping
-        // process may access those tables.
-        co_await start_sys_dist_ks();
-
-        if (_sys_ks.local().bootstrap_complete()) {
-            if (_topology_state_machine._topology.left_nodes.contains(raft_server.id())) {
-                throw std::runtime_error("A node that already left the cluster cannot be restarted");
-            }
-        } else {
-            if (!_db.local().get_config().join_ring() && !_feature_service.zero_token_nodes) {
-                throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
-            }
-
-            co_await utils::get_local_injector().inject("crash_before_topology_request_completion", [] (auto& handler) -> future<> {
-                co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-                throw std::runtime_error("Crashed in crash_before_topology_request_completion");
-            });
-
-            auto err = co_await wait_for_topology_request_completion(join_params.request_id);
-            if (!err.empty()) {
-                throw std::runtime_error(fmt::format("{} failed. See earlier errors ({})", raft_replace_info ? "Replace" : "Bootstrap", err));
-            }
-
-            if (raft_replace_info) {
-                co_await await_tablets_rebuilt(raft_replace_info->raft_id);
-            }
+        auto err = co_await wait_for_topology_request_completion(join_params.request_id);
+        if (!err.empty()) {
+            throw std::runtime_error(fmt::format("{} failed. See earlier errors ({})", raft_replace_info ? "Replace" : "Bootstrap", err));
         }
 
-        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
-
-        co_await update_topology_with_local_metadata(raft_server);
-
-        // Node state is enough to know that bootstrap has completed, but to make legacy code happy
-        // let it know that the bootstrap is completed as well
-        co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-        set_mode(mode::NORMAL);
-
-        utils::get_local_injector().inject("stop_after_setting_mode_to_normal_raft_topology",
-            [] { std::raise(SIGSTOP); });
-
-        if (get_token_metadata().sorted_tokens().empty()) {
-            auto err = ::format("join_topology: Sorted token in token_metadata is empty");
-            slogger.error("{}", err);
-            throw std::runtime_error(err);
+        if (raft_replace_info) {
+            co_await await_tablets_rebuilt(raft_replace_info->raft_id);
         }
+    }
 
-        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), true);
+    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
-        // Initializes monitor only after updating local topology.
-        start_tablet_split_monitor();
+    co_await update_topology_with_local_metadata(raft_server);
 
-        auto ids = _topology_state_machine._topology.normal_nodes |
-                   std::views::keys |
-                   std::views::transform([] (raft::server_id id) { return locator::host_id{id.uuid()}; }) |
-                   std::ranges::to<std::unordered_set<locator::host_id>>();
+    // Node state is enough to know that bootstrap has completed, but to make legacy code happy
+    // let it know that the bootstrap is completed as well
+    co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
+    set_mode(mode::NORMAL);
 
-        co_await _gossiper.notify_nodes_on_up(std::move(ids));
+    utils::get_local_injector().inject("stop_after_setting_mode_to_normal_raft_topology",
+        [] { std::raise(SIGSTOP); });
+
+    if (get_token_metadata().sorted_tokens().empty()) {
+        auto err = ::format("join_topology: Sorted token in token_metadata is empty");
+        slogger.error("{}", err);
+        throw std::runtime_error(err);
+    }
+
+    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), true);
+
+    // Initializes monitor only after updating local topology.
+    start_tablet_split_monitor();
+
+    auto ids = _topology_state_machine._topology.normal_nodes |
+                std::views::keys |
+                std::views::transform([] (raft::server_id id) { return locator::host_id{id.uuid()}; }) |
+                std::ranges::to<std::unordered_set<locator::host_id>>();
+
+    co_await _gossiper.notify_nodes_on_up(std::move(ids));
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
