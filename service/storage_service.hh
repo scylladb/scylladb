@@ -488,7 +488,6 @@ public:
     future<> init_address_map(gms::gossip_address_map& address_map);
 
     future<> uninit_address_map();
-    bool is_topology_coordinator_enabled() const;
 
     future<> drain_on_shutdown();
 
