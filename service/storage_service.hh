@@ -56,7 +56,6 @@
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
-struct node_ops_ctl;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
@@ -225,22 +224,10 @@ private:
     utils::sequenced_set<table_id> _tablet_split_candidates;
     future<> _tablet_split_monitor = make_ready_future<>();
 
-    std::unordered_map<node_ops_id, node_ops_meta_data> _node_ops;
-    std::list<std::optional<node_ops_id>> _node_ops_abort_queue;
-    seastar::condition_variable _node_ops_abort_cond;
-    named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
-    future<> _node_ops_abort_thread;
     shared_ptr<node_ops::task_manager_module> _node_ops_module;
     shared_ptr<service::task_manager_module> _tablets_module;
     shared_ptr<service::topo::task_manager_module> _global_topology_requests_module;
     gms::gossip_address_map& _address_map;
-    void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
-                         std::function<future<>()> abort_func);
-    future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
-    future<> node_ops_done(node_ops_id ops_uuid);
-    future<> node_ops_abort(node_ops_id ops_uuid);
-    void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
-    future<> node_ops_abort_thread();
     future<service::tablet_operation_result> do_tablet_operation(locator::global_tablet_id tablet,
                                  sstring op_name,
                                  std::function<future<service::tablet_operation_result>(locator::tablet_metadata_guard&)> op);
@@ -353,7 +340,6 @@ private:
         return _batchlog_manager;
     }
 
-    friend struct ::node_ops_ctl;
     friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
     friend class db::schema_tables::schema_applier;
 public:
@@ -469,9 +455,6 @@ private:
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<locator::host_id, sstring>& loaded_peer_features);
-
-    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
-    void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
 public:
 

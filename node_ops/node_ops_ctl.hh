@@ -18,15 +18,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include <list>
-#include <unordered_set>
 
-namespace service {
-class storage_service;
-}
-
-namespace locator {
-class token_metadata;
-}
 
 class node_ops_info {
 public:
@@ -65,17 +57,6 @@ enum class node_ops_cmd : uint32_t {
     query_pending_ops,
     repair_updater,
 };
-
-enum class node_ops_cmd_category {
-    prepare,
-    heartbeat,
-    sync_data,
-    abort,
-    done,
-    other
-};
-
-node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept;
 
 template <>
 struct fmt::formatter<node_ops_cmd> : fmt::formatter<string_view> {
@@ -125,43 +106,6 @@ struct node_ops_cmd_response {
         : ok(o)
         , pending_ops(std::move(pending)) {
     }
-};
-
-class node_ops_ctl {
-    std::unordered_set<locator::host_id> nodes_unknown_verb;
-    std::unordered_set<locator::host_id> nodes_down;
-    std::unordered_set<locator::host_id> nodes_failed;
-
-public:
-    const service::storage_service& ss;
-    sstring desc;
-    locator::host_id host_id;   // Host ID of the node operand (i.e. added, replaced, or leaving node)
-    gms::inet_address endpoint;      // IP address of the node operand (i.e. added, replaced, or leaving node)
-    lw_shared_ptr<const locator::token_metadata> tmptr;
-    std::unordered_set<locator::host_id> sync_nodes;
-    std::unordered_set<locator::host_id> ignore_nodes;
-    node_ops_cmd_request req;
-    std::chrono::seconds heartbeat_interval;
-    abort_source as;
-    std::optional<future<>> heartbeat_updater_done_fut;
-
-    explicit node_ops_ctl(const service::storage_service& ss_, node_ops_cmd cmd, locator::host_id id, gms::inet_address ep, node_ops_id uuid = node_ops_id::create_random_id());
-    ~node_ops_ctl();
-    const node_ops_id& uuid() const noexcept;
-    // may be called multiple times
-    void start(sstring desc_, std::function<bool(locator::host_id)> sync_to_node = [] (locator::host_id) { return true; });
-    void refresh_sync_nodes(std::function<bool(locator::host_id)> sync_to_node = [] (locator::host_id) { return true; });
-    future<> stop() noexcept;
-    // Caller should set the required req members before prepare
-    future<> prepare(node_ops_cmd cmd) noexcept;
-    void start_heartbeat_updater(node_ops_cmd cmd);
-    future<> query_pending_op();
-    future<> stop_heartbeat_updater() noexcept;
-    future<> done(node_ops_cmd cmd) noexcept;
-    future<> abort(node_ops_cmd cmd) noexcept;
-    future<> abort_on_error(node_ops_cmd cmd, std::exception_ptr ex) noexcept;
-    future<> send_to_all(node_ops_cmd cmd);
-    future<> heartbeat_updater(node_ops_cmd cmd);
 };
 
 template <>
