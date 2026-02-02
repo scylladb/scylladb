@@ -1890,6 +1890,9 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     if (not sstables_as_params and not sstables_as_file_list) {
       throw std::invalid_argument("missing both argument: sstables and --sstables-file-list (at least one is required)");
     }
+    if (vm.contains("primary-replica-only")) {
+        params["primary_replica_only"] = "true";
+    }
     if (vm.contains("scope")) {
         if (vm.contains("primary-replica-only") && vm["scope"].as<sstring>() == "node") {
             throw std::invalid_argument("Cannot set both primary_replica_only and scope=node");
