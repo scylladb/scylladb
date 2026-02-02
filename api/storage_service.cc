@@ -1312,10 +1312,7 @@ rest_get_ownership(http_context& ctx, sharded<service::storage_service>& ss, std
             throw httpd::bad_param_exception("storage_service/ownership cannot be used when a keyspace uses tablets");
         }
 
-        return ss.local().get_ownership().then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().get_ownership(), &map_to_json<gms::inet_address, float>));
 }
 
 static
@@ -1332,10 +1329,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
             }
         }
 
-        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().effective_ownership(keyspace_name, table_name), &map_to_json<gms::inet_address, float>));
 }
 
 static
