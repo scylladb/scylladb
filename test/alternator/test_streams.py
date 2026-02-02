@@ -289,7 +289,6 @@ def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
 # Running update_item with UpdateExpression set to remove column emits spurious MODIFY event when item does not exist
 # The test tries all combinations (delete column from non-existing item, delete existing column from existing item, delete non-existing column from existing item)
 # only delete column from non-existing item emits spurious MODIFY event
-@pytest.mark.xfail(reason="fix-coming-in-next-commit")
 def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     null = None
     def do_updates(table, p, c):
@@ -321,7 +320,6 @@ def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_ne
         do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
         
 # the same as test_streams_spurious_modify_when_update_expr_on_empty_item but for a table without clustering key
-@pytest.mark.xfail(reason="fix-coming-in-next-commit")
 def test_streams_spurious_modify_when_update_expr_on_empty_item_on_no_clustering_key_table(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
     null = None
     def do_updates(table, p, c):
@@ -353,7 +351,6 @@ def test_streams_spurious_modify_when_update_expr_on_empty_item_on_no_clustering
 
 # we mix noop changes with real changes in single batch write - old algorithm would emit spurious MODIFY for noop changes
 # as it was only able to drop all changes, not part of them
-@pytest.mark.xfail(reason="fix-coming-in-next-commit")
 def test_streams_spurious_modify_mixing_noop_with_real_changes_in_batch_write_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     null = None
     def do_updates(table, p, c):
