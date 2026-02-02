@@ -8,6 +8,7 @@ import logging
 
 import pytest
 from cassandra.cluster import Session
+from cassandra.protocol import ConfigurationException, InvalidRequest
 
 from dtest_class import Tester
 
@@ -27,9 +28,9 @@ def create_ks_and_assert_warning(session, query, ks_name, key_warn_msg_words):
 
 
 def assert_creating_ks_fails(session, query, ks_name):
-    with pytest.raises(Exception):
+    with pytest.raises(ConfigurationException):
         session.execute(query)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidRequest):
         session.execute(f"USE {ks_name}")
 
 
