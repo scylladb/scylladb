@@ -23,31 +23,6 @@
 
 namespace api {
 
-template<class T>
-std::vector<T> map_to_key_value(const std::map<sstring, sstring>& map) {
-    std::vector<T> res;
-    res.reserve(map.size());
-
-    for (const auto& [key, value] : map) {
-        res.push_back(T());
-        res.back().key = key;
-        res.back().value = value;
-    }
-    return res;
-}
-
-template<class T, class MAP>
-std::vector<T>& map_to_key_value(const MAP& map, std::vector<T>& res) {
-    res.reserve(res.size() + std::size(map));
-
-    for (const auto& [key, value] : map) {
-        T val;
-        val.key = fmt::to_string(key);
-        val.value = fmt::to_string(value);
-        res.push_back(val);
-    }
-    return res;
-}
 template <typename T, typename S = T>
 T map_sum(T&& dest, const S& src) {
     for (const auto& i : src) {
