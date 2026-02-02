@@ -259,6 +259,64 @@ SEASTAR_TEST_CASE(test_index) {
     co_return;
 }
 
+SEASTAR_TEST_CASE(test_index_iterator) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
+    auto indexp = std::make_unique<log_index>();
+    auto& index = *indexp;
+
+    auto s = make_kv_schema();
+
+    // Insert multiple entries into the index
+    std::vector<std::pair<index_key, index_entry>> expected_entries;
+
+    for (size_t i = 0; i < 10; i++) {
+        auto pk = dht::decorate_key(*s, make_key(*s, format("key_{}", i)));
+        index_key key = logstor::calculate_key(*s, pk);
+        index_entry entry = {
+            .location = log_location{
+                .segment = log_segment_id(i / 3),  // Spread across different segments
+                .offset = static_cast<uint32_t>(i * 100),
+                .size = static_cast<uint32_t>(100 + i)
+            }
+        };
+
+        (void)index.exchange(key, entry);
+        expected_entries.push_back({key, entry});
+    }
+
+    // Iterate over all entries and verify we get them all
+    size_t count = 0;
+    for (const auto& entry : index) {
+        count++;
+
+        // Verify this entry exists in our expected set
+        bool found = false;
+        for (const auto& [expected_key, expected_entry] : expected_entries) {
+            if (entry.location == expected_entry.location) {
+                found = true;
+                break;
+            }
+        }
+        BOOST_REQUIRE(found);
+    }
+
+    // Verify we iterated over all entries
+    BOOST_REQUIRE_EQUAL(count, expected_entries.size());
+
+    // Test that empty index iteration works
+    auto empty_index = std::make_unique<log_index>();
+    count = 0;
+    for (const auto& entry : *empty_index) {
+        (void)entry;
+        count++;
+    }
+    BOOST_REQUIRE_EQUAL(count, 0);
+
+    co_return;
+}
+
 static future<> do_segment_manager_test(segment_manager_config cfg, noncopyable_function<future<> (segment_manager&, log_index&)> f) {
     auto indexp = std::make_unique<log_index>();
     auto& index = *indexp;
