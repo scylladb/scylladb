@@ -398,46 +398,6 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     );
 }
 
-/*
- * The helper waits for two things
- *  1) for schema agreement
- *  2) there's no pending node operations
- * before proceeding with the bootstrap or replace.
- *
- * This function must only be called if we're not the first node
- * (i.e. booting into existing cluster).
- *
- * Precondition: gossiper observed at least one other live node;
- * see `gossiper::wait_for_live_nodes_to_show_up()`.
- */
-future<> storage_service::wait_for_ring_to_settle() {
-    auto t = gms::gossiper::clk::now();
-    while (true) {
-        slogger.info("waiting for schema information to complete");
-        while (!_migration_manager.local().have_schema_agreement()) {
-            co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
-        }
-        co_await update_topology_change_info("joining");
-
-        auto tmptr = get_token_metadata_ptr();
-        if (!_db.local().get_config().consistent_rangemovement() ||
-                (tmptr->get_bootstrap_tokens().empty() && tmptr->get_leaving_endpoints().empty())) {
-            break;
-        }
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-        slogger.info("Checking bootstrapping/leaving nodes: tokens {}, leaving {}, sleep 1 second and check again ({} seconds elapsed)",
-                tmptr->get_bootstrap_tokens().size(),
-                tmptr->get_leaving_endpoints().size(),
-                elapsed);
-
-        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
-            throw std::runtime_error("Other bootstrapping/leaving nodes detected, cannot bootstrap while consistent_rangemovement is true");
-        }
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-    }
-    slogger.info("Checking bootstrapping/leaving nodes: ok");
-}
-
 static locator::node::state to_topology_node_state(node_state ns) {
     switch (ns) {
         case node_state::bootstrapping: return locator::node::state::bootstrapping;
@@ -1658,7 +1618,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
     std::optional<replacement_info> ri;
     std::optional<gms::inet_address> replace_address;
-    std::optional<locator::host_id> replaced_host_id;
     std::optional<raft_group0::replace_info> raft_replace_info;
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -1837,7 +1796,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
             raft_replace_info, *this, _qp, _migration_manager.local(), true, join_params);
 
-    raft::server* raft_server = &_group0->group0_server();
+    raft::server& raft_server = _group0->group0_server();
 
     // This is the moment when the locator::topology has gathered information about other nodes
     // in the cluster -- either through gossiper, or by loading it from disk -- so it's safe
@@ -1852,7 +1811,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
     co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
-    if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         rtlogger.info("topology changes are using raft");
 
         // Prevent shutdown hangs. We cannot count on wait_for_group0_stop while we are
@@ -1863,16 +1821,16 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         });
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate());
+        _raft_state_monitor = raft_state_monitor_fiber(raft_server, _group0->hold_group0_gate());
         // start vnodes cleanup fiber
-        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(*raft_server, _group0->hold_group0_gate(), proxy);
+        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(raft_server, _group0->hold_group0_gate(), proxy);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
         co_await start_sys_dist_ks();
 
         if (_sys_ks.local().bootstrap_complete()) {
-            if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
+            if (_topology_state_machine._topology.left_nodes.contains(raft_server.id())) {
                 throw std::runtime_error("A node that already left the cluster cannot be restarted");
             }
         } else {
@@ -1897,7 +1855,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
-        co_await update_topology_with_local_metadata(*raft_server);
+        co_await update_topology_with_local_metadata(raft_server);
 
         // Node state is enough to know that bootstrap has completed, but to make legacy code happy
         // let it know that the bootstrap is completed as well
@@ -1924,322 +1882,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
                    std::ranges::to<std::unordered_set<locator::host_id>>();
 
         co_await _gossiper.notify_nodes_on_up(std::move(ids));
-
-        co_return;
-    }
-
-    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
-
-    // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
-    // If we are a seed, or if the user manually sets auto_bootstrap to false,
-    // we'll skip streaming data from other nodes and jump directly into the ring.
-    //
-    // The seed check allows us to skip the RING_DELAY sleep for the single-node cluster case,
-    // which is useful for both new users and testing.
-    //
-    // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
-    // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-    if (should_bootstrap()) {
-        bool resume_bootstrap = _sys_ks.local().bootstrap_in_progress();
-        if (resume_bootstrap) {
-            slogger.warn("Detected previous bootstrap failure; retrying");
-        } else {
-            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
-        }
-        slogger.info("waiting for ring information");
-
-        // if our schema hasn't matched yet, keep sleeping until it does
-        // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        co_await wait_for_ring_to_settle();
-
-        if (!replace_address) {
-            auto tmptr = get_token_metadata_ptr();
-
-            if (tmptr->is_normal_token_owner(tmptr->get_my_id())) {
-                throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
-            }
-            slogger.info("getting bootstrap token");
-            if (resume_bootstrap) {
-                bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
-                if (!bootstrap_tokens.empty()) {
-                    slogger.info("Using previously saved tokens = {}", bootstrap_tokens);
-                } else {
-                    bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
-                }
-            } else {
-                bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
-            }
-        } else {
-            if (*replace_address != get_broadcast_address()) {
-                // Sleep additionally to make sure that the server actually is not alive
-                // and giving it more time to gossip if alive.
-                slogger.info("Sleeping before replacing {}...", *replace_address);
-                co_await sleep_abortable(2 * get_ring_delay(), _abort_source);
-
-                // check for operator errors...
-                const auto tmptr = get_token_metadata_ptr();
-                for (auto token : bootstrap_tokens) {
-                    auto existing = tmptr->get_endpoint(token);
-                    if (existing) {
-                        auto eps = _gossiper.get_endpoint_state_ptr(*existing);
-                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
-                            throw std::runtime_error("Cannot replace a live node...");
-                        }
-                    } else {
-                        throw std::runtime_error(::format("Cannot replace token {} which does not exist!", token));
-                    }
-                }
-            } else {
-                slogger.info("Sleeping before replacing {}...", *replace_address);
-                co_await sleep_abortable(get_ring_delay(), _abort_source);
-            }
-            slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
-            // bootstrap_tokens was previously set using tokens gossiped by the replaced node
-        }
-        co_await start_sys_dist_ks();
-        co_await _view_builder.local().mark_existing_views_as_built();
-        co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
-    } else {
-        co_await start_sys_dist_ks();
-        bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
-        if (bootstrap_tokens.empty()) {
-            bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        } else {
-            size_t num_tokens = _db.local().get_config().num_tokens();
-            if (bootstrap_tokens.size() != num_tokens) {
-                throw std::runtime_error(::format("Cannot change the number of tokens from {:d} to {:d}", bootstrap_tokens.size(), num_tokens));
-            } else {
-                slogger.info("Using saved tokens {}", bootstrap_tokens);
-            }
-        }
-    }
-
-    slogger.debug("Setting tokens to {}", bootstrap_tokens);
-    co_await mutate_token_metadata([this, &bootstrap_tokens, &replaced_host_id] (mutable_token_metadata_ptr tmptr) -> future<> {
-        // This node must know about its chosen tokens before other nodes do
-        // since they may start sending writes to this node after it gossips status = NORMAL.
-        // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::normal);
-        co_await tmptr->update_normal_tokens(bootstrap_tokens, tmptr->get_my_id());
-        if (replaced_host_id) {
-            tmptr->remove_endpoint(*replaced_host_id);
-        }
-    });
-
-    if (!_sys_ks.local().bootstrap_complete()) {
-        // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
-        SCYLLA_ASSERT(should_bootstrap() || !cdc_gen_id);
-
-        // Don't try rewriting CDC stream description tables.
-        // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
-        co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
-    }
-
-    // now, that the system distributed keyspace is initialized and started,
-    // pass an accessor to the service level controller so it can interact with it
-    // but only if the conditions are right (the cluster supports or have supported
-    // workload prioritization before):
-    if (!_sys_dist_ks.local().workload_prioritization_tables_exists()) {
-        // if we got here, it means that the workload priotization didn't exist before and
-        // also that the cluster currently doesn't support workload prioritization.
-        // we delay the creation of the tables and accessing them until it does.
-        //
-        // the callback might be run immediately and it uses async methods, so the thread is needed
-        co_await seastar::async([&] {
-            _workload_prioritization_registration = _feature_service.workload_prioritization.when_enabled([&sys_dist_ks = _sys_dist_ks] () {
-                // since we are creating tables here and we wouldn't want to have a race condition
-                // we will first wait for a random period of time and only then start the routine
-                // the race condition can happen because the feature flag will "light up" in about
-                // the same time on all nodes. The more nodes there are, the higher the chance for
-                // a race.
-                std::random_device seed_gen;
-                std::default_random_engine rnd_engine(seed_gen());
-                std::uniform_int_distribution<> delay_generator(0,5000000);
-                sleep(std::chrono::microseconds(delay_generator(rnd_engine))).get();
-                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start_workload_prioritization).get();
-                slogger.info("Workload prioritization v1 started.");
-            });
-        });
-    } else {
-        slogger.info("Workload prioritization v1 is already started.");
-    }
-
-    if (!cdc_gen_id) {
-        // If we didn't observe any CDC generation at this point, then either
-        // 1. we're replacing a node,
-        // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
-        // 3. we're the first node, starting a fresh cluster.
-
-        // In the replacing case we won't create any CDC generation: we're not introducing any new tokens,
-        // so the current generation used by the cluster is fine.
-
-        // In the case of an upgrading cluster, one of the nodes is responsible for creating
-        // the first CDC generation. We'll check if it's us.
-
-        // Finally, if we're the first node, we'll create the first generation.
-
-        if (!is_replacing()
-                && (!_sys_ks.local().bootstrap_complete()
-                    || cdc::should_propose_first_generation(my_host_id(), _gossiper))) {
-            try {
-                cdc_gen_id = co_await _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node());
-            } catch (...) {
-                cdc_log.warn(
-                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
-                    " Use nodetool checkAndRepairCdcStreams to fix CDC.", std::current_exception());
-            }
-        }
-    }
-
-    // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
-    if (cdc_gen_id) {
-        co_await _sys_ks.local().update_cdc_generation_id(*cdc_gen_id);
-    }
-    // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
-    // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
-
-    co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-    // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
-
-    // start participating in the ring.
-    co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
-
-    set_mode(mode::NORMAL);
-
-    if (get_token_metadata().sorted_tokens().empty()) {
-        auto err = ::format("join_topology: Sorted token in token_metadata is empty");
-        slogger.error("{}", err);
-        throw std::runtime_error(err);
-    }
-
-    SCYLLA_ASSERT(_group0);
-    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
-    co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
-
-    std::unordered_set<locator::host_id> ids;
-    _gossiper.for_each_endpoint_state([this, &ids] (const gms::endpoint_state& ep) {
-        if (_gossiper.is_normal(ep.get_host_id())) {
-            ids.insert(ep.get_host_id());
-        }
-    });
-
-    co_await _gossiper.notify_nodes_on_up(std::move(ids));
-}
-
-// Runs inside seastar::async context
-future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
-    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &replacement_info] {
-        auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
-
-        set_mode(mode::BOOTSTRAP);
-        slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, is_replacing());
-
-        // Wait until we know tokens of existing node before announcing replacing status.
-        slogger.info("Wait until local node knows tokens of peer nodes");
-        _gossiper.wait_for_range_setup().get();
-
-        _db.invoke_on_all([] (replica::database& db) {
-            for (auto& cf : db.get_non_system_column_families()) {
-                cf->notify_bootstrap_or_replace_start();
-            }
-        }).get();
-
-        {
-            int retry = 0;
-            while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
-                if (retry++ < 500) {
-                    sleep_abortable(std::chrono::milliseconds(10), _abort_source).get();
-                    continue;
-                }
-                // We're joining an existing cluster, so there are normal nodes in the cluster.
-                // We've waited for tokens to arrive.
-                // But we didn't see any normal token owners. Something's wrong, we cannot proceed.
-                throw std::runtime_error{
-                        "Failed to learn about other nodes' tokens during bootstrap or replace. Make sure that:\n"
-                        " - the node can contact other nodes in the cluster,\n"
-                        " - the `ring_delay` parameter is large enough (the 30s default should be enough for small-to-middle-sized clusters),\n"
-                        " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
-                        "and retry the bootstrap/replace."};
-            }
-        }
-
-        if (!replacement_info) {
-            // Even if we reached this point before but crashed, we will make a new CDC generation.
-            // It doesn't hurt: other nodes will (potentially) just do more generation switches.
-            // We do this because with this new attempt at bootstrapping we picked a different set of tokens.
-
-            // Update pending ranges now, so we correctly count ourselves as a pending replica
-            // when inserting the new CDC generation.
-            if (!bootstrap_rbno) {
-                // When is_repair_based_node_ops_enabled is true, the bootstrap node
-                // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
-                slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
-                mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
-                    auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::bootstrapping);
-                    tmptr->add_bootstrap_tokens(bootstrap_tokens, tmptr->get_my_id());
-                    return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
-                }).get();
-            }
-
-            // After we pick a generation timestamp, we start gossiping it, and we stick with it.
-            // We don't do any other generation switches (unless we crash before complecting bootstrap).
-            SCYLLA_ASSERT(!cdc_gen_id);
-
-            cdc_gen_id = _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get();
-
-            if (!bootstrap_rbno) {
-                // When is_repair_based_node_ops_enabled is true, the bootstrap node
-                // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
-                _gossiper.add_local_application_state(
-                    std::pair(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens)),
-                    std::pair(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id)),
-                    std::pair(gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens))
-                ).get();
-
-                slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
-                _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
-                slogger.info("Starting to bootstrap...");
-                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard).get();
-            } else {
-                // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
-                _gossiper.add_local_application_state(
-                    std::pair(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id))
-                ).get();
-                slogger.info("Starting to bootstrap...");
-                run_bootstrap_ops(bootstrap_tokens);
-            }
-        } else {
-            auto replace_addr = replacement_info->address;
-            auto replaced_host_id = replacement_info->host_id;
-
-            slogger.debug("Removing replaced endpoint {} from system.peers", replace_addr);
-            _sys_ks.local().remove_endpoint(replace_addr).get();
-
-            SCYLLA_ASSERT(replaced_host_id);
-            auto raft_id = raft::server_id{replaced_host_id.uuid()};
-            SCYLLA_ASSERT(_group0);
-            bool raft_available = _group0->wait_for_raft().get();
-            if (raft_available) {
-                slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
-                _group0->remove_from_group0(raft_id).get();
-            }
-
-            slogger.info("Starting to bootstrap...");
-            run_replace_ops(bootstrap_tokens, *replacement_info);
-        }
-
-        _db.invoke_on_all([] (replica::database& db) {
-            for (auto& cf : db.get_non_system_column_families()) {
-                cf->notify_bootstrap_or_replace_end();
-            }
-        }).get();
-
-        slogger.info("Bootstrap completed! for the tokens {}", bootstrap_tokens);
-    });
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
