@@ -9,8 +9,11 @@
 #include "service/strong_consistency/raft_groups_sharder.hh"
 
 #include "service/strong_consistency/raft_groups_partitioner.hh"
+#include "utils/log.hh"
 
 namespace service::strong_consistency {
+
+extern logging::logger rgslog;
 
 raft_groups_sharder& raft_groups_sharder::instance() {
     static thread_local raft_groups_sharder sharder;
@@ -30,12 +33,14 @@ unsigned raft_groups_sharder::shard_of(const dht::token& t) const {
         return shard_count() - 1;
     }
     auto shard = raft_groups_partitioner::shard_of(t);
+    rgslog.trace("shard_of({}) = {}", t, shard);
     return shard;
 }
 
 std::optional<unsigned> raft_groups_sharder::try_get_shard_for_reads(const dht::token& t) const {
     const auto shard = shard_of(t);
     if (shard >= shard_count()) {
+        rgslog.warn("try_get_shard_for_reads: token {} maps to invalid shard {}", t, shard);
         return std::nullopt;
     }
     return shard;

@@ -12,6 +12,7 @@
 #include "db/system_keyspace.hh"
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
+#include "utils/log.hh"
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
@@ -28,6 +29,8 @@
 
 namespace service::strong_consistency {
 
+logging::logger rgslog("raft_groups_storage");
+
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard)
     : _group_id(std::move(gid))
     , _server_id(std::move(server_id))
@@ -38,6 +41,7 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
     // max_mutation_size = 1/2 of commitlog segment size, thus _max_mutation_size is set 1/3 of commitlog segment size to leave space for metadata.
     , _max_mutation_size(_qp.db().get_config().schema_commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
 {
+    rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, _shard);
     static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, term, \"index\", data) VALUES (?, ?, ?, ?, ?)",
         db::system_keyspace::RAFT_GROUPS);
     auto prepared_stmt_ptr = _qp.prepare_internal(store_cql);
