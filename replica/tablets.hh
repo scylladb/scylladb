@@ -43,6 +43,10 @@ void set_strongly_consistent_tables_enabled(bool enabled);
 
 schema_ptr make_tablets_schema();
 
+schema_ptr make_raft_schema(sstring name, bool is_group0);
+schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0);
+schema_ptr make_raft_snapshot_config_schema(sstring name, bool is_group0);
+
 void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db);
 
 std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set& replicas);
