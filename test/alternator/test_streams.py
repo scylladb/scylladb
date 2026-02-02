@@ -286,6 +286,91 @@ def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
             # local java throws here. real does not. 
             ensure_java_server(dynamodbstreams, error=None)
 
+# Running update_item with UpdateExpression set to remove column emits spurious MODIFY event when item does not exist
+# The test tries all combinations (delete column from non-existing item, delete existing column from existing item, delete non-existing column from existing item)
+# only delete column from non-existing item emits spurious MODIFY event
+@pytest.mark.xfail(reason="fix-coming-in-next-commit")
+def test_streams_spurious_modify_when_update_expr_on_empty_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ['INSERT',{'c':'c0','p':'p0'},null,{'c':'c0','e':166,'g':166,'p':'p0'}],
+            ['MODIFY',{'c':'c0','p':'p0'},{'c':'c0','e':166,'g':166,'p':'p0'}, {'c':'c0','e':166,'p':'p0'}],
+        ]
+        # first we try to remove column from non existing item
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'}).get('Item', None)
+        assert v is None
+
+        # then we try to remove existing column from existing item
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression="SET e = :e, g = :g", ExpressionAttributeValues={':e': 166, ':g': 166})
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'})['Item']
+        assert v == {'p': 'p0', 'c': 'c0', 'e': 166, 'g': 166}
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'})['Item']
+        assert v == {'p': 'p0', 'c': 'c0', 'e': 166}
+
+        # finally we try again to remove the same column (non existing) from existing item
+        table.update_item(Key={'p': 'p0', 'c': 'c0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0', 'c': 'c0'})['Item']
+        assert v == {'p': 'p0', 'c': 'c0', 'e': 166}
+
+        return events
+    
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+        
+# the same as test_streams_spurious_modify_when_update_expr_on_empty_item but for a table without clustering key
+@pytest.mark.xfail(reason="fix-coming-in-next-commit")
+def test_streams_spurious_modify_when_update_expr_on_empty_item_on_no_clustering_key_table(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ['INSERT',{'p':'p0'},null,{'e':166,'g':166,'p':'p0'}],
+            ['MODIFY',{'p':'p0'},{'e':166,'g':166,'p':'p0'}, {'e':166,'p':'p0'}],
+        ]
+        # first we try to remove column from non existing item
+        table.update_item(Key={'p': 'p0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0'}).get('Item', None)
+        assert v is None
+
+        # then we try to remove existing column from existing item
+        table.update_item(Key={'p': 'p0'}, UpdateExpression='SET e = :e, g = :g', ExpressionAttributeValues={':e': 166, ':g': 166})
+        v = table.get_item(Key={'p': 'p0'})['Item']
+        assert v == {'p': 'p0', 'e': 166, 'g': 166}
+        table.update_item(Key={'p': 'p0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0'})['Item']
+        assert v == {'p': 'p0', 'e': 166}
+
+        # finally we try again to remove the same column (non existing) from existing item
+        table.update_item(Key={'p': 'p0'}, UpdateExpression='REMOVE g')
+        v = table.get_item(Key={'p': 'p0'})['Item']
+        assert v == {'p': 'p0', 'e': 166}
+
+        return events
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# we mix noop changes with real changes in single batch write - old algorithm would emit spurious MODIFY for noop changes
+# as it was only able to drop all changes, not part of them
+@pytest.mark.xfail(reason="fix-coming-in-next-commit")
+def test_streams_spurious_modify_mixing_noop_with_real_changes_in_batch_write_item(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    null = None
+    def do_updates(table, p, c):
+        events = [
+            ['INSERT',{'c':c + '0','p':p},null,{'c':c + '0','a':0,'p':p}],
+            ['INSERT',{'c':c + '2','p':p},null,{'c':c + '2','a':2,'p':p}],
+        ]
+
+        with table.batch_writer() as batch:
+            batch.put_item({'p': p, 'c': c + '0', 'a': 0})
+            batch.delete_item(Key={'p': p, 'c': c + '1'})
+            batch.put_item({'p': p, 'c': c + '2', 'a': 2})
+        return events
+    
+    with scylla_config_temporary(dynamodb, 'alternator_streams_increased_compatibility', 'true', nop=is_aws(dynamodb)):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
 def test_get_shard_iterator(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
