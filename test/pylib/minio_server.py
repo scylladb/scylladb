@@ -172,6 +172,7 @@ class MinioServer:
             preexec_fn=os.setsid,
             stderr=self.log_file,
             stdout=self.log_file,
+            env={**os.environ, 'MINIO_BROWSER': 'off'},
         )
         timeout = time.time() + 30
         while time.time() < timeout:
