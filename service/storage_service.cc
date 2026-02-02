@@ -1627,10 +1627,6 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
-raft::server* storage_service::get_group_server_if_raft_topolgy_enabled() {
-    return &_group0->group0_server();
-}
-
 future<> storage_service::start_sys_dist_ks() const {
     slogger.info("starting system distributed keyspace shards");
     return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -1841,7 +1837,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
             raft_replace_info, *this, _qp, _migration_manager.local(), true, join_params);
 
-    raft::server* raft_server = get_group_server_if_raft_topolgy_enabled();
+    raft::server* raft_server = &_group0->group0_server();
 
     // This is the moment when the locator::topology has gathered information about other nodes
     // in the cluster -- either through gossiper, or by loading it from disk -- so it's safe
