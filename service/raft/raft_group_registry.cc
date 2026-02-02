@@ -380,11 +380,12 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         std::rethrow_exception(ex);
     }
 
-    if (is_group0) {
-        co_await container().invoke_on_all([] (raft_group_registry& rg) {
+    co_await container().invoke_on_all([is_group0, shard = this_shard_id(), gid] (raft_group_registry& rg) {
+        if (is_group0) {
             rg._group0_is_alive = true;
-        });
-    }
+        }
+        rg._group_shards[gid] = shard;
+    });
 }
 
 future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
@@ -394,11 +395,12 @@ future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
     if (const auto it = _servers.find(gid); it != _servers.end()) {
         auto& [gid, s] = *it;
         if (!s.aborted) {
-            if (gid == _group0_id) {
-                co_await container().invoke_on_all([] (raft_group_registry& rg) {
+            co_await container().invoke_on_all([is_group0 = (gid == _group0_id), gid] (raft_group_registry& rg) {
+                if (is_group0) {
                     rg._group0_is_alive = false;
-                });
-            }
+                }
+                rg._group_shards.erase(gid);
+            });
             s.aborted = s.server->abort(std::move(reason))
                 .handle_exception([gid] (std::exception_ptr ex) {
                     rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
@@ -409,7 +411,11 @@ future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
 }
 
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
-    return 0; // schema raft server is always owned by shard 0
+    auto it = _group_shards.find(gid);
+    if (it == _group_shards.end()) {
+        throw raft_group_not_found(gid);
+    }
+    return it->second;
 }
 
 shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {

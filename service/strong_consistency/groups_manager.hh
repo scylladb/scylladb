@@ -72,6 +72,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
 
+    // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
