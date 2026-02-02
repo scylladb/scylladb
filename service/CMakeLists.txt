@@ -22,6 +22,7 @@ target_sources(service
     strong_consistency/coordinator.cc
     strong_consistency/raft_groups_partitioner.cc
     strong_consistency/raft_groups_sharder.cc
+    strong_consistency/raft_groups_storage.cc
     raft/discovery.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
