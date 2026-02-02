@@ -783,17 +783,13 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
         apilog.info("cleanup_all global={}", global);
 
-        auto done = !global ? false : co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
-            if (!ss.is_topology_coordinator_enabled()) {
-                co_return false;
-            }
-            co_await ss.do_clusterwide_vnodes_cleanup();
-            co_return true;
-        });
-        if (done) {
+        if (global) {
+            co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+                co_return co_await ss.do_clusterwide_vnodes_cleanup();
+            });
             co_return json::json_return_type(0);
         }
-        // fall back to the local cleanup if topology coordinator is not enabled or local cleanup is requested
+        // fall back to the local cleanup if local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
@@ -801,9 +797,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
         // Mark this node as clean
         co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-            if (ss.is_topology_coordinator_enabled()) {
-                co_await ss.reset_cleanup_needed();
-            }
+            co_await ss.reset_cleanup_needed();
         });
 
         co_return json::json_return_type(0);
@@ -814,9 +808,6 @@ future<json::json_return_type>
 rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("reset_cleanup_needed");
         co_await ss.invoke_on(0, [] (service::storage_service& ss) {
-            if (!ss.is_topology_coordinator_enabled()) {
-                throw std::runtime_error("mark_node_as_clean is only supported when topology over raft is enabled");
-            }
             return ss.reset_cleanup_needed();
         });
         co_return json_void();
