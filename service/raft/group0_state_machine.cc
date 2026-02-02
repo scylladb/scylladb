@@ -475,26 +475,26 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> topology_snp;
     std::optional<service::raft_snapshot> raft_snp;
 
-        auto auth_tables = db::system_keyspace::auth_tables();
-        std::vector<table_id> tables;
-        tables.reserve(3);
-        tables.push_back(db::system_keyspace::topology()->id());
-        tables.push_back(db::system_keyspace::topology_requests()->id());
-        tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+    auto auth_tables = db::system_keyspace::auth_tables();
+    std::vector<table_id> tables;
+    tables.reserve(3);
+    tables.push_back(db::system_keyspace::topology()->id());
+    tables.push_back(db::system_keyspace::topology_requests()->id());
+    tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+    topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+        &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
-        tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size() + 1);
+    tables = std::vector<table_id>();
+    tables.reserve(auth_tables.size() + 1);
 
-        for (const auto& schema : auth_tables) {
-            tables.push_back(schema->id());
-        }
-        tables.push_back(db::system_keyspace::service_levels_v2()->id());
+    for (const auto& schema : auth_tables) {
+        tables.push_back(schema->id());
+    }
+    tables.push_back(db::system_keyspace::service_levels_v2()->id());
 
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+    raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+        &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
