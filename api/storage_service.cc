@@ -527,13 +527,12 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {
-    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) {
+    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto view = req->get_path_param("view");
-        return vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()).then([] (std::unordered_map<sstring, sstring> status) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
-        });
+        auto status = co_await vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local());
+        std::vector<storage_service_json::mapper> res;
+        co_return json::json_return_type(map_to_key_value(std::move(status), res));
     });
 
     cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
