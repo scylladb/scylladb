@@ -530,9 +530,12 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
     ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto view = req->get_path_param("view");
-        auto status = co_await vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local());
-        std::vector<storage_service_json::mapper> res;
-        co_return json::json_return_type(map_to_key_value(std::move(status), res));
+        co_return json::json_return_type(stream_range_as_array(co_await vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()), [] (const auto& i) {
+            storage_service_json::mapper res;
+            res.key = i.first;
+            res.value = i.second;
+            return res;
+        }));
     });
 
     cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
