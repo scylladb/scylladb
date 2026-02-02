@@ -1617,7 +1617,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.ring_delay_ms = cfg->ring_delay_ms();
                 gcfg.shadow_round_ms = cfg->shadow_round_ms();
                 gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
-                gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
                 gcfg.group0_id = group0_id;
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;

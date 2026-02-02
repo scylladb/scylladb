@@ -66,7 +66,6 @@ struct gossip_config {
     uint32_t ring_delay_ms = 30 * 1000;
     uint32_t shadow_round_ms = 300 * 1000;
     uint32_t shutdown_announce_ms = 2 * 1000;
-    uint32_t skip_wait_for_gossip_to_settle = -1;
     utils::updateable_value<uint32_t> failure_detector_timeout_ms;
     utils::updateable_value<int32_t> force_gossip_generation;
     utils::updateable_value<utils::UUID> recovery_leader;
@@ -660,12 +659,7 @@ public:
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
     std::string_view get_gossip_status(const locator::host_id& endpoint) const noexcept;
-public:
-    future<> wait_for_gossip_to_settle() const;
-    future<> wait_for_range_setup() const;
 private:
-    future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {}) const;
-
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
 
