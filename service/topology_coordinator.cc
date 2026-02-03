@@ -3168,6 +3168,11 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
 
+    co_await utils::get_local_injector().inject("wait_refresh_tablet_load_stats", [] (auto& handler) -> future<> {
+        rtlogger.info("waiting for message: wait_refresh_tablet_load_stats");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+    }, false);
+
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
         rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
@@ -3219,6 +3224,9 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
         for (auto& [table_id, table_stats] : dc_stats.tables) {
             co_await coroutine::maybe_yield();
 
+            if (!_db.column_family_exists(table_id)) {
+                continue;
+            }
             auto& t = _db.find_column_family(table_id);
             auto& rs = t.get_effective_replication_map()->get_replication_strategy();
             if (!rs.uses_tablets()) {
@@ -3242,6 +3250,9 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     }
 
     for (auto& [table_id, table_load_stats] : stats.tables) {
+        if (!total_replicas.contains(table_id)) {
+            continue;
+        }
         auto table_total_replicas = total_replicas.at(table_id);
         if (table_total_replicas == 0) {
             continue;
