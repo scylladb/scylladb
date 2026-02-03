@@ -215,6 +215,8 @@ public:
     static constexpr auto BUILT_VIEWS = "built_views";
     static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
     static constexpr auto CDC_LOCAL = "cdc_local";
+    static constexpr auto CDC_TIMESTAMPS = "cdc_timestamps";
+    static constexpr auto CDC_STREAMS = "cdc_streams";
 
     // auth
     static constexpr auto ROLES = "roles";
