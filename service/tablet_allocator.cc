@@ -4075,21 +4075,28 @@ private:
         co_return std::move(new_tablets);
     }
 
-    // The merging of tablet is completely based on the power-of-two constraint.
-    // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
         tablet_map new_tablets(tablets.tablet_count() / 2, tablets.has_raft_info(), tablet_map::initialized_later());
 
-        for (tablet_id tid : new_tablets.tablet_ids()) {
-            co_await coroutine::maybe_yield();
+        std::optional<tablet_id> new_tid = new_tablets.first_tablet();
+        co_await tablets.for_each_sibling_tablets([&] (tablet_desc left, std::optional<tablet_desc> right) {
+            if (!new_tid) {
+                on_internal_error(lblogger, "Invalid merge, more sibling sets than new tablets.");
+            }
 
-            tablet_id old_left_tid = tablet_id(tid.value() << 1);
-            tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
+            if (!right) {
+                new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(left.tid), *left.info);
+                new_tid = new_tablets.next_tablet(*new_tid);
+                return make_ready_future<>();
+            }
 
-            auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
-            auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+            tablet_id old_left_tid = left.tid;
+            tablet_id old_right_tid = right->tid;
+
+            auto& left_tablet_info = *left.info;
+            auto& right_tablet_info = *right->info;
 
             auto sorted = [] (tablet_replica_set set) {
                 std::ranges::sort(set, std::less<tablet_replica>());
@@ -4108,7 +4115,13 @@ private:
             }
             lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
-            new_tablets.emplace_tablet(tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
+            new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
+            new_tid = new_tablets.next_tablet(*new_tid);
+            return make_ready_future<>();
+        });
+
+        if (new_tid) {
+            on_internal_error(lblogger, "Invalid merge, more new tablets than sibling sets.");
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
