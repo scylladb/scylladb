@@ -3304,6 +3304,13 @@ db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
 
+struct snapshot_tablet_info {
+    size_t id;
+    dht::token first_token, last_token;
+    db_clock::time_point repair_time;
+    int64_t repaired_at;
+};
+
 struct manifest_json : public json::json_base {
     struct info : public json::json_base {
         json::json_element<sstring> version;
@@ -3436,6 +3443,7 @@ struct manifest_json : public json::json_base {
         json::json_element<uint64_t> index_size;
         json::json_element<int64_t> first_token;
         json::json_element<int64_t> last_token;
+        json::json_element<uint64_t> tablet_id;
 
         sstable_info() {
             register_params();
@@ -3448,6 +3456,9 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            if (e.tablet_id) {
+                tablet_id = *e.tablet_id;
+            }
         }
         sstable_info(const sstable_info& e) {
             register_params();
@@ -3457,6 +3468,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
         }
         sstable_info(sstable_info&& e) {
             register_params();
@@ -3466,6 +3478,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
         }
         sstable_info& operator=(sstable_info&& e) {
             id = e.id;
@@ -3474,6 +3487,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
             return *this;
         }
     private:
@@ -3484,6 +3498,51 @@ struct manifest_json : public json::json_base {
             add(&index_size, "index_size");
             add(&first_token, "first_token");
             add(&last_token, "last_token");
+            add(&tablet_id, "tablet_id");
+        }
+    };
+
+    struct tablet_info : public json::json_base {
+        json::json_element<uint64_t> id;
+        json::json_element<int64_t> first_token;
+        json::json_element<int64_t> last_token;
+        json::json_element<time_t> repair_time;
+        json::json_element<int64_t> repaired_at;
+
+        tablet_info() {
+            register_params();
+        }
+        tablet_info(const snapshot_tablet_info& e) {
+            register_params();
+            id = e.id;
+            first_token = dht::token::to_int64(e.first_token);
+            last_token = dht::token::to_int64(e.last_token);
+            repair_time = db_clock::to_time_t(e.repair_time);
+            repaired_at = e.repaired_at;
+        }
+        tablet_info(const tablet_info& e) {
+            register_params();
+            id = e.id;
+            first_token = e.first_token;
+            last_token = e.last_token;
+            repair_time = e.repair_time;
+            repaired_at = e.repaired_at;
+        }
+        tablet_info& operator=(tablet_info&& e) {
+            id = e.id;
+            first_token = e.first_token;
+            last_token = e.last_token;
+            repair_time = e.repair_time;
+            repaired_at = e.repaired_at;
+            return *this;
+        }
+    private:
+        void register_params() {
+            add(&id, "id");
+            add(&first_token, "first_token");
+            add(&last_token, "last_token");
+            add(&repair_time, "repair_time");
+            add(&repaired_at, "repaired_at");
         }
     };
 
@@ -3492,6 +3551,7 @@ struct manifest_json : public json::json_base {
     json::json_element<snapshot_info> snapshot;
     json::json_element<table_info> table;
     json::json_chunked_list<sstable_info> sstables;
+    json::json_chunked_list<tablet_info> tablets;
 
     manifest_json() {
         register_params();
@@ -3503,6 +3563,7 @@ struct manifest_json : public json::json_base {
         snapshot = std::move(e.snapshot);
         table = std::move(e.table);
         sstables = std::move(e.sstables);
+        tablets = std::move(e.tablets);
     }
     manifest_json& operator=(manifest_json&& e) {
         if (this != &e) {
@@ -3511,6 +3572,7 @@ struct manifest_json : public json::json_base {
             snapshot = std::move(e.snapshot);
             table = std::move(e.table);
             sstables = std::move(e.sstables);
+            tablets = std::move(e.tablets);
         }
         return *this;
     }
@@ -3521,6 +3583,7 @@ private:
         add(&snapshot, "snapshot");
         add(&table, "table");
         add(&sstables, "sstables");
+        add(&tablets, "tablets");
     }
 };
 
@@ -3534,7 +3597,7 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
+static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, std::vector<snapshot_tablet_info> tablets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
     manifest_json manifest;
 
     manifest_json::info info;
@@ -3570,6 +3633,11 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
             manifest.sstables.push(manifest_json::sstable_info(md));
         }
     }
+
+    for (const auto& sti : tablets) {
+        manifest.tablets.push(manifest_json::tablet_info(sti));
+    }
+
     auto streamer = json::stream_object(std::move(manifest));
     auto out = co_await writer.stream_for("manifest.json");
     std::exception_ptr ex;
@@ -3694,11 +3762,32 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         std::optional<int64_t> min_tablet_count;
+        std::vector<snapshot_tablet_info> tablets;
         if (t.uses_tablets()) {
             SCYLLA_ASSERT(!tablet_counts.empty());
             min_tablet_count = *std::ranges::min_element(tablet_counts);
+
+            auto erm = t.get_effective_replication_map();
+            auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+            for (auto& ssts : sstable_sets) {
+                for (auto& sst : *ssts) {
+                    auto tok = sst.first_token;
+                    auto tid = tm.get_tablet_id(dht::token::from_int64(tok));
+                    sst.tablet_id = tid.id;
+                    if (std::none_of(tablets.begin(), tablets.end(), [tid](auto& sti) { return sti.id == tid.id; })) {
+                        auto& tinfo = tm.get_tablet_info(tid);
+                        tablets.emplace_back(snapshot_tablet_info{
+                            .id = tid.id,
+                            .first_token = tm.get_first_token(tid),
+                            .last_token = tm.get_last_token(tid),
+                            .repair_time = tinfo.repair_time,
+                            .repaired_at = tinfo.sstables_repaired_at,
+                        });
+                    }
+                }
+            }
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
