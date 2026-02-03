@@ -258,14 +258,12 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
         throw exceptions::configuration_exception{"cannot start group0 operation in the maintenance mode"};
     }
 
-    std::pair<rwlock::holder, group0_upgrade_state> upgrade_lock_and_state = co_await get_group0_upgrade_state();
-    auto [upgrade_lock_holder, upgrade_state] = std::move(upgrade_lock_and_state);
-    switch (upgrade_state) {
-        case group0_upgrade_state::synchronize:
-            // The version no longer support upgrade to group0, so the state should be unused
-            on_internal_error(logger, "unexpected group0 upgrade state 'synchronize' in start_operation");
-            [[fallthrough]];
-        case group0_upgrade_state::use_post_raft_procedures: {
+    group0_upgrade_state upgrade_state = get_group0_upgrade_state();
+    if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
+        // The version no longer supports pre raft procedures
+        on_internal_error(logger, format("unexpected group0 upgrade state {} in start_operation",  upgrade_state));
+    }
+
             auto operation_holder = co_await get_units(_operation_mutex, 1, as);
             co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
 
@@ -283,27 +281,10 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
                     observed_group0_state_id,
                     new_group0_state_id,
                     // Not holding any lock in this case, but move the upgrade lock holder for consistent code
-                    std::move(upgrade_lock_holder),
+                    rwlock::holder{},
                     true
                 )
             };
-       }
-
-        case group0_upgrade_state::recovery:
-            logger.warn("starting operation in RECOVERY mode (using old procedures)");
-            [[fallthrough]];
-        case group0_upgrade_state::use_pre_raft_procedures:
-            co_return group0_guard {
-                std::make_unique<group0_guard::impl>(
-                    semaphore_units<>{},
-                    semaphore_units<>{},
-                    utils::UUID{},
-                    generate_group0_state_id(utils::UUID{}),
-                    std::move(upgrade_lock_holder),
-                    false
-                )
-            };
-    }
 }
 
 template<typename Command>
@@ -392,21 +373,11 @@ future<> raft_group0_client::init() {
     }
 }
 
-future<std::pair<rwlock::holder, group0_upgrade_state>> raft_group0_client::get_group0_upgrade_state() {
-    auto holder = co_await _upgrade_lock.hold_read_lock();
-
-    if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
-        co_return std::pair{std::move(holder), _upgrade_state};
-    }
-
-    co_return std::pair{rwlock::holder{}, _upgrade_state};
+group0_upgrade_state raft_group0_client::get_group0_upgrade_state() {
+    return _upgrade_state;
 }
 
 future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state) {
-    // We could explicitly handle abort here but we assume that if someone holds the lock,
-    // they will eventually finish (say, due to abort) and release it.
-    auto holder = co_await _upgrade_lock.hold_write_lock();
-
     auto value = [] (group0_upgrade_state s) constexpr {
         switch (s) {
             case service::group0_upgrade_state::use_post_raft_procedures:
@@ -430,9 +401,6 @@ future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state
 
     co_await _sys_ks.save_group0_upgrade_state(value(state));
     _upgrade_state = state;
-    if (_upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
-        _upgraded.broadcast();
-    }
 }
 
 future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source& as) {
