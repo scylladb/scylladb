@@ -674,7 +674,7 @@ struct group0_members {
 future<bool> raft_group0::use_raft() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
-    if (((co_await _client.get_group0_upgrade_state()).second) == group0_upgrade_state::recovery) {
+    if (_client.get_group0_upgrade_state() == group0_upgrade_state::recovery) {
         group0_log.warn("setup_group0: Raft RECOVERY mode, skipping group 0 setup.");
         co_return false;
     }
@@ -708,7 +708,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
         // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
         // migration_manager schema pulls.
-        auto start_state = (co_await _client.get_group0_upgrade_state()).second;
+        auto start_state = _client.get_group0_upgrade_state();
         if (start_state != group0_upgrade_state::use_post_raft_procedures) {
             throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
                 " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
