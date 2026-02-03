@@ -58,10 +58,6 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
           _notifier(notifier)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
-                if ((co_await _group0_client.get_group0_upgrade_state()).second == group0_upgrade_state::use_pre_raft_procedures) {
-                    on_internal_error(mlogger, "Trying to pull schema over raft while in pre raft procedures");
-                }
-
                 // This will run raft barrier and will sync schema with the leader
                 co_await with_scheduling_group(_storage_proxy.get_db().local().get_gossip_scheduling_group(), [this] {
                     return start_group0_operation().discard_result();
