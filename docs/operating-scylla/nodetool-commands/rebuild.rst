@@ -18,6 +18,7 @@ When :doc:`adding a new data-center into an existing ScyllaDB cluster </operatin
 
 .. note:: The ScyllaDB rebuild process continues to run in the background, even if the nodetool command is killed or interrupted.
 
+.. note:: ``nodetool rebuild`` command works only for vnode keyspaces. For tablet keyspaces, use ``nodetool cluster repair`` instead.
 
 For Example:
 
