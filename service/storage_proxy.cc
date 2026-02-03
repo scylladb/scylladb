@@ -242,7 +242,10 @@ class storage_proxy::remote {
     const db::view::view_building_state_machine& _vb_state_machine;
     abort_source _group0_as;
 
+    // These two could probably share, but nice to
+    // have named separations...
     seastar::named_gate _truncate_gate;
+    seastar::named_gate _snapshot_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -254,6 +257,7 @@ public:
                 sharded<paxos::paxos_store>& paxos_store, raft_group0_client& group0_client, topology_state_machine& tsm, const db::view::view_building_state_machine& vbsm)
         : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(paxos_store), _group0_client(group0_client), _topology_state_machine(tsm), _vb_state_machine(vbsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
+        , _snapshot_gate("storage_proxy::remote::snapshot_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -268,6 +272,7 @@ public:
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
         ser::storage_proxy_rpc_verbs::register_truncate_with_tablets(&_ms, std::bind_front(&remote::handle_truncate_with_tablets, this));
+        ser::storage_proxy_rpc_verbs::register_snapshot_with_tablets(&_ms, std::bind_front(&remote::handle_snapshot_with_tablets, this));
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
@@ -282,6 +287,7 @@ public:
     future<> stop() {
         _group0_as.request_abort();
         co_await _truncate_gate.close();
+        co_await _snapshot_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -969,6 +975,18 @@ private:
     future<> handle_truncate_with_tablets(sstring ksname, sstring cfname, service::frozen_topology_guard frozen_guard) {
         topology_guard guard(frozen_guard);
         co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
+    }
+
+    future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, service::frozen_topology_guard frozen_guard) {
+        topology_guard guard(frozen_guard);
+        db::snapshot_options opts {
+            .skip_flush = skip_flush,
+            .use_topology_coordinator = true,
+            .created_at = ts
+        };
+        co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
+            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts);
+        });
     }
 
     future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
