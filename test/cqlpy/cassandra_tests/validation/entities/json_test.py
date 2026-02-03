@@ -1264,11 +1264,7 @@ def testEmptyStringJsonSerialization(cql, test_keyspace):
 
 # CASSANDRA-14286
 # Reproduces #8100
-# We have to *skip* this test instead of *xfail*, because our buggy
-# implementation not only fails to produce the right results, it reads
-# already-freed memory to do so, which crashes the debug build with the
-# sanitizer enabled.
-@pytest.mark.skip(reason="issue #8100")
+@pytest.mark.xfail(reason="issue #28467")
 def testJsonOrdering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a INT, b INT, PRIMARY KEY(a, b))") as table:
         execute(cql, table, "INSERT INTO %s(a, b) VALUES (20, 30);")
@@ -1300,6 +1296,7 @@ def testJsonOrdering(cql, test_keyspace):
                    ["{\"a\": 20, \"c\": 30}"])
 
         # Check ordering with CAST
+        # Reproduces #28467
         assert_rows(execute_without_paging(cql, table, "SELECT JSON a, CAST(b AS FLOAT) FROM %s WHERE a IN (20, 100) ORDER BY b"),
                    ["{\"a\": 20, \"cast(b as float)\": 30.0}"],
                    ["{\"a\": 100, \"cast(b as float)\": 200.0}"])

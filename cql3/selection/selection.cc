@@ -211,12 +211,26 @@ public:
         _initial_values_for_temporaries = std::move(agg_split.initial_values_for_temporaries);
     }
 
+    virtual uint32_t add_column_to_query(const column_definition& c) override {
+        auto [index, _] = add_column(c);
+        return index;
+    }
+
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
-        uint32_t index = selection::add_column_for_post_processing(c);
+        auto it = std::find_if(_selectors.begin(), _selectors.end(), [&c](const expr::expression& e) {
+            auto col = expr::as_if<expr::column_value>(&e);
+            return col && col->col == &c;
+        });
+        if (it != _selectors.end()) {
+            return std::distance(_selectors.begin(), it);
+        }
+
+        add_column(c);
+        get_result_metadata()->add_non_serialized_column(c.column_specification);
         _selectors.push_back(expr::column_value(&c));
         if (_inner_loop.empty()) {
             // Simple case: no aggregation
-            return index;
+            return _selectors.size() - 1;
         } else {
             // Complex case: aggregation, must pass through temporary
             auto first_func = cql3::functions::aggregate_fcts::make_first_function(c.type);
@@ -470,10 +484,21 @@ std::vector<const column_definition*> selection::wildcard_columns(schema_ptr sch
     return simple_selection::make(schema, std::move(columns), false);
 }
 
-uint32_t selection::add_column_for_post_processing(const column_definition& c) {
+std::pair<uint32_t, bool> selection::add_column(const column_definition& c) {
+    auto index = index_of(c);
+    if (index != -1) {
+        return {index, false};
+    }
     _columns.push_back(&c);
-    _metadata->add_non_serialized_column(c.column_specification);
-    return _columns.size() - 1;
+    return {_columns.size() - 1, true};
+}
+
+uint32_t selection::add_column_to_query(const column_definition& c) {
+    auto [index, added] = add_column(c);
+    if (added) {
+        _metadata->add_non_serialized_column(c.column_specification);
+    }
+    return index;
 }
 
 ::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& prepared_selectors) {
