@@ -8,7 +8,7 @@ When a write is performed to the base table, a corresponding write is made to th
 
 There are three kinds of rows: preimage rows, delta rows, and postimage rows.
 
-The row's kind can be recognized using the ``cdc$operation`` column: values ``1`` to ``8`` denote the different types of delta rows (as explained in the :doc:`CDC log table <./cdc-log-table>` document), value ``0`` denotes a preimage row, and value ``9`` denotes a postimage row.
+The row's kind can be recognized using the ``cdc$operation`` column: values ``1`` to ``8`` denote the different types of delta rows (as explained in the :doc:`CDC log table <./cdc-log-table>` document), value ``0`` denotes a preimage row, and value ``9`` denotes a postimage row. Currently, there are also two special negative values that have identical meaning as their positive counterparts. Only Alternator uses ``-3`` and ``-4`` to mark TTL deletes.
 
 **Delta rows** have been extensively covered in the previous documents. They always appear if CDC is enabled. On the other hand, preimage and postimage rows are optional.
 
@@ -100,7 +100,7 @@ returns:
 
 The difference, compared to the previous example, is that the ``v1`` column has a value in all preimage rows: even though the second and third updates did not modify this column, the preimage shows its previous value anyway since we enabled full preimages.
 
-Preimage rows are only created for rows modified using inserts, updates, or row deletes. They are not created for range deletes or partition deletes. For example:
+Preimage rows are only created for rows modified using inserts, updates. <row deletes>. They are not created for range deletes. For example:
 
 .. code-block:: cql
 
