@@ -177,11 +177,10 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         sharded<netw::messaging_service>& ms,
         gms::gossiper& gs,
         gms::feature_service& feat,
-        db::system_keyspace& sys_ks,
         raft_group0_client& client,
         seastar::scheduling_group sg)
     : _shutdown_gate("raft_group0::shutdown")
-    , _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client), _sg(sg)
+    , _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _client(client), _sg(sg)
     , _status_for_monitoring(status_for_monitoring::normal)
 {
     register_metrics();
@@ -731,7 +730,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
+        service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
         const join_node_request_params& params) {
     if (!co_await use_raft()) {
         // The node is in the RECOVERY mode. We are in Maintenance Mode or the gossip-based recovery procedure.
@@ -810,14 +809,6 @@ bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
     return cfg.contains(id) && (!include_voters_only || cfg.can_vote(id));
 }
 
-future<> raft_group0::become_nonvoter(abort_source& as, std::optional<raft_timeout> timeout) {
-    co_return co_await modify_voters({}, {load_my_id()}, as, timeout);
-}
-
-future<> raft_group0::make_nonvoter(raft::server_id node, abort_source& as, std::optional<raft_timeout> timeout) {
-    co_return co_await modify_voters({}, {node}, as, timeout);
-}
-
 future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
         abort_source& as, std::optional<raft_timeout> timeout) {
     if (voters_add.empty() && voters_del.empty()) {
@@ -832,10 +823,6 @@ future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& v
     };
     if (!calculate_intersection(voters_add, voters_del).empty()) {
         on_internal_error(group0_log, "called modify_voters with the same node in both voters and non-voters sets");
-    }
-
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called modify_voters before Raft upgrade finished");
     }
 
     if (!voters_add.empty()) {
@@ -853,48 +840,6 @@ future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& v
     if (!voters_del.empty()) {
         group0_log.info("servers {} are now non-voters.", voters_del);
     }
-}
-
-future<> raft_group0::leave_group0() {
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called leave_group0 before Raft upgrade finished");
-    }
-
-    auto my_id = load_my_id();
-
-    group0_log.info("leaving group 0 (my id = {})...", my_id);
-    // Note: if this gets stuck due to a failure, the DB admin can abort.
-    // FIXME: this gets stuck without failures if we're the leader (#10833)
-    co_return co_await remove_from_raft_config(my_id);
-    group0_log.info("left group 0.");
-}
-
-future<> raft_group0::remove_from_group0(raft::server_id node) {
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called remove_from_group0 before Raft upgrade finished");
-    }
-
-    group0_log.info("remove_from_group0({}): removing the server from group 0 configuration...", node);
-
-    co_await remove_from_raft_config(node);
-
-    group0_log.info("remove_from_group0({}): finished removing from group 0 configuration.", node);
-}
-
-future<bool> raft_group0::wait_for_raft() {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    if (upgrade_state == group0_upgrade_state::recovery) {
-        group0_log.warn("In Raft RECOVERY mode.");
-        co_return false;
-    }
-
-    group0_log.info("Performing a group 0 read barrier...");
-    co_await _raft_gr.group0().read_barrier(&_abort_source);
-    group0_log.info("Finished group 0 read barrier.");
-
-    co_return true;
 }
 
 future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
@@ -945,11 +890,6 @@ future<> raft_group0::remove_from_raft_config(raft::server_id id) {
 
 bool raft_group0::joined_group0() const {
     return std::holds_alternative<raft::group_id>(_group0);
-}
-
-future<bool> raft_group0::raft_upgrade_complete() const {
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    co_return upgrade_state == group0_upgrade_state::use_post_raft_procedures;
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {

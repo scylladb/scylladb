@@ -1795,7 +1795,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(raft::is_voter::no);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, _qp, _migration_manager.local(), join_params);
+            *this, _qp, _migration_manager.local(), join_params);
 
     raft::server& raft_server = _group0->group0_server();
 
