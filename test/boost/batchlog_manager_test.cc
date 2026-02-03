@@ -170,68 +170,68 @@ void check_range_tombstone_end(const fragment& f, std::optional<bound_weight> bo
 }
 
 uint64_t prepare_batches(cql_test_env& env, uint64_t batch_count, bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
-        uint64_t failed_batches = 0;
+    uint64_t failed_batches = 0;
 
-        auto& bm = env.batchlog_manager().local();
+    auto& bm = env.batchlog_manager().local();
 
-        env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+    env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
 
-        for (uint64_t i = 0; i != batch_count; ++i) {
-            std::vector<sstring> queries;
-            std::vector<std::string_view> query_views;
-            for (uint64_t j = 0; j != i+2; ++j) {
-                queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
-                query_views.emplace_back(queries.back());
-            }
-            const bool fail = i % 2;
-            bool injected_exception_thrown = false;
-
-            std::optional<scoped_error_injection> error_injection;
-            if (fail) {
-                ++failed_batches;
-                error_injection.emplace("storage_proxy_fail_send_batch");
-            }
-            try {
-                env.execute_batch(
-                        query_views,
-                        cql3::statements::batch_statement::type::LOGGED,
-                        std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
-            } catch (std::runtime_error& ex) {
-                if (fail) {
-                    BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
-                    injected_exception_thrown = true;
-                } else {
-                    throw;
-                }
-            }
-            BOOST_REQUIRE_EQUAL(injected_exception_thrown, fail);
+    for (uint64_t i = 0; i != batch_count; ++i) {
+        std::vector<sstring> queries;
+        std::vector<std::string_view> query_views;
+        for (uint64_t j = 0; j != i+2; ++j) {
+            queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
+            query_views.emplace_back(queries.back());
         }
-
-        const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
-
-        assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
-            .is_rows()
-            .with_size(failed_batches);
-
-        assert_that(env.execute_cql(fragments_query).get())
-            .is_rows()
-            .with_size(batch_count)
-            .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
-                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
-            });
+        const bool fail = i % 2;
+        bool injected_exception_thrown = false;
 
         std::optional<scoped_error_injection> error_injection;
-        if (replay_fails) {
-            error_injection.emplace("storage_proxy_fail_replay_batch");
+        if (fail) {
+            ++failed_batches;
+            error_injection.emplace("storage_proxy_fail_send_batch");
         }
+        try {
+            env.execute_batch(
+                    query_views,
+                    cql3::statements::batch_statement::type::LOGGED,
+                    std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
+        } catch (std::runtime_error& ex) {
+            if (fail) {
+                BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
+                injected_exception_thrown = true;
+            } else {
+                throw;
+            }
+        }
+        BOOST_REQUIRE_EQUAL(injected_exception_thrown, fail);
+    }
 
-        bm.do_batch_log_replay(cleanup).get();
+    const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
 
-        assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
-            .is_rows()
-            .with_size(replay_fails ? failed_batches : 0);
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
+        .is_rows()
+        .with_size(failed_batches);
 
-        return failed_batches;
+    assert_that(env.execute_cql(fragments_query).get())
+        .is_rows()
+        .with_size(batch_count)
+        .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+            columns.with_typed_column<sstring>("mutation_source", "memtable:0");
+        });
+
+    std::optional<scoped_error_injection> error_injection;
+    if (replay_fails) {
+        error_injection.emplace("storage_proxy_fail_replay_batch");
+    }
+
+    bm.do_batch_log_replay(cleanup).get();
+
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
+        .is_rows()
+        .with_size(replay_fails ? failed_batches : 0);
+
+    return failed_batches;
 }
 
 } // anonymous namespace
