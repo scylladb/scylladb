@@ -25,4 +25,8 @@ For Example:
 
    nodetool rebuild <source-dc-name>
 
+``nodetool rebuild`` command works only for vnode keyspaces. For tablet keyspaces, use ``nodetool cluster repair`` instead.
+
+See :doc:`Data Distribution with Tablets </architecture/tablets/>`.
+
 .. include:: nodetool-index.rst
