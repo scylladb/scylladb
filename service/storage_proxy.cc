@@ -485,6 +485,12 @@ public:
         }
     }
 
+    future<> snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        co_await seastar::with_gate(_snapshot_gate, [&] () -> future<> {
+            co_await request_snapshot_with_tablets(ks_cf_names, tag, opts);
+        });
+    }
+
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
         auto s = _sp.local_db().find_schema(keyspace, cfname);
         auto erm_ptr = s->table().get_effective_replication_map();
@@ -1218,6 +1224,43 @@ private:
             , "request_truncate_with_tablets"
         );
     }
+
+    future<> request_snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>> ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        std::unordered_set<table_id> ids;
+        co_await do_topology_request("Snapshot table"
+            , [&] {
+                auto& db = _sp.local_db();
+                for (auto& [ks_name, cf_name] : ks_cf_names) {
+                    if (cf_name.empty()) {
+                        auto& ks = db.find_keyspace(ks_name);
+                        auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
+                        ids.insert(id_range.begin(), id_range.end());
+                    } else {
+                        ids.insert(db.find_uuid(ks_name, cf_name));
+                    }
+                }
+                return fmt::format("SNAPSHOT tables {}", ks_cf_names);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::snapshot_tables) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::snapshot_tables) {
+                        return entry.snapshot_table_ids == ids && entry.snapshot_tag == tag;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_snapshot_tables_data(ids, tag, opts.skip_flush)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                slogger.info("Creating SNAPSHOT global topology request for tables {}", ks_cf_names);
+                return global_topology_request::snapshot_tables;
+            }
+            , "request_snapshot_with_tablets"
+        );
+    }
+
 };
 
 using namespace exceptions;
@@ -7090,6 +7133,34 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     } else {
         co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
+}
+
+future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
+    slogger.debug("Starting a blocking snapshot operation on keyspaces {}", ks_tables);
+
+    if (features().snapshot_as_topology_operation) {
+        auto non_local = ks_tables | std::views::filter([this](auto& p) {
+            const replica::keyspace& ks = local_db().find_keyspace(p.first);
+            return !ks.get_replication_strategy().is_local() && ks.uses_tablets();
+        }) | std::views::transform([](auto& p) { return std::pair<sstring, sstring>(p.first, p.second); }) 
+           | std::ranges::to<std::vector>()
+           ;
+        co_await remote().snapshot_with_tablets(non_local, tag, opts);
+        for (auto& [k, _] : non_local) {
+            ks_tables.erase(k);
+        }
+    }
+
+    co_await coroutine::parallel_for_each(ks_tables | std::views::keys, [&] (const auto& ks_name) -> future<> {
+        auto [i, e] = ks_tables.equal_range(ks_name);
+        if (std::distance(i, e) == 1 && i->second.empty()) {
+            co_await replica::database::snapshot_keyspace_on_all_shards(_db, ks_name, tag, opts);
+        } else {
+            co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, 
+                std::ranges::subrange(i, e) | std::views::values | std::ranges::to<std::vector>(), 
+                tag, opts);
+        }
+    });
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {
