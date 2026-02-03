@@ -52,11 +52,7 @@ Row-level repair improves ScyllaDB in two ways:
   * keeping the data in a temporary buffer.
   * using the cached data to calculate the checksum and send it to the replicas.
 
-See also
-
-* `ScyllaDB Manager documentation <https://manager.docs.scylladb.com/>`_
-
-* `Blog: ScyllaDB Open Source 3.1: Efficiently Maintaining Consistency with Row-Level Repair <https://www.scylladb.com/2019/08/13/scylla-open-source-3-1-efficiently-maintaining-consistency-with-row-level-repair/>`_
+See also the `ScyllaDB Manager documentation <https://manager.docs.scylladb.com/>`_.
 
 Incremental Repair
 ------------------
