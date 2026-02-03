@@ -15,6 +15,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
+#include <seastar/core/gate.hh>
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
@@ -107,6 +108,7 @@ class client : public enable_shared_from_this<client> {
     semaphore _creds_sem;
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
+    named_gate _refresher_gate{"s3_header_refresher"};
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
 

@@ -384,6 +384,17 @@ future<> client::make_request(http::request req,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
     auto request = std::move(req);
+    auto header_refresher = timer<lowres_clock>();
+    header_refresher.set_callback([&header_refresher, &request, this] {
+        auto gh = _refresher_gate.hold();
+        s3l.debug("Refreshing authorization headers for long-running S3 request");
+        // Safe to ignore the future here, as we hold the gate
+        std::ignore = authorize(request).then([gh = std::move(gh)] {});
+        header_refresher.rearm(lowres_clock::now() + 14min);
+    });
+    header_refresher.arm(lowres_clock::now() + 14min);
+    auto refresher_canceller = defer([&header_refresher] { header_refresher.cancel(); });
+
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
     auto& gc = find_or_create_client();
@@ -1824,6 +1835,7 @@ future<> client::close() {
         _creds_invalidation_timer.cancel();
         _creds_update_timer.cancel();
     }
+    co_await _refresher_gate.close();
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
