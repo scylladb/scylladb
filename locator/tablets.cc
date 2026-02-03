@@ -37,25 +37,25 @@ seastar::logger tablet_logger("tablets");
 
 std::pair<tablet_id, std::optional<tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
     check_tablet_id(t);
-    std::optional<tablet_id> isolated_tablet;
 
-    if (needs_merge()) {
-        auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
-        isolated_tablet = merge_plan.isolated_tablet;
+    if (!needs_merge()) {
+        return std::make_pair(t, std::nullopt);
     }
 
-    if (!isolated_tablet || t < isolated_tablet) {
+    auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
+
+    if (!merge_plan.isolated_tablet || t < *merge_plan.isolated_tablet) {
         auto first_sibling = tablet_id(t.value() & ~0x1);
         auto second_sibling = next_tablet(first_sibling);
         return std::make_pair(first_sibling, second_sibling);
     }
 
-    if (t == isolated_tablet) {
+    if (t == *merge_plan.isolated_tablet) {
         return std::make_pair(t, std::nullopt);
     }
 
-    auto adjusted_index = t.value() - 1;
-    auto first_sibling = tablet_id(adjusted_index & ~0x1);
+    // t is after the isolated_tablet here, which shifts the sibling pairs by one position.
+    auto first_sibling = tablet_id(((t.value() - 1) & ~0x1) + 1);
     auto second_sibling = next_tablet(first_sibling);
     return std::make_pair(first_sibling, second_sibling);
 }
@@ -520,6 +520,19 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::ini
     if (with_raft_info) {
         _raft_info.resize(tablet_count);
     }
+}
+
+tablet_layout tablet_map::get_layout() const {
+    if (tablet_count() != 1ull << _tablet_ids.log2_count()) {
+        return tablet_layout::arbitrary;
+    }
+    for (size_t i = 0; i < _last_tokens.size(); ++i) {
+        auto pow2_last_token = dht::last_token_of_compaction_group(_tablet_ids.log2_count(), i);
+        if (_last_tokens[i] != pow2_last_token) {
+            return tablet_layout::arbitrary;
+        }
+    }
+    return tablet_layout::pow_of_2;
 }
 
 tablet_map tablet_map::clone() const {
