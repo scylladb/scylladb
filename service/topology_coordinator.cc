@@ -2383,12 +2383,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         sstring tag;
         bool skip_flush;
         gc_clock::time_point t;
+        std::optional<gc_clock::time_point> expiry;
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
                 tag = *topology_requests_entry.snapshot_tag;
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
+                if (topology_requests_entry.snapshot_expiry) {
+                    expiry = gc_clock::from_time_t(db_clock::to_time_t(*topology_requests_entry.snapshot_expiry));
+                }
                 for (auto& id : *topology_requests_entry.snapshot_table_ids) {
                     lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
                     if (!table) {
@@ -2400,7 +2404,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 return *topology_requests_entry.snapshot_table_ids;
             }
             , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
-                return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, frozen_guard);
+                return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
             }
             , [&] { 
                 return fmt::format("SNAPSHOT on tables {}", ids);

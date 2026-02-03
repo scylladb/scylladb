@@ -983,11 +983,12 @@ private:
         co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
     }
 
-    future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, service::frozen_topology_guard frozen_guard) {
+    future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, std::optional<gc_clock::time_point> expiry, service::frozen_topology_guard frozen_guard) {
         topology_guard guard(frozen_guard);
         db::snapshot_options opts {
             .skip_flush = skip_flush,
-            .created_at = ts
+            .created_at = ts,
+            .expires_at = expiry
         };
         co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
             co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts);
@@ -1266,6 +1267,9 @@ private:
                 trbuilder.set_snapshot_tables_data(ids, tag, opts.skip_flush)
                          .set("done", false)
                          .set("start_time", db_clock::now());
+                if (opts.expires_at) {
+                    trbuilder.set("snapshot_expiry", db_clock::from_time_t(gc_clock::to_time_t(*opts.expires_at)));
+                }
                 slogger.info("Creating SNAPSHOT global topology request for tables {}", ks_cf_names);
                 return global_topology_request::snapshot_tables;
             }

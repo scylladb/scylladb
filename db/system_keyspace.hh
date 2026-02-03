@@ -419,6 +419,7 @@ public:
         std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
         std::optional<std::unordered_set<table_id>> snapshot_table_ids;
         std::optional<sstring> snapshot_tag;
+        std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;

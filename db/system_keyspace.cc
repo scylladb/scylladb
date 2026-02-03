@@ -337,6 +337,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false))
             .with_column("snapshot_table_ids", set_type_impl::get_instance(uuid_type, false))
             .with_column("snapshot_tag", utf8_type)
+            .with_column("snapshot_expiry", timestamp_type)
             .with_column("snapshot_skip_flush", boolean_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
@@ -3592,6 +3593,9 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
             | std::ranges::to<std::unordered_set>()
             ;
         ;
+        if (row.has("snapshot_expiry")) {
+            entry.snapshot_expiry = row.get_as<db_clock::time_point>("snapshot_expiry");
+        }
     }
 
     return entry;
