@@ -574,7 +574,8 @@ commitlog_total_space_in_mb: -1
 audit: "table"
 #
 # List of statement categories that should be audited.
-audit_categories: "DCL,DDL,AUTH,ADMIN"
+# Possible categories are: QUERY, DML, DCL, DDL, AUTH, ADMIN
+audit_categories: "DCL,AUTH,ADMIN"
 #
 # List of tables that should be audited.
 # audit_tables: "<keyspace_name>.<table_name>,<keyspace_name>.<table_name>"
