@@ -1311,7 +1311,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
-        static const auto resize_decision = locator::resize_decision("split", 1);
+        static const auto resize_decision = locator::resize_decision(locator::resize_decision::split(), 1);
 
         {
             tablet_mutation_builder b(ts++, table1);

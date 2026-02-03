@@ -935,22 +935,12 @@ const std::optional<locator::repair_scheduler_config> tablet_map::get_repair_sch
     return _repair_scheduler_config;
 }
 
-static auto to_resize_type(sstring decision) {
-    static const std::unordered_map<sstring, decltype(resize_decision::way)> string_to_type = {
-        {"none", resize_decision::none{}},
-        {"split", resize_decision::split{}},
-        {"merge", resize_decision::merge{}},
-    };
-    return string_to_type.at(decision);
-}
-
-resize_decision::resize_decision(sstring decision, uint64_t seq_number)
-    : way(to_resize_type(decision))
-    , sequence_number(seq_number) {
-}
-
 sstring resize_decision::type_name() const {
-    return fmt::format("{}", way);
+    return std::visit(seastar::make_visitor(
+        [] (const resize_decision::none&) { return "none"; },
+        [] (const resize_decision::split&) { return "split"; },
+        [] (const resize_decision::merge&) { return "merge"; }
+    ), way);
 }
 
 resize_decision::seq_number_t resize_decision::next_sequence_number() const {
@@ -1830,13 +1820,17 @@ future<> tablet_id_map::clear_gently() {
 
 auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_decision_way& way, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    static const std::array<sstring, 3> index_to_string = {
-        "none",
-        "split",
-        "merge",
-    };
-    static_assert(std::variant_size_v<locator::resize_decision_way> == index_to_string.size());
-    return fmt::format_to(ctx.out(), "{}", index_to_string[way.index()]);
+    std::visit(seastar::make_visitor(
+        [&] (const locator::resize_decision::none&) {
+            fmt::format_to(ctx.out(), "none");
+        },
+        [&] (const locator::resize_decision::split&) {
+            fmt::format_to(ctx.out(), "split");
+        },
+        [&] (const locator::resize_decision::merge& merge) {
+            fmt::format_to(ctx.out(), "merge");
+        }), way);
+    return ctx.out();
 }
 
 auto fmt::formatter<locator::global_tablet_id>::format(const locator::global_tablet_id& id, fmt::format_context& ctx) const
