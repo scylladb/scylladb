@@ -2433,6 +2433,43 @@ SEASTAR_THREAD_TEST_CASE(test_merge_chooses_best_replica_with_odd_count) {
     }, std::move(cfg)).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_map_layout) {
+    auto cfg = cql_test_config{};
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([](auto& e) {
+        auto& stm = e.shared_token_metadata().local();
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto min_10 = std::map<sstring, sstring>({{"min_tablet_count", "10"}}); // 10 -> 5 -> 3 -> 2
+        auto min_8 = std::map<sstring, sstring>({{"min_tablet_count", "8"}});
+        auto table1 = add_table(e, ks_name, min_10).get();
+        auto table2 = add_table(e, ks_name, min_8).get();
+        auto table3 = add_table(e, ks_name, min_8).get();
+
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 10);
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table2).tablet_count() == 8);
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table3).tablet_count() == 8);
+
+        BOOST_REQUIRE(tablet_layout::arbitrary == stm.get()->tablets().get_tablet_map(table1).get_layout());
+        BOOST_REQUIRE(tablet_layout::pow_of_2 == stm.get()->tablets().get_tablet_map(table2).get_layout());
+        BOOST_REQUIRE(tablet_layout::pow_of_2 == stm.get()->tablets().get_tablet_map(table3).get_layout());
+
+        topo.get_shared_load_stats().set_tablet_sizes(stm.get(), table1, 1);
+
+        set_min_tablet_count(e, table1, 2);
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        // Even though the count is a power-of-two, boundaries are not aligned due to odd-count merge,
+        // so the layout should remain arbitrary.
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 2);
+        BOOST_REQUIRE(tablet_layout::arbitrary == stm.get()->tablets().get_tablet_map(table1).get_layout());
+        return make_ready_future<>();
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);

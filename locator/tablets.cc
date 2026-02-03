@@ -514,6 +514,28 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::ini
     }
 }
 
+tablet_layout tablet_id_map::get_layout(const utils::chunked_vector<dht::raw_token>& last_tokens) {
+    auto log2count = log2ceil(last_tokens.size());
+    if (last_tokens.size() != 1ull << log2count) {
+        return tablet_layout::arbitrary;
+    }
+    for (size_t i = 0; i < last_tokens.size(); ++i) {
+        auto pow2_last_token = dht::last_token_of_compaction_group(log2count, i);
+        if (last_tokens[i] != pow2_last_token) {
+            return tablet_layout::arbitrary;
+        }
+    }
+    return tablet_layout::pow_of_2;
+}
+
+tablet_layout tablet_id_map::get_layout() const {
+    return get_layout(_last_tokens);
+}
+
+tablet_layout tablet_map::get_layout() const {
+    return _tablet_ids.get_layout();
+}
+
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
                       _repair_scheduler_config, _raft_info);

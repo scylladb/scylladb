@@ -57,6 +57,33 @@ struct tablet_id {
     auto operator<=>(const tablet_id&) const = default;
 };
 
+/// Determines properties of tablet layout in a given table (tablet_map).
+enum class tablet_layout {
+    // Tablet count is a power of 2.
+    // Tablet boundaries start and end at whole tokens.
+    // Every token is owned by exactly one tablet.
+    //
+    // Tablet token ranges are adjacent, with subsequent tablets owning higher tokens.
+    // Tablet of index i covers the range (a, b], where:
+    //
+    //    a = i == 0 ? dht::minimum_token() : last_token[i-1]
+    //    b = last_token[i]
+    //
+    // Boundary tokens are evenly distributed in token space:
+    //
+    //     last_token[i] = i < tablet_count - 1 ? dht::bias((uint64_t(i + 1) << (64 - log2ceil(tablet_count))) - 1)
+    //                                          : dht::maximum_token()
+    pow_of_2,
+
+    // Tablet count can be any integer greater than 0.
+    // Tablet boundaries end and start at whole tokens.
+    // Each tablet owns at least one token.
+    // Every token is owned by exactly one tablet.
+    // Tablet token ranges are adjacent, with subsequent tablets owning higher tokens.
+    // As long as the above holds, boundary tokens can be arbitrary.
+    arbitrary
+};
+
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
 struct global_tablet_id {
     table_id table;
@@ -603,6 +630,9 @@ public:
     [[nodiscard]] size_t log2_count() const { return _log2_tablets; }
     [[nodiscard]] size_t tablet_count() const { return _last_tokens.size(); }
     [[nodiscard]] dht::raw_token get_last_token(tablet_id id) const { return _last_tokens[id.value()]; }
+    [[nodiscard]] tablet_layout get_layout() const;
+
+    static tablet_layout get_layout(const utils::chunked_vector<dht::raw_token>& last_tokens);
 
     /// Adds a new mapping for the next tablet whose range will be recorded to start
     /// after the last token of the previously added entry and end at last_token (inclusive).
@@ -829,6 +859,9 @@ public:
     /// Returns the token which will become the last token of the lower sibling post-split.
     /// The higher sibling will own (get_split_token(id), get_last_token(id)].
     dht::token get_split_token(tablet_id id) const;
+
+    /// Returns tablet_layout of this tablet_map.
+    tablet_layout get_layout() const;
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;

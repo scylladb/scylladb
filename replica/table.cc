@@ -3550,7 +3550,22 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
+static std::string get_tablets_type(locator::tablet_layout layout) {
+    switch (layout) {
+        case locator::tablet_layout::pow_of_2: return "powof2";
+        case locator::tablet_layout::arbitrary: return "arbitrary";
+    }
+    on_internal_error(tlogger, format("Unknown tablet layout: {}", static_cast<int>(layout)));
+}
+
+static future<> write_manifest(const locator::topology& topology,
+                               snapshot_writer& writer,
+                               std::vector<snapshot_sstable_set> sstable_sets,
+                               sstring name,
+                               db::snapshot_options opts,
+                               schema_ptr schema,
+                               std::optional<int64_t> tablet_count,
+                               std::optional<locator::tablet_layout> tablet_layout) {
     manifest_json manifest;
 
     manifest_json::info info;
@@ -3577,8 +3592,8 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
     table.keyspace_name = schema->ks_name();
     table.table_name = schema->cf_name();
     table.table_id = to_sstring(schema->id());
-    table.tablets_type = tablet_count ? "powof2" : "none";
     table.tablet_count = tablet_count.value_or(0);
+    table.tablets_type = tablet_layout ? get_tablets_type(*tablet_layout) : "none";
     manifest.table = std::move(table);
 
     for (const auto& fsp : sstable_sets) {
@@ -3708,13 +3723,19 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
-        const auto& topology = sharded_db.local().get_token_metadata().get_topology();
+        // Use table's effective replication map to get token metadata.
+        // When this is snapshot on table drop, the global token metadata will not have tablets for this table anymore.
+        auto& tm = t.get_effective_replication_map()->get_token_metadata();
+        const auto& topology = tm.get_topology();
         std::optional<int64_t> min_tablet_count;
+        std::optional<locator::tablet_layout> tablet_layout;
         if (t.uses_tablets()) {
             SCYLLA_ASSERT(!tablet_counts.empty());
             min_tablet_count = *std::ranges::min_element(tablet_counts);
+            tablet_layout = tm.tablets().get_tablet_map(s->id()).get_layout();
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s,
+                                min_tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
