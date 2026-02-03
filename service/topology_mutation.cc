@@ -361,6 +361,16 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_snapshot_tables_data(const std::unordered_set<table_id>& table_ids, const sstring& tag, bool skip_flush) {
+    auto uuids = table_ids | std::views::transform(std::mem_fn(&table_id::uuid));
+    apply_atomic("snapshot_table_ids", 
+                 make_set_value(schema().get_column_definition("snapshot_table_ids")->type,
+                                set_type_impl::native_type(uuids.begin(), uuids.end())));
+    apply_atomic("snapshot_tag", tag);
+    apply_atomic("snapshot_skip_flush", skip_flush);
+    return *this;
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_new_keyspace_rf_change_data(
         const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
     apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
