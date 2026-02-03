@@ -335,6 +335,9 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("truncate_table_id", uuid_type)
             .with_column("new_keyspace_rf_change_ks_name", utf8_type)
             .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false))
+            .with_column("snapshot_table_ids", set_type_impl::get_instance(uuid_type, false))
+            .with_column("snapshot_tag", utf8_type)
+            .with_column("snapshot_skip_flush", boolean_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3580,6 +3583,15 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("new_keyspace_rf_change_data")) {
         entry.new_keyspace_rf_change_ks_name = row.get_as<sstring>("new_keyspace_rf_change_ks_name");
         entry.new_keyspace_rf_change_data = row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+    }
+    if (row.has("snapshot_table_ids")) {
+        entry.snapshot_tag = row.get_as<sstring>("snapshot_tag");
+        entry.snapshot_skip_flush = row.get_as<bool>("snapshot_skip_flush");
+        entry.snapshot_table_ids = row.get_set<utils::UUID>("snapshot_table_ids")
+            | std::views::transform([](auto& uuid) { return table_id(uuid); })
+            | std::ranges::to<std::unordered_set>()
+            ;
+        ;
     }
 
     return entry;

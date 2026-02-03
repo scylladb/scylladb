@@ -417,6 +417,9 @@ public:
         std::optional<sstring> new_keyspace_rf_change_ks_name;
         // The KS options to be used when executing the scheduled ALTER KS statement
         std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
+        std::optional<std::unordered_set<table_id>> snapshot_table_ids;
+        std::optional<sstring> snapshot_tag;
+        bool snapshot_skip_flush;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 
