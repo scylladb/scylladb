@@ -67,10 +67,10 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 {
 }
 
-auto raft_server::begin_mutate() -> begin_mutate_result {
+auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     const auto leader = _state.server->current_leader();
     if (!leader) {
-        return need_wait_for_leader{_state.server->wait_for_leader(nullptr)};
+        return need_wait_for_leader{_state.server->wait_for_leader(&as)};
     }
     if (leader != _state.server->id()) {
         return raft::not_a_leader{leader};
@@ -290,7 +290,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     schedule_raft_groups_deletion(false);
 }
 
-future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
+future<raft_server> groups_manager::acquire_server(raft::group_id group_id, abort_source& as) {
     if (this_shard_id() != 0 || !_features.strongly_consistent_tables) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");
     }
@@ -300,7 +300,7 @@ future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
         on_internal_error(logger, format("raft group {} not found", group_id));
     }
     auto& state = it->second;
-    return state.server_control_op.get_future().then([&state, h = state.gate->hold()] mutable {
+    return state.server_control_op.get_future(as).then([&state, h = state.gate->hold()] mutable {
         return raft_server(state, std::move(h));
     });
 }
