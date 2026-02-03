@@ -1345,8 +1345,8 @@ public:
 
 private:
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_timestamps");
-        return schema_builder(system_keyspace::NAME, "cdc_timestamps", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", reversed_type_impl::get_instance(timestamp_type), column_kind::clustering_key)
@@ -1428,8 +1428,8 @@ public:
     }
 private:
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_streams");
-        return schema_builder(system_keyspace::NAME, "cdc_streams", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_STREAMS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_STREAMS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", timestamp_type, column_kind::clustering_key)
