@@ -27,7 +27,7 @@ import yaml
 
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, TEST_DIR, TEST_RUNNER
 from test.pylib.artifact_registry import ArtifactRegistry
-from test.pylib.host_registry import HostRegistry
+from test.pylib.host_registry import HostRegistry, HOST_REGISTRY
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import get_resource_gather, setup_cgroup
@@ -375,7 +375,7 @@ def init_testsuite_globals() -> None:
     """Create global objects required for a test run."""
 
     TestSuite.artifacts = ArtifactRegistry()
-    TestSuite.hosts = HostRegistry()
+    TestSuite.hosts = HOST_REGISTRY
 
 
 def read_log(log_filename: pathlib.Path) -> str:
@@ -544,7 +544,7 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
 
 @universalasync.async_to_sync_wraps
 async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
-    hosts = HostRegistry()
+    hosts = HOST_REGISTRY
 
     finalize = start_ldap(
         host=await hosts.lease_host(),
