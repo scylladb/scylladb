@@ -746,8 +746,17 @@ struct tablet_metadata_builder {
             if (row.has("resize_type") && row.has("resize_seq_number")) {
                 auto resize_type_name = row.get_as<sstring>("resize_type");
                 int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
-
-                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
+                locator::resize_decision resize_decision = std::invoke([&] {
+                    if (resize_type_name == "none") {
+                        return locator::resize_decision(resize_seq_number);
+                    } else if (resize_type_name == "split") {
+                        return locator::resize_decision(locator::resize_decision::split(), resize_seq_number);
+                    } else if (resize_type_name == "merge") {
+                        return locator::resize_decision(locator::resize_decision::merge(), resize_seq_number);
+                    } else {
+                        throw std::runtime_error(format("Unknown resize_type '{}' for table {}", resize_type_name, table));
+                    }
+                });
                 current->map.set_resize_decision(std::move(resize_decision));
             }
             if (row.has("resize_task_info")) {

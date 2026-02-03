@@ -415,7 +415,22 @@ struct resize_decision {
     seq_number_t sequence_number = 0;
 
     resize_decision() = default;
-    resize_decision(sstring decision, uint64_t seq_number);
+
+    resize_decision(uint64_t seq_number)
+        : way(none{})
+        , sequence_number(seq_number)
+    {}
+
+    resize_decision(merge m, uint64_t seq_number)
+        : way(std::move(m))
+        , sequence_number(seq_number)
+    {}
+
+    resize_decision(split s, uint64_t seq_number)
+        : way(std::move(s))
+        , sequence_number(seq_number)
+    {}
+
     bool is_none() const {
         return std::holds_alternative<resize_decision::none>(way);
     }
