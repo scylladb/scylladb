@@ -21,23 +21,16 @@ the working directory mounted:
     ./tools/toolchain/dbuild ./configure.py
     ./tools/toolchain/dbuild ninja
 
+The script will bind-mount ~/.cache and ~/.config so sccache within the
+container will access a cache directory on the host, so the cache
+is persistent across runs.
+
 You can adjust the `docker run` command by adding more flags before the
 command to be executed, separating the flags and the command with `--`.
-This can be useful to attach more volumes (for data or ccache) and to
-set environment variables. For example, to use ccache:
+This can be useful to attach more volumes (say, for /var/lib/scylla) and to
+set environment variables. For example, to mount /var/lib/scylla:
 
-    ./tools/toolchain/dbuild -e PATH=/usr/lib64/ccache:/usr/bin:/usr/local/bin -v $HOME/.ccache:$HOME/.ccache:z -- ninja
-
-The above command works as follows:
-1. Ccache comes pre-installed in the container, and the setting of PATH
-   to put it first causes the ccache wrappers to be used for compilation.
-2. The "-v" option mounts the user's regular ccache cache directory into the
-   container, so the same directory can be reused.
-3. The ":z" flag is necessary on systems with SELinux enabled, and causes a
-   special selinux label to be applied to $HOME/.ccache so docker can write
-   it. While this (rightfully) sounds fishy, note that dbuild already does
-   the same thing to your current directory, where the build output is
-   written - the current directory is also mounted with the ":z" flag.
+    ./tools/toolchain/dbuild -e MYVAR=foo -v $HOME/data:/var/lib/scylla:z -- ninja
 
 To pass the same options to every run of dbuild, put them in the file
 ~/.config/scylladb/dbuild, which should contain a bash array assignment:
