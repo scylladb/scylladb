@@ -7,6 +7,7 @@ import asyncio
 import itertools
 import logging
 import os
+import json
 
 from test.cqlpy import nodetool
 from test.pylib.manager_client import ManagerClient
@@ -17,8 +18,9 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-async def get_snapshot_files(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
-    """Gets TOC files from server"""
+
+async def get_snapshot_path(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+    """Gets snapshot path files for server and snapshot"""
     workdir = await manager.server_get_workdir(server.server_id)
     data_path = os.path.join(workdir, 'data', keyspace)
     cf_dirs = os.listdir(data_path)
@@ -26,11 +28,22 @@ async def get_snapshot_files(manager:ManagerClient, server, keyspace:str, table:
     for cf_dir in cf_dirs:
         if cf_dir.startswith(table):
             snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
-            return [
-                f.name for f in os.scandir(snapshot_path)
-                if f.is_file() and f.name.endswith('TOC.txt')
-            ]
+            return snapshot_path
     raise RuntimeError(f"No column family directories found in {data_path} for {table}")
+
+async def get_snapshot_files(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+    """Gets TOC files from server"""
+    snapshot_path = await get_snapshot_path(manager, server, keyspace, table, snapshot_name)
+    return [
+        f.name for f in os.scandir(snapshot_path)
+        if f.is_file() and f.name.endswith('TOC.txt')
+    ]
+
+async def get_snapshot_manifest(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+    """Gets TOC files from server"""
+    snapshot_path = await get_snapshot_path(manager, server, keyspace, table, snapshot_name)
+    with open(os.path.join(snapshot_path, 'manifest.json'), encoding='utf-8') as f:
+        return json.load(f)
 
 async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
     """write some data"""
@@ -58,7 +71,7 @@ async def test_snapshot_on_all_nodes(manager: ManagerClient):
     """
     topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
 
-    servers, host_ids = await create_cluster(topology, True, manager, logger)
+    servers, _ = await create_cluster(topology, True, manager, logger)
 
     snapshot_name = unique_name('snap_')
 
@@ -72,6 +85,13 @@ async def test_snapshot_on_all_nodes(manager: ManagerClient):
                 for s in servers:
                     files = await get_snapshot_files(manager, s, ks, cf, snapshot_name)
                     assert len(files) > 0
+                    manifest = await get_snapshot_manifest(manager, s, ks, cf, snapshot_name)
+
+                    assert len(manifest['tablets'])
+                    tablets = { t['id']: t for t in manifest['tablets'] }
+                    for sst in manifest['sstables']:
+                        assert sst['tablet_id'] is not None
+                        assert tablets[sst['tablet_id']]
             finally:
                 #todo: clear snapshot
                 pass
