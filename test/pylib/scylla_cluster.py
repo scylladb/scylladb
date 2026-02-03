@@ -823,7 +823,6 @@ class ScyllaServer:
             stderr=self.log_file,
             stdout=self.log_file,
             env=env,
-            preexec_fn=os.setsid,
         )
 
         if expected_server_up_state == ServerUpState.PROCESS_STARTED:
