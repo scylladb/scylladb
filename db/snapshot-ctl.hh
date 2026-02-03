@@ -24,6 +24,7 @@
 using namespace seastar;
 
 namespace sstables { class storage_manager; }
+namespace service { class storage_proxy; }
 
 namespace db {
 
@@ -40,6 +41,7 @@ class backup_task_impl;
 
 struct snapshot_options {
     bool skip_flush = false;
+    bool use_topology_coordinator = false;
     gc_clock::time_point created_at = gc_clock::now();
     std::optional<gc_clock::time_point> expires_at;
 };
@@ -63,7 +65,7 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
+    snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>&, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
     future<> stop();
 
@@ -111,6 +113,7 @@ public:
 private:
     config _config;
     sharded<replica::database>& _db;
+    sharded<service::storage_proxy>& _sp;
     seastar::rwlock _lock;
     seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
