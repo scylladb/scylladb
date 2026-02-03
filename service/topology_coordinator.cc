@@ -1158,6 +1158,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await update_topology_state(std::move(guard), std::move(updates), "no-op request completed");
         }
         break;
+        case global_topology_request::snapshot_tables: 
+        break;
         }
     }
 
@@ -3243,6 +3245,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 break;
             case topology::transition_state::truncate_table:
                 co_await handle_truncate_table(std::move(guard));
+                break;
+            case topology::transition_state::snapshot_tables:
                 break;
         }
         co_return true;
