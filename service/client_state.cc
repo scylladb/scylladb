@@ -227,6 +227,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     static const std::unordered_set<auth::resource> vector_search_system_resources = {
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_STREAMS),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_TIMESTAMPS),
     };
 
     if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||
