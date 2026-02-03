@@ -99,14 +99,15 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
     ]
 
     # same_rack == True
-    # rack1: 1 server
+    # rack1: 2 servers
     # rack2: 3 servers (will have 2 removed)
     #
     # same_rack == False
-    # rack1: 2 servers (will have 1 removed)
+    # rack1: 3 servers (will have 1 removed)
     # rack2: 2 servers (will have 1 removed)
 
-    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(5, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack2" if same_rack else "rack1"}, # will be removed
@@ -120,7 +121,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
 
-        servers_to_remove = [servers[2], servers[3]]
+        servers_to_remove = [servers[3], servers[4]]
         host_ids_to_remove = await gather_safely(*(manager.get_host_id(s.server_id) for s in servers_to_remove))
 
         logger.info("Stopping servers to be removed")
@@ -305,7 +306,8 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
     ]
-    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(5, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack2"},
