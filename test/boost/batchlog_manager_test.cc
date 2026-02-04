@@ -240,6 +240,56 @@ uint64_t prepare_batches(cql_test_env& env, std::string_view batchlog_table_name
 
 } // anonymous namespace
 
+future<> run_batchlog_v1_cleanup_with_failed_batches_test(bool replay_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
+    cfg.batchlog_delay = 9999h;
+    cfg.disabled_features.insert("BATCHLOG_V2");
+
+    return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
+        const uint64_t batch_count = 8;
+        const uint64_t failed_batches = prepare_batches(env, db::system_keyspace::BATCHLOG, batch_count, replay_fails, db::batchlog_manager::post_replay_cleanup::no);
+
+        const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 0 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+
+        const auto fragment_results = cql3::untyped_result_set(env.execute_cql(fragments_query).get());
+
+        const auto batchlog_v1_schema = env.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+
+        size_t live{0};
+        size_t dead{0};
+        for (const auto& row : fragment_results) {
+            const auto metadata = row.get_as<sstring>("metadata");
+            auto metadata_json = rjson::parse(metadata);
+            if (metadata_json.HasMember("tombstone") && metadata_json["tombstone"].IsObject() && metadata_json["tombstone"].HasMember("deletion_time")) {
+                ++dead;
+            } else {
+                ++live;
+            }
+        }
+
+        if (replay_fails) {
+            BOOST_REQUIRE_EQUAL(failed_batches, live);
+        } else {
+            BOOST_REQUIRE_EQUAL(0, live);
+        }
+        BOOST_REQUIRE_EQUAL(batch_count, dead + live);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_v1_replay_fails) {
+    return run_batchlog_v1_cleanup_with_failed_batches_test(true);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_v1_replay) {
+    return run_batchlog_v1_cleanup_with_failed_batches_test(false);
+}
+
 future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     return make_ready_future<>();
