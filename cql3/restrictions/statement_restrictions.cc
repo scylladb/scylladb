@@ -1503,14 +1503,22 @@ void statement_restrictions::add_null_restriction(const expr::binary_operator& r
         _not_null_columns.insert(lhs_col_def->col);
     }
 
-    // For materialized views, IS NOT NULL is mandatory on primary key columns
+    const column_definition* def = lhs_col_def->col;
+
+    // For materialized views, IS NULL is not allowed on base table's primary key columns
+    // because primary key columns cannot be null.
+    // IS NULL on regular (non-PK) columns is allowed for filtering.
     if (for_view && restr.op != expr::oper_t::IS_NOT) {
-        throw exceptions::invalid_request_exception(format("Restriction '{}' is not supported in materialized view creation. Only IS NOT NULL is allowed.", restr));
+        if (def->is_partition_key() || def->is_clustering_key()) {
+            throw exceptions::invalid_request_exception(
+                format("Restriction '{}' is not supported in materialized view creation. "
+                       "Only IS NOT NULL is allowed on primary key columns.", restr));
+        }
+        // For regular (non-PK) columns, IS NULL is allowed
     }
 
     // Add the restriction to the appropriate category based on column type
     // This ensures proper filtering checks are applied
-    const column_definition* def = lhs_col_def->col;
     if (def->is_partition_key()) {
         _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
     } else if (def->is_clustering_key()) {

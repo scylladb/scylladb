@@ -300,15 +300,33 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
-# Using IS NULL on either view's pk or regular column is not supported.
+# Test IS NULL restrictions in materialized views
+# - IS NULL on MV's PK is NOT allowed
+# - IS NULL on regular columns (not part of view's PK) IS allowed
 def test_mv_with_is_null_on_view_column(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'pk int primary key, mv_pk int, regular_col int') as table:
+        # Test 1: IS NULL on base table's PK should be rejected
+        mv1 = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="Only IS NOT NULL is allowed on primary key columns"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv1} AS SELECT * FROM {table} WHERE pk IS NULL PRIMARY KEY (pk)")
+            with pytest.raises(InvalidRequest, match="Only IS NOT NULL is allowed on primary key columns"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv1} AS SELECT * FROM {table} WHERE pk IS NULL AND mv_pk IS NOT NULL PRIMARY KEY (mv_pk)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv1}")
+
+        # Test 2: IS NULL on a regular column (not part of view's PK) should be ALLOWED
         mv_null = unique_name()
         try:
-            with pytest.raises(InvalidRequest, match="IS null.*not supported.*Only IS NOT NULL"):
-                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NOT NULL AND mv_pk IS NULL PRIMARY KEY (mv_pk, pk)")
-            with pytest.raises(InvalidRequest, match="IS null.*not supported.*Only IS NOT NULL"):
-                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NOT NULL AND regular_col IS NULL AND mv_pk IS NOT NULL PRIMARY KEY (mv_pk, pk)")
+            # This should succeed - regular_col IS NULL is a valid filter
+            cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NOT NULL AND mv_pk IS NOT NULL AND regular_col IS NULL PRIMARY KEY (mv_pk, pk)")
+            # Insert test data
+            cql.execute(f"INSERT INTO {table} (pk, mv_pk, regular_col) VALUES (1, 100, 10)")
+            cql.execute(f"INSERT INTO {table} (pk, mv_pk) VALUES (2, 200)")  # regular_col is null
+            cql.execute(f"INSERT INTO {table} (pk, mv_pk, regular_col) VALUES (3, 300, 30)")
+            # Only the row where regular_col IS NULL should appear in the view
+            result = list(cql.execute(f"SELECT pk FROM {test_keyspace}.{mv_null}"))
+            assert sorted([r.pk for r in result]) == [2]
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv_null}")
 

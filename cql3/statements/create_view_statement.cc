@@ -19,6 +19,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/column_identifier.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/statements/select_statement.hh"
@@ -304,14 +305,30 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     // non-pk base column + base column used in view pk)". When the filtered
     // column *is* the base column added to the view pk, we don't have this
     // problem. And this case actually works correctly.
+    //
+    // IS NULL and IS NOT NULL restrictions are an exception - they are allowed
+    // on regular columns for filtering purposes.
     const expr::single_column_restrictions_map& non_pk_restrictions = restrictions->get_non_pk_restriction();
-    if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
-            target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
+
+    // Filter out IS NULL and IS NOT NULL restrictions for validation
+    // These are allowed on regular columns
+    auto non_null_restrictions = non_pk_restrictions
+        | std::views::filter([](const auto& pair) {
+            // Check if this restriction contains only IS NULL or IS NOT NULL
+            bool is_null_restriction = expr::find_binop(pair.second, [](const expr::binary_operator& binop) {
+                return binop.op == expr::oper_t::IS || binop.op == expr::oper_t::IS_NOT;
+            }) != nullptr;
+            return !is_null_restriction;
+        })
+        | std::ranges::to<std::unordered_map>();
+
+    if (non_null_restrictions.size() == 1 && has_non_pk_column &&
+            target_primary_keys.contains(non_null_restrictions.cbegin()->first)) {
         // This case (filter by new PK column of the view) works, as explained above
-    } else if (!non_pk_restrictions.empty()) {
+    } else if (!non_null_restrictions.empty()) {
         throw exceptions::invalid_request_exception(seastar::format("Non-primary key columns cannot be restricted in the SELECT statement used for materialized view {} creation (got restrictions on: {})",
                 column_family(),
-                fmt::join(non_pk_restrictions | std::views::keys | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
+                fmt::join(non_null_restrictions | std::views::keys | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
 
     // IS NOT NULL restrictions are handled separately from other restrictions.
