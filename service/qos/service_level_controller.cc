@@ -692,7 +692,7 @@ void service_level_controller::maybe_start_legacy_update_from_distributed_data(s
     if (this_shard_id() != global_controller) {
         throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));
     }
-    if (storage_service.get_topology_upgrade_state() == service::topology::upgrade_state_type::done && !group0_client.in_recovery()) {
+    if (storage_service.get_topology_upgrade_state() == service::topology::upgrade_state_type::done) {
         // Falling into this branch means service levels were migrated to raft and legacy update loop is not needed.
         return;
     }

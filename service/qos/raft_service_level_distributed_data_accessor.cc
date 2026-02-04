@@ -51,9 +51,6 @@ static void validate_state(const service::raft_group0_client& group0_client) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
     }
-    if (group0_client.in_recovery()) {
-        throw exceptions::invalid_request_exception("The cluster is in recovery mode. Changes to service levels are not allowed.");
-    }
 }
 
 future<utils::chunked_vector<mutation>> raft_service_level_distributed_data_accessor::set_service_level_mutations(cql3::query_processor& qp, sstring service_level_name, qos::service_level_options slo, api::timestamp_type timestamp) {

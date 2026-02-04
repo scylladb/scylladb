@@ -179,8 +179,6 @@ public:
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 
-    bool in_recovery() const;
-
     gc_clock::duration get_history_gc_duration() const;
     // for test only
     void set_history_gc_duration(gc_clock::duration d);

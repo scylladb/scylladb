@@ -2221,13 +2221,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
                     get_broadcast_address() : recovery_leader_it->second.endpoint;
             initial_contact_nodes = std::unordered_set{recovery_leader_ip};
 
-            if (_group0->client().in_recovery()) {
-                throw std::runtime_error(format(
-                        "Entered RECOVERY mode and set recovery_leader to {}. RECOVERY mode is used in the "
-                        "gossip-based recovery procedure, while recovery_leader is used in the Raft-based recovery "
-                        "procedure. If the Raft-based topology is enabled in the whole cluster, use the Raft-based "
-                        "procedure. Otherwise, use the gossip-based procedure.", recovery_leader_id));
-            }
             if (!_sys_ks.local().bootstrap_complete()) {
                 throw std::runtime_error("Cannot bootstrap in the Raft-based recovery procedure");
             }
@@ -2254,10 +2247,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         }
         slogger.info("Raft-based recovery procedure - found group 0 with ID {}", g0_info.group0_id);
         set_topology_change_kind(topology_change_kind::raft);
-    } else if (_group0->client().in_recovery()) {
-        // The gossip-based recovery procedure.
-        slogger.info("Raft recovery - starting in legacy topology operations mode");
-        set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
         // We are a part of group 0.
         if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
