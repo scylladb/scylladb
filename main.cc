@@ -1308,7 +1308,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting storage proxy");
             service::storage_proxy::config spcfg {
                 .hints_directory_initializer = hints_dir_initializer,
-                .hints_sched_group = maintenance_scheduling_group,
+                .hints_sched_group = dbcfg.streaming_scheduling_group,
             };
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
@@ -1381,7 +1381,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             stop_signal.check();
             ctx.http_server.server().invoke_on_all([] (auto& server) { server.set_content_streaming(true); }).get();
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
@@ -1681,7 +1681,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
-                .background_sg = maintenance_scheduling_group,
+                .background_sg = dbcfg.streaming_scheduling_group,
             };
             sharded<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
@@ -1799,7 +1799,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -2167,7 +2167,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting sstables loader");
-            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), dbcfg.streaming_scheduling_group).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
@@ -2234,7 +2234,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_storage_service(ctx).get();
             });
 
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return messaging.invoke_on_all([&] (auto& ms) {
                         return ms.start_listen(token_metadata.local(), [&gossiper] (gms::inet_address ip)  {
                             // #27429. When running with broadcast_address != rpc_address, topology gets
@@ -2261,7 +2261,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Allow abort during join_cluster since bootstrap or replace
             // can take a long time.
             stop_signal.ready(true);
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
             stop_signal.ready(false);
@@ -2486,14 +2486,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "Launching generate_mv_updates for non system tables");
-                with_scheduling_group(maintenance_scheduling_group, [] {
+                with_scheduling_group(dbcfg.streaming_scheduling_group, [] {
                     return view_update_generator.invoke_on_all(&db::view::view_update_generator::start);
                 }).get();
             }
 
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "starting view builders");
-                with_scheduling_group(maintenance_scheduling_group, [&mm] {
+                with_scheduling_group(dbcfg.streaming_scheduling_group, [&mm] {
                     return view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm), utils::cross_shard_barrier());
                 }).get();
             }
@@ -2502,7 +2502,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting view building worker's background fibers");
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return view_building_worker.local().init();
             }).get();
             auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
@@ -2529,7 +2529,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
                     es.stop().get();
                 });
-                with_scheduling_group(maintenance_scheduling_group, [&es] {
+                with_scheduling_group(dbcfg.streaming_scheduling_group, [&es] {
                     return es.invoke_on_all(&alternator::expiration_service::start);
                 }).get();
             }
