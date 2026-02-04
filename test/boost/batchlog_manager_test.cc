@@ -169,7 +169,10 @@ void check_range_tombstone_end(const fragment& f, std::optional<bound_weight> bo
     }
 }
 
-uint64_t prepare_batches(cql_test_env& env, uint64_t batch_count, bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
+uint64_t prepare_batches(cql_test_env& env, std::string_view batchlog_table_name, uint64_t batch_count, bool replay_fails,
+        db::batchlog_manager::post_replay_cleanup cleanup) {
+    const bool is_v1 = batchlog_table_name == db::system_keyspace::BATCHLOG;
+
     uint64_t failed_batches = 0;
 
     auto& bm = env.batchlog_manager().local();
@@ -207,14 +210,15 @@ uint64_t prepare_batches(cql_test_env& env, uint64_t batch_count, bool replay_fa
         BOOST_REQUIRE_EQUAL(injected_exception_thrown, fail);
     }
 
-    const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
+    // v1 (system.batchlog) is partition-oriented, while v2 (system.batchlog_v2) is row oriented. We need to switch the partition-region filter accordingly.
+    const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = {} ALLOW FILTERING", db::system_keyspace::NAME, batchlog_table_name, is_v1 ? 0 : 2);
 
-    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, batchlog_table_name)).get())
         .is_rows()
         .with_size(failed_batches);
 
     assert_that(env.execute_cql(fragments_query).get())
-        .is_rows()
+        .is_rows(tests::dump_to_logs::yes)
         .with_size(batch_count)
         .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
             columns.with_typed_column<sstring>("mutation_source", "memtable:0");
@@ -227,8 +231,8 @@ uint64_t prepare_batches(cql_test_env& env, uint64_t batch_count, bool replay_fa
 
     bm.do_batch_log_replay(cleanup).get();
 
-    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
-        .is_rows()
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, batchlog_table_name)).get())
+        .is_rows(tests::dump_to_logs::yes)
         .with_size(replay_fails ? failed_batches : 0);
 
     return failed_batches;
@@ -248,7 +252,7 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
 
     return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
         const uint64_t batch_count = 8;
-        const uint64_t failed_batches = prepare_batches(env, batch_count, replay_fails, cleanup);
+        const uint64_t failed_batches = prepare_batches(env, db::system_keyspace::BATCHLOG_V2, batch_count, replay_fails, cleanup);
 
         const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
 
