@@ -1503,12 +1503,10 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.compaction_concurrency_semaphore = _config.compaction_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
-    cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
     cfg.memory_compaction_scheduling_group = _config.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
-    cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
@@ -2452,12 +2450,10 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
-    cfg.compaction_scheduling_group = _dbcfg.compaction_scheduling_group;
     cfg.memory_compaction_scheduling_group = _dbcfg.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
-    cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 
     cfg.view_update_memory_semaphore_limit = max_memory_pending_view_updates();
