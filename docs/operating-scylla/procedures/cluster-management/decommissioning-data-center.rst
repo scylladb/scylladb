@@ -102,6 +102,17 @@ Procedure
 
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
+   If the ``enforce_rack_list`` option is set, update the replication factor in one ALTER KEYSPACE statement.
+
+   .. code-block:: shell
+
+      cqlsh> DESCRIBE nba4
+      cqlsh> CREATE KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : ['RAC4', 'RAC5'], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']} AND tablets = { 'enabled': true };
+
+   .. code-block:: shell
+
+      cqlsh> ALTER KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']} AND tablets = { 'enabled': true };
+
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
    Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
 
