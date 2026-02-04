@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 
 @pytest.mark.asyncio
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_balance_empty_tablets(manager: ManagerClient):
 
     # This test checks that size-based load balancing migrates empty tablets of a newly created
@@ -25,7 +24,7 @@ async def test_balance_empty_tablets(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
 
-    cfg = { 'error_injections_at_startup': ['short_tablet_stats_refresh_interval'] }
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
 
     cfg_small = cfg | { 'data_file_capacity': 50 * GB }
     cfg_large = cfg | { 'data_file_capacity': 100 * GB }
