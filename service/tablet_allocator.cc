@@ -1544,6 +1544,11 @@ public:
             co_return prep;
         }
 
+        if (utils::get_local_injector().enter("determine_rf_change_actions_per_rack_throw")) {
+            lblogger.info("determine_rf_change_actions_per_rack_throw: entered");
+            throw std::runtime_error("determine_rf_change_actions_per_rack_throw injection");
+        }
+
         // Extend views.
         if (auto prep = co_await scan_tables(views, rf_change_state::needs_extending, process_views::yes); !prep.actions.empty()) {
             co_return prep;

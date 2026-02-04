@@ -327,6 +327,71 @@ async def test_singledc_alter_tablets_rf(manager: ManagerClient):
             await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
 
 @pytest.mark.asyncio
+async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
+    config = {"rf_rack_valid_keyspaces": "false", "enable_tablets": "true", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r2"})
+    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r3"})
+    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc2", "rack": "r4"})
+    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc3", "rack": "r7"})
+
+    cql = manager.get_cql()
+
+    err_msg = "Only one DC's RF can be changed at a time and not by more than 1"
+
+    # RF change by more than 1 in a single DC (1->3)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 3}}")
+
+    # RF change by more than 1 in a single DC (3->1)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}}")
+
+    # Adding a DC while also changing RF in another DC
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1}}")
+
+    # Removing a DC while also changing RF in another DC
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}")
+
+    # Adding one DC and removing another at the same time
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0, 'dc3': 1}}")
+
+    # ---- Rack list variants ----
+
+    # RF change by more than 1 in a single DC using rack lists (1->3)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']}}")
+
+    # RF change by more than 1 in a single DC using rack lists (3->1)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3']}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}}")
+
+    # Adding a DC while also changing RF in another DC, using rack lists
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r4']}}")
+
+    # Removing a DC while also changing RF in another DC, using rack lists
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r4']}") as ks:
+        with pytest.raises(InvalidRequest, match=err_msg):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0}}")
+
+    # Adding one DC and removing another at the same time (with rack lists)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': ['r4']}") as ks:
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0, 'dc3': ['r7']}}")
+
+@pytest.mark.asyncio
 async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
 
@@ -545,6 +610,497 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     await manager.server_add(config=config, cmdline=["--enforce-rack-list", "true", "--smp", "2"], property_file={'dc': 'dc2', 'rack': 'rack2b'})
 
     await cql.run_async("alter keyspace ksv with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1};")
+
+async def check_system_schema_keyspaces(manager, keyspace, replication, next_replication):
+    def compare_replications(r1, r2):
+        assert len(r1) == len(r2)
+        for k, v in r1.items():
+            assert k in r2
+            is_list = isinstance(r2[k], list)
+            if is_list:
+                assert len(v) == len(r2[k])
+                assert all([rack in r2[k] for rack in v])
+                assert all([rack in v for rack in r2[k]])
+            else:
+                assert len(v) == r2[k]
+
+    await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in await manager.running_servers()])
+
+    cql = manager.get_cql()
+    res = await cql.run_async(f"select * from system_schema.keyspaces where keyspace_name = '{keyspace}';")
+
+    repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
+    repl.pop('class')
+    compare_replications(repl, replication)
+
+    if next_replication is not None:
+        next_repl = parse_replication_options(res[0].next_replication)
+        next_repl.pop('class')
+        compare_replications(next_repl, next_replication)
+    else:
+        assert res[0].next_replication is None
+
+@pytest.mark.asyncio
+async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test RF changes where each DC transitions only between 0 and N replicas."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'load_balancer=debug', '--logger-log-level', 'raft_topology=debug']
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
+    dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
+
+    cql = manager.get_cql()
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
+    # Create keyspace with RF=3 in dc1 only.
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk) VALUES ({k});", host=dc1_host) for k in range(10)])
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+
+    # Move all replicas from dc1 to dc2 (dc1: 3->0, dc2: 0->3).
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+    await check_system_schema_keyspaces(manager, "ks1", {'dc2': ['rack2a', 'rack2b', 'rack2c']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc2_host_ids
+        assert all(host in [r[0] for r in t.replicas] for host in dc2_host_ids)
+
+    # Move replicas from dc2 to dc1 with different RF (dc1: 0->2, dc2: 3->0).
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b'], 'dc2': []};")
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 2
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+
+    # Move replicas from dc1 to dc2 with RF=1 (dc1: 2->0, dc2: 0->1).
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a']};")
+    await check_system_schema_keyspaces(manager, "ks1", {'dc2': ['rack2a']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 1
+        assert t.replicas[0][0] in dc2_host_ids
+
+@pytest.mark.asyncio
+async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test RF changes with colocated tables where each DC transitions only between 0 and N replicas."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    cql = manager.get_cql()
+
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
+    await cql.run_async("create keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} and tablets = {'initial': 4};")
+    await cql.run_async("create table ks1.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (pk, v)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    async def check_replicas(expected_rf: int):
+        base_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+        view_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "tv", is_view=True)
+        assert len(base_replicas) > 0
+        assert len(view_replicas) > 0
+        for r in base_replicas:
+            logger.info(f"base: {r.replicas}")
+            assert len(r.replicas) == expected_rf
+        for r in view_replicas:
+            logger.info(f"view: {r.replicas}")
+            assert len(r.replicas) == expected_rf
+
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a']}, None)
+    await check_replicas(1)
+
+    # dc1: 1->0, dc2: 0->3.
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+    await check_system_schema_keyspaces(manager, "ks1", {'dc2': ['rack2a', 'rack2b', 'rack2c']}, None)
+    await check_replicas(3)
+
+    # dc1: 0->1, dc2: 3->0.
+    await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a'], 'dc2': []};")
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a']}, None)
+    await check_replicas(1)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enforce_rack_list", ['false', 'true'])
+async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: ManagerClient, enforce_rack_list) -> None:
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", enforce_rack_list, "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'})]
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk) VALUES ({k})", consistency_level=ConsistencyLevel.QUORUM)) for k in range(10)])
+
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': ['rack2a', 'rack2b']}}")
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, "t")
+        assert len(replicas) > 0
+        for r in replicas:
+            assert len(r.replicas) == 4
+
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': ['rack2a', 'rack2b']}}")
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, "t")
+        assert len(replicas) > 0
+        for r in replicas:
+            assert len(r.replicas) == 2
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test aborting a 0->N RF increase (adding a new DC)."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+    injection = "determine_rf_change_actions_per_rack_throw"
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
+
+    cql = manager.get_cql()
+
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log = await manager.server_open_log(coord_serv.server_id)
+    mark = await log.mark()
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+
+    # Add dc2 (dc2: 0->3).
+    async def alter_keyspace():
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+
+    alter_task = asyncio.create_task(alter_keyspace())
+
+    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']})
+
+    task_manager_client = TaskManagerClient(manager.api)
+    tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    assert len(rf_change_tasks) == 1
+    task_id = rf_change_tasks[0].task_id
+    await task_manager_client.abort_task(servers[0].ip_addr, task_id)
+
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, injection)
+        await manager.api.disable_injection(s.ip_addr, injection)
+
+    task = await task_manager_client.wait_for_task(servers[0].ip_addr, task_id)
+    assert task.state == "failed"
+
+    failed = False
+    try:
+        await alter_task
+    except Exception as e:
+        failed = True
+    assert failed
+
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+    view_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "tv", is_view=True)
+    assert len(view_replicas) > 0
+    for t in view_replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test aborting an N->0 RF decrease (removing a DC). Abort should not be allowed."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+    injection = "determine_rf_change_actions_per_rack_throw"
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});") for k in range(10)])
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log = await manager.server_open_log(coord_serv.server_id)
+    mark = await log.mark()
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+
+    # Remove dc2 (dc2: 3->0).
+    async def alter_keyspace():
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': []};")
+
+    alter_task = asyncio.create_task(alter_keyspace())
+
+    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c']})
+
+    task_manager_client = TaskManagerClient(manager.api)
+    tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    assert len(rf_change_tasks) == 1
+    task_id = rf_change_tasks[0].task_id
+    await task_manager_client.abort_task(servers[0].ip_addr, task_id)
+
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, injection)
+        await manager.api.disable_injection(s.ip_addr, injection)
+
+    # Aborting a rf change that removed replicas isn't allowed.
+    task = await task_manager_client.wait_for_task(servers[0].ip_addr, task_id)
+    assert task.state == "done"
+
+    await alter_task
+
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+    view_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "tv", is_view=True)
+    assert len(view_replicas) > 0
+    for t in view_replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in dc1_host_ids
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test concurrent 0->N RF changes across multiple keyspaces."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+    injection = "determine_rf_change_actions_per_rack_throw"
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
+
+    cql = manager.get_cql()
+
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    await cql.run_async(f"create keyspace ks2 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks2.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks2.tv as select * from ks2.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks2.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    await cql.run_async(f"create keyspace ks3 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1c']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks3.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks3.tv as select * from ks3.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks3.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log = await manager.server_open_log(coord_serv.server_id)
+    mark = await log.mark()
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+
+    # Move each keyspace from dc1 to dc2 (dc1: 1->0, dc2: 0->3).
+    async def alter_keyspace1():
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+
+    async def alter_keyspace2():
+        await cql.run_async("alter keyspace ks2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+
+    async def alter_keyspace3():
+        await cql.run_async("alter keyspace ks3 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+
+    alter_task1 = asyncio.create_task(alter_keyspace1())
+    alter_task2 = asyncio.create_task(alter_keyspace2())
+    alter_task3 = asyncio.create_task(alter_keyspace3())
+
+    await log.wait_for(*[f'{injection}: entered' for _ in range(3)], from_mark=mark)
+
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, injection)
+        await manager.api.disable_injection(s.ip_addr, injection)
+
+    await alter_task1
+    await alter_task2
+    await alter_task3
+
+    for ks in ["ks1", "ks2", "ks3"]:
+        await check_system_schema_keyspaces(manager, ks, {'dc2': ['rack2a', 'rack2b', 'rack2c']}, None)
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 3
+            for rep in t.replicas:
+                assert rep[0] in dc2_host_ids
+            for host_id in dc2_host_ids:
+                assert host_id in [r[0] for r in t.replicas]
+        view_replicas = await get_all_tablet_replicas(manager, servers[0], ks, "tv", is_view=True)
+        assert len(view_replicas) > 0
+        for t in view_replicas:
+            assert len(t.replicas) == 3
+            for rep in t.replicas:
+                assert rep[0] in dc2_host_ids
+            for host_id in dc2_host_ids:
+                assert host_id in [r[0] for r in t.replicas]
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test aborting an RF change that involves both 0->N increase and N->0 decrease across DCs."""
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug']
+    injection = "determine_rf_change_actions_per_rack_throw"
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+
+    cql = manager.get_cql()
+
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
+    # Start with dc1 only (dc2: 0).
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key, v int);")
+    await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log = await manager.server_open_log(coord_serv.server_id)
+    mark = await log.mark()
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+
+    # Move all replicas from dc1 to dc2 (dc1: 3->0, dc2: 0->3).
+    async def alter_keyspace():
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};")
+
+    alter_task = asyncio.create_task(alter_keyspace())
+
+    await log.wait_for(f'{injection}: entered', from_mark=mark)
+
+    dc1_host_ids = set(host_ids[0:3])
+    replicas_mid = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas_mid) > 0
+    for t in replicas_mid:
+        t_dc1 = [r for r in t.replicas if r[0] in dc1_host_ids]
+        # dc1 replicas must not have decreased (still 3)
+        assert len(t_dc1) == 3, f"Expected 3 dc1 replicas, got {len(t_dc1)}"
+
+    task_manager_client = TaskManagerClient(manager.api)
+    tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    assert len(rf_change_tasks) == 1
+    task_id = rf_change_tasks[0].task_id
+    await task_manager_client.abort_task(servers[0].ip_addr, task_id)
+
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, injection)
+        await manager.api.disable_injection(s.ip_addr, injection)
+
+    task = await task_manager_client.wait_for_task(servers[0].ip_addr, task_id)
+    assert task.state == "failed"
+
+    failed = False
+    try:
+        await alter_task
+    except Exception as e:
+        failed = True
+    assert failed
+
+    await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, None)
+    replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
+    assert len(replicas) > 0
+    for t in replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in host_ids[0:3]
+        assert all(host in [r[0] for r in t.replicas] for host in host_ids[0:3])
+    view_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "tv", is_view=True)
+    assert len(view_replicas) > 0
+    for t in view_replicas:
+        assert len(t.replicas) == 3
+        for rep in t.replicas:
+            assert rep[0] in host_ids[0:3]
+        assert all(host in [r[0] for r in t.replicas] for host in host_ids[0:3])
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1078,6 +1634,48 @@ async def test_excludenode(manager: ManagerClient):
 
         # Check that removenode succeeds on the node which is excluded
         await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id)
+
+@pytest.mark.asyncio
+async def test_excludenode_shrink_rf(manager: ManagerClient):
+    """
+    Verifies that ALTER keyspace removing replicas from a DC succeeds when the only
+    node in that DC is down and marked as excluded.
+
+    1. Create a 2-DC cluster: dc1 with 2 nodes, dc2 with 1 node.
+    2. Create keyspace replicated to both DCs.
+    3. Stop the dc2 node (the only node in dc2).
+    4. Mark the dc2 node as excluded.
+    5. ALTER keyspace to remove dc2 from replication.
+    6. Verify the ALTER succeeds without timing out.
+    """
+    config = {"tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+    dc1_servers = await manager.servers_add(servers_num=2, config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    dc2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
+                                          "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # Stop the only node in dc2
+        await manager.server_stop(dc2_server.server_id)
+        await manager.others_not_see_server(dc2_server.ip_addr)
+
+        # Mark the dc2 node as excluded
+        live_node = dc1_servers[0]
+        await manager.api.exclude_node(live_node.ip_addr, hosts=[await manager.get_host_id(dc2_server.server_id)])
+
+        # ALTER keyspace to remove dc2 from replication.
+        # This should succeed without timing out, even though the excluded node
+        # has tablet replicas that need to be shrunk away.
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}")
+
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in dc1_servers))
+
+        # Verify dc2 is no longer in the replication settings
+        repl = get_replication(cql, ks)
+        assert 'dc2' not in repl or get_replica_count(repl.get('dc2', '0')) == 0
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
