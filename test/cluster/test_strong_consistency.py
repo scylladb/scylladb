@@ -15,7 +15,6 @@ import logging
 import time
 import uuid
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -92,3 +91,54 @@ async def test_basic_write_read(manager: ManagerClient):
 
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_no_schema_when_apply_write(manager: ManagerClient):
+    config = {
+        'experimental_features': ['strongly-consistent-tables']
+    }
+    cmdline = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
+    # because we want `servers[2]` to receive Raft commands from others.
+    servers += [await manager.server_add(config=config | {'error_injections_at_startup': ['avoid_being_raft_leader']}, cmdline=cmdline, property_file={'dc':'my_dc', 'rack': 'rack3'})]
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # Drop incomming append entries from group0 (schema changes) on `servers[2]` after the table is created,
+        # so strong consistency raft groups are creates on the node but it won't receive next alter table mutations.
+        group0_id = (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
+        await manager.api.enable_injection(servers[2].ip_addr, "raft_drop_incoming_append_entries_for_specified_group", one_shot=False, parameters={'value': group0_id})
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD new_col int;", host=hosts[0])
+
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+        assert leader_host_id != host_ids[2]
+        leader_host = host_by_host_id(leader_host_id)
+
+        s2_log = await manager.server_open_log(servers[2].server_id)
+        s2_mark = await s2_log.mark()
+
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c, new_col) VALUES (10, 20, 30)", host=leader_host)
+        await manager.api.disable_injection(servers[2].ip_addr, "raft_drop_incoming_append_entries_for_specified_group")
+
+        await s2_log.wait_for(f"Column definitions for {ks}.test changed", timeout=60, from_mark=s2_mark)
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 10;", host=hosts[2])
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 10
+        assert row.c == 20
+        assert row.new_col == 30
