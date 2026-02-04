@@ -84,6 +84,9 @@ static const std::vector<sstring> boolean_values = {
     "false", "true"
 };
 
+static constexpr float min_oversampling = 1.0f;
+static constexpr float max_oversampling = 100.0f;
+
 const static std::unordered_map<sstring, std::function<void(const sstring&, const sstring&)>> vector_index_options = {
         // `similarity_function` defines method of calculating similarity between vectors
         // Used internally by vector store during both indexing and querying
@@ -100,7 +103,7 @@ const static std::unordered_map<sstring, std::function<void(const sstring&, cons
         // 'oversampling' defines factor by which number of candidates retrieved from vector store is multiplied.
         // It can improve accuracy of ANN queries, especially for quantized vectors when combined with rescoring.
         // Used by Scylla during query processing to increase query limit sent to vector store.
-        {"oversampling", std::bind_front(validate_factor_option, 1.0f, 100.0f)},
+        {"oversampling", std::bind_front(validate_factor_option, min_oversampling, max_oversampling)},
         // 'rescoring' enables recalculating of similarity scores of candidates retrieved from vector store when quantization is used.
         {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
     };
@@ -125,12 +128,18 @@ bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
         && r != properties.end() && boost::iequals(r->second, "true");
 }
 
-float vector_index::get_oversampling(const index_options_map& properties) {
+float vector_index::get_oversampling(const index_options_map& properties, std::optional<float> query_value) {
+    if (query_value) {
+        if (*query_value >= min_oversampling && *query_value <= max_oversampling) {
+            return *query_value;
+        }
+        throw exceptions::invalid_request_exception(format("Oversampling must be between {} and {}", min_oversampling, max_oversampling));
+    }
     auto it = properties.find("oversampling");
     if (it != properties.end()) {
         return std::stof(it->second);
     }
-    return 1.0f;
+    return min_oversampling;
 }
 
 sstring vector_index::get_cql_similarity_function_name(const index_options_map& properties) {
