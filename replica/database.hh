@@ -1795,8 +1795,6 @@ public:
         return &_cf_stats;
     }
 
-    seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
-
     seastar::scheduling_group get_gossip_scheduling_group() const { return _dbcfg.gossip_scheduling_group; }
 
     compaction::compaction_manager& get_compaction_manager() {
