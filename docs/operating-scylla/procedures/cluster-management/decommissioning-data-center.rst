@@ -102,10 +102,7 @@ Procedure
 
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
-   If the keyspace uses rack list replication, update the replication factor in one ``ALTER KEYSPACE`` statement, under the following rules:
-      * Existing datacenters must keep their current replication factor.
-      * An existing datacenter can be removed (**N to 0**).
-      * A new datacenter can be assigned a replication factor (**0 to N**).
+   If the keyspace uses rack list replication, update the replication factor in one ALTER KEYSPACE statement.
 
    .. warning::
 
@@ -117,14 +114,6 @@ Procedure
 
       cqlsh> DESCRIBE nba4
       cqlsh> CREATE KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : ['RAC4', 'RAC5'], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']} AND tablets = { 'enabled': true };
-
-   The following is **not** allowed because it changes the replication factor of ``EUROPE-DC`` (adds ``RAC9``) and removes ``ASIA-DC`` in the same statement:
-
-   .. code-block:: shell
-
-      cqlsh> ALTER KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8', 'RAC9']} AND tablets = { 'enabled': true };
-
-   Remove all replicas from the decommissioned datacenter:
 
    .. code-block:: shell
 
