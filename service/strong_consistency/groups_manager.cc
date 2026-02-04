@@ -109,7 +109,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
-    auto state_machine = make_state_machine(tablet, group_id, _db);
+    auto state_machine = make_state_machine(tablet, group_id, _raft_gr, _db);
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
     // Keep a reference to a specific RPC class.

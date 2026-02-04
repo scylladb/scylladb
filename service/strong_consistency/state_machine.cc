@@ -17,20 +17,24 @@ namespace service::strong_consistency {
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
+    raft_group_registry& _raft_gr;
     replica::database& _db;
 
 public:
     state_machine(locator::global_tablet_id tablet,
         raft::group_id gid,
+        raft_group_registry& raft_gr,
         replica::database& db)
         : _tablet(tablet)
         , _group_id(gid)
+        , _raft_gr(raft_gr)
         , _db(db)
     {
     }
 
     future<> apply(std::vector<raft::command_cref> command) override {
         try {
+            co_await _raft_gr.group0().read_barrier(nullptr);
             utils::chunked_vector<frozen_mutation> muts;
             muts.reserve(command.size());
             for (const auto& c: command) {
@@ -69,9 +73,10 @@ public:
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
+    raft_group_registry& raft_gr,
     replica::database& db)
 {
-    return std::make_unique<state_machine>(tablet, gid, db);
+    return std::make_unique<state_machine>(tablet, gid, raft_gr, db);
 }
 
 };

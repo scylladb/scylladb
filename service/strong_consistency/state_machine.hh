@@ -9,6 +9,7 @@
 #pragma once
 
 #include "service/raft/raft_state_machine.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "mutation/frozen_mutation.hh"
 #include "locator/tablets.hh"
 
@@ -19,6 +20,7 @@ struct raft_command {
 };
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
+    raft_group_registry& raft_gr,
     replica::database& db);
 
 }
