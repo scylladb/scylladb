@@ -671,19 +671,19 @@ struct group0_members {
     }
 };
 
-future<bool> raft_group0::use_raft() {
+bool raft_group0::maintenance_mode() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (_client.get_group0_upgrade_state() == group0_upgrade_state::recovery) {
-        group0_log.warn("setup_group0: Raft RECOVERY mode, skipping group 0 setup.");
-        co_return false;
+        group0_log.warn("setup_group0: maintenance mode, skipping group 0 setup.");
+        return true;
     }
 
-    co_return true;
+    return false;
 }
 
 future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
-    if (!co_await use_raft()) {
+    if (maintenance_mode()) {
         co_return;
     }
 
@@ -732,8 +732,8 @@ future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
         service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
         const join_node_request_params& params) {
-    if (!co_await use_raft()) {
-        // The node is in the RECOVERY mode. We are in Maintenance Mode or the gossip-based recovery procedure.
+    if (maintenance_mode()) {
+        // The node is in maintenance mode.
         co_return;
     }
 
