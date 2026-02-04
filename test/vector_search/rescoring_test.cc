@@ -61,11 +61,19 @@ std::vector<test_data_type> test_data = {
         },
 };
 
-future<> create_index_and_insert_data(cql_test_env& env, const test_data_type& data, const sstring& quantization = "b1") {
+future<> create_index_and_insert_data(cql_test_env& env, const test_data_type& data, const std::map<sstring, sstring>& options = {}) {
+    std::map<sstring, sstring> index_options = {
+        {"quantization", "b1"},
+        {"oversampling", "2.0"},
+        {"rescoring", "true"},
+        {"similarity_function", data.function_name},
+    };
+    for (const auto& [k, v] : options) {
+        index_options[k] = v;
+    }
     co_await env.execute_cql("CREATE TABLE ks.cf (id int primary key, embedding vector<float, 2>)");
-    co_await env.execute_cql(fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{'quantization': '{}', "
-                                         "'oversampling': '2.0', 'rescoring': 'true', 'similarity_function': '{}'}}",
-            quantization, data.function_name));
+    co_await env.execute_cql(fmt::format("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={{{}}}",
+            fmt::join(index_options | std::views::transform([] (const auto& x) { return fmt::format("'{}':'{}'", x.first, x.second);}), ",")));
     for (const auto& [id, vector] : std::views::zip(test_ids, data.vectors)) {
         co_await env.execute_cql(fmt::format("INSERT INTO ks.cf (id, embedding) VALUES ({}, [{}])", id, fmt::join(vector, ",")));
     }
@@ -284,7 +292,7 @@ SEASTAR_TEST_CASE(f32_quantization_disables_rescoring) {
             [&](cql_test_env& env) -> future<> {
                 configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
                 env.local_qp().vector_store_client().start_background_tasks();
-                co_await create_index_and_insert_data(env, test_data[0], "f32");
+                co_await create_index_and_insert_data(env, test_data[0], {{"quantization", "f32"}});
 
                 // Mock Response: Return all keys but in REVERSE similarity order.
                 server->next_ann_response({http::reply::status_type::ok, R"({
@@ -460,3 +468,91 @@ SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_fail
                 }));
     }
 }
+
+SEASTAR_TEST_CASE(per_request_oversampling_override) {
+    // Default oversampling would be 1.0. `create_index_and_insert_data` creates index with oversampling = 2.0.
+    // We check that per-request oversampling overrides index option.
+    auto server = co_await make_vs_mock_server();
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                env.local_qp().vector_store_client().start_background_tasks();
+                co_await create_index_and_insert_data(env, test_data[0], {{"rescoring", "false"}});
+                server->next_ann_response({http::reply::status_type::ok, R"({"primary_keys": { "id": [1] }, "distances": [0]})"});
+
+                constexpr auto query = "SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2 USING OVERSAMPLING {};";
+                std::vector<sstring> valid_factors_const = {"1.0", "50.5", "100.0", "10", "1e1", "1000000e-4", "  10  "};
+                std::vector<float> valid_factors_bind = {1.0f, 50.5f, 100.0f};
+                int expected_requests = 0;
+                std::vector<int> expected_limit = {2, 101, 200, 20, 20, 200, 20};
+                for (auto f = 0u ; f < valid_factors_const.size(); ++f) {
+                    auto msg = co_await env.execute_cql(fmt::format(query, valid_factors_const[f]));
+                    BOOST_REQUIRE_EQUAL(server->ann_requests().size(), ++expected_requests);
+                    auto limit = parse_limit(server->ann_requests().back().body);
+                    BOOST_CHECK_EQUAL(limit, expected_limit[f]);
+                }
+                auto prepared_stmt = co_await env.prepare(format(query, "?"));
+                for (auto f = 0u ; f < valid_factors_bind.size(); ++f) {
+                    auto msg = co_await env.execute_prepared(prepared_stmt, {
+                                cql3::raw_value::make_value(float_type->decompose(valid_factors_bind[f]))
+                            });
+                    BOOST_REQUIRE_EQUAL(server->ann_requests().size(), ++expected_requests);
+                    auto limit = parse_limit(server->ann_requests().back().body);
+                    BOOST_CHECK_EQUAL(limit, expected_limit[f]);
+                }
+            },
+            make_config(format("http://server.node:{}", server->port())))
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(per_request_oversampling_invalid_values) {
+    auto server = co_await make_vs_mock_server();
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                env.local_qp().vector_store_client().start_background_tasks();
+                co_await create_index_and_insert_data(env, test_data[0]);
+                constexpr auto query_literal = "SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2 USING OVERSAMPLING {};";
+
+                std::vector<sstring> invalid_factors_const = {"0.9", "100.1", "0", "-5", "NaN", "INFINITY", "0x10"};
+                for (const auto& factor : invalid_factors_const) {
+                    BOOST_CHECK_THROW(
+                        co_await env.execute_cql(format(query_literal, factor)),
+                        exceptions::invalid_request_exception);
+                }
+
+                std::vector<sstring> invalid_syntax = {"abc", "    ", "inf", "\"2.0\""};
+                for (const auto& factor : invalid_syntax) {
+                    BOOST_CHECK_THROW(
+                        co_await env.execute_cql(format(query_literal, factor)),
+                        exceptions::syntax_exception);
+                }
+
+                auto prepared_stmt = co_await env.prepare(format(query_literal, "?"));
+                std::vector<float> invalid_factors_bind = {0.9, 100.1, 0, -5, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+                for (const auto& factor : invalid_factors_bind) {
+                    BOOST_CHECK_THROW(
+                        co_await env.execute_prepared(prepared_stmt, {
+                            cql3::raw_value::make_value(float_type->decompose(factor))
+                        }),
+                        exceptions::invalid_request_exception);
+                }
+                BOOST_CHECK_THROW(
+                    co_await env.execute_prepared(prepared_stmt, {
+                        cql3::raw_value::make_value(utf8_type->decompose("2.0"))
+                    }),
+                    exceptions::invalid_request_exception);
+                BOOST_CHECK_THROW(
+                    co_await env.execute_prepared(prepared_stmt, {
+                        cql3::raw_value::make_value(byte_type->decompose(uint8_t{10}))
+                    }),
+                    exceptions::invalid_request_exception);
+            },
+            make_config(format("http://server.node:{}", server->port())))
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
