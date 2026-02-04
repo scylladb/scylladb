@@ -1505,6 +1505,10 @@ public:
 
         // Continue current steps.
         std::unordered_map<sstring, std::vector<sstring>> res_prep;
+        if (utils::get_local_injector().enter("rf_change_plan_second_step_throw") && !rf_equals(*ks.metadata()->previous_strategy_options_opt(), ks.metadata()->strategy_options())) {
+            lblogger.info("rf_change_plan_second_step_throw: entered");
+            throw std::runtime_error("rf_change_plan_second_step_throw injection");
+        }
         for (const auto& table : tables) {
             const auto& tmap = _tm->tablets().get_tablet_map(table->id());
             co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
