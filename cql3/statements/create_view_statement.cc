@@ -295,10 +295,10 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     }
 
     // The unique feature of a filter by a non-key column is that the
-    // value of such column can be updated - and also be expired with TTL
+    // value of such a column can be updated - and also be expired with TTL
     // and cause the view row to appear and disappear. We don't currently
-    // support support this case - see issue #3430, and neither does
-    // Cassandra - see see CASSANDRA-13798 and CASSANDRA-13832.
+    // support this case - see issue #3430, and neither does
+    // Cassandra - see CASSANDRA-13798 and CASSANDRA-13832.
     // Actually, as CASSANDRA-13798 explains, the problem is "the liveness of
     // view row is now depending on multiple base columns (multiple filtered
     // non-pk base column + base column used in view pk)". When the filtered
