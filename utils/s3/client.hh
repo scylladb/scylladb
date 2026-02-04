@@ -108,7 +108,6 @@ class client : public enable_shared_from_this<client> {
     semaphore _creds_sem;
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
-    named_gate _refresher_gate{"s3_header_refresher"};
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
 
@@ -144,7 +143,7 @@ class client : public enable_shared_from_this<client> {
     future<semaphore_units<>> claim_memory(size_t mem, seastar::abort_source* as);
 
     future<> update_credentials_and_rearm();
-    future<> authorize(http::request&);
+    void authorize(http::request&);
     group_client& find_or_create_client();
 
     using error_handler = std::function<void(std::exception_ptr)>;

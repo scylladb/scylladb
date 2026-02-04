@@ -161,15 +161,7 @@ future<> client::update_credentials_and_rearm() {
     _creds_update_timer.rearm(_credentials.expires_at - 1h);
 }
 
-future<> client::authorize(http::request& req) {
-    if (!_credentials) [[unlikely]] {
-        auto units = co_await get_units(_creds_sem, 1);
-        if (!_credentials) {
-            s3l.info("Update creds synchronously");
-            co_await update_credentials_and_rearm();
-        }
-    }
-
+void client::authorize(http::request& req) {
     auto time_point_str = utils::aws::format_time_point(db_clock::now());
     auto time_point_st = time_point_str.substr(0, 8);
     req._headers["x-amz-date"] = time_point_str;
@@ -335,13 +327,14 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                          utils::aws::format_time_point(db_clock::now()),
                          request.get_header("x-amz-date"));
                 should_retry = aws::retryable::yes;
-                co_await authorize(request);
+                authorize(request);
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
-                _credentials = {};
                 should_retry = aws::retryable::yes;
-                co_await authorize(request);
+                auto units = co_await get_units(_creds_sem, 1);
+                co_await update_credentials_and_rearm();
+                authorize(request);
             }
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(
                 aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
@@ -386,17 +379,15 @@ future<> client::make_request(http::request req,
     auto request = std::move(req);
     auto header_refresher = timer<lowres_clock>();
     header_refresher.set_callback([&header_refresher, &request, this] {
-        auto gh = _refresher_gate.hold();
         s3l.debug("Refreshing authorization headers for long-running S3 request");
-        // Safe to ignore the future here, as we hold the gate
-        std::ignore = authorize(request).then([gh = std::move(gh)] {});
+        authorize(request);
         header_refresher.rearm(lowres_clock::now() + 14min);
     });
     header_refresher.arm(lowres_clock::now() + 14min);
     auto refresher_canceller = defer([&header_refresher] { header_refresher.cancel(); });
 
     auto handler = wrap_handler(request, std::move(handle), expected);
-    co_await authorize(request);
+    authorize(request);
     auto& gc = find_or_create_client();
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
@@ -1835,7 +1826,6 @@ future<> client::close() {
         _creds_invalidation_timer.cancel();
         _creds_update_timer.cancel();
     }
-    co_await _refresher_gate.close();
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
