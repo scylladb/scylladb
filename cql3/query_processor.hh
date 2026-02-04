@@ -528,6 +528,26 @@ public:
             int32_t page_size = -1,
             service::node_local_only node_local_only = service::node_local_only::no) const;
 
+
+    /* Check write consistency level against guardrail configuration and update per-CL metrics.
+    *
+    * @returns true if the caller should add a warning to the response, false otherwise.
+    * @throws exceptions::invalid_request_exception if the consistency level is disallowed.
+    */
+    inline bool check_write_consistency_levels_guardrail(db::consistency_level cl) {
+        _cql_stats.writes_per_consistency_level[size_t(cl)]++;
+
+        if (write_consistency_levels_disallowed().contains(cl)) {
+            _cql_stats.write_consistency_levels_disallowed_violations[size_t(cl)]++;
+            throw exceptions::invalid_request_exception(format("Consistency level {} is not allowed for write operations", cl));
+        }
+        if (write_consistency_levels_warned().contains(cl)) {
+            _cql_stats.write_consistency_levels_warned_violations[size_t(cl)]++;
+            return true;
+        }
+        return false;
+    }
+
 private:
     // Keep the holder until you stop using the `remote` services.
     std::pair<std::reference_wrapper<remote>, gate::holder> remote();
