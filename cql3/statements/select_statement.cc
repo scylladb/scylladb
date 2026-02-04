@@ -2431,7 +2431,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 "Grouping on clustering columns is not allowed for SELECT DISTINCT queries");
     }
 
-    ::shared_ptr<cql3::statements::select_statement> stmt;
+    if (!is_ann_query) {
+        if (_attrs->oversampling.has_value()) {
+            throw exceptions::invalid_request_exception("OVERSAMPLING option is only supported for ANN queries");
+        }
+    }
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
@@ -2474,6 +2478,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 && restrictions->partition_key_restrictions_size() == schema->partition_key_size());
     };
 
+    ::shared_ptr<cql3::statements::select_statement> stmt;
     if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
         stmt = ::make_shared<strong_consistency::select_statement>(
                 schema,

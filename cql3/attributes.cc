@@ -20,14 +20,15 @@
 namespace cql3 {
 
 std::unique_ptr<attributes> attributes::none() {
-    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}, {}}};
+    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}, {}, {}}};
 }
 
 attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
                        std::optional<cql3::expr::expression>&& time_to_live,
                        std::optional<cql3::expr::expression>&& timeout,
                        std::optional<sstring> service_level,
-                       std::optional<cql3::expr::expression>&& concurrency)
+                       std::optional<cql3::expr::expression>&& concurrency,
+                       std::optional<cql3::expr::expression>&& oversampling)
     : _timestamp_unset_guard(timestamp)
     , _timestamp{std::move(timestamp)}
     , _time_to_live_unset_guard(time_to_live)
@@ -35,6 +36,7 @@ attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
     , _timeout{std::move(timeout)}
     , _service_level(std::move(service_level))
     , _concurrency{std::move(concurrency)}
+    , _oversampling{std::move(oversampling)}
 { }
 
 bool attributes::is_timestamp_set() const {
@@ -55,6 +57,10 @@ bool attributes::is_service_level_set() const {
 
 bool attributes::is_concurrency_set() const {
     return bool(_concurrency);
+}
+
+bool attributes::is_oversampling_set() const {
+    return bool(_oversampling);
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
@@ -150,6 +156,22 @@ std::optional<int32_t> attributes::get_concurrency(const query_options& options)
     return concurrency;
 }
 
+std::optional<float> attributes::get_oversampling(const query_options& options) const {
+    if (!_oversampling.has_value()) {
+        return std::nullopt;
+    }
+
+    cql3::raw_value oversampling_raw = expr::evaluate(*_oversampling, options);
+    if (oversampling_raw.is_null()) {
+        throw exceptions::invalid_request_exception("Invalid null value of oversampling");
+    }
+    try {
+        return oversampling_raw.view().validate_and_deserialize<float>(*float_type);
+    } catch (marshal_exception& e) {
+        throw exceptions::invalid_request_exception("Invalid oversampling value");
+    }
+}
+
 void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_timestamp.has_value()) {
         expr::fill_prepare_context(*_timestamp, ctx);
@@ -163,10 +185,13 @@ void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_concurrency.has_value()) {
         expr::fill_prepare_context(*_concurrency, ctx);
     }
+    if (_oversampling.has_value()) {
+        expr::fill_prepare_context(*_oversampling, ctx);
+    }
 }
 
 std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const {
-    std::optional<expr::expression> ts, ttl, to, conc;
+    std::optional<expr::expression> ts, ttl, to, conc, oversamp;
 
     if (timestamp.has_value()) {
         ts = prepare_expression(*timestamp, db, ks_name, nullptr, timestamp_receiver(ks_name, cf_name));
@@ -188,7 +213,12 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
         verify_no_aggregate_functions(*concurrency, "USING clause");
     }
 
-    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level), std::move(conc)}};
+    if (oversampling.has_value()) {
+        oversamp = prepare_expression(*oversampling, db, ks_name, nullptr, oversampling_receiver(ks_name, cf_name));
+        verify_no_aggregate_functions(*oversamp, "USING clause");
+    }
+
+    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level), std::move(conc), std::move(oversamp)}};
 }
 
 lw_shared_ptr<column_specification> attributes::raw::timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const {
@@ -205,6 +235,10 @@ lw_shared_ptr<column_specification> attributes::raw::timeout_receiver(const sstr
 
 lw_shared_ptr<column_specification> attributes::raw::concurrency_receiver(const sstring& ks_name, const sstring& cf_name) const {
     return make_lw_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[concurrency]", true), data_type_for<int32_t>());
+}
+
+lw_shared_ptr<column_specification> attributes::raw::oversampling_receiver(const sstring& ks_name, const sstring& cf_name) const {
+    return make_lw_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[oversampling]", true), float_type);
 }
 
 }
