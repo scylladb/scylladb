@@ -2537,6 +2537,30 @@ std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistenc
     }
 }
 
+std::unordered_map<sstring, db::consistency_level> db::consistency_level_option::map() {
+    using cl = db::consistency_level;
+    std::unordered_map<sstring, cl> result = {
+        {"ANY", cl::ANY},
+        {"ONE", cl::ONE},
+        {"TWO", cl::TWO},
+        {"THREE", cl::THREE},
+        {"QUORUM", cl::QUORUM},
+        {"ALL", cl::ALL},
+        {"LOCAL_QUORUM", cl::LOCAL_QUORUM},
+        {"EACH_QUORUM", cl::EACH_QUORUM},
+        {"SERIAL", cl::SERIAL},
+        {"LOCAL_SERIAL", cl::LOCAL_SERIAL},
+        {"LOCAL_ONE", cl::LOCAL_ONE},
+    };
+
+    constexpr auto expected_size = static_cast<size_t>(cl::MAX_VALUE) - static_cast<size_t>(cl::MIN_VALUE) + 1;
+    if (result.size() != expected_size) {
+        on_internal_error_noexcept(dblog, format("consistency_level_option::map() has {} entries but expected {}", result.size(), expected_size));
+    }
+
+    return result;
+}
+
 namespace replica {
 
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
