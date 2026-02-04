@@ -268,10 +268,21 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     inc_cql_stats(qs.get_client_state().is_internal());
 
+    // Check consistency level guardrails
+    auto cl = options.get_consistency();
+    if (qp.write_consistency_levels_disallowed().contains(cl)) {
+        throw exceptions::invalid_request_exception(format("Consistency level {} is not allowed for write operations", cl));
+    }
+    bool should_warn_cl = qp.write_consistency_levels_warned().contains(cl);
+
     _restrictions->validate_primary_key(options);
 
     if (has_conditions()) {
-        co_return co_await execute_with_condition(qp, qs, options);
+        auto result = co_await execute_with_condition(qp, qs, options);
+        if (should_warn_cl) {
+            result->add_warning(format("Consistency level {} is not recommended for write operations", cl));
+        }
+        co_return result;
     }
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
@@ -290,6 +301,9 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     auto result = seastar::make_shared<cql_transport::messages::result_message::void_message>();
+    if (should_warn_cl) {
+        result->add_warning(format("Consistency level {} is not recommended for write operations", cl));
+    }
     if (keys_size_one) {
         auto&& table = s->table();
         if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
