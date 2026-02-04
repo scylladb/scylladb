@@ -2115,7 +2115,13 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
     auto limit = get_limit(options, _limit);
 
-    auto result = co_await measure_index_latency(*_schema, _index, [this, &qp, &state, &options, &limit](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
+    // Determine effective oversampling: per-request value takes precedence over index value
+    float effective_oversampling = secondary_index::vector_index::get_oversampling(
+        _index.metadata().options(),
+        _attrs->get_oversampling(options));
+    uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * effective_oversampling));
+
+    auto result = co_await measure_index_latency(*_schema, _index, [this, &qp, &state, &options, &limit, fetch](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
         tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
         validate_for_read(options.get_consistency());
 
@@ -2131,7 +2137,6 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
         auto aoe = abort_on_expiry(timeout);
         auto filter_json = _prepared_filter.to_json(options);
-        uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
         auto pkeys = co_await qp.vector_store_client().ann(
                 _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, aoe.abort_source());
         if (!pkeys.has_value()) {
