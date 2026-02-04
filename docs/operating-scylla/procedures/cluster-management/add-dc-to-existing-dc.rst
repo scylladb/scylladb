@@ -231,6 +231,29 @@ Add New DC
 
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
+   If the ``enforce_rack_list`` option is set, update the replication factor in one ALTER KEYSPACE statement.
+
+   Before
+
+   .. code-block:: cql
+
+      DESCRIBE KEYSPACE mykeyspace4;
+
+      CREATE KEYSPACE mykeyspace4 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : ['<existing_rack1>', '<existing_rack2>', '<existing_rack3>']} AND tablets = { 'enabled': true };
+
+   Add all the nodes to the new datacenter and then:
+
+   .. code-block:: cql
+
+      ALTER KEYSPACE mykeyspace4 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : ['<existing_rack1>', '<existing_rack2>', '<existing_rack3>'], '<new_dc>' : ['<new_rack1>', '<new_rack2>', '<new_rack3>']} AND tablets = { 'enabled': true };
+
+   After
+
+   .. code-block:: cql
+
+      DESCRIBE KEYSPACE mykeyspace4;
+      CREATE KEYSPACE mykeyspace4 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', '<existing_dc>' : ['<existing_rack1>', '<existing_rack2>', '<existing_rack3>'], '<new_dc>' : ['<new_rack1>', '<new_rack2>', '<new_rack3>']} AND tablets = { 'enabled': true };
+
 #. If any vnode keyspace was altered, run ``nodetool rebuild`` on each node in the new datacenter, specifying the existing datacenter name in the rebuild command.
 
    For example:
