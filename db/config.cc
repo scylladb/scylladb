@@ -1832,7 +1832,8 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
-        {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES}
+        {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},
+        {"kv-storage", feature::KV_STORAGE}
     };
 }
 
