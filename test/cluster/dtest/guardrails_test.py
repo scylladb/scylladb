@@ -14,27 +14,27 @@ from dtest_class import Tester
 
 logger = logging.getLogger(__name__)
 
+class TestRfGuardrails(Tester):
 
-def create_ks_and_assert_warning(session, query, ks_name, key_warn_msg_words):
-    ret = session.execute_async(query)
-    _ = ret.result()
-    found = False
-    if len(key_warn_msg_words) > 0:
-        assert len(ret.warnings) >= 1, "Expected RF guardrail warning"
-        for warning in ret.warnings:
-            found = found or all(word in warning.lower() for word in key_warn_msg_words)
-        assert found, "Didn't match all required keywords"
-    session.execute(f"USE {ks_name}")
-
-
-def assert_creating_ks_fails(session, query, ks_name):
-    with pytest.raises(ConfigurationException):
-        session.execute(query)
-    with pytest.raises(InvalidRequest):
+    @staticmethod
+    def create_ks_and_assert_warning(session, query, ks_name, key_warn_msg_words):
+        ret = session.execute_async(query)
+        _ = ret.result()
+        found = False
+        if len(key_warn_msg_words) > 0:
+            assert len(ret.warnings) >= 1, "Expected RF guardrail warning"
+            for warning in ret.warnings:
+                found = found or all(word in warning.lower() for word in key_warn_msg_words)
+            assert found, "Didn't match all required keywords"
         session.execute(f"USE {ks_name}")
 
+    @staticmethod
+    def assert_creating_ks_fails(session, query, ks_name):
+        with pytest.raises(ConfigurationException):
+            session.execute(query)
+        with pytest.raises(InvalidRequest):
+            session.execute(f"USE {ks_name}")
 
-class TestGuardrails(Tester):
     def test_default_rf(self):
         """
         As of now, the only RF guardrail enabled is a soft limit checking that RF >= 3. Not complying to this soft limit
@@ -55,7 +55,7 @@ class TestGuardrails(Tester):
         query = "CREATE KEYSPACE %s WITH REPLICATION={%s}"
         options = ", ".join(["'%s':%d" % (dc_value, rf_value) for dc_value, rf_value in rf.items()])
         query = query % (ks_name, "'class':'NetworkTopologyStrategy', %s" % options)
-        create_ks_and_assert_warning(session_dc1, query, ks_name, ["warn", "min", "replication", "factor", "3", "dc1", "2"])
+        self.create_ks_and_assert_warning(session_dc1, query, ks_name, ["warn", "min", "replication", "factor", "3", "dc1", "2"])
 
     def test_all_rf_limits(self):
         """
@@ -89,13 +89,13 @@ class TestGuardrails(Tester):
         def test_rf(rf):
             ks_name = f"ks_{rf}"
             if rf < MIN_FAIL_THRESHOLD or rf > MAX_FAIL_THRESHOLD:
-                assert_creating_ks_fails(session, query % (ks_name, rf), ks_name)
+                self.assert_creating_ks_fails(session, query % (ks_name, rf), ks_name)
             elif rf < MIN_WARN_THRESHOLD:
-                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "min", "replication", "factor", str(MIN_WARN_THRESHOLD), "dc1", "2"])
+                self.create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "min", "replication", "factor", str(MIN_WARN_THRESHOLD), "dc1", "2"])
             elif rf > MAX_WARN_THRESHOLD:
-                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "max", "replication", "factor", str(MAX_WARN_THRESHOLD), "dc1", "5"])
+                self.create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, ["warn", "max", "replication", "factor", str(MAX_WARN_THRESHOLD), "dc1", "5"])
             else:
-                create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, [])
+                self.create_ks_and_assert_warning(session, query % (ks_name, rf), ks_name, [])
 
         for rf in range(MIN_FAIL_THRESHOLD - 1, MAX_FAIL_THRESHOLD + 1):
             test_rf(rf)
