@@ -208,4 +208,29 @@ void write_json_result(const std::string& filename, const aggregated_perf_result
     out << results;
 }
 
+future<> run_standalone(std::function<void(sharded<abort_source>*)> fun) {
+    auto as = make_shared<sharded<abort_source>>();
+    co_await as->start();
+
+    auto stop_handler = [as] {
+        as->invoke_on_all(&abort_source::request_abort).get();
+    };
+
+    seastar::handle_signal(SIGINT, stop_handler);
+    seastar::handle_signal(SIGTERM, stop_handler);
+
+    std::exception_ptr ex;
+    try {
+        co_await seastar::async([fun = std::move(fun), as_ptr = as.get()] {
+             fun(as_ptr);
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await as->stop();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
 } // namespace perf
