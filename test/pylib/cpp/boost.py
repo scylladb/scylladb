@@ -14,6 +14,7 @@ import pathlib
 import json
 from functools import cache, cached_property
 from itertools import chain
+from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
@@ -60,7 +61,7 @@ class BoostTestFile(CppFile):
             return [self.test_name]
         return get_boost_test_list_json_content(executable=self.exe_path,combined=self.combined).get(self.test_name, [])
 
-    def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
+    def run_test_case(self, test_case: CppTestCase) -> tuple[list[CppTestFailure], Path] | tuple[None, Path]:
         run_test = f"{self.test_name}/{test_case.test_case_name}" if self.combined else test_case.test_case_name
 
         log_sink = tempfile.NamedTemporaryFile(mode="w+t")
@@ -100,13 +101,13 @@ class BoostTestFile(CppFile):
                     command to repeat: {subprocess.list2cmdline(process.args)}
                     error: {results[0].lines if results else 'unknown'}
                 """),
-            )], ""
+            )], stdout_file_path
 
         if not self.config.getoption("--save-log-on-success"):
             log_sink.close()
             stdout_file_path.unlink(missing_ok=True)
 
-        return None, ""
+        return None, stdout_file_path
 
 
 pytest_collect_file = BoostTestFile.pytest_collect_file
