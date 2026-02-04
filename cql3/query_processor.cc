@@ -16,6 +16,9 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/trim.hpp>
+
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
@@ -27,9 +30,11 @@
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
+#include "db/consistency_level_type.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
+#include "utils/enum_option.hh"
 #include "service/migration_manager.hh"
 #include "utils/labels.hh"
 
@@ -91,7 +96,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _lang_manager(langm)
+        , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const sstring& v) { update_write_consistency_levels_warned(v); }))
+        , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const sstring& v) { update_write_consistency_levels_disallowed(v); }))
         {
+    update_write_consistency_levels_warned(_db.get_config().write_consistency_levels_warned());
+    update_write_consistency_levels_disallowed(_db.get_config().write_consistency_levels_disallowed());
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
@@ -1231,6 +1240,41 @@ future<> query_processor::query_internal(
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     _proxy.get_stats().replica_cross_shard_ops++;
     return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+}
+
+void query_processor::update_write_consistency_levels_warned(const sstring& list) {
+    update_consistency_level_set(list, "write_consistency_levels_warned", _write_consistency_levels_warned);
+}
+
+void query_processor::update_write_consistency_levels_disallowed(const sstring& list) {
+    update_consistency_level_set(list, "write_consistency_levels_disallowed", _write_consistency_levels_disallowed);
+}
+
+void query_processor::update_consistency_level_set(const sstring& list, std::string_view config_name, db::consistency_level_set& target) {
+    db::consistency_level_set new_set;
+    if (!list.empty()) {
+        std::vector<sstring> tokens;
+        boost::split(tokens, list, boost::is_any_of(","));
+        for (sstring& token : tokens) {
+            boost::trim(token);
+            if (token.empty()) {
+                continue;
+            }
+            // Convert to uppercase for lookup
+            for (auto& c : token) {
+                c = std::toupper(static_cast<unsigned char>(c));
+            }
+            std::istringstream ss(token);
+            enum_option<db::consistency_level_option> opt;
+            try {
+                ss >> opt;
+                new_set.set(opt);
+            } catch (const boost::program_options::invalid_option_value&) {
+                log.warn("Ignoring unknown consistency level '{}' in {}", token, config_name);
+            }
+        }
+    }
+    target = new_set;
 }
 
 void query_processor::update_authorized_prepared_cache_config() {
