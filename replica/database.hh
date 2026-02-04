@@ -1492,6 +1492,7 @@ struct database_config {
     seastar::scheduling_group gossip_scheduling_group;
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
+    seastar::scheduling_group backup_scheduling_group;
     size_t available_memory;
 };
 

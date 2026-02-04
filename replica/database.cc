@@ -1651,6 +1651,7 @@ request_class classify_request(const database_config& _dbcfg) {
         return request_class::system;
     // Requests done on behalf of view update generation run in the streaming group
     } else if (current_group == _dbcfg.streaming_scheduling_group
+            || current_group == _dbcfg.backup_scheduling_group
             || current_group == _dbcfg.maintenance_compaction_scheduling_group) {
         return request_class::maintenance;
     // Everything else is considered a user request
