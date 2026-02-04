@@ -12,8 +12,10 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/signal.hh>
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
@@ -324,6 +326,33 @@ public:
 std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
 
 void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type);
+
+template<class T>
+future<> run_standalone(T c, std::function<void(T)> fun) {
+    auto as = make_shared<sharded<abort_source>>();
+    co_await as->start();
+    c.as = as.get();
+
+    auto stop_handler = [as] {
+        (void)as->invoke_on_all(&abort_source::request_abort);
+    };
+
+    seastar::handle_signal(SIGINT, stop_handler);
+    seastar::handle_signal(SIGTERM, stop_handler);
+
+    std::exception_ptr ex;
+    try {
+        co_await seastar::async([c = std::move(c), fun = std::move(fun)] {
+            fun(c);
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await as->stop();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
 
 } // namespace perf
 
