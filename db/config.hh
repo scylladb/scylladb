@@ -24,6 +24,7 @@
 #include "utils/error_injection.hh"
 #include "message/dict_trainer.hh"
 #include "message/advanced_rpc_compressor.hh"
+#include "db/consistency_level_type.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
 
@@ -124,6 +125,10 @@ struct experimental_features_t {
 
 struct replication_strategy_restriction_t {
     static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>
+};
+
+struct consistency_level_restriction_t {
+    static std::unordered_map<sstring, db::consistency_level> map(); // for enum_option<>
 };
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
@@ -615,6 +620,9 @@ public:
     named_value<float> compaction_max_shares;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
+
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_warned;
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_disallowed;
 
     static const sstring default_tls_priority;
 private:
