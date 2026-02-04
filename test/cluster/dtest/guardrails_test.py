@@ -34,7 +34,6 @@ def assert_creating_ks_fails(session, query, ks_name):
         session.execute(f"USE {ks_name}")
 
 
-@pytest.mark.next_gating
 class TestGuardrails(Tester):
     def test_default_rf(self):
         """
