@@ -8,6 +8,8 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra import Unauthorized
 from cassandra.connection import UnixSocketEndPoint
+from cassandra.policies import WhiteListRoundRobinPolicy
+
 from test.cluster.conftest import cluster_con
 from test.pylib.manager_client import ManagerClient
 
@@ -58,7 +60,7 @@ async def test_maintenance_socket(manager: ManagerClient):
     else:
         pytest.fail("User 'john' has no permissions to access ks2.t1")
 
-    maintenance_cluster = cluster_con([UnixSocketEndPoint(socket)])
+    maintenance_cluster = cluster_con([UnixSocketEndPoint(socket)], load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(socket)]))
     maintenance_session = maintenance_cluster.connect()
 
     # check that the maintenance session has superuser permissions
