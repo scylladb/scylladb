@@ -586,6 +586,8 @@ usingTimeoutServiceLevelClause[std::unique_ptr<cql3::attributes::raw>& attrs]
 usingTimeoutServiceLevelClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     | serviceLevel sl_name=serviceLevelOrRoleName { attrs->service_level = std::move(sl_name); }
+    | K_RESCORING r=term { attrs->rescoring = std::move(r); }
+    | K_OVERSAMPLING o=term { attrs->oversampling = std::move(o); }
     ;
 
 usingTimeoutConcurrencyClause[std::unique_ptr<cql3::attributes::raw>& attrs]
@@ -2200,6 +2202,8 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_RESCORING
+        | K_OVERSAMPLING
         ) { $str = $k.text; }
     ;
 
@@ -2412,6 +2416,8 @@ K_LIKE:        L I K E;
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
 K_CONCURRENCY: C O N C U R R E N C Y;
+K_RESCORING:   R E S C O R I N G;
+K_OVERSAMPLING: O V E R S A M P L I N G;
 
 K_EXECUTE:     E X E C U T E;
 
