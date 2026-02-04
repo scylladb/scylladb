@@ -12,6 +12,7 @@ import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from functools import cached_property
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -102,7 +103,7 @@ class CppFile(pytest.File, ABC):
         ...
 
     @abstractmethod
-    def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
+    def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], Path]:
         ...
 
     @cached_property
@@ -211,8 +212,18 @@ class CppTestCase(pytest.Item):
     def runtest(self) -> None:
         failures, output = self.parent.run_test_case(test_case=self)
 
-        # Report the c++ output in its own sections.
-        self.add_report_section(when="call", key="c++", content=output)
+        # Write output to stdout so pytest captures it for both terminal and JUnit report.
+        # Only show the last 300 lines to avoid excessive output.
+        lines = get_lines_from_end(output)
+        if lines:
+            print("\n" + "=" * 70)
+            print("C++ Test Output (last 300 lines):")
+            print("=" * 70)
+            print('\n'.join(lines))
+            print("=" * 70 + "\n")
+
+        if not self.config.getoption("--save-log-on-success"):
+            output.unlink(missing_ok=True)
 
         if failures:
             raise CppTestFailureList(failures)
@@ -277,3 +288,31 @@ class CppFailureRepr:
 
             if index != len(self.failures) - 1:
                 tw.line(self.failure_sep, cyan=True)
+
+
+def get_lines_from_end(file_path: pathlib.Path, lines_count: int = 300) -> list[str]:
+    """
+    Seeks to the end of the file and reads backwards to find the last N lines
+    without iterating over the whole file.
+    """
+    chunk_size = 8192  # 8KB chunks
+    buffer = ""
+
+    with file_path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        pointer = file_size
+
+        while pointer > 0:
+            # Read one chunk backwards
+            pointer -= min(pointer, chunk_size)
+            f.seek(pointer)
+            chunk = f.read(min(file_size - pointer, chunk_size)).decode('utf-8', errors='ignore')
+            buffer = chunk + buffer
+
+            # Stop once we have enough lines
+            if len(buffer.splitlines()) > lines_count:
+                break
+
+    # Return only the requested number of lines
+    return buffer.splitlines()[-lines_count:]

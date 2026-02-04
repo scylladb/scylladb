@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ class UnitTestFile(CppFile):
     def list_test_cases(self) -> list[str]:
         return [self.test_name]
 
-    def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
+    def run_test_case(self, test_case: CppTestCase) -> tuple[list[CppTestFailure], Path] | tuple[None, Path]:
         stdout_file_path = test_case.get_artifact_path(extra="_stdout", suffix=".log").absolute()
         process = test_case.run_exe(test_args=self.test_args, output_file=stdout_file_path)
 
@@ -38,12 +39,9 @@ class UnitTestFile(CppFile):
                     output file: {stdout_file_path}
                     command to repeat: {subprocess.list2cmdline(process.args)}
                 """),
-            )], ""
+            )], stdout_file_path
 
-        if not self.config.getoption("--save-log-on-success"):
-            stdout_file_path.unlink(missing_ok=True)
-
-        return None, ""
+        return None, stdout_file_path
 
 
 pytest_collect_file = UnitTestFile.pytest_collect_file
