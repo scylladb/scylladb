@@ -905,7 +905,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
-            auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200).get();
+
+            // Maintenance supergroup -- the collection of background low-prio activites
+            auto maintenance_supergroup = create_scheduling_supergroup(200).get();
+            auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
             debug::streaming_scheduling_group = maintenance_scheduling_group;
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
