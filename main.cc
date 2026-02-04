@@ -908,8 +908,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Maintenance supergroup -- the collection of background low-prio activites
             auto maintenance_supergroup = create_scheduling_supergroup(200).get();
-            auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
-            debug::streaming_scheduling_group = maintenance_scheduling_group;
+            auto maintenance_scheduling_group = create_scheduling_group("maintenance", "mant", 200, maintenance_supergroup).get();
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;
@@ -1149,7 +1148,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
             dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
-            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
+            dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
+            debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
+            dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
             dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000, user_ssg).get();
             dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
             dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
@@ -1686,7 +1687,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
-                .background_sg = dbcfg.streaming_scheduling_group,
+                .background_sg = dbcfg.maintenance_scheduling_group,
             };
             sharded<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();

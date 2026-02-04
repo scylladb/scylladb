@@ -453,8 +453,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
     , _corrupt_data_handler(std::make_unique<db::system_table_corrupt_data_handler>(db::system_table_corrupt_data_handler::config{.entry_ttl = std::chrono::days(10)}, db::corrupt_data_handler::register_metrics::yes))
     , _nop_corrupt_data_handler(std::make_unique<db::nop_corrupt_data_handler>(db::corrupt_data_handler::register_metrics::no))
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.maintenance_scheduling_group, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.maintenance_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -1509,6 +1509,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
+    cfg.maintenance_scheduling_group = _config.maintenance_scheduling_group;
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
@@ -1652,6 +1653,7 @@ request_class classify_request(const database_config& _dbcfg) {
     // Requests done on behalf of view update generation run in the streaming group
     } else if (current_group == _dbcfg.streaming_scheduling_group
             || current_group == _dbcfg.backup_scheduling_group
+            || current_group == _dbcfg.maintenance_scheduling_group
             || current_group == _dbcfg.maintenance_compaction_scheduling_group) {
         return request_class::maintenance;
     // Everything else is considered a user request
@@ -2460,6 +2462,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
+    cfg.maintenance_scheduling_group = _dbcfg.maintenance_scheduling_group;
     cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 

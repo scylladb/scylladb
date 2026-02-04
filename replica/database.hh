@@ -470,6 +470,7 @@ public:
         seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
+        seastar::scheduling_group maintenance_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
         size_t view_update_memory_semaphore_limit;
@@ -1409,6 +1410,7 @@ public:
         seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
+        seastar::scheduling_group maintenance_scheduling_group;
         bool enable_metrics_reporting = false;
         size_t view_update_memory_semaphore_limit;
     };
@@ -1489,6 +1491,7 @@ struct database_config {
     seastar::scheduling_group memory_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
+    seastar::scheduling_group maintenance_scheduling_group;
     seastar::scheduling_group gossip_scheduling_group;
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
