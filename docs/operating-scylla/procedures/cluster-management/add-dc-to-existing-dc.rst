@@ -232,14 +232,6 @@ Add New DC
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
    If the ``enforce_rack_list`` option is set, update the replication factor in one ``ALTER KEYSPACE`` statement.
-   This is only allowed if each datacenter's replication factor is either **unchanged** or changed from **0 to N** (i.e., a new datacenter is added).
-   Updating the replication factor of an existing datacenter in the same statement is **not** allowed.
-
-   .. warning::
-
-      While adding a new datacenter and altering keyspaces, do **not** perform any reads or writes that involve the new datacenter.
-      In particular, avoid using global consistency levels (such as ``ALL``, ``EACH_QUORUM``) that would include the new datacenter in the operation.
-      Use ``LOCAL_*`` consistency levels (e.g., ``LOCAL_QUORUM``, ``LOCAL_ONE``) until the new datacenter is fully operational.
 
    Before
 
@@ -248,12 +240,6 @@ Add New DC
       DESCRIBE KEYSPACE mykeyspace4;
 
       CREATE KEYSPACE mykeyspace4 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : ['<existing_rack1>', '<existing_rack2>', '<existing_rack3>']} AND tablets = { 'enabled': true };
-
-   The following is **not** allowed because it changes the replication factor of ``<existing_dc>`` (adds ``<existing_rack4>``) and adds ``<new_dc>`` in the same statement:
-
-   .. code-block:: cql
-
-      ALTER KEYSPACE mykeyspace4 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : ['<existing_rack1>', '<existing_rack2>', '<existing_rack3>', '<existing_rack4>'], '<new_dc>' : ['<new_rack1>', '<new_rack2>', '<new_rack3>']} AND tablets = { 'enabled': true };
 
    Add all the nodes to the new datacenter and then:
 

@@ -103,27 +103,11 @@ Procedure
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
    If the ``enforce_rack_list`` option is set, update the replication factor in one ALTER KEYSPACE statement.
-   This is only allowed if each datacenter's replication factor is either **unchanged** or changed from **N to 0** (i.e., a datacenter is removed).
-   Updating the replication factor of a datacenter that is not being removed in the same statement is **not** allowed.
-
-   .. warning::
-
-      While removing a datacenter and altering keyspaces, do **not** perform any reads or writes that involve the datacenter being removed.
-      In particular, avoid using global consistency levels (such as ``ALL``, ``EACH_QUORUM``) that would include the decommissioned datacenter in the operation.
-      Use ``LOCAL_*`` consistency levels (e.g., ``LOCAL_QUORUM``, ``LOCAL_ONE``) until the datacenter is fully decommissioned.
 
    .. code-block:: shell
 
       cqlsh> DESCRIBE nba4
       cqlsh> CREATE KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : ['RAC4', 'RAC5'], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']} AND tablets = { 'enabled': true };
-
-   The following is **not** allowed because it changes the replication factor of ``EUROPE-DC`` (adds ``RAC9``) and removes ``ASIA-DC`` in the same statement:
-
-   .. code-block:: shell
-
-      cqlsh> ALTER KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8', 'RAC9']} AND tablets = { 'enabled': true };
-
-   Remove all replicas from the decommissioned datacenter:
 
    .. code-block:: shell
 
