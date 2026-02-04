@@ -1617,7 +1617,6 @@ private:
     dirty_memory_manager _dirty_memory_manager;
 
     database_config _dbcfg;
-    backlog_controller::scheduling_group _flush_sg;
     flush_controller _memtable_controller;
     drain_progress _drain_progress {};
 
