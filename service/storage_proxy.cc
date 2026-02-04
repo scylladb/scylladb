@@ -120,12 +120,7 @@ utils::small_vector<locator::host_id, N> addr_vector_to_id(const gms::gossiper& 
 // Check the effective replication map consistency:
 // we have an inconsistent effective replication map in case we the number of
 // read replicas is higher than the replication factor.
-void validate_read_replicas(const locator::effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) {
-    // Skip for non-debug builds.
-    if constexpr (!tools::build_info::is_debug_build()) {
-        return;
-    }
-
+[[maybe_unused]] void validate_read_replicas(const locator::effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) {
     const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, read_replicas);
     if (!error.empty()) {
         on_internal_error(slogger, error);
@@ -6694,7 +6689,12 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::effective_replica
 
 host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
     auto endpoints = erm.get_replicas_for_reading(token);
-    validate_read_replicas(erm, endpoints);
+    // Skip for non-debug builds and maintenance mode.
+    if constexpr (tools::build_info::is_debug_build()) {
+        if (!_db.local().get_config().maintenance_mode()) {
+            validate_read_replicas(erm, endpoints);
+        }
+    }
     auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm, endpoints);
