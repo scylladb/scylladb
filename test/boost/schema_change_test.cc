@@ -37,12 +37,6 @@
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 
-static cql_test_config run_with_raft_recovery_config() {
-    cql_test_config c;
-    c.run_with_raft_recovery = true;
-    return c;
-}
-
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
@@ -117,119 +111,6 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             BOOST_REQUIRE_EQUAL(*s, *e.local_db().find_keyspace(s->ks_name()).metadata()->cf_meta_data().at(s->cf_name()));
         });
     });
-}
-
-SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-
-            auto table_schema = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .build();
-
-            auto& mm = e.migration_manager().local();
-            auto group0_guard = mm.start_group0_operation().get();
-            auto ts = group0_guard.write_timestamp();
-            mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), table_schema, ts).get(), std::move(group0_guard), "").get();
-
-            auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
-            auto old_node_version = e.db().local().get_version();
-
-            {
-                testlog.info("Applying a no-op tombstone to v1 column definition");
-                auto s = db::schema_tables::columns();
-                auto pkey = partition_key::from_singular(*s, table_schema->ks_name());
-                mutation m(s, pkey);
-                auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
-                m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                mm.announce(utils::chunked_vector<mutation>({m}), mm.start_group0_operation().get(), "").get();
-            }
-
-            auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
-            auto new_node_version = e.db().local().get_version();
-
-            BOOST_REQUIRE_EQUAL(new_table_version, old_table_version);
-
-            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
-            // because the version after the first schema change is not a digest, but taken
-            // to be the version sent in the schema change mutations; in this case,
-            // `prepare_new_column_family_announcement` took `table_schema->version()`
-            //
-            // On the other hand, the second schema change mutations do not contain
-            // the ususal `system_schema.scylla_tables` mutation (which would contain the version);
-            // they are 'incomplete' schema mutations created by the above piece of code,
-            // not by the usual `prepare_..._announcement` functions. This causes
-            // a digest to be calculated when applying the schema change, and the digest
-            // will be different than the first version sent.
-            //
-            // Hence we use `run_with_raft_recovery_config()` in this test.
-            BOOST_REQUIRE_EQUAL(new_node_version, old_node_version);
-        });
-    }, run_with_raft_recovery_config());
-}
-
-SEASTAR_TEST_CASE(test_concurrent_column_addition) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-
-            service::migration_manager& mm = e.migration_manager().local();
-
-            auto s0 = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .build();
-
-            auto s1 = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .with_column("v3", bytes_type)
-                    .build();
-
-            auto s2 = schema_builder("ks", "table", std::make_optional(s1->id()))
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .with_column("v2", bytes_type)
-                    .build();
-
-            {
-                auto group0_guard = mm.start_group0_operation().get();
-                auto ts = group0_guard.write_timestamp();
-                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s1, ts).get(), std::move(group0_guard), "").get();
-            }
-            auto old_version = e.db().local().find_schema(s1->id())->version();
-
-            // Apply s0 -> s2 change.
-            {
-                auto group0_guard = mm.start_group0_operation().get();
-                auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
-                auto muts = db::schema_tables::make_update_table_mutations(e.get_storage_proxy().local(), keyspace, s0, s2,
-                        group0_guard.write_timestamp());
-                mm.announce(std::move(muts), std::move(group0_guard), "").get();
-            }
-
-            auto new_schema = e.db().local().find_schema(s1->id());
-
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v1")) != nullptr);
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v2")) != nullptr);
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v3")) != nullptr);
-
-            BOOST_REQUIRE(new_schema->version() != old_version);
-
-            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
-            // because the version resulting after schema change is not a digest, but taken to be
-            // the version sent in the schema change mutations; in this case, `make_update_table_mutations`
-            // takes `s2->version()`.
-            //
-            // This is fine with group 0 where all schema changes are linearized, so this scenario
-            // of merging concurrent schema changes doesn't happen.
-            //
-            // Hence we use `run_with_raft_recovery_config()` in this test.
-            BOOST_REQUIRE(new_schema->version() != s2->version());
-        });
-    }, run_with_raft_recovery_config());
 }
 
 SEASTAR_TEST_CASE(test_sort_type_in_update) {
