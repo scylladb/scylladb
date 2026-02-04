@@ -188,6 +188,8 @@ Add New DC
       ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 2};
       ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
 
+   Unless the ``enforce_rack_list`` is set, in this case, you can update the replication factor in one ALTER KEYSPACE statement.
+
    After
 
    .. code-block:: cql

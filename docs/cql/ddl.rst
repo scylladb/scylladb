@@ -437,6 +437,36 @@ To alter from a numeric replication factor to a rack-list replication factor, yo
   ALTER KEYSPACE Excelsior
    WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']};
 
+Multi RF change
+~~~~~~~~~~~~~~~~~
+
+If ``enforce_rack_list`` is set, which means that all tablet keyspaces use rack lists exclusively, you can update the replication factor by more than one in many DCs in a single ALTER KEYSPACE statement. You cannot replace a replica's rack in a single DC, but you can both add and remove replicas in many DCs at once. For example you can do the following sequence of statements:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2'], 'dc2' : ['RAC4', 'RAC5']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : [], 'dc2' : ['RAC4', 'RAC5', 'RAC6']};
+
+But the ALTER KEYSPACE below will fail:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC3']};
+
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE
