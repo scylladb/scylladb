@@ -7,10 +7,13 @@
 import logging
 
 import pytest
+from cassandra import ConsistencyLevel
 from cassandra.cluster import Session
 from cassandra.protocol import ConfigurationException, InvalidRequest
+from cassandra.query import SimpleStatement
 
-from dtest_class import Tester
+from dtest_class import Tester, create_ks, get_ip_from_node
+from tools.metrics import get_node_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +102,74 @@ class TestRfGuardrails(Tester):
 
         for rf in range(MIN_FAIL_THRESHOLD - 1, MAX_FAIL_THRESHOLD + 1):
             test_rf(rf)
+
+
+class TestWriteConsistencyLevelGuardrails(Tester):
+
+    WARNED_METRIC = "scylla_cql_write_consistency_levels_warned_violations"
+    DISALLOWED_METRIC = "scylla_cql_write_consistency_levels_disallowed_violations"
+
+    def metric_for_cl(self, name, cl):
+        cl_name = ConsistencyLevel.value_to_name[cl]
+        return f'{name}{{consistency_level="{cl_name}"'
+
+    def get_metric(self, node, name, cl):
+        pattern = self.metric_for_cl(name, cl)
+        return get_node_metrics(get_ip_from_node(node), [pattern])[pattern]
+
+    def assert_metric_increased(self, node, name, cl, before):
+        after = self.get_metric(node, name, cl)
+        cl_name = ConsistencyLevel.value_to_name[cl]
+        assert after > before, f"Expected {name} for {cl_name} to increase, but got {before} -> {after}"
+
+    def assert_metric_unchanged(self, node, name, cl, before):
+        after = self.get_metric(node, name, cl)
+        cl_name = ConsistencyLevel.value_to_name[cl]
+        assert after == before, f"Expected {name} for {cl_name} unchanged, but got {before} -> {after}"
+
+    def change_config(self, session, param, value):
+        session.execute(f"UPDATE system.config SET value = '{value}' WHERE name = '{param}'")
+
+    def test_write_cl_live_update(self):
+        """
+        Test that write_consistency_levels_disallowed and write_consistency_levels_warned
+        support live updates via CQL config changes.
+        """
+        cluster = self.cluster
+        cluster.set_configuration_options(values={
+            "write_consistency_levels_warned": "",
+            "write_consistency_levels_disallowed": "",
+        })
+        cluster.populate([1]).start(wait_for_binary_proto=True)
+
+        node = cluster.nodelist()[0]
+        session = self.patient_cql_connection(node)
+
+        create_ks(session, "ks", 1)
+        session.execute("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+        # ANY should work initially with no metric bumps
+        before_warned = self.get_metric(node, self.WARNED_METRIC, ConsistencyLevel.ANY)
+        stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY)
+        session.execute(stmt)
+        self.assert_metric_unchanged(node, self.WARNED_METRIC, ConsistencyLevel.ANY, before_warned)
+
+        # Update config via CQL to disallow ANY
+        self.change_config(session, "write_consistency_levels_disallowed", "ANY")
+
+        # ANY should now be rejected and disallowed metric should increase
+        before_disallowed = self.get_metric(node, self.DISALLOWED_METRIC, ConsistencyLevel.ANY)
+        stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (2, 2)", consistency_level=ConsistencyLevel.ANY)
+        with pytest.raises(InvalidRequest):
+            session.execute(stmt)
+        self.assert_metric_increased(node, self.DISALLOWED_METRIC, ConsistencyLevel.ANY, before_disallowed)
+
+        # Now update to warned instead of disallowed
+        self.change_config(session, "write_consistency_levels_disallowed", "")
+        self.change_config(session, "write_consistency_levels_warned", "ANY")
+
+        # ANY should now work but warned metric should increase
+        before_warned = self.get_metric(node, self.WARNED_METRIC, ConsistencyLevel.ANY)
+        stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (3, 3)", consistency_level=ConsistencyLevel.ANY)
+        session.execute(stmt)
+        self.assert_metric_increased(node, self.WARNED_METRIC, ConsistencyLevel.ANY, before_warned)
