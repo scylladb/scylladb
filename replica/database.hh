@@ -1485,6 +1485,7 @@ struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
     seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
     seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group maintenance_compaction_scheduling_group;
     seastar::scheduling_group memory_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;

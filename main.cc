@@ -1147,6 +1147,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
+            dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
             dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
             dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000, user_ssg).get();
@@ -1207,7 +1208,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto get_cm_cfg = sharded_parameter([&] {
                 return compaction::compaction_manager::config {
                     .compaction_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.maintenance_compaction_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
