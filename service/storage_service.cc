@@ -6286,7 +6286,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             break;
             case raft_topology_cmd::command::stream_ranges: {
                 co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
-                    const auto rs = _topology_state_machine._topology.find(id)->second;
+                    const auto* server_rs = _topology_state_machine._topology.find(id);
+                    if (!server_rs) {
+                        on_internal_error(rtlogger, format("Got {} request for node {} not found in topology", cmd.cmd, id));
+                    }
+                    const auto& rs = server_rs->second;
                     auto tstate = _topology_state_machine._topology.tstate;
                     auto session = _topology_state_machine._topology.session;
                     if (!rs.ring || rs.ring->tokens.empty()) {
