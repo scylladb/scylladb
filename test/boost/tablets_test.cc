@@ -1650,6 +1650,21 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
     }
 }
 
+static future<> apply_repair_transitions(token_metadata& tm, const migration_plan& plan) {
+    for (const auto& repair : plan.repair_plan().repairs()) {
+        co_await tm.tablets().mutate_tablet_map_async(repair.table, [&] (tablet_map& tmap) {
+            auto tablet_info = tmap.get_tablet_info(repair.tablet);
+            tmap.set_tablet_transition_info(repair.tablet, tablet_transition_info{
+                tablet_transition_stage::repair,
+                tablet_transition_kind::repair,
+                tablet_info.replicas,
+                std::nullopt,
+            });
+            return make_ready_future();
+        });
+    }
+}
+
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::topology& topology, shared_load_stats* load_stats) {
@@ -1674,6 +1689,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
     if (auto request_id = plan.rack_list_colocation_plan().request_to_resume(); request_id) {
         topology.paused_rf_change_requests.erase(request_id);
     }
+    co_await apply_repair_transitions(tm, plan);
 }
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
@@ -5993,6 +6009,91 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
         auto ring = ss.describe_ring_for_table(s->ks_name(), s->cf_name()).get();
         BOOST_REQUIRE_GE(ring.size(), min_tablet_count);
     }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+
+        tablet_id tablet{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tablet = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        bool once = false;
+        rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+    }, std::move(cfg_in)).get();
+}
+
+void run_tablet_manual_repair_rf1(cql_test_env& e) {
+    topology_builder topo(e);
+
+    unsigned shard_count = 1;
+    auto dc1 = topo.dc();
+    auto rack1 = topo.rack();
+    [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto rack2 = topo.start_new_rack();
+    [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+
+    tablet_id tablet{0};
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tablet = tid;
+        tablet_info ti{
+            tablet_replica_set {
+                tablet_replica{host1, 0},
+            }
+        };
+        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        tmap.set_tablet(tid, std::move(ti));
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    bool once = false;
+    rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+    BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet)->transition == tablet_transition_kind::repair);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_off) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(false);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
