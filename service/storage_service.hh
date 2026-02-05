@@ -849,12 +849,6 @@ private:
     // based topology to raft-based topology.
     topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
 
-    // Throws an exception if the node is either starting and didn't determine which
-    // topology operations to use, or if it is in the process of upgrade to topology
-    // on raft. The name only serves for display purposes (i.e. it will be included
-    // in the exception, if one is thrown).
-    void check_ability_to_perform_topology_operation(std::string_view operation_name) const;
-
 private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
