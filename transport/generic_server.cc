@@ -29,9 +29,10 @@ class counted_data_source_impl : public data_source_impl {
         if (_cpu_concurrency.stopped) {
             return fun();
         }
+        size_t units = _cpu_concurrency.units.count();
         _cpu_concurrency.units.return_all();
-        return fun().finally([this] () {
-            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        return fun().finally([this, units] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, units));
         });
     };
 public:
@@ -57,9 +58,10 @@ class counted_data_sink_impl : public data_sink_impl {
         if (_cpu_concurrency.stopped) {
             return fun();
         }
+        size_t units = _cpu_concurrency.units.count();
         _cpu_concurrency.units.return_all();
-        return fun().finally([this] () {
-            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        return fun().finally([this, units] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, units));
         });
     };
 public:
@@ -72,10 +74,10 @@ public:
         if (_cpu_concurrency.stopped) {
             return _ds.put(std::move(data));
         }
-
+        size_t units = _cpu_concurrency.units.count();
         _cpu_concurrency.units.return_all();
-        return _ds.put(std::move(data)).finally([this] {
-            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        return _ds.put(std::move(data)).finally([this, units] {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, units));
         });
     }
     virtual future<> flush() override {
