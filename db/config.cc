@@ -1527,6 +1527,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
          "Allows target tablet size to be configured. Defaults to 5G (in bytes). Maintaining tablets at reasonable sizes is important to be able to " \
          "redistribute load. A higher value means tablet migration throughput can be reduced. A lower value may cause number of tablets to increase significantly, " \
          "potentially resulting in performance drawbacks.")
+    , tablet_streaming_read_concurrency_per_shard(this, "tablet_streaming_read_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 4,
+         "Maximum number of tablets which may be leaving a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
+    , tablet_streaming_write_concurrency_per_shard(this, "tablet_streaming_write_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 2,
+         "Maximum number of tablets which may be pending on a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
     , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
