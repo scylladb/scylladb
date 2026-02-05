@@ -182,6 +182,8 @@ inline fs::path make_path(std::string_view table_dir, sstable_state state) {
 
 constexpr const char* repair_origin = "repair";
 
+const open_flags sstable_write_open_flags = open_flags::wo | open_flags::create | open_flags::exclusive;
+
 class delayed_commit_changes {
     std::unordered_set<sstring> _dirs;
     friend class filesystem_storage;
@@ -673,10 +675,10 @@ private:
     future<> unlink_component(component_type type) noexcept;
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
-            open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
+            open_flags oflags = sstable_write_open_flags) noexcept;
 
     future<std::unique_ptr<crc32_digest_file_writer>> make_digests_component_file_writer(component_type c, file_output_stream_options options,
-            open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
+            open_flags oflags = sstable_write_open_flags) noexcept;
 
     void generate_toc();
     void open_sstable(const sstring& origin);

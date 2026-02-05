@@ -1516,7 +1516,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
 }
 
 future<> sstable::create_data() noexcept {
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+    auto oflags = sstable_write_open_flags;
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
