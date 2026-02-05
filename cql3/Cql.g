@@ -91,6 +91,7 @@ options {
 #include <algorithm>
 #include <unordered_map>
 #include <map>
+#include <limits>
 }
 
 @parser::traits {
@@ -2092,7 +2093,11 @@ vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
         {
             if ($d.text[0] == '-')
                 throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
-            $pt = cql3::cql3_type::raw::vector(t, std::stoul($d.text));
+            auto parsed_dimension = std::stoul($d.text);
+            if (parsed_dimension > std::numeric_limits<vector_dimension_t>::max()) {
+                throw exceptions::invalid_request_exception("Vector dimension is too large");
+            }
+            $pt = cql3::cql3_type::raw::vector(t, static_cast<vector_dimension_t>(parsed_dimension));
         }
     ;
 

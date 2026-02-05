@@ -4,6 +4,8 @@
 
 #############################################################################
 # Tests involving the "vector" column type.
+import pytest
+
 from .util import new_test_table
 
 
@@ -26,3 +28,14 @@ def test_vector_of_set_using_arguments_binding(cql, test_keyspace):
 
         assert row is not None
         assert row.v == value_to_insert
+
+
+def test_vector_dimension_upper_bound_is_allowed(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int primary key, v vector<float, 16000>"):
+        pass
+
+
+def test_vector_dimension_above_upper_bound_is_rejected(cql, test_keyspace):
+    with pytest.raises(Exception, match="dimension"):
+        with new_test_table(cql, test_keyspace, "pk int primary key, v vector<float, 16001>"):
+            pass
