@@ -103,16 +103,41 @@ if __name__ == '__main__':
         run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb), shell=True, check=True)
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile), shell=True, check=True)
+
+    mount_point = find_mount_point(swap_directory)
+    mount_unit = out(f'systemd-escape -p --suffix=mount {mount_point}')
+
+    # Add DefaultDependencies=no to the swap unit to avoid getting the default
+    # Before=swap.target dependency. We apply this to all clouds, but the
+    # requirement came from Azure:
+    #
+    # On Azure, the swap directory is on the Azure ephemeral disk (mounted on /mnt).
+    # However, cloud-init makes this mount (i.e., the mnt.mount unit) depend on
+    # the network (After=network-online.target). By extension, this means that
+    # the swap unit depends on the network. If we didn't use DefaultDependencies=no,
+    # then the swap unit would be part of the swap.target which other services
+    # assume to be a local boot target, so we would end up with dependency cycles
+    # such as:
+    #
+    # swap.target -> mnt-swapfile.swap -> mnt.mount -> network-online.target -> network.target -> systemd-resolved.service -> tmp.mount -> swap.target
+    #
+    # By removing the automatic Before=swap.target, the swap unit is no longer
+    # part of swap.target, avoiding such cycles. The swap will still be
+    # activated via WantedBy=multi-user.target.
     unit_data = '''
 [Unit]
 Description=swapfile
+DefaultDependencies=no
+After={}
+Conflicts=umount.target
+Before=umount.target
 
 [Swap]
 What={}
 
 [Install]
 WantedBy=multi-user.target
-'''[1:-1].format(swapfile)
+'''[1:-1].format(mount_unit, swapfile)
     with swapunit.open('w') as f:
         f.write(unit_data)
     systemd_unit.reload()
