@@ -578,8 +578,6 @@ static auto check_run_test_decorator(const char* var, bool def = false) {
     return boost::unit_test::precondition(std::bind(&check_run_test, var, def));
 }
 
-#ifdef HAVE_KMIP
-
 struct kmip_test_info {
     std::string host;
     std::string cert;
@@ -928,8 +926,6 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
         BOOST_REQUIRE(!past_second_start);
     });
 }
-
-#endif // HAVE_KMIP
 
 std::string make_aws_host(std::string_view aws_region, std::string_view service);
 
