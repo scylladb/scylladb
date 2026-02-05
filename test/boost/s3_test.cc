@@ -766,7 +766,6 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
 #endif
 
     cln->delete_object(object_name).get();
-    cln->close().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
