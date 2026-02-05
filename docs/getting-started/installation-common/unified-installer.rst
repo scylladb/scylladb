@@ -12,7 +12,8 @@ the package manager (dnf and apt).
 Prerequisites
 ---------------
 Ensure your platform is supported by the ScyllaDB version you want to install. 
-See :doc:`OS Support </getting-started/os-support>` for information about supported Linux distributions and versions.
+See `OS Support <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
+for information about supported Linux distributions and versions.
 
 Note that if you're on CentOS 7, only root offline installation is supported.
 
