@@ -804,6 +804,7 @@ public:
     virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return do_make_sstable(); }
+    virtual sstables::shared_sstable make_sstable(sstables::sstable_state, sstables::sstable_version_types) const override { return do_make_sstable(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
@@ -1332,6 +1333,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
         case sstables::scylla_metadata_type::Schema: return "schema";
+        case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
     }
     std::abort();
 }
@@ -1388,6 +1390,14 @@ public:
             _writer.EndObject();
         }
         _writer.EndArray();
+    }
+    void operator()(const sstables::scylla_metadata::components_digests& val) const {
+        _writer.StartObject();
+        for (const auto& [k, v] : val.map) {
+            _writer.Key(fmt::format("{}", k));
+            _writer.Uint(v);
+        }
+        _writer.EndObject();
     }
     void operator()(const sstables::sstable_enabled_features& val) const {
         std::pair<sstables::sstable_feature, const char*> all_features[] = {
@@ -1525,6 +1535,10 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
         }
         for (const auto& [k, v] : m->data.data) {
             std::visit(scylla_metadata_visitor(writer), v);
+        }
+        if (m->digest.has_value()) {
+            writer.Key("digest");
+            writer.Uint(m->digest.value());
         }
         writer.EndObject();
     }
