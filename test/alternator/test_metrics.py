@@ -581,8 +581,7 @@ def test_update_item_many_items_fall_into_appropriate_buckets(dynamodb, test_tab
 # Verify that only the new item size is counted in the histogram if RBW is
 # disabled, and both sizes if it is enabled. The WCU is calculated as the
 # maximum of the old and new item sizes.
-@pytest.mark.xfail(reason="Updates don't consider the larger of the old item size and the new item size. This will be fixed in a next PR.")
-@pytest.mark.parametrize("force_rbw", [True, False])
+@pytest.mark.parametrize("force_rbw", [pytest.param(True, marks=pytest.mark.xfail(reason="Updates don't consider the larger of the old item size and the new item size.")), False])
 def test_update_item_increases_metrics_for_new_item_size_only(dynamodb, test_table_s, metrics, force_rbw):
     with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
         if force_rbw:

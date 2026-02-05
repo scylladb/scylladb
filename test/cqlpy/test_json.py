@@ -414,7 +414,6 @@ def test_fromjson_null_constant(cql, table1):
 # (issue #7972) where the double value 123.456 was correctly formatted, but
 # the value 123123.123123 was truncated to an integer. This test reproduces
 # this.
-@pytest.mark.xfail(reason="issue #7972")
 def test_tojson_double(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, d) VALUES (?, ?)")
