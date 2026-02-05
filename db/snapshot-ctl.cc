@@ -21,14 +21,16 @@
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
 #include "sstables/sstables_manager.hh"
+#include "service/storage_proxy.hh"
 
 logging::logger snap_log("snapshots");
 
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
     : _config(std::move(cfg))
     , _db(db)
+    , _sp(sp)
     , _ops("snapshot_ctl")
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
     , _storage_manager(sstm)
@@ -83,6 +85,15 @@ future<> snapshot_ctl::do_take_snapshot(sstring tag, std::vector<sstring> keyspa
     co_await coroutine::parallel_for_each(keyspace_names, [tag, this] (const auto& ks_name) {
         return check_snapshot_not_exist(ks_name, tag);
     });
+
+    if (opts.use_topology_coordinator) {
+        co_await _sp.local().snapshot_keyspace(
+            keyspace_names | std::views::transform([&](auto& ks) { return std::make_pair(ks, sstring{}); }) 
+                | std::ranges::to<std::unordered_multimap>(),
+                tag, opts
+        );
+        co_return;
+    }
     co_await coroutine::parallel_for_each(keyspace_names, [this, tag = std::move(tag), opts] (const auto& ks_name) {
         return replica::database::snapshot_keyspace_on_all_shards(_db, ks_name, tag, opts);
     });
@@ -106,6 +117,14 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
 
 future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
     co_await check_snapshot_not_exist(ks_name, tag, tables);
+    if (opts.use_topology_coordinator) {
+        co_await _sp.local().snapshot_keyspace(
+            tables | std::views::transform([&](auto& cf) { return std::make_pair(ks_name, cf); }) 
+                | std::ranges::to<std::unordered_multimap>(),
+                tag, opts
+        );
+        co_return;
+    } 
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), opts);
 }
 

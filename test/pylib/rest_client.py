@@ -391,9 +391,13 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def take_snapshot(self, node_ip: str, ks: str, tag: str) -> None:
+    async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None, use_tc: bool = False) -> None:
         """Take keyspace snapshot"""
         params = { 'kn': ks, 'tag': tag }
+        if tables:
+            params['cf'] = ','.join(tables)
+        if use_tc:
+            params['tc'] = 'true'
         await self.client.post(f"/storage_service/snapshots", host=node_ip, params=params)
 
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:

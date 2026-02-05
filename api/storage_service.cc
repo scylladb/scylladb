@@ -2016,8 +2016,11 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
+        auto tcopt = req->get_query_param("tc");
+
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
+            .use_topology_coordinator = strcasecmp(tcopt.c_str(), "true") == 0,
         };
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
