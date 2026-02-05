@@ -2280,7 +2280,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         }
     }
 
-    set_topology_change_kind(topology_change_kind::raft);
+    _gossiper.set_topology_state_machine(&_topology_state_machine);
 
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
@@ -6519,11 +6519,6 @@ future<> storage_service::start_maintenance_mode() {
         token_metadata->update_topology(my_host_id(), _snitch.local()->get_location(), locator::node::state::normal, smp::count);
         return token_metadata->update_normal_tokens({ dht::token{} }, my_host_id());
     }, acquire_merge_lock::yes);
-}
-
-void storage_service::set_topology_change_kind(topology_change_kind kind) {
-    _topology_change_kind_enabled = kind;
-    _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {

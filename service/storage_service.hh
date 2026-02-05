@@ -833,22 +833,6 @@ private:
 
     friend class group0_state_machine;
 
-    enum class topology_change_kind {
-        // The node is still starting and didn't determine yet which ops kind to use
-        unknown,
-        // The node uses legacy, gossip-based topology operations
-        legacy,
-        // The node is in the process of upgrading to raft-based topology operations
-        upgrading_to_raft,
-        // The node uses raft-based topology operations
-        raft
-    };
-    // The _topology_change_kind_enabled variable is first initialized in `join_cluster`.
-    // After the node successfully joins, the control over the variable is yielded
-    // to `topology_state_load`, so that it can control it during the upgrade from gossiper
-    // based topology to raft-based topology.
-    topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
-
 private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
@@ -899,7 +883,6 @@ private:
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
-    void set_topology_change_kind(topology_change_kind kind);
 
     struct state_change_hint {
         std::optional<locator::tablet_metadata_change_hint> tablets_hint;
