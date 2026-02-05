@@ -17,7 +17,7 @@ This article will help you install ScyllaDB on Linux using platform-specific pac
 Prerequisites
 ----------------
 
-* Ubuntu, Debian, CentOS, or RHEL (see :doc:`OS Support by Platform and Version </getting-started/os-support>`
+* Ubuntu, Debian, CentOS, or RHEL (see `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
   for details about supported versions and architecture)
 * Root or ``sudo`` access to the system
 * Open :ref:`ports used by ScyllaDB <networking-ports>`

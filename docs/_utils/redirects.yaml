@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Move the OS Support page
+
+/stable/getting-started/os-support.html: https://docs.scylladb.com/stable/versioning/os-support-per-version.html
+
 # Remove an outdated KB
 
 /stable/kb/perftune-modes-sync.html: /stable/kb/index.html

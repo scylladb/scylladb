@@ -10,7 +10,7 @@ Prerequisites
 --------------
 
 Ensure that your platform is supported by the ScyllaDB version you want to install. 
-See :doc:`OS Support by Platform and Version </getting-started/os-support/>`.
+See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_.
 
 Install ScyllaDB with Web Installer
 ---------------------------------------
