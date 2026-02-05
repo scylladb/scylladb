@@ -388,6 +388,20 @@ public:
         return _nodes.at(node)._shards.size();
     }
 
+    uint64_t get_best_overcommit(host_id node, const uint64_t ideal_used_on_shard) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+
+        uint64_t best_overcommit = 0;
+        for (const shard_load& s : _nodes.at(node)._shards_by_load) {
+            if (s.du.used >= ideal_used_on_shard && (best_overcommit == 0 || s.du.used < best_overcommit)) {
+                best_overcommit = s.du.used;
+            }
+        }
+        return best_overcommit;
+    }
+
     // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
     // Returns 0 when shards are perfectly balanced.
     // Returns 1 when shards are imbalanced, but it's not possible to balance them.
