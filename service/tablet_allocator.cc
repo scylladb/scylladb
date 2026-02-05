@@ -1223,6 +1223,24 @@ public:
             co_await coroutine::maybe_yield();
             auto config = tmap.get_repair_scheduler_config();
             auto auto_repair_enabled = is_auto_repair_enabled(config);
+            if (auto_repair_enabled) {
+                auto needs_repair = [&] {
+                    auto t = _db.get_tables_metadata().get_table_if_exists(table);
+                    if (!t) {
+                        return false;
+                    }
+                    auto erm = t->get_effective_replication_map();
+                    auto replication_factor = erm->get_replication_factor();
+                    if (replication_factor == 1) {
+                        lblogger.debug("make_repair_plan: Skipped auto repair for table={} using rf=1", table);
+                        return false;
+                    }
+                    return true;
+                };
+                if (!needs_repair()) {
+                    continue;
+                }
+            }
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
