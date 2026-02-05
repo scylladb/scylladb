@@ -1493,6 +1493,7 @@ class client::do_upload_file : private multipart_upload {
     // read-ahead into consideration, for maximizing the throughput,
     // we use 64K buffer size.
     static constexpr size_t _transmit_size = 64_KiB;
+    static constexpr size_t _max_multipart_concurrency = 16;
 
     static file_input_stream_options input_stream_options() {
         // optimized for throughput
@@ -1546,9 +1547,7 @@ class client::do_upload_file : private multipart_upload {
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
-        // upload the parts in the background for better throughput
-        auto gh = _bg_flushes.hold();
-        std::ignore = _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+        co_await _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
@@ -1556,7 +1555,7 @@ class client::do_upload_file : private multipart_upload {
             return make_ready_future();
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-        }).finally([gh = std::move(gh)] {});
+        });
     }
 
     // returns pair<num_of_parts, part_size>
@@ -1589,12 +1588,13 @@ class client::do_upload_file : private multipart_upload {
 
         std::exception_ptr ex;
         try {
-            for (size_t offset = 0; offset < total_size; offset += part_size) {
-                part_size = std::min(total_size - offset, part_size);
-                s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
-                co_await upload_part(file{f}, offset, part_size);
-            }
-
+            auto offsets = std::views::iota(0ul, total_size) | std::views::stride(part_size);
+            co_await max_concurrent_for_each(
+                offsets, _max_multipart_concurrency, [&part_size, total_size, this, f = std::move(f)](uint64_t offset) -> future<> {
+                    part_size = std::min(total_size - offset, part_size);
+                    s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
+                    co_await upload_part(file{f}, offset, part_size);
+                });
             co_await finalize_upload();
         } catch (...) {
             ex = std::current_exception();
