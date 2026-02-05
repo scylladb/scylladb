@@ -264,27 +264,27 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
         on_internal_error(logger, format("unexpected group0 upgrade state {} in start_operation",  upgrade_state));
     }
 
-            auto operation_holder = co_await get_units(_operation_mutex, 1, as);
-            co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
+    auto operation_holder = co_await get_units(_operation_mutex, 1, as);
+    co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
 
-            // Take `_group0_read_apply_mutex` *after* read barrier.
-            // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-            auto read_apply_holder = co_await hold_read_apply_mutex(as);
+    // Take `_group0_read_apply_mutex` *after* read barrier.
+    // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
+    auto read_apply_holder = co_await hold_read_apply_mutex(as);
 
-            auto observed_group0_state_id = co_await get_last_group0_state_id();
-            auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
+    auto observed_group0_state_id = co_await get_last_group0_state_id();
+    auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
 
-            co_return group0_guard {
-                std::make_unique<group0_guard::impl>(
-                    std::move(operation_holder),
-                    std::move(read_apply_holder),
-                    observed_group0_state_id,
-                    new_group0_state_id,
-                    // Not holding any lock in this case, but move the upgrade lock holder for consistent code
-                    rwlock::holder{},
-                    true
-                )
-            };
+    co_return group0_guard {
+        std::make_unique<group0_guard::impl>(
+            std::move(operation_holder),
+            std::move(read_apply_holder),
+            observed_group0_state_id,
+            new_group0_state_id,
+            // Not holding any lock in this case, but move the upgrade lock holder for consistent code
+            rwlock::holder{},
+            true
+        )
+    };
 }
 
 template<typename Command>
