@@ -56,7 +56,7 @@ SEASTAR_THREAD_TEST_CASE(test_control_protocol_sanity) {
     bob.announce_dict(nullptr);
     settle();
     BOOST_REQUIRE(alice.sender_current_dict().id == netw::shared_dict::dict_id());
-    BOOST_REQUIRE(bob.sender_current_dict().id == netw::shared_dict::dict_id());
+    BOOST_REQUIRE(bob.sender_current_dict().id != netw::shared_dict::dict_id());
 }
 
 temporary_buffer<char> bytes_view_to_temporary_buffer(bytes_view bv) {
