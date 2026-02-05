@@ -3011,7 +3011,7 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
 }
 
 future<> tablet_storage_group_manager::merge_completion_fiber() {
-    co_await coroutine::switch_to(_t.get_config().streaming_scheduling_group);
+    co_await coroutine::switch_to(_t.get_config().maintenance_scheduling_group);
 
     while (!_t.async_gate().is_closed()) {
         try {
