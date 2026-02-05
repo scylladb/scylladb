@@ -373,7 +373,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         auto& topo = _topo_sm._topology;
 
         auto it = topo.find(id);
-        SCYLLA_ASSERT(it);
+        if (!it) {
+            on_internal_error(rtlogger, format("retake_node: node {} not found in topology", id));
+        }
 
         std::optional<topology_request> req;
         auto rit = topo.requests.find(id);
@@ -2496,7 +2498,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        if (node.rs->ring) {
+                            on_internal_error(rtlogger, format("Bootstrapping node {} owns tokens", node.id));
+                        }
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
 
@@ -2552,11 +2556,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                         break;
                     case node_state::replacing: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        if (node.rs->ring) {
+                            on_internal_error(rtlogger, format("Replacing node {} owns tokens", node.id));
+                        }
                         auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
-                        SCYLLA_ASSERT(it != _topo_sm._topology.normal_nodes.end());
-                        SCYLLA_ASSERT(it->second.ring && it->second.state == node_state::normal);
+                        if (it == _topo_sm._topology.normal_nodes.end()) {
+                            on_internal_error(rtlogger,
+                                    format("Node {} being replaced by {} not found in normal nodes", replaced_id, node.id));
+                        }
+                        if (!it->second.ring) {
+                            on_internal_error(rtlogger,
+                                    format("Node {} being replaced by {} is missing tokens", replaced_id, node.id));
+                        }
+                        if (it->second.state != node_state::normal) {
+                            on_internal_error(rtlogger,
+                                    format("Node {} being replaced by {} is not in normal state", replaced_id, node.id));
+                        }
 
                         topology_mutation_builder builder(node.guard.write_timestamp());
 
@@ -2955,7 +2971,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     break;
                 default:
-                    on_fatal_internal_error(rtlogger, ::format(
+                    on_internal_error(rtlogger, ::format(
                             "Ring state on node {} is write_both_read_new while the node is in state {}",
                             node.id, node.rs->state));
                 }
@@ -3272,7 +3288,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtbuilder.set("start_time", db_clock::now());
                 switch (node.request.value()) {
                     case topology_request::join: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        if (node.rs->ring) {
+                            on_internal_error(rtlogger, ::format("Joining node {} owns tokens", node.id));
+                        }
                         // Write chosen tokens through raft.
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
@@ -3284,7 +3302,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         break;
                         }
                     case topology_request::leave: {
-                        SCYLLA_ASSERT(node.rs->ring);
+                        if (!node.rs->ring) {
+                            on_internal_error(rtlogger, ::format("Leaving node {} doesn't own tokens", node.id));
+                        }
 
                         auto validation_result = validate_removing_node(_db, to_host_id(node.id));
                         if (std::holds_alternative<node_validation_failure>(validation_result)) {
@@ -3315,7 +3335,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         break;
                         }
                     case topology_request::remove: {
-                        SCYLLA_ASSERT(node.rs->ring);
+                        if (!node.rs->ring) {
+                            on_internal_error(rtlogger, ::format("Node {} being removed doesn't own tokens", node.id));
+                        }
 
                         auto validation_result = validate_removing_node(_db, to_host_id(node.id));
                         if (std::holds_alternative<node_validation_failure>(validation_result)) {
@@ -3343,7 +3365,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         break;
                         }
                     case topology_request::replace: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        if (node.rs->ring) {
+                            on_internal_error(rtlogger, ::format("Replacing node {} owns tokens", node.id));
+                        }
 
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
@@ -3400,12 +3424,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             case node_state::removing:
             case node_state::replacing:
                 // Should not get here
-                on_fatal_internal_error(rtlogger, ::format(
+                on_internal_error(rtlogger, ::format(
                     "Found node {} in state {} but there is no ongoing topology transition",
                     node.id, node.rs->state));
             case node_state::left:
                 // Should not get here
-                on_fatal_internal_error(rtlogger, ::format(
+                on_internal_error(rtlogger, ::format(
                         "Topology coordinator is called for node {} in state 'left'", node.id));
                 break;
         }
@@ -3467,7 +3491,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         auto id = node.id;
 
-        SCYLLA_ASSERT(!_topo_sm._topology.transition_nodes.empty());
+        if (_topo_sm._topology.transition_nodes.empty()) {
+            on_internal_error(rtlogger, format("transition nodes are empty while accepting node {}", node.id));
+        }
 
         release_node(std::move(node));
 
