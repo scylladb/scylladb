@@ -2165,7 +2165,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_read_load;
-            if (load + info.stream_weight > max_read_streaming_load) {
+            if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
             }
@@ -2175,7 +2175,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_write_load;
-            if (load + info.stream_weight > max_write_streaming_load) {
+            if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
             }
