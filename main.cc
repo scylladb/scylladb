@@ -1892,8 +1892,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_raft(ctx).get();
             });
 
-            group0_client.init().get();
-
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
             db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();

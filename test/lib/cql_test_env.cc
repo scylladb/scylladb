@@ -1058,8 +1058,6 @@ private:
                 _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
             }
 
-            group0_client.init().get();
-
             auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });

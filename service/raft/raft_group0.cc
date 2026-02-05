@@ -411,9 +411,9 @@ future<> raft_group0::abort_and_drain() {
 future<> raft_group0::do_abort_and_drain() {
     group0_log.debug("Aborting raft group0 service...");
 
-    // abort_server() may already be running in the background if triggered by the 
-    // on_background_error callback. We wait for that to complete. This code 
-    // shouldn't normally throw, but we wrap it in try/catch just in case, to ensure 
+    // abort_server() may already be running in the background if triggered by the
+    // on_background_error callback. We wait for that to complete. This code
+    // shouldn't normally throw, but we wrap it in try/catch just in case, to ensure
     // we still wait for the background abort.
 
     try {
@@ -560,8 +560,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // Force snapshot transfer from us to subsequently joining servers.
                 // This is important for upgrade and recovery, where the group 0 state machine
                 // (schema tables in particular) is nonempty.
-                // In case of fresh cluster with raft topology enabled, this will trigger a snapshot transfer which propagates initial 
-                // topology state (created in raft_initialize_discovery_leader above). Otherwise, with raft topology disabled, this will 
+                // In case of fresh cluster with raft topology enabled, this will trigger a snapshot transfer which propagates initial
+                // topology state (created in raft_initialize_discovery_leader above). Otherwise, with raft topology disabled, this will
                 // trigger an empty snapshot transfer.
                 nontrivial_snapshot = true;
             } else {
@@ -673,13 +673,7 @@ struct group0_members {
 
 bool raft_group0::maintenance_mode() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-
-    if (_client.get_group0_upgrade_state() == group0_upgrade_state::recovery) {
-        group0_log.warn("setup_group0: maintenance mode, skipping group 0 setup.");
-        return true;
-    }
-
-    return false;
+    return _client.maintenance_mode();
 }
 
 future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
@@ -708,8 +702,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
         // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
         // migration_manager schema pulls.
-        auto start_state = _client.get_group0_upgrade_state();
-        if (start_state != group0_upgrade_state::use_post_raft_procedures) {
+        if (co_await sys_ks.load_group0_upgrade_state() != "use_post_raft_procedures") {
             throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
                 " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
         }
@@ -755,7 +748,7 @@ future<> raft_group0::setup_group0(
     });
 
     group0_log.info("setup_group0: the cluster is ready to use Raft. Finishing.");
-    co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
+    co_await sys_ks.save_group0_upgrade_state("use_post_raft_procedures");
 }
 
 future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
