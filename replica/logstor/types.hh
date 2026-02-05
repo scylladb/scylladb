@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 #include "mutation/canonical_mutation.hh"
 #include "replica/logstor/utils.hh"
+#include "utils/hash.hh"
 
 namespace replica::logstor {
 
@@ -95,5 +96,13 @@ struct fmt::formatter<replica::logstor::group_id> : fmt::formatter<string_view> 
     template <typename FormatContext>
     auto format(const replica::logstor::group_id& gid, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}:{}", gid.table, gid.compaction_group_id);
+    }
+};
+
+template <>
+struct std::hash<replica::logstor::group_id> {
+    size_t operator()(const replica::logstor::group_id& gid) const noexcept {
+        return utils::hash_combine(std::hash<table_id>{}(gid.table),
+                                   std::hash<size_t>{}(gid.compaction_group_id));
     }
 };

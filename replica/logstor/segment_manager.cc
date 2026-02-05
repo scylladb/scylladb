@@ -20,6 +20,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/abort_source.hh>
@@ -45,6 +46,7 @@ protected:
     seastar::file _file;
     uint64_t _file_offset; // Offset within the shared file where this segment starts
     size_t _max_size;
+    std::optional<group_id> _gid;
 
 public:
     segment(log_segment_id id, seastar::file file, uint64_t file_offset, size_t max_size);
@@ -57,6 +59,14 @@ public:
 
     log_segment_id id() const noexcept { return _id; }
     seastar::file& get_file() noexcept { return _file; }
+
+    void set_group_id(group_id gid) {
+        _gid = gid;
+    }
+
+    std::optional<group_id> get_group_id() const noexcept {
+        return _gid;
+    }
 
 protected:
     uint64_t absolute_offset(uint64_t relative_offset) const noexcept {
@@ -176,10 +186,12 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     size_t free_space{0};
     size_t record_count{0};
     segment_generation seg_gen{1};
+    std::optional<group_id> gid;
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
         record_count = 0;
+        gid = std::nullopt;
     }
 
     size_t net_data_size(size_t segment_size) const noexcept {
@@ -406,7 +418,15 @@ private:
 
     serialized_action _compaction_action;
 
-    segment_descriptor_hist _segment_hist;
+    struct compaction_group {
+        segment_descriptor_hist segment_hist;
+    };
+
+    using compaction_group_map = std::map<group_id, compaction_group>;
+    using compaction_group_it = compaction_group_map::iterator;
+
+    compaction_group_map _compaction_groups;
+    compaction_group_it _next_group_for_compaction;
 
     seastar::gate _async_gate;
 
@@ -425,6 +445,7 @@ public:
         , _compaction_action([this] {
             return start_compaction();
         })
+        , _next_group_for_compaction(_compaction_groups.end())
     {}
 
     future<> start();
@@ -461,14 +482,15 @@ public:
 
     const stats& get_stats() const noexcept { return _stats; }
 
+    // compaction group must be set.
     void add_segment(segment_descriptor& desc) {
-        _segment_hist.push(desc);
+        _compaction_groups[*desc.gid].segment_hist.push(desc);
     }
 
     // call when space is freed in a segment.
     void update_segment(segment_descriptor& desc) {
         if (desc.is_linked()) {
-            _segment_hist.adjust_up(desc);
+            _compaction_groups[*desc.gid].segment_hist.adjust_up(desc);
         }
     }
 
@@ -477,13 +499,12 @@ private:
     bool is_record_alive(const index_key&, log_location);
     bool update_record_location(const index_key&, log_location old_loc, log_location new_loc);
 
-    std::vector<log_segment_id> select_segments_for_compaction();
+    std::vector<log_segment_id> select_segments_for_compaction(const compaction_group&);
+    future<std::optional<std::pair<group_id, std::vector<log_segment_id>>>> select_segments_for_compaction();
     future<> start_compaction();
-    future<> compact_segments(std::vector<log_segment_id> segments);
+    future<> compact_segments(group_id gid, std::vector<log_segment_id> segments);
 
-    void remove_segment(segment_descriptor& desc) {
-        _segment_hist.erase(desc);
-    }
+    void remove_segment(segment_descriptor& desc);
 };
 
 future<> compaction_manager::start() {
@@ -498,9 +519,12 @@ future<> compaction_manager::stop() {
 
     co_await _compaction_action.join();
 
-    while (!_segment_hist.empty()) {
-        _segment_hist.pop_one_of_largest();
+    for (auto& [gid, cg] : _compaction_groups) {
         co_await coroutine::maybe_yield();
+        while (!cg.segment_hist.empty()) {
+            cg.segment_hist.pop_one_of_largest();
+            co_await coroutine::maybe_yield();
+        }
     }
 }
 
@@ -627,7 +651,7 @@ public:
     future<> stop();
 
     future<log_location> write(write_buffer&);
-    future<log_location> write_from_compaction(write_buffer&);
+    future<log_location> write_from_compaction(write_buffer&, group_id);
 
     future<log_record> read(log_location);
 
@@ -895,7 +919,7 @@ future<log_location> segment_manager_impl::write(write_buffer& wb) {
     co_return loc;
 }
 
-future<log_location> segment_manager_impl::write_from_compaction(write_buffer& wb) {
+future<log_location> segment_manager_impl::write_from_compaction(write_buffer& wb, group_id gid) {
     auto holder = _async_gate.hold();
 
     wb.finalize(block_alignment);
@@ -907,6 +931,7 @@ future<log_location> segment_manager_impl::write_from_compaction(write_buffer& w
     }
 
     seg_ptr seg = co_await _segment_pool.get_segment(write_source::compaction);
+    seg->set_group_id(gid);
     _stats.segments_in_use++;
 
     auto alloc = seg->allocate(data.size());
@@ -972,6 +997,8 @@ future<> segment_manager_impl::switch_active_segment() {
     _stats.segments_in_use++;
 
     if (old_seg) {
+        // currently put all segments in the default compaction group
+        old_seg->set_group_id(group_id{});
         // close old segment in background
         (void)with_gate(_async_gate, [this, old_seg] mutable {
             return close_segment(std::move(old_seg));
@@ -985,7 +1012,10 @@ future<> segment_manager_impl::close_segment(seg_ptr seg) {
     co_await seg->stop();
 
     auto& desc = get_segment_descriptor(seg->id());
-    _compaction_mgr.add_segment(desc);
+    if (auto gid = seg->get_group_id()) {
+        desc.gid = *gid;
+        _compaction_mgr.add_segment(desc);
+    }
 }
 
 future<> segment_manager_impl::replenish_reserve() {
@@ -1195,7 +1225,7 @@ bool compaction_manager::update_record_location(const index_key& key, log_locati
     return _index.update_record_location(key, old_loc, new_loc);
 }
 
-std::vector<log_segment_id> compaction_manager::select_segments_for_compaction() {
+std::vector<log_segment_id> compaction_manager::select_segments_for_compaction(const compaction_group& cg) {
     size_t accum_net_data_size = 0;
     size_t accum_record_count = 0;
     ssize_t max_gain = 0;
@@ -1203,7 +1233,7 @@ std::vector<log_segment_id> compaction_manager::select_segments_for_compaction()
     std::vector<log_segment_id> candidates;
     const auto segment_size = _sm.get_segment_size();
 
-    for (auto& desc : _segment_hist) {
+    for (const auto& desc : cg.segment_hist) {
         if (candidates.size() >= _cfg.max_segments_per_compaction) {
             break;
         }
@@ -1235,40 +1265,68 @@ std::vector<log_segment_id> compaction_manager::select_segments_for_compaction()
             | std::ranges::to<std::vector<log_segment_id>>();
 }
 
+future<std::optional<std::pair<group_id, std::vector<log_segment_id>>>>
+compaction_manager::select_segments_for_compaction() {
+    if (_compaction_groups.empty()) {
+        co_return std::nullopt;
+    }
+
+    if (_next_group_for_compaction == _compaction_groups.end()) {
+        _next_group_for_compaction = _compaction_groups.begin();
+    }
+
+    auto start = _next_group_for_compaction;
+    do {
+        co_await coroutine::maybe_yield();
+
+        auto& [gid, cg] = *_next_group_for_compaction;
+        ++_next_group_for_compaction;
+
+        auto candidates = select_segments_for_compaction(cg);
+        if (candidates.size() > 0) {
+            co_return std::make_pair(gid, std::move(candidates));
+        }
+
+        if (_next_group_for_compaction == _compaction_groups.end()) {
+            _next_group_for_compaction = _compaction_groups.begin();
+        }
+    } while (_next_group_for_compaction != start);
+
+    co_return std::nullopt;
+}
+
 future<> compaction_manager::start_compaction() {
     if (!_cfg.compaction_enabled) {
         logstor_logger.debug("Compaction is disabled, skipping");
         co_return;
     }
 
-    auto candidates = select_segments_for_compaction();
-    if (candidates.size() == 0) {
-        logstor_logger.debug("No segments for compaction");
-        co_return;
+    if (auto group_and_candidates = co_await select_segments_for_compaction()) {
+        auto& [gid, candidates] = *group_and_candidates;
+        logstor_logger.debug("Starting compaction for group {}", gid);
+
+        auto holder = _async_gate.hold();
+        co_await with_scheduling_group(_cfg.compaction_sg, [this, gid, candidates = std::move(candidates)] mutable {
+            return compact_segments(gid, std::move(candidates));
+        });
     }
-
-    auto holder = _async_gate.hold();
-
-    logstor_logger.debug("Starting compaction of {} segments", candidates.size());
-    co_await with_scheduling_group(_cfg.compaction_sg, [this, candidates = std::move(candidates)] mutable {
-        return compact_segments(std::move(candidates));
-    });
 }
 
-future<> compaction_manager::compact_segments(std::vector<log_segment_id> segments) {
+future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segment_id> segments) {
     struct compaction_buffer {
         segment_manager_impl& sm;
         write_buffer buf;
+        group_id gid;
         std::vector<future<>> pending_updates;
         size_t flush_count{0};
 
-        explicit compaction_buffer(segment_manager_impl& sm, size_t buffer_size)
-            : sm(sm), buf(buffer_size) {}
+        explicit compaction_buffer(segment_manager_impl& sm, size_t buffer_size, group_id gid)
+            : sm(sm), buf(buffer_size), gid(gid) {}
 
         future<> flush() {
             if (buf.has_data()) {
                 flush_count++;
-                auto base_location = co_await sm.write_from_compaction(buf);
+                auto base_location = co_await sm.write_from_compaction(buf, gid);
                 co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
 
                 logstor_logger.trace("Compaction buffer flushed to {} with {} bytes", base_location, buf.get_net_data_size());
@@ -1279,7 +1337,7 @@ future<> compaction_manager::compact_segments(std::vector<log_segment_id> segmen
         }
     };
 
-    compaction_buffer cb(_sm, _sm.get_segment_size());
+    compaction_buffer cb(_sm, _sm.get_segment_size(), gid);
 
     size_t records_rewritten = 0;
     size_t records_skipped = 0;
@@ -1334,6 +1392,23 @@ future<> compaction_manager::compact_segments(std::vector<log_segment_id> segmen
     _stats.compaction_segments_freed += new_segments;
     _stats.compaction_records_rewritten += records_rewritten;
     _stats.compaction_records_skipped += records_skipped;
+}
+
+void compaction_manager::remove_segment(segment_descriptor& desc) {
+    auto it = _compaction_groups.find(*desc.gid);
+    if (it == _compaction_groups.end()) {
+        on_internal_error(logstor_logger, fmt::format("Compaction group {} not found for segment {}", *desc.gid, desc.seg_gen));
+    }
+
+    auto& cg = it->second;
+    cg.segment_hist.erase(desc);
+
+    if (cg.segment_hist.empty()) {
+        if (_next_group_for_compaction == it) {
+            ++_next_group_for_compaction;
+        }
+        _compaction_groups.erase(it);
+    }
 }
 
 future<> segment_manager_impl::do_recovery() {
@@ -1405,9 +1480,16 @@ future<> segment_manager_impl::do_recovery() {
             _free_segments.push_back(seg_id);
             free_segment_count++;
         } else {
-            _compaction_mgr.add_segment(desc);
             used_segment_count++;
             _stats.segments_in_use++;
+
+            if (desc.gid) {
+                logstor_logger.trace("Recovered segment {} with group id {}", seg_id, *desc.gid);
+                _compaction_mgr.add_segment(desc);
+            } else {
+                // TODO recover mixed segments
+                logstor_logger.trace("Recovered segment {} with mixed groups", seg_id);
+            }
         }
         co_await coroutine::maybe_yield();
     }
@@ -1430,8 +1512,17 @@ future<> segment_manager_impl::recover_segment(log_segment_id segment_id) {
     }
     desc.seg_gen = *seg_gen_opt;
 
-    co_await for_each_record(segment_id, [this, &desc] (log_location loc, log_record record) -> future<> {
+    struct mixed_groups {};
+    std::optional<std::variant<group_id, mixed_groups>> seg_group;
+
+    co_await for_each_record(segment_id, [this, &desc, &seg_group] (log_location loc, log_record record) -> future<> {
         logstor_logger.trace("Recovery: read record at {} gen {}", loc, record.generation);
+
+        if (!seg_group) {
+            seg_group = record.group;
+        } else if (std::holds_alternative<group_id>(*seg_group) && std::get<group_id>(*seg_group) != record.group) {
+            seg_group = mixed_groups{};
+        }
 
         index_entry new_entry {
             .location = loc,
@@ -1449,6 +1540,10 @@ future<> segment_manager_impl::recover_segment(log_segment_id segment_id) {
 
         co_return;
     });
+
+    if (std::holds_alternative<group_id>(*seg_group)) {
+        desc.gid = std::get<group_id>(*seg_group);
+    }
 }
 
 future<std::optional<segment_generation>> segment_manager_impl::recover_segment_generation(log_segment_id segment_id) {
