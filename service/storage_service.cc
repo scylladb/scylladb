@@ -6498,19 +6498,6 @@ bool storage_service::is_normal_state_handled_on_boot(locator::host_id node) {
     return _normal_state_handled_on_boot.contains(node);
 }
 
-storage_service::topology_change_kind storage_service::upgrade_state_to_topology_op_kind(topology::upgrade_state_type upgrade_state) const {
-    switch (upgrade_state) {
-    case topology::upgrade_state_type::done:
-        return topology_change_kind::raft;
-    case topology::upgrade_state_type::not_upgraded:
-        // Did not start upgrading to raft topology yet - use legacy
-        return topology_change_kind::legacy;
-    default:
-        // Upgrade is in progress - disallow topology operations
-        return topology_change_kind::upgrading_to_raft;
-    }
-}
-
 future<bool> storage_service::is_vnodes_cleanup_allowed(sstring keyspace) {
     return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         const auto my_id = ss.get_token_metadata().get_my_id();
@@ -6563,13 +6550,6 @@ future<> storage_service::start_maintenance_mode() {
 void storage_service::set_topology_change_kind(topology_change_kind kind) {
     _topology_change_kind_enabled = kind;
     _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);
-}
-
-bool storage_service::raft_topology_change_enabled() const {
-    if (this_shard_id() != 0) {
-        on_internal_error(slogger, "raft_topology_change_enabled() must run on shard 0");
-    }
-    return _topology_change_kind_enabled == topology_change_kind::raft;
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {

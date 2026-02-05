@@ -855,11 +855,6 @@ private:
     // in the exception, if one is thrown).
     void check_ability_to_perform_topology_operation(std::string_view operation_name) const;
 
-    topology_change_kind upgrade_state_to_topology_op_kind(topology::upgrade_state_type upgrade_state) const;
-
-public:
-    bool raft_topology_change_enabled() const;
-
 private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
