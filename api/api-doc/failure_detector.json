@@ -8,6 +8,30 @@
    ],
    "apis":[
       {
+       "path":"/failure_detector/convict/{host}",
+       "operations":[
+         {
+           "method":"POST",
+           "summary":"Forces failure detection of a given host locally, marks the node as DOWN, drops connections",
+           "type":"string",
+           "nickname":"convict",
+           "produces":[
+             "application/json"
+           ],
+           "parameters":[
+             {
+               "name":"host",
+               "description":"Host ID of the node to convict",
+               "required":true,
+               "allowMultiple":false,
+               "type":"string",
+               "paramType":"path"
+             }
+           ]
+         }
+       ]
+      },
+      {
          "path":"/failure_detector/phi",
          "operations":[
             {

@@ -318,6 +318,9 @@ class ScyllaRESTAPIClient:
         res = await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, timeout=timeout, params=params)
         return res
 
+    async def convict(self, node_ip: str, host: HostID) -> None:
+        await self.client.post(f"/failure_detector/convict/{host}", host=node_ip)
+
     async def enable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "true"})
 

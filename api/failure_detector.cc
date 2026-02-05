@@ -9,8 +9,11 @@
 #include "failure_detector.hh"
 #include "api/api.hh"
 #include "api/api-doc/failure_detector.json.hh"
+#include "api/validate.hh"
 #include "gms/application_state.hh"
 #include "gms/gossiper.hh"
+
+extern logging::logger apilog;
 
 namespace api {
 using namespace seastar::httpd;
@@ -62,6 +65,15 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_phi_convict_threshold.set(r, [] (std::unique_ptr<request> req) {
         return make_ready_future<json::json_return_type>(8);
+    });
+
+    fd::convict.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) -> future<json::json_return_type> {
+            auto host_id = validate_host_id(req->get_path_param("host"));
+            apilog.info("Convict {}", host_id);
+            co_await g.convict(host_id);
+            co_return seastar::json::json_void();
+        });
     });
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
