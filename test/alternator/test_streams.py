@@ -482,6 +482,7 @@ def test_get_records_nonexistent_iterator(dynamodbstreams):
 # and if in the future we can work around the DynamoDB problem, we can return
 # these fixtures to module scope.
 
+@contextmanager
 def create_table_ss(dynamodb, dynamodbstreams, type):
     table = create_test_table(dynamodb,
         Tags=TAGS,
@@ -529,19 +530,23 @@ def test_table_sss_new_and_old_images_lsi(dynamodb, dynamodbstreams):
 
 @pytest.fixture(scope="function")
 def test_table_ss_keys_only(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+    with create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY') as stream:
+        yield stream
 
 @pytest.fixture(scope="function")
 def test_table_ss_new_image(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_IMAGE')
+    with create_table_ss(dynamodb, dynamodbstreams, 'NEW_IMAGE') as stream:
+        yield stream
 
 @pytest.fixture(scope="function")
 def test_table_ss_old_image(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'OLD_IMAGE')
+    with create_table_ss(dynamodb, dynamodbstreams, 'OLD_IMAGE') as stream:
+        yield stream
 
 @pytest.fixture(scope="function")
 def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams):
-    yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+    with create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES') as stream:
+        yield stream
 
 @pytest.fixture(scope="function")
 def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams):
@@ -2010,6 +2015,33 @@ def test_stream_table_name_length_192_update(dynamodb, dynamodbstreams):
         # DynamoDB doesn't allow deleting the base table while the stream
         # is in the process of being added
         wait_for_active_stream(dynamodbstreams, table)
+
+# In earlier tests, we tested the stream events logged for BatchWriteItem,
+# but it was usually a single item in the batch or in do_batch_test(),
+# it was multiple items in different partitions. This test checks the
+# remaining case, of a batch writing multiple items in one partition -
+# and checks that the correct events appear for them on the stream.
+# Turns out we had a bug (#28439) in this case, but *only* in always_use_lwt
+# write isolation mode, which writes all the items in the batch with the
+# same timestamp. The test is parameterized to try all write isolation
+# modes, and reproduces #28439 when it failed only in always_use_lwt mode.
+# This is a Scylla-only test because it checks write isolation modes, which
+# don't exist in DynamoDB.
+@pytest.mark.parametrize('mode', ['only_rmw_uses_lwt', pytest.param('always_use_lwt', marks=pytest.mark.xfail(reason='#28439')), 'unsafe_rmw', 'forbid_rmw'])
+def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_only, mode):
+    with create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES') as stream:
+        table, stream_arn = stream
+        # Set write isolation mode on the table to the chosen "mode":
+        table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        table.meta.client.tag_resource(ResourceArn=table_arn, Tags=[{'Key': 'system:write_isolation', 'Value': mode}])
+        # Now try the test, a single BatchWriteItem writing three different
+        # items in the same partition p:
+        def do_updates(table, p, c):
+            cs = [c + '1', c + '2', c + '3']
+            table.meta.client.batch_write_item(RequestItems = {
+                table.name: [{'PutRequest': {'Item': {'p': p, 'c': cc, 'x': cc}}} for cc in cs]})
+            return [['INSERT', {'p': p, 'c': cc}, None, {'p': p, 'c': cc, 'x': cc}] for cc in cs]
+        do_test(stream, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but

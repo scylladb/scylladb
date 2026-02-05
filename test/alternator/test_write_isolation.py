@@ -51,7 +51,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from .util import create_test_table, random_string
+from .util import create_test_table, random_string, new_test_table
 
 @pytest.fixture(scope="function", autouse=True)
 def all_tests_are_scylla_only(scylla_only):
@@ -430,3 +430,53 @@ def test_isolation_updateitem_returnvalues(table_forbid_rmw, tables_permit_rmw):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': 1},
                 ReturnValues=returnvalues)
+
+#############################################################################
+# BatchWriteItem tests.
+# BatchWriteItem writes are always pure write - never RMW (read-modify-write)
+# operations - because none of the RMW options are supported: Batch writes
+# don't support an UpdateExpression, a ConditionExpression or ReturnValues.
+# Still, even in the pure write case, the write code paths are different for
+# the different write isolation modes, and we need to exercise them.
+
+# For completeness, this test exercises a single batch with more than one
+# partition, more than one clustering key in the same partition, and a
+# combination of PutRequest and DeleteRequest.
+def test_isolation_batchwriteitem(dynamodb):
+    # Unfortunately we can't use the four table fixtures that all other tests
+    # use, because those fixtures only have a partition key and we also want
+    # a sort key (so we can test the case of multiple items in the same
+    # partition). So we have to create four new tables just for this test.
+    for mode in ['only_rmw_uses_lwt', 'always_use_lwt', 'unsafe_rmw', 'forbid_rmw']:
+        with new_test_table(dynamodb,
+            Tags=[{'Key': 'system:write_isolation', 'Value': mode}],
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                        { 'AttributeName': 'p', 'AttributeType': 'S' },
+                        { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+            p1 = random_string()
+            p2 = random_string()
+            # Set up two items in p1, only one of them will be deleted later
+            table.put_item(Item={'p': p1, 'c': 'item1', 'x': 'hello'})
+            assert table.get_item(Key={'p': p1, 'c': 'item1'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item1', 'x': 'hello'}
+            table.put_item(Item={'p': p1, 'c': 'item2', 'x': 'hi'})
+            assert table.get_item(Key={'p': p1, 'c': 'item2'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item2', 'x': 'hi'}
+            # Perform the batch write, writing to two different partitions
+            # (p1 and p2), multiple items in one partition (p1), and
+            # one of the writes is a DeleteRequest (of item1 that we wrote
+            # above).
+            table.meta.client.batch_write_item(RequestItems = {
+                table.name: [
+                    {'PutRequest': {'Item': {'p': p1, 'c': 'item3', 'x': 'dog'}}},
+                    {'PutRequest': {'Item': {'p': p1, 'c': 'item4', 'x': 'cat'}}},
+                    {'DeleteRequest': {'Key': {'p': p1, 'c': 'item1'}}},
+                    {'PutRequest': {'Item': {'p': p2, 'c': 'item5', 'x': 'mouse'}}}
+                ]})
+            # After the batch write, item1 will be gone, item2..item5 should
+            # exist with the right content.
+            assert 'Item' not in table.get_item(Key={'p': p1, 'c': 'item1'}, ConsistentRead=True)
+            assert table.get_item(Key={'p': p1, 'c': 'item2'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item2', 'x': 'hi'}
+            assert table.get_item(Key={'p': p1, 'c': 'item3'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item3', 'x': 'dog'}
+            assert table.get_item(Key={'p': p1, 'c': 'item4'}, ConsistentRead=True)['Item'] == {'p': p1, 'c': 'item4', 'x': 'cat'}
+            assert table.get_item(Key={'p': p2, 'c': 'item5'}, ConsistentRead=True)['Item'] == {'p': p2, 'c': 'item5', 'x': 'mouse'}
