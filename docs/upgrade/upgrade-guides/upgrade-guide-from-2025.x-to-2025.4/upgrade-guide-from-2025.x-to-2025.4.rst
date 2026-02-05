@@ -17,7 +17,7 @@ This document describes a step-by-step procedure for upgrading from |SCYLLA_NAME
 to |SCYLLA_NAME| |NEW_VERSION| and rollback to version |SRC_VERSION| if necessary.
 
 This guide covers upgrading ScyllaDB on Red Hat Enterprise Linux (RHEL), CentOS, Debian, 
-and Ubuntu. See :doc:`OS Support by Platform and Version </getting-started/os-support>` 
+and Ubuntu. See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ 
 for information about supported versions.
 
 It also applies when using the ScyllaDB official image on EC2, GCP, or Azure.

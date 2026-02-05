@@ -18,7 +18,7 @@ Getting Started
   :class: my-panel
   
   * :doc:`ScyllaDB System Requirements Guide</getting-started/system-requirements/>`
-  * :doc:`OS Support by Platform and Version</getting-started/os-support/>`
+  * `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
     
 .. panel-box::
   :title: Install and Configure ScyllaDB
