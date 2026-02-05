@@ -707,8 +707,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
-    set_topology_change_kind(upgrade_state_to_topology_op_kind(topology.upgrade_state));
-
     if (topology.upgrade_state != topology::upgrade_state_type::done) {
         co_return;
     }
@@ -1852,8 +1850,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         }
     }
 
-    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
-
     co_await update_topology_with_local_metadata(raft_server);
 
     // Node state is enough to know that bootstrap has completed, but to make legacy code happy
@@ -2246,7 +2242,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
                     g0_info.group0_id, g0_info.id, g0_info.ip_addr, recovery_leader_id, recovery_leader_ip));
         }
         slogger.info("Raft-based recovery procedure - found group 0 with ID {}", g0_info.group0_id);
-        set_topology_change_kind(topology_change_kind::raft);
     } else if (_group0->joined_group0()) {
         // We are a part of group 0.
         if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
@@ -2254,7 +2249,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
                     "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
                     "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
         }
-        set_topology_change_kind(topology_change_kind::raft);
         slogger.info("The node is already in group 0");
     } else if (_sys_ks.local().bootstrap_complete()) {
         // setup_group0_if_exist() should already throw in this case, so do internal error here.
@@ -2269,7 +2263,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         if (_group0->load_my_id() == g0_info.id) {
             // We're creating the group 0.
             slogger.info("We are creating the group 0. Start in raft topology operations mode");
-            set_topology_change_kind(topology_change_kind::raft);
         } else {
             // Ask the current member of the raft group about which mode to use
             auto params = join_node_query_params {};
@@ -2278,7 +2271,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             switch (result.topo_mode) {
             case join_node_query_result::topology_mode::raft:
                 slogger.info("Will join existing cluster in raft topology operations mode");
-                set_topology_change_kind(topology_change_kind::raft);
                 break;
             case join_node_query_result::topology_mode::legacy:
                 throw std::runtime_error(
@@ -2287,6 +2279,8 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             }
         }
     }
+
+    set_topology_change_kind(topology_change_kind::raft);
 
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",

@@ -715,10 +715,6 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         }
         group0_log.info("Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
         co_await mm.disable_schema_pulls();
-        if (!ss.raft_topology_change_enabled()) {
-            throw std::runtime_error("The cluster uses gossip based topology operations. "
-                "This is no longer supported. To upgrade a node please enable topology coordinator");
-        }
     } else if (qp.db().get_config().recovery_leader.is_set()) {
         group0_log.info("Disabling migration_manager schema pulls in the Raft-based recovery procedure");
         co_await mm.disable_schema_pulls();
