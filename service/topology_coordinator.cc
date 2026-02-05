@@ -331,12 +331,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         auto [id, req] = *next_req;
 
+        auto* server_rs = topo.find(id);
+        if (!server_rs) {
+            on_internal_error(rtlogger, format("Node {} has a pending {} request but is not found in topology", id, req));
+        }
+
         if (cleanup_needed && (req == topology_request::remove || req == topology_request::leave)) {
             // If the highest prio request is removenode or decommission we need to start cleanup if one is needed
             return start_vnodes_cleanup(std::move(guard), req, id);
         }
 
-        return node_to_work_on(std::move(guard), &topo, id, &topo.find(id)->second, req, get_request_param(id));
+        return node_to_work_on(std::move(guard), &topo, id, &server_rs->second, req, get_request_param(id));
     };
 
     node_to_work_on get_node_to_work_on(group0_guard guard) const {
