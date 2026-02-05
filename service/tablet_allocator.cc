@@ -1109,6 +1109,11 @@ public:
         if (!is_auto_repair_enabled(config)) {
             co_return false;
         }
+        auto size = info.replicas.size();
+        if (size <= 1) {
+            lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
+            co_return false;
+        }
         auto threshold = _db.get_config().auto_repair_threshold_default_in_seconds();
         auto repair_time_threshold = std::chrono::seconds(threshold);
         auto& last_repair_time = info.repair_time;
