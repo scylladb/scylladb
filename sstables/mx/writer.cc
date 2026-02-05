@@ -965,7 +965,7 @@ void writer::init_file_writers() {
         file_output_stream_options options;
         options.buffer_size = 32 * 1024;
         _hashes_writer = std::make_unique<file_writer>(_sst.make_component_file_writer(component_type::TemporaryHashes, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::exclusive).get());
+            sstable_write_open_flags).get());
     }
 }
 

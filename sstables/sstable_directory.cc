@@ -641,7 +641,7 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
         dirlog.trace("Writing {}", tmp_pending_delete_log);
 
             touch_directory(pending_delete_dir).get();
-            auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+            auto oflags = sstable_write_open_flags;
             // Create temporary pending_delete log file.
             auto f = open_file_dma(tmp_pending_delete_log, oflags).get();
             // Write all toc names into the log file.
