@@ -203,8 +203,13 @@ public:
         , _token_owners(_tm.get_datacenter_token_owners())
         , _racks(_tm.get_datacenter_racks_token_owners())
     {
-        // not aware of any cluster members
-        SCYLLA_ASSERT(!_token_owners.empty() && !_racks.empty());
+        // During early startup (e.g. maintenance mode before join_cluster), token_metadata may not have
+        // any known token owners/DC/rack info yet. In that case we simply can't compute replicas, and
+        // callers will get an empty replica set. This is preferable to crashing.
+        if (_token_owners.empty() || _racks.empty()) {
+            _dcs_to_fill = 0;
+            return;
+        }
 
         auto size_for = [](auto& map, auto& k) {
             auto i = map.find(k);
