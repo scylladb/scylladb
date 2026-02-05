@@ -163,7 +163,11 @@ public:
     void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type);
 
+    // Called when creating a tablet map for a new table.
+    // When in the context of a notification callback, call `before_allocate_tablet_map_in_notification`,
+    // and otherwise call 'before_allocate_tablet_map'.
     void before_allocate_tablet_map(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_allocate_tablet_map_in_notification(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
 };
 
 }
