@@ -113,15 +113,23 @@ static future<> compare_object_data(const local_gcs_wrapper& env, std::string_vi
     BOOST_REQUIRE_EQUAL(read, total);
 }
 
+using namespace std::string_literals;
+static constexpr auto prefix = "bork/ninja/"s;
+
+// #28398 include a prefix in all names. 
+static std::string make_name() {
+    return fmt::format("{}{}", prefix, utils::UUID_gen::get_time_UUID());
+}
+
 static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest_size, std::optional<size_t> specific_buffer_size = std::nullopt) {
     auto& c = env.client();
-    auto uuid = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    auto name = make_name();
     std::vector<temporary_buffer<char>> written;
 
     // ensure we remove the object
-    env.objects_to_delete.emplace_back(uuid);
-    co_await create_object_of_size(c, env.bucket, uuid, dest_size, &written, specific_buffer_size);
-    co_await compare_object_data(env, uuid, std::move(written));
+    env.objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, env.bucket, name, dest_size, &written, specific_buffer_size);
+    co_await compare_object_data(env, name, std::move(written));
 }
 
 BOOST_AUTO_TEST_SUITE(gcs_tests, *seastar::testing::async_fixture<gcs_fixture>())
@@ -147,21 +155,28 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *che
     auto& c = env.client();
     std::unordered_map<std::string, uint64_t> names;
     for (size_t i = 0; i < 10; ++i) {
-        auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+        auto name = make_name();
         auto size = tests::random::get_int(size_t(1), size_t(2*1024*1024));
         env.objects_to_delete.emplace_back(name);
         co_await create_object_of_size(c, env.bucket, name, size);
         names.emplace(name, size);
     }
 
-    auto infos = co_await c.list_objects(env.bucket);
+    utils::gcp::storage::bucket_paging paging;
     size_t n_found = 0;
 
-    for (auto& info : infos) {
-        auto i = names.find(info.name);
-        if (i != names.end()) {
-            BOOST_REQUIRE_EQUAL(info.size, i->second);
-            ++n_found;
+    for (;;) {
+        auto infos = co_await c.list_objects(env.bucket, "", paging);
+
+        for (auto& info : infos) {
+            auto i = names.find(info.name);
+            if (i != names.end()) {
+                BOOST_REQUIRE_EQUAL(info.size, i->second);
+                ++n_found;
+            }
+        }
+        if (infos.empty()) {
+            break;
         }
     }
     BOOST_REQUIRE_EQUAL(n_found, names.size());
@@ -170,7 +185,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *che
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_delete_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     auto& env = *this;
     auto& c = env.client();
-    auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    auto name = make_name();
     env.objects_to_delete.emplace_back(name);
     co_await create_object_of_size(c, env.bucket, name, 128);
     {
@@ -190,7 +205,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_delete_object, local_gcs_wrapper, *ch
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_skip_read, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     auto& env = *this;
     auto& c = env.client();
-    auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    auto name = make_name();
     std::vector<temporary_buffer<char>> bufs;
     constexpr size_t file_size = 12*1024*1024 + 384*7 + 31;
 
@@ -243,7 +258,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_merge_objects, local_gcs_wrapper, *check_gcp_stor
 
     size_t total = 0; 
     for (size_t i = 0; i < 32; ++i) {
-        auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+        auto name = make_name();
         auto size = tests::random::get_int(size_t(1), size_t(2*1024*1024));
         env.objects_to_delete.emplace_back(name);
         co_await create_object_of_size(c, env.bucket, name, size, &bufs);
@@ -251,7 +266,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_merge_objects, local_gcs_wrapper, *check_gcp_stor
         total += size;
     }
 
-    auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    auto name = make_name();
     env.objects_to_delete.emplace_back(name);
 
     auto info = co_await c.merge_objects(env.bucket, name, names);
