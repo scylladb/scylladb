@@ -34,6 +34,12 @@ CDC_LOG_TABLE_DESC_PREFIX =                                                     
     "   enabled option or creating the vector index on the base table's vector column.\n"  \
     "\n"
 CDC_LOG_TABLE_DESC_SUFFIX = "\n*/"
+# The prefix of the create statement returned by `DESC TABLE "tbl$paxos"` and corresponding to a Paxos state table.
+PAXOS_STATE_TABLE_DESC_PREFIX =                                                            \
+    "/* Do NOT execute this statement! It's only for informational purposes.\n"            \
+    "   A paxos state table is created automatically when enabling LWT on a base table.\n" \
+    "\n"
+PAXOS_STATE_TABLE_DESC_SUFFIX = "\n*/"
 
 def filter_non_default_user(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.name != DEFAULT_SUPERUSER, desc_result_iter)
@@ -3376,3 +3382,62 @@ def test_desc_table_tombstone_gc(cql, test_keyspace, scylla_only):
             # ignore spaces in comparison, as different versions of Scylla
             # add spaces in different places
             assert with_clause.replace(' ','') in desc.create_statement.replace(' ','')
+
+# Ever since tablets were introduced to Scylla, LWT writes its Paxos log not
+# in a central system table, but in a new table named "...$paxos" in the same
+# keyspace. 
+# Similary as for CDC's internal tables, we expect these internal Paxos tables
+# (which have names that are not valid CQL) to be hidden from various DESCRIBE commands. 
+# The only difference is that when describing a CDC base table, 
+# an ALTER statement of the log table is added to the description,
+# but this is not the case for Paxos tables.
+# This test checks that these internal tables aren't listed by DESCRIBE commands. 
+# Reproduces issue #28183
+def test_hide_paxos_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, x int") as table:
+        # The extra "...$paxos" table only appears after a real LWT write is
+        # performed. So let's do an LWT operation that will cause it to be
+        # created.
+        cql.execute(f'INSERT INTO {table}(p,x) values (1,2) IF NOT EXISTS')
+
+        # DESC TABLES
+        # Look at the tables in test_keyspace, check that the test table is
+        # in this list, but its long and unique name (by unique_table_name())
+        # isn't a proper substring of any other table's name.
+        tables = [r.name for r in cql.execute('DESC TABLES') if r.keyspace_name == test_keyspace]
+        _, table_name = table.split('.')
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
+
+        #  DESC SCHEMA
+        tables = [r.name for r in cql.execute('DESC SCHEMA') if r.keyspace_name == test_keyspace]
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
+
+        # DESC KEYSPACE of the test keyspace
+        # Again, the test table should be in the list, but no other table
+        # that contains that name.
+        tables = [r.name for r in cql.execute(f'DESC KEYSPACE {test_keyspace}')]
+        assert table_name in tables
+        for listed_name in tables:
+            if table_name != listed_name:
+                assert table_name not in listed_name
+
+# It is allowed to directly describe a Paxos state table with `DESC ks."tbl$paxos"`
+# but it should contain only commented-out CQL statements, so executing them is a no-op.
+def test_paxos_table_described_in_comment(scylla_only, cql, test_keyspace):
+    paxos_table_desc = ""
+    with new_test_table(cql, test_keyspace, "p int primary key, x int") as table:
+        # The extra "...$paxos" table only appears after a real LWT write is
+        # performed. So let's do an LWT operation that will cause it to be
+        # created.
+        cql.execute(f'INSERT INTO {table}(p,x) values (1,2) IF NOT EXISTS')
+        paxos_table_desc = cql.execute(f'DESC TABLE {test_keyspace}."{table.split('.')[1]}$paxos"').one().create_statement
+
+        assert paxos_table_desc.startswith(PAXOS_STATE_TABLE_DESC_PREFIX)
+        assert paxos_table_desc.endswith(PAXOS_STATE_TABLE_DESC_SUFFIX)
+        assert f'CREATE TABLE {test_keyspace}."{table.split('.')[1]}$paxos"' in paxos_table_desc
