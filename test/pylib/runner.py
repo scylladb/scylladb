@@ -11,11 +11,13 @@ import logging
 import os
 import pathlib
 import platform
+import random
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count, product
 from functools import cache, cached_property
+from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING
 
@@ -150,6 +152,10 @@ async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test |
         return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
     return None
 
+@pytest.fixture(scope="function")
+def scylla_binary(testpy_test) -> Path:
+    return testpy_test.suite.scylla_exe
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
@@ -263,6 +269,7 @@ def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
 
+    os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
     repeat = int(config.getoption("--repeat"))
 
