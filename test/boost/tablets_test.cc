@@ -5995,4 +5995,61 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_count_fixed_by_table_properties) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.need_remote_proxy = true;
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 3 shards. default initial scale wants 30 (32) tablets.
+        // keyspace 'initial' wants 2 tablets.
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        //table will be initially empty
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0); 
+
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+
+        // Before the restore process, we want to ensure the tablet count is fixed.
+        // When a snapshot is taken, load balancing is disabled, so we record the tablet count in a manifest for backup.
+        // During restore, we set both min_tablet_count and max_tablet_count to the same value to guarantee a fixed number of tablets.
+        // This allows us to leverage file-based streaming of SSTables, ensuring each SSTable is fully contained within a single tablet.
+        auto force_tablet_count = 8;
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_tablet_count': {}, 'max_tablet_count': {}}}",
+                              ks_name1, force_tablet_count, force_tablet_count)).get();
+
+        //TODO: FIXME: without calling rebalance_tablets here, the tablet count does not change.
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        //lets fill the table with some large data that would require tablet splitting if min/max where not set
+        load_stats.set_size(table1, default_target_tablet_size * force_tablet_count * 16);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        // Check that hint can be dropped and that the initial tablet count remains fixed (after restore is completed)
+        load_stats.set_size(table1, default_target_tablet_size);
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 WITH tablets = {{}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
+    }, cfg).get();
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()

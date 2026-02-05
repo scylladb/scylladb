@@ -138,6 +138,13 @@ db::tablet_options combine_tablet_options(R&& opts) {
             total_expected_data_size_in_gb += *opt.expected_data_size_in_gb;
             total_expected_data_size_in_gb_count++;
         }
+        if (opt.max_tablet_count) {
+            if (!combined_opts.max_tablet_count) {
+                combined_opts.max_tablet_count = *opt.max_tablet_count;
+            } else {
+                combined_opts.max_tablet_count = std::min(*combined_opts.max_tablet_count, *opt.max_tablet_count);
+            }
+        }
     }
 
     if (total_expected_data_size_in_gb_count) {
@@ -1848,6 +1855,13 @@ public:
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
                 maybe_apply({table_plan.current_tablet_count, "current count"});
+            }
+
+            // Apply max_tablet_count cap after all other factors have been considered.
+            if (tablet_options.max_tablet_count) {
+                if (target_tablet_count.tablet_count > static_cast<size_t>(*tablet_options.max_tablet_count)) {
+                    target_tablet_count = {static_cast<size_t>(*tablet_options.max_tablet_count), "max_tablet_count"};
+                }
             }
 
             if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {

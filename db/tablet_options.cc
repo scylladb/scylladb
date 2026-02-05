@@ -23,6 +23,11 @@ tablet_options::tablet_options(const map_type& map) {
                 min_tablet_count.emplace(value);
             }
             break;
+        case tablet_option_type::max_tablet_count:
+            if (auto value = std::atol(value_str.c_str())) {
+                max_tablet_count.emplace(value);
+            }
+            break;
         case tablet_option_type::min_per_shard_tablet_count:
             if (auto value = std::atof(value_str.c_str())) {
                 min_per_shard_tablet_count.emplace(value);
@@ -40,6 +45,7 @@ tablet_options::tablet_options(const map_type& map) {
 sstring tablet_options::to_string(tablet_option_type hint) {
     switch (hint) {
     case tablet_option_type::min_tablet_count: return "min_tablet_count";
+    case tablet_option_type::max_tablet_count: return "max_tablet_count";
     case tablet_option_type::min_per_shard_tablet_count: return "min_per_shard_tablet_count";
     case tablet_option_type::expected_data_size_in_gb: return "expected_data_size_in_gb";
     }
@@ -48,6 +54,8 @@ sstring tablet_options::to_string(tablet_option_type hint) {
 tablet_option_type tablet_options::from_string(sstring hint_desc) {
     if (hint_desc == "min_tablet_count") {
         return tablet_option_type::min_tablet_count;
+    } else if (hint_desc == "max_tablet_count") {
+        return tablet_option_type::max_tablet_count;
     } else if (hint_desc == "min_per_shard_tablet_count") {
         return tablet_option_type::min_per_shard_tablet_count;
     } else if (hint_desc == "expected_data_size_in_gb") {
@@ -62,6 +70,9 @@ std::map<sstring, sstring> tablet_options::to_map() const {
     if (min_tablet_count) {
         res[to_string(tablet_option_type::min_tablet_count)] = fmt::to_string(*min_tablet_count);
     }
+    if (max_tablet_count) {
+        res[to_string(tablet_option_type::max_tablet_count)] = fmt::to_string(*max_tablet_count);
+    }
     if (min_per_shard_tablet_count) {
         res[to_string(tablet_option_type::min_per_shard_tablet_count)] = fmt::to_string(*min_per_shard_tablet_count);
     }
@@ -72,11 +83,23 @@ std::map<sstring, sstring> tablet_options::to_map() const {
 }
 
 void tablet_options::validate(const map_type& map) {
+    std::optional<ssize_t> min_tablets;
+    std::optional<ssize_t> max_tablets;
+
     for (auto& [key, value_str] : map) {
         switch (tablet_options::from_string(key)) {
         case tablet_option_type::min_tablet_count:
             if (auto value = std::atol(value_str.c_str()); value < 0) {
                 throw exceptions::configuration_exception(format("Invalid value '{}' for min_tablet_count", value));
+            } else {
+                min_tablets = value;
+            }
+            break;
+        case tablet_option_type::max_tablet_count:
+            if (auto value = std::atol(value_str.c_str()); value <= 0) {
+                throw exceptions::configuration_exception(format("Invalid value '{}' for max_tablet_count", value));
+            } else {
+                max_tablets = value;
             }
             break;
         case tablet_option_type::min_per_shard_tablet_count:
@@ -90,6 +113,10 @@ void tablet_options::validate(const map_type& map) {
             }
             break;
         }
+    }
+
+    if (max_tablets && min_tablets && *max_tablets < *min_tablets) {
+        throw exceptions::configuration_exception(format("max_tablet_count ({}) cannot be less than min_tablet_count ({})", *max_tablets, *min_tablets));
     }
 }
 
