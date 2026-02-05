@@ -347,7 +347,7 @@ static void flush_table(const test_config& c) {
     auto cli = get_client(c, 10000);
     auto req = http::request::make("POST", "localhost", "/storage_service/keyspace_flush/alternator_workloads_test");
     cli.make_request(std::move(req), [] (const http::reply& rep, input_stream<char>&& in) {
-        return make_ready_future<>();
+        return in.close();
     }).get();
     cli.close().get();
 }
@@ -407,12 +407,26 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     }
     fun_t fun = it->second;
 
+    static thread_local std::vector<http::experimental::client> cli_pool;
+    smp::invoke_on_all([&c] {
+        cli_pool = make_client_pool(c);
+    }).get();
+    // Cleanup thread-local connections to avoid destruction issues at exit
+    auto close_pools = defer([] {
+        smp::invoke_on_all([] {
+            return parallel_for_each(cli_pool, [] (auto& cli) {
+                return cli.close();
+            }).then([] {
+                cli_pool.clear();
+            });
+        }).get();
+    });
+
     auto results = time_parallel([&] {
         as->local().check();
-        static thread_local auto sharded_cli_pool = make_client_pool(c); // for simplicity never closed as it lives for the whole process runtime
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
-        return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
+        return fun(c, cli_pool[++cli_iter % c.concurrency], seq);
     }, c.concurrency, c.duration_in_seconds, c.operations_per_shard, !c.continue_after_error);
 
     aggregated_perf_results agg(results);
