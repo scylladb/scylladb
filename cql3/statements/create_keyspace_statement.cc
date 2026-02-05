@@ -127,7 +127,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
             // We hold a group0_guard, so it's correct to check this here.
             // The topology or schema cannot change while we're performing this query.
             locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
-        } catch (const std::exception& e) {
+        } catch (const std::invalid_argument& e) {
             if (cfg.rf_rack_valid_keyspaces()) {
                 // There's no guarantee what the type of the exception will be, so we need to
                 // wrap it manually here in a type that can be passed to the user.
