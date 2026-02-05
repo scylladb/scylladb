@@ -37,6 +37,8 @@ private:
     std::optional<cql3::expr::expression> _timeout;
     std::optional<sstring> _service_level;
     std::optional<cql3::expr::expression> _concurrency;
+    std::optional<cql3::expr::expression> _rescoring;
+    std::optional<cql3::expr::expression> _oversampling;
 public:
     static std::unique_ptr<attributes> none();
 private:
@@ -44,7 +46,9 @@ private:
                std::optional<cql3::expr::expression>&& time_to_live,
                std::optional<cql3::expr::expression>&& timeout,
                std::optional<sstring> service_level,
-               std::optional<cql3::expr::expression>&& concurrency);
+               std::optional<cql3::expr::expression>&& concurrency,
+               std::optional<cql3::expr::expression>&& rescoring,
+               std::optional<cql3::expr::expression>&& oversampling);
 public:
     bool is_timestamp_set() const;
 
@@ -56,6 +60,10 @@ public:
 
     bool is_concurrency_set() const;
 
+    bool is_rescoring_set() const;
+
+    bool is_oversampling_set() const;
+
     int64_t get_timestamp(int64_t now, const query_options& options);
 
     std::optional<int32_t> get_time_to_live(const query_options& options);
@@ -66,6 +74,10 @@ public:
 
     std::optional<int32_t> get_concurrency(const query_options& options) const;
 
+    std::optional<bool> get_rescoring(const query_options& options) const;
+
+    std::optional<float> get_oversampling(const query_options& options) const;
+
     void fill_prepare_context(prepare_context& ctx);
 
     class raw final {
@@ -75,6 +87,8 @@ public:
         std::optional<cql3::expr::expression> timeout;
         std::optional<sstring> service_level;
         std::optional<cql3::expr::expression> concurrency;
+        std::optional<cql3::expr::expression> rescoring;
+        std::optional<cql3::expr::expression> oversampling;
 
         std::unique_ptr<attributes> prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const;
     private:
@@ -85,6 +99,10 @@ public:
         lw_shared_ptr<column_specification> timeout_receiver(const sstring& ks_name, const sstring& cf_name) const;
 
         lw_shared_ptr<column_specification> concurrency_receiver(const sstring& ks_name, const sstring& cf_name) const;
+
+        lw_shared_ptr<column_specification> rescoring_receiver(const sstring& ks_name, const sstring& cf_name) const;
+
+        lw_shared_ptr<column_specification> oversampling_receiver(const sstring& ks_name, const sstring& cf_name) const;
     };
 };
 
