@@ -19,6 +19,8 @@
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 
+using namespace std::chrono_literals;
+
 namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
@@ -46,6 +48,7 @@ public:
 
     future<> apply(std::vector<raft::command_cref> command) override {
         try {
+            co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             utils::chunked_vector<frozen_mutation> muts;
             muts.reserve(command.size());
             for (const auto& c: command) {

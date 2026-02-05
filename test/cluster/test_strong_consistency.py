@@ -142,3 +142,52 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         assert row.pk == 10
         assert row.c == 20
         assert row.new_col == 30
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_old_schema_when_apply_write(manager: ManagerClient):
+    config = {
+        'experimental_features': ['strongly-consistent-tables']
+    }
+    cmdline = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
+    # because we want `servers[2]` to receive Raft commands from others.
+    servers += [await manager.server_add(config=config | {'error_injections_at_startup': ['avoid_being_raft_leader']}, cmdline=cmdline, property_file={'dc':'my_dc', 'rack': 'rack3'})]
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+        assert leader_host_id != host_ids[2]
+        leader_host = host_by_host_id(leader_host_id)
+
+        table_schema_version = (await cql.run_async(f"SELECT version FROM system_schema.scylla_tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].version
+
+        await manager.api.enable_injection(servers[2].ip_addr, "strong_consistency_state_machine_wait_before_apply", one_shot=False)
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (10, 20)", host=leader_host)
+
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD new_col int;")
+        # Following injection simulates that old schema version was already removed from the memory
+        await manager.api.enable_injection(servers[2].ip_addr, "schema_registry_ignore_version", one_shot=False, parameters={'value': table_schema_version})
+        await manager.api.message_injection(servers[2].ip_addr, "strong_consistency_state_machine_wait_before_apply")
+        await manager.api.disable_injection(servers[2].ip_addr, "strong_consistency_state_machine_wait_before_apply")
+
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 10;", host=hosts[2])
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 10
+        assert row.c == 20
+        assert row.new_col == None
