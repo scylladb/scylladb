@@ -690,3 +690,29 @@ async def test_tablet_user_and_auto_repair_priority(manager: ManagerClient):
     await manager.api.wait_task(servers[0].ip_addr, task_id)
 
     await check_repair_plan()
+
+# Check auto repair of rf1 table should be skipped
+@pytest.mark.asyncio
+async def test_tablet_auto_repair_rf1(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "1",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, rf=1, fast_stats_refresh=True, disable_flush_cache_time=True, nr_nodes=1, gc_mode='timeout')
+    logs = []
+    for s in servers:
+        logs.append(await manager.server_open_log(s.server_id))
+        await manager.api.set_logger_level(s.ip_addr, "load_balancer", "debug")
+    for log in logs:
+        await log.wait_for(f"Skipped auto repair for tablet")
+
+# Check manual repair of rf1 table should finish when auto repair is disabled
+@pytest.mark.asyncio
+async def test_tablet_manual_repair_rf1_auto_repair_off(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "0"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, rf=1, fast_stats_refresh=True, disable_flush_cache_time=True, nr_nodes=1, gc_mode='timeout')
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="-1", await_completion=True)
+
+# Check manual repair of rf1 table should finish when auto repair is enabled
+@pytest.mark.asyncio
+async def test_tablet_manual_repair_rf1_auto_repair_on(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, rf=1, fast_stats_refresh=True, disable_flush_cache_time=True, nr_nodes=1, gc_mode='timeout')
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="-1", await_completion=True)
