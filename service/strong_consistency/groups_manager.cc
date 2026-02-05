@@ -94,11 +94,12 @@ auto raft_server::begin_mutate() -> begin_mutate_result {
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
-        replica::database& db, gms::feature_service& features)
+        replica::database& db, db::system_keyspace& sys_ks, gms::feature_service& features)
     : _ms(ms)
     , _raft_gr(raft_gr)
     , _qp(qp)
     , _db(db)
+    , _sys_ks(sys_ks)
     , _features(features)
 {
 }
@@ -109,7 +110,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
-    auto state_machine = make_state_machine(tablet, group_id, _raft_gr, _db);
+    auto state_machine = make_state_machine(tablet, group_id, _raft_gr, _db, _sys_ks);
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
     // Keep a reference to a specific RPC class.
