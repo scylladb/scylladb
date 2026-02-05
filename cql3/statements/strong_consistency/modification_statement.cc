@@ -44,6 +44,8 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
     }
 
+    // FIXME: Placeholder for the time being.
+    abort_source as;
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     const auto mutate_result = co_await coordinator.get().mutate(_statement->s,
         keys[0].start()->value().token(),
@@ -58,7 +60,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
                     raw_cql_statement, muts.size()));
             }
             return std::move(*muts.begin());
-        });
+        }, as);
 
     using namespace service::strong_consistency;
     if (const auto* redirect = get_if<need_redirect>(&mutate_result)) {

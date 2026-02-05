@@ -36,7 +36,7 @@ struct coordinator::operation_ctx {
     const locator::tablet_info& tablet_info;
 };
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token) 
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as) 
     -> future<value_or_redirect<operation_ctx>>
 {
     auto erm = schema.table().get_effective_replication_map();
@@ -65,7 +65,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         co_return need_redirect{target ? *target : tablet_info.replicas.at(0)};
     }
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
-    auto raft_server = co_await _groups_manager.acquire_server(raft_info.group_id);
+    auto raft_server = co_await _groups_manager.acquire_server(raft_info.group_id, as);
 
     co_return operation_ctx {
         .erm = std::move(erm),
@@ -84,16 +84,17 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db)
 
 future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         const dht::token& token,
-        mutation_gen&& mutation_gen)
+        mutation_gen&& mutation_gen,
+        abort_source& as)
 {
-    auto op_result = co_await create_operation_ctx(*schema, token);
+    auto op_result = co_await create_operation_ctx(*schema, token, as);
     if (const auto* redirect = get_if<need_redirect>(&op_result)) {
         co_return *redirect;
     }
     auto& op = get<operation_ctx>(op_result);
 
     while (true) {
-        auto disposition = op.raft_server.begin_mutate();
+        auto disposition = op.raft_server.begin_mutate(as);
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
             const auto* target = find_replica(op.tablet_info, leader_host_id);
@@ -122,11 +123,15 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         try {
             co_await op.raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
-                nullptr);
+                &as);
             co_return std::monostate{};
         } catch (...) {
             auto ex = std::current_exception();
-            if (try_catch<raft::request_aborted>(ex) || try_catch<raft::stopped_error>(ex)) {
+            if (try_catch<raft::request_aborted>(ex)) {
+                logger.debug("mutate(): add_entry, aborted operation {}, table {}.{}, tablet {}, term {}",
+                    ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
+                throw;
+            } else if (try_catch<raft::stopped_error>(ex)) {
                 // Holding raft_server.holder guarantees that the raft::server is not
                 // aborted until the holder is released.
 
@@ -158,16 +163,17 @@ auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout
+        db::timeout_clock::time_point timeout,
+        abort_source& as
     ) -> future<query_result_type>
 {
-    auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token());
+    auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), as);
     if (const auto* redirect = get_if<need_redirect>(&op_result)) {
         co_return *redirect;
     }
     auto& op = get<operation_ctx>(op_result);
 
-    co_await op.raft_server.server().read_barrier(nullptr);
+    co_await op.raft_server.server().read_barrier(&as);
 
     auto [result, cache_temp] = co_await _db.query(schema, cmd,
         query::result_options::only_result(), ranges, trace_state, timeout);

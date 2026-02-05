@@ -26,21 +26,25 @@ class coordinator : public peering_sharded_service<coordinator> {
     replica::database& _db;
 
     struct operation_ctx;
-    future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema, const dht::token& token);
+    future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
+        const dht::token& token,
+        abort_source& as);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db);
 
     using mutation_gen = noncopyable_function<mutation(api::timestamp_type)>;
     future<value_or_redirect<>> mutate(schema_ptr schema, 
         const dht::token& token,
-        mutation_gen&& mutation_gen);
+        mutation_gen&& mutation_gen,
+        abort_source& as);
 
     using query_result_type = value_or_redirect<lw_shared_ptr<query::result>>;
     future<query_result_type> query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout);
+        db::timeout_clock::time_point timeout,
+        abort_source& as);
 };
 
 }
