@@ -155,4 +155,5 @@ with Tablets enabled.
     compatibility
     new-apis
     network
+    sdks
 ```
