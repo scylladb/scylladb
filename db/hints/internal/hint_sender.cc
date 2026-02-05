@@ -154,7 +154,10 @@ hint_sender::~hint_sender() {
 
 
 future<> hint_sender::stop(drain should_drain) noexcept {
-    return seastar::async([this, should_drain] {
+    seastar::thread_attributes attr;
+
+    attr.sched_group = _hints_cpu_sched_group;
+    return seastar::async(std::move(attr), [this, should_drain] {
         set_stopping();
         _stop_as.request_abort();
         _stopped.get();
