@@ -246,6 +246,7 @@ public:
 
     schema_builder& with_partitioner(sstring name);
     schema_builder& with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits);
+    schema_builder& with_sharder(const dht::static_sharder& sharder);
     schema_builder& set_in_memory(bool in_memory) {
         _raw._in_memory = in_memory;
         return *this;

@@ -409,7 +409,11 @@ future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
 }
 
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
-    return 0; // schema raft server is always owned by shard 0
+    auto it = _servers.find(gid);
+    if (it == _servers.end()) {
+        throw raft_group_not_found(gid);
+    }
+    return it->second.shard;
 }
 
 shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {

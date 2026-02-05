@@ -51,10 +51,11 @@ struct raft_server_for_group {
     std::unique_ptr<raft::server> server;
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
-    raft_sys_table_storage& persistence;
+    raft::persistence& persistence;
     raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
+    shard_id shard;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {
