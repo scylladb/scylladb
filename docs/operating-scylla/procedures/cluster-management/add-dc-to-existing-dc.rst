@@ -155,7 +155,6 @@ Add New DC
       UN   54.235.9.159    109.75 KB       256     ?               39798227-9f6f-4868-8193-08570856c09a    RACK1
       UN   54.146.228.25   128.33 KB       256     ?               7a4957a1-9590-4434-9746-9c8a6f796a0c    RACK1
 
-.. TODO possibly provide additional information WRT how ALTER works with tablets
 
 #. When all nodes are up and running ``ALTER`` the following Keyspaces in the new nodes:
 
@@ -181,6 +180,16 @@ Add New DC
       ALTER KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       ALTER KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
 
+   For tablet keyspaces you have to update the replication factor one by one:
+
+   .. code-block:: cql
+
+      ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 1};
+      ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 2};
+      ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
+
+   Unless the ``enforce_rack_list`` is set, in this case, you can update the replication factor in one ALTER KEYSPACE statement.
+
    After
 
    .. code-block:: cql
@@ -190,7 +199,7 @@ Add New DC
       CREATE KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       CREATE KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
 
-#. Run ``nodetool rebuild`` on each node in the new datacenter, specify the existing datacenter name in the rebuild command.
+#. If you altered any vnode keyspace, run ``nodetool rebuild`` on each node in the new datacenter, specify the existing datacenter name in the rebuild command.
 
    For example:
 
@@ -198,7 +207,47 @@ Add New DC
 
    The rebuild ensures that the new nodes that were just added to the cluster will recognize the existing datacenters in the cluster.
 
-#. Run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `ScyllaDB Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
+#. If you altered any vnode keyspace, run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `ScyllaDB Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
+
+      .. include:: /rst_include/scylla-commands-start-index.rst
+
+.. note::
+      Note that if `rf_rack_valid_keyspaces` option is set, you should alter the replication factor by one immediately after adding each of the nodes.
+
+      For example:
+
+      Before
+
+      .. code-block:: cql
+
+         DESCRIBE KEYSPACE mykeyspace;
+
+         CREATE KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3};
+
+      Add the first node and alter keyspace:
+
+      .. code-block:: cql
+
+         ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 1};
+
+      Add the second node and alter keyspace:
+
+      .. code-block:: cql
+
+         ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 2};
+
+      Add the third node and alter keyspace:
+
+      .. code-block:: cql
+
+         ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
+
+      After
+
+      .. code-block:: cql
+
+         DESCRIBE KEYSPACE mykeyspace;
+         CREATE KEYSPACE mykeyspace WITH REPLICATION = {'class’: 'NetworkTopologyStrategy', <exiting_dc>:3, <new_dc>: 3};
 
 #. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 

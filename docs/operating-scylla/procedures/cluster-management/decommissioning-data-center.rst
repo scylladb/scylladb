@@ -46,6 +46,8 @@ Procedure
 
    If the ASIA-DC cluster is to be removed, then, run the ``nodetool repair -pr`` command on all the nodes in the ASIA-DC
 
+#. If there are tablet keyspaces in this DC, run the ``nodetool cluter repair`` on any node. This will verify that all the data is in sync between the decommissioned data-center and the other data-centers in the cluster.
+
 #. ALTER every cluster KEYSPACE, so that the keyspaces will no longer replicate data to the decommissioned data-center.
 
    For example:
@@ -72,6 +74,15 @@ Procedure
    .. code-block:: shell
 
       cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
+
+   For tablet keyspaces you have to update the replication factor one by one:
+
+   .. code-block:: shell
+
+      cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 1, 'EUROPE-DC' : 3};
+      cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
+
+   Unless the ``enforce_rack_list`` is set, in this case, you can update the replication factor in one ALTER KEYSPACE statement.
 
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
    Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
@@ -102,3 +113,6 @@ Procedure
       UN  172.91.202.31  112.82 KB  256     32.7%             1d5ed8f4-7764-4dbd-rad8-44fddce94b7v   B1
       UN  172.91.202.32  91.11 KB   256     32.9%             525ed7g4-7437-1dbn-mac8-53fddce9123c   B1
       UN  172.91.202.33  124.42 KB  256     32.6%             975edbm4-6564-63bd-san8-73fddce952ga   B1
+
+
+.. note:: Note that if `rf_rack_valid_keyspaces` option is set, there is no way to remove a DC with tablet keyspaces.

@@ -1084,7 +1084,7 @@ public:
 
     future<> wait_for_topology_not_busy();
 
-    future<> abort_paused_rf_change(utils::UUID request_id);
+    future<> abort_rf_change(utils::UUID request_id);
 
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};

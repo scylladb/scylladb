@@ -424,6 +424,49 @@ Altering from a rack list to a numeric replication factor is not supported.
 
 Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>` if each rack in the rack list contains at least one node (excluding :doc:`zero-token nodes </architecture/zero-token-nodes>`).
 
+Conversion to rack-list replication factor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To alter from a numeric replication factor to a rack-list replication factor, you need to specify rack-list replication factor explicitly in ALTER KEYSPACE statement. The number of racks in the list must be equal to the numeric replication factor. You can convert the replication factor in any number of DCs at once. In a statement that converts replication factor, no replication factor updates (increase or decrease) are allowed in any DC.
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 1};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']};
+
+Multi RF change
+~~~~~~~~~~~~~~~~~
+
+If ``enforce_rack_list`` is set, which means that all tablet keyspaces use rack lists exclusively, you can update the replication factor by more than one in many DCs in a single ALTER KEYSPACE statement. You cannot replace a replica's rack in a single DC, but you can both add and remove replicas in many DCs at once. For example you can do the following sequence of statements:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2'], 'dc2' : ['RAC4', 'RAC5']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : [], 'dc2' : ['RAC4', 'RAC5', 'RAC6']};
+
+But the ALTER KEYSPACE below will fail:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC3']};
+
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE

@@ -318,8 +318,26 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (mixed_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint.emplace();
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
+
+        utils::chunked_vector<canonical_mutation> schema_mutations;
+        utils::chunked_vector<canonical_mutation> other_mutations;
+        const auto& db = _sp.local_db();
+        for (auto& cm : chng.mutations) {
+            auto& tbl = db.find_column_family(cm.column_family_id());
+            if (tbl.schema()->ks_name() == db::schema_tables::v3::NAME) {
+                schema_mutations.push_back(std::move(cm));
+            } else {
+                other_mutations.push_back(std::move(cm));
+            }
+        }
+
+        if (!schema_mutations.empty()) {
+            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(schema_mutations));
+        }
+        if (!other_mutations.empty()) {
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(other_mutations));
+        }
     },
     [&] (write_mutations& muts) -> future<> {
         modules_to_reload = get_modules_to_reload(muts.mutations);
