@@ -101,6 +101,59 @@ def assert_element_listing(cql, elements, name_column, name_f):
 def test_keyspaces(cql, test_keyspace):
     assert_element_listing(cql, "keyspaces", "keyspace_name", lambda r: r.keyspace_name)
 
+<<<<<<< HEAD
+||||||| parent of c4a9d7eb3e (cql: fix DESC KEYSPACES when a "USE" is in effect)
+# Test that even with a USE statement, `DESC KEYSPACES` still lists all the
+# keyspaces, not just the USEd keyspace. Reproduces issue #26334.
+@pytest.mark.xfail(reason="Issue #26334")
+def test_keyspaces_with_use(cql, test_keyspace):
+    # Create new session to ensure the `USE keyspace` doesn't leak to other
+    # tests that we'll run later and use the same "cql" fixture.
+    with new_cql(cql) as ncql:
+        ncql.execute(f"USE {test_keyspace}")
+        # we can't use assert_element_listing because it currently undoes
+        # our "USE" by using new_cql itself...
+        desc_keyspaces = [x.keyspace_name for x in ncql.execute("DESC KEYSPACES")]
+        expected_keyspaces = [x.keyspace_name for x in ncql.execute(f"SELECT keyspace_name FROM system_schema.keyspaces")]
+        # Allow, like assert_element_listing(), for DESC KEYSPACES to contain
+        # *more* keyspaces beyond what's listed in system_schema - but not
+        # less. In Cassandra, some virtual system keyspaces are listed by
+        # DESC KEYSPACE but aren't in system_schema.
+        assert set(expected_keyspaces).issubset(set(desc_keyspaces))
+
+=======
+# Test that even with a USE statement, `DESC KEYSPACES` still lists all the
+# keyspaces, not just the USEd keyspace. Reproduces issue #26334.
+def test_keyspaces_with_use(cql, test_keyspace):
+    # Create new session to ensure the `USE keyspace` doesn't leak to other
+    # tests that we'll run later and use the same "cql" fixture.
+    with new_cql(cql) as ncql:
+        ncql.execute(f"USE {test_keyspace}")
+        # we can't use assert_element_listing because it currently undoes
+        # our "USE" by using new_cql itself...
+        desc_keyspaces = [x.keyspace_name for x in ncql.execute("DESC KEYSPACES")]
+        expected_keyspaces = [x.keyspace_name for x in ncql.execute(f"SELECT keyspace_name FROM system_schema.keyspaces")]
+        # Allow, like assert_element_listing(), for DESC KEYSPACES to contain
+        # *more* keyspaces beyond what's listed in system_schema - but not
+        # less. In Cassandra, some virtual system keyspaces are listed by
+        # DESC KEYSPACE but aren't in system_schema.
+        assert set(expected_keyspaces).issubset(set(desc_keyspaces))
+
+# Contrasting with test_keyspaces_with_use(), a `DESC TABLES` should only
+# list tables inside a USEd keyspace - not all the tables in the database.
+def test_tables_with_use(cql, test_keyspace):
+    # Create a table in test_keyspace so the check below will see some
+    # table in the keyspace, not just an empty list.
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY") as table:
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {test_keyspace}")
+            desc_tables = [x.name for x in ncql.execute("DESC TABLES")]
+            # Note expected are just tables inside test_keyspace, not all
+            # tables in the database.
+            expected_tables = [x.table_name for x in ncql.execute(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name='{test_keyspace}'")]
+            assert sorted(expected_tables) ==  sorted(desc_tables)
+
+>>>>>>> c4a9d7eb3e (cql: fix DESC KEYSPACES when a "USE" is in effect)
 # Test that `DESC TABLES` contains all tables
 def test_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY"):
