@@ -1054,10 +1054,6 @@ private:
                 return raft_gr.start();
             }).get();
 
-            if (cfg_in.run_with_raft_recovery) {
-                _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
-            }
-
             auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });
