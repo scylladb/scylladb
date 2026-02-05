@@ -61,9 +61,9 @@ See also
 Incremental Repair
 ------------------
 
-Built on top of `Row-level Repair <row-level-repair_>`_ and `Tablets </architecture/tablets>`_, Incremental Repair enables frequent and quick repairs. For more details, see `Incremental Repair </features/incremental-repair>`_.
+Built on top of :ref:`Row-level Repair <row-level-repair>` and :doc:`Tablets </architecture/tablets>`, Incremental Repair enables frequent and quick repairs. For more details, see :doc:`Incremental Repair </features/incremental-repair>`.
 
 Automatic Repair
 ----------------
 
-Built on top of `Incremental Repair </features/incremental-repair>`_, `Automatic Repair </features/automatic-repair>`_ offers repair scheduling and execution directly in ScyllaDB, without external processes.
+Built on top of :doc:`Incremental Repair </features/incremental-repair>`, :doc:`Automatic Repair </features/automatic-repair>` offers repair scheduling and execution directly in ScyllaDB, without external processes.
