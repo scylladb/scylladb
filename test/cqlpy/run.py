@@ -331,6 +331,9 @@ def run_scylla_cmd(pid, dir):
         '--tablets-initial-scale-factor=1',
         # Avoid unhelpful "guardrails" warnings
         '--minimum-replication-factor-warn-threshold=-1',
+        # The expiration scanner's period (started for Alternator but
+        # now also CQL)
+        '--alternator-ttl-period-in-seconds=0.5',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
