@@ -593,6 +593,8 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
 
 class client::multipart_upload {
 protected:
+    static constexpr size_t _max_multipart_concurrency = 16;
+
     shared_ptr<client> _client;
     sstring _object_name;
     sstring _upload_id;
@@ -662,10 +664,15 @@ private:
         std::exception_ptr ex;
 
         try {
-            for (size_t offset = 0; offset < source_size; offset += part_size) {
-                part_size = std::min(source_size - offset, part_size);
-                co_await copy_part(offset, part_size);
-            }
+            auto parts = std::views::iota(size_t{0}, (source_size + part_size - 1) / part_size);
+            _part_etags.resize(parts.size());
+            co_await max_concurrent_for_each(parts,
+                                             _max_multipart_concurrency,
+                                             [part_size, source_size, this](auto part_num) -> future<> {
+                                                 auto part_offset = part_num * part_size;
+                                                 auto actual_part_size = std::min(source_size - part_offset, part_size);
+                                                 co_await copy_part(part_offset, actual_part_size, part_num);
+                                             });
             // Here we are going to finalize the upload and close the _bg_flushes, in case an exception is thrown the
             // gate will be closed and the upload will be aborted. See below.
             co_await finalize_upload();
@@ -682,9 +689,7 @@ private:
         }
     }
 
-    future<> copy_part(size_t offset, size_t part_size) {
-        unsigned part_number = _part_etags.size();
-        _part_etags.emplace_back();
+    future<> copy_part(size_t offset, size_t part_size, size_t part_number) {
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["x-amz-copy-source"] = _source_object;
         auto range = format("bytes={}-{}", offset, offset + part_size - 1);
@@ -694,11 +699,7 @@ private:
         req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
         req.query_parameters.emplace("uploadId", _upload_id);
 
-        // upload the parts in the background for better throughput
-        auto gh = _bg_flushes.hold();
-        // Ignoring the result of make_request() because we don't want to block and it is safe since we have a gate we are going to wait on and all argument are
-        // captured by value or moved into the fiber
-        std::ignore = _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
+        co_await _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
             return util::read_entire_stream_contiguous(in).then([this, part_number](auto body) mutable {
                 auto etag = parse_multipart_copy_upload_etag(body);
                 if (etag.empty()) {
@@ -711,8 +712,7 @@ private:
         },http::reply::status_type::ok,_as)
         .handle_exception([this, part_number](auto ex) {
             s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
-        })
-        .finally([gh = std::move(gh)] {});
+        });
 
         co_return;
     }
@@ -1492,13 +1492,11 @@ class client::do_upload_file : private multipart_upload {
         }
     }
 
-    future<> upload_part(file f, uint64_t offset, uint64_t part_size) {
+    future<> upload_part(file f, uint64_t offset, uint64_t part_size, uint64_t part_number) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
         auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
-        unsigned part_number = _part_etags.size();
-        _part_etags.emplace_back();
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["Content-Length"] = to_sstring(part_size);
         req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
@@ -1509,9 +1507,7 @@ class client::do_upload_file : private multipart_upload {
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
-        // upload the parts in the background for better throughput
-        auto gh = _bg_flushes.hold();
-        std::ignore = _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+        co_await _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
@@ -1519,7 +1515,7 @@ class client::do_upload_file : private multipart_upload {
             return make_ready_future();
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-        }).finally([gh = std::move(gh)] {});
+        });
     }
 
     // returns pair<num_of_parts, part_size>
@@ -1552,12 +1548,14 @@ class client::do_upload_file : private multipart_upload {
 
         std::exception_ptr ex;
         try {
-            for (size_t offset = 0; offset < total_size; offset += part_size) {
-                part_size = std::min(total_size - offset, part_size);
-                s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
-                co_await upload_part(file{f}, offset, part_size);
-            }
-
+            co_await max_concurrent_for_each(std::views::iota(size_t{0}, (total_size + part_size - 1) / part_size),
+                                             _max_multipart_concurrency,
+                                             [part_size, total_size, this, f = file{f}](auto part_num) -> future<> {
+                                                 auto part_offset = part_num * part_size;
+                                                 auto actual_part_size = std::min(total_size - part_offset, part_size);
+                                                 s3l.trace("upload_part: {}~{}/{}", part_offset, actual_part_size, total_size);
+                                                 co_await upload_part(f, part_offset, actual_part_size, part_num);
+                                             });
             co_await finalize_upload();
         } catch (...) {
             ex = std::current_exception();
@@ -1615,7 +1613,7 @@ public:
         // parallel to improve throughput
         if (file_size > aws_minimum_part_size) {
             auto [num_parts, part_size] = calc_part_size(file_size, _part_size);
-            _part_etags.reserve(num_parts);
+            _part_etags.resize(num_parts);
             co_await multi_part_upload(std::move(f), file_size, part_size);
         } else {
             // single part upload
