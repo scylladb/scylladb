@@ -632,7 +632,9 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
             break;
         case node_state::replacing: {
-            SCYLLA_ASSERT(_topology_state_machine._topology.req_param.contains(id));
+            if (!_topology_state_machine._topology.req_param.contains(id)) {
+                on_internal_error(rtlogger, format("No request parameters for replacing node {}", id));
+            }
             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
             auto existing_ip = _address_map.find(locator::host_id{replaced_id.uuid()});
             const auto replaced_host_id = locator::host_id(replaced_id.uuid());
@@ -649,7 +651,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             co_await process_normal_node(id, host_id, ip, rs);
             break;
         default:
-            on_fatal_internal_error(rtlogger, ::format("Unexpected state {} for node {}", rs.state, id));
+            on_internal_error(rtlogger, ::format("Unexpected state {} for node {}", rs.state, id));
         }
     };
 
