@@ -340,7 +340,7 @@ static void set_table_creation_time(std::map<sstring, sstring>& tags_map, db_clo
     tags_map[TABLE_CREATION_TIME_TAG_KEY] = std::to_string(tm);
 }
 
-static double get_table_creation_time(const schema &schema) {
+double get_table_creation_time(const schema &schema) {
     auto time = db::find_tag(schema, TABLE_CREATION_TIME_TAG_KEY);
     if (time) {
         try {
@@ -1235,9 +1235,62 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
     return {hash_key, range_key};
 }
 
+std::string_view extract_table_name_from_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
+    // Expected ARN format arn:partition:service:region:account-id:resource-type/resource-id
+    // So arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME};
+    // or arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952
+    // According to Amazon account-id must be a number, but we don't check for it here.
+
+    // skip to the resource part
+    auto index = arn.find(':');
+    if (index != std::string_view::npos) {
+        index = arn.find(':', index + 1);
+        if (index != std::string_view::npos) {
+            index = arn.find(':', index + 1);
+            if (index != std::string_view::npos) {
+                index = arn.find(':', index + 1);
+                if (index != std::string_view::npos) {
+                    index = arn.find(':', index + 1);
+                }
+            }
+        }
+    }
+    if (index == std::string_view::npos) {
+        throw api_error::access_denied(fmt::format("Incorrect resource identifier `{}`", arn));
+    }
+
+    // this looks like a valid ARN up to this point
+    // as a sanity check make sure that what follows is a resource-type "table/"
+    if (arn.substr(index + 1, 6) != "table/") {
+        throw api_error::validation(fmt::format("{} '{}' is not a valid {} ARN", arn_field_name, arn, type_name));
+    }
+    index += 7; // move past "table/"
+
+    auto end_index1 = arn.find('/', index);
+    // Amazon's spec allows both ':' and '/' as resource separators
+    auto end_index2 = arn.find(':', index);
+    auto end_index = std::min(end_index1, end_index2);
+    if (end_index == std::string_view::npos) {
+        end_index = arn.length();
+    }
+    auto table_name = arn.substr(index, end_index - index);
+    index = end_index;
+
+    // caller might require a specific postfix after the table name
+    // so for example in arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952
+    // specific postfix could be "stream" to make sure ARN is for a stream, not for the table itself
+    std::string_view postfix;
+    if (index < arn.size()) {
+        ++index; // skip separator
+        postfix = arn.substr(index);
+    }
+    if (postfix.starts_with(expected_postfix)) {
+        return table_name;
+    }
+    throw api_error::validation(fmt::format("{} '{}' is not a valid {} ARN", arn_field_name, arn, type_name));
+}
+
 static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_view arn) {
-    // Expected format: arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME};
-    constexpr size_t prefix_size = sizeof("arn:scylla:alternator:") - 1;
     // NOTE: This code returns AccessDeniedException if it's problematic to parse or recognize an arn.
     // Technically, a properly formatted, but nonexistent arn *should* return AccessDeniedException,
     // while an incorrectly formatted one should return ValidationException.
@@ -1249,18 +1302,10 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     // concluding that an error is an error and code which uses tagging
     // must be ready for handling AccessDeniedException instances anyway.
     try {
-        size_t keyspace_end = arn.find_first_of(':', prefix_size);
-        std::string_view keyspace_name = arn.substr(prefix_size, keyspace_end - prefix_size);
-        size_t table_start = arn.find_first_of('/');
-        std::string_view table_name = arn.substr(table_start + 1);
-        if (table_name.find('/') != std::string_view::npos) {
-            // A table name cannot contain a '/' - if it does, it's not a
-            // table ARN, it may be an index. DynamoDB returns a
-            // ValidationException in that case - see #10786.
-            throw api_error::validation(fmt::format("ResourceArn '{}' is not a valid table ARN", table_name));
-        }
         // FIXME: remove sstring creation once find_schema gains a view-based interface
-        return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
+        auto table_name = sstring{ extract_table_name_from_arn(arn, "ResourceArn", "table", "") };
+        sstring keyspace = sstring{ executor::KEYSPACE_NAME_PREFIX } + table_name;
+        return proxy.data_dictionary().find_schema(keyspace, table_name);
     } catch (const data_dictionary::no_such_column_family& e) {
         throw api_error::resource_not_found(fmt::format("ResourceArn '{}' not found", arn));
     } catch (const std::out_of_range& e) {

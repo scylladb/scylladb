@@ -13,11 +13,58 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
+#include "alternator/error.hh"
 
 #include "alternator/expressions.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
+
+namespace alternator {
+    std::string_view extract_table_name_from_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_simple_1) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    BOOST_REQUIRE_EQUAL(alternator::extract_table_name_from_arn(arn, "", "stream", "stream/"), "dynamodb_streams_verification_table_rc");
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_simple_2) {
+    std::string_view arn = "arn:partition:service:region:account-id:table/resource";
+
+    BOOST_REQUIRE_EQUAL(alternator::extract_table_name_from_arn(arn, "", "", ""), "resource");
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_no_table) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:foo/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    BOOST_REQUIRE_THROW(alternator::extract_table_name_from_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_wrong_postfix) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
+
+    BOOST_REQUIRE_THROW(alternator::extract_table_name_from_arn(arn, "", "", "cakes"), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_not_enough_colons_1) {
+    std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907";
+
+    BOOST_REQUIRE_THROW(alternator::extract_table_name_from_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_not_enough_colons_2) {
+    std::string_view arn = "arn";
+
+    BOOST_REQUIRE_THROW(alternator::extract_table_name_from_arn(arn, "", "", ""), alternator::api_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_empty) {
+    std::string_view arn = "";
+
+    BOOST_REQUIRE_THROW(alternator::extract_table_name_from_arn(arn, "", "", ""), alternator::api_error);
+}
 
 static std::map<std::string, std::string> strings {
     {"", ""},
