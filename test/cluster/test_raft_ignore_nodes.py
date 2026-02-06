@@ -11,6 +11,7 @@ import logging
 from test.pylib.internal_types import IPAddress, HostID
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.util import gather_safely
 from test.cluster.util import get_current_group0_config, wait_for_token_ring_and_group0_consistency
 
 
@@ -73,9 +74,7 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
     s2_id = await manager.get_host_id(servers[2].server_id)
     s3_id = await manager.get_host_id(servers[3].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
-    await manager.server_stop(servers[0].server_id)
-    await manager.server_stop(servers[1].server_id)
-    await manager.server_stop_gracefully(servers[2].server_id)
+    await gather_safely(*(manager.server_stop(srv.server_id) for srv in servers[:3]))
 
     ignore_dead = [s1_id, s2_id, s3_id]
     logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}, expecting error")
@@ -111,15 +110,13 @@ async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
        we want to run it only in dev mode.
     """
     logger.info("Booting initial cluster")
-    servers = await make_servers(manager, 7)
+    servers = await make_servers(manager, 7, config={'failure_detector_timeout_in_ms': 2000})
 
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
     s3_id = await manager.get_host_id(servers[3].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
-    await manager.server_stop_gracefully(servers[0].server_id)
-    await manager.server_stop_gracefully(servers[1].server_id)
-    await manager.server_stop_gracefully(servers[2].server_id)
+    await gather_safely(*(manager.server_stop(srv.server_id) for srv in servers[:3]))
 
     ignore_dead = [s1_id, s2_id, s3_id]
     logger.info(f"Removing {servers[0]} initiated by {servers[4]}, ignore_dead_nodes = {ignore_dead}, expecting error")
