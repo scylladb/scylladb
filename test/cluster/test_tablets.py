@@ -1494,6 +1494,8 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_id(ks, "test")
+
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
@@ -1515,7 +1517,7 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
         logger.info(f"Adding replica to tablet, host {new_replica[0]}")
         await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
 
-        assert sum([len(await log.grep(rf'.*Will set tablet .* stage to rebuild_repair.*')) for log in logs]) == 1
+        assert sum([len(await log.grep(rf'.*Will set tablet {table_id}:\d+ stage to rebuild_repair.*')) for log in logs]) == 1
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")
