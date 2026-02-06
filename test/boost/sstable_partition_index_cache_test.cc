@@ -26,7 +26,7 @@ static void add_entry(logalloc::region& r,
     as(r, [&] {
         with_allocator(r.allocator(), [&] {
             sstables::key sst_key = sstables::key::from_partition_key(s, key);
-            page._entries.push_back(make_managed<index_entry>(
+            page._entries.push_back(index_entry(
                     managed_bytes(sst_key.get_bytes()),
                     position,
                     managed_ref<promoted_index>()));
@@ -54,10 +54,10 @@ static partition_index_page make_page0(logalloc::region& r, simple_schema& s) {
 static void has_page0(partition_index_cache::entry_ptr ptr) {
     BOOST_REQUIRE(!ptr->empty());
     BOOST_REQUIRE_EQUAL(ptr->_entries.size(), 4);
-    BOOST_REQUIRE_EQUAL(ptr->_entries[0]->position(), 0);
-    BOOST_REQUIRE_EQUAL(ptr->_entries[1]->position(), 1);
-    BOOST_REQUIRE_EQUAL(ptr->_entries[2]->position(), 2);
-    BOOST_REQUIRE_EQUAL(ptr->_entries[3]->position(), 3);
+    BOOST_REQUIRE_EQUAL(ptr->_entries[0].position(), 0);
+    BOOST_REQUIRE_EQUAL(ptr->_entries[1].position(), 1);
+    BOOST_REQUIRE_EQUAL(ptr->_entries[2].position(), 2);
+    BOOST_REQUIRE_EQUAL(ptr->_entries[3].position(), 3);
 };
 
 SEASTAR_THREAD_TEST_CASE(test_caching) {

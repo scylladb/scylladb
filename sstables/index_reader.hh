@@ -82,7 +82,7 @@ public:
                             e.promoted_index->num_blocks);
                 }
                 auto key = managed_bytes(reinterpret_cast<const bytes::value_type*>(e.key.get()), e.key.size());
-                indexes._entries.emplace_back(make_managed<index_entry>(std::move(key), e.data_file_offset, std::move(pi)));
+                indexes._entries.emplace_back(std::move(key), e.data_file_offset, std::move(pi));
             });
         });
     }
@@ -550,7 +550,7 @@ private:
             if (bound.current_list->empty()) {
                 throw malformed_sstable_exception(format("missing index entry for summary index {} (bound {})", summary_idx, fmt::ptr(&bound)), _sstable->index_filename());
             }
-            bound.data_file_position = bound.current_list->_entries[0]->position();
+            bound.data_file_position = bound.current_list->_entries[0].position();
             bound.element = indexable_element::partition;
             bound.end_open_marker.reset();
 
@@ -559,8 +559,8 @@ private:
                 logalloc::reclaim_lock rl(_region);
                 for (auto&& e : bound.current_list->_entries) {
                     auto dk = dht::decorate_key(*_sstable->_schema,
-                        e->get_key().to_partition_key(*_sstable->_schema));
-                    sstlog.trace("  {} -> {}", dk, e->position());
+                        e.get_key().to_partition_key(*_sstable->_schema));
+                    sstlog.trace("  {} -> {}", dk, e.position());
                 }
             }
 
@@ -604,7 +604,7 @@ private:
     // Valid if partition_data_ready(bound)
     index_entry& current_partition_entry(index_bound& bound) {
         parse_assert(bool(bound.current_list), _sstable->index_filename());
-        return *bound.current_list->_entries[bound.current_index_idx];
+        return bound.current_list->_entries[bound.current_index_idx];
     }
 
     future<> advance_to_next_partition(index_bound& bound) {
@@ -617,7 +617,7 @@ private:
         if (bound.current_index_idx + 1 < bound.current_list->size()) {
             ++bound.current_index_idx;
             bound.current_pi_idx = 0;
-            bound.data_file_position = bound.current_list->_entries[bound.current_index_idx]->position();
+            bound.data_file_position = bound.current_list->_entries[bound.current_index_idx].position();
             bound.element = indexable_element::partition;
             bound.end_open_marker.reset();
             return reset_clustered_cursor(bound);
@@ -697,7 +697,7 @@ private:
             }
             bound.current_index_idx = std::distance(std::begin(entries), i);
             bound.current_pi_idx = 0;
-            bound.data_file_position = (*i)->position();
+            bound.data_file_position = (*i).position();
             bound.element = indexable_element::partition;
             bound.end_open_marker.reset();
             sstlog.trace("index {}: new page index = {}, pos={}", fmt::ptr(this), bound.current_index_idx, bound.data_file_position);

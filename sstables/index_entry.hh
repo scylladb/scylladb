@@ -289,7 +289,7 @@ public:
 // So the shallow part is in the standard allocator but all indirect objects are inside LSA.
 class partition_index_page {
 public:
-    lsa::chunked_managed_vector<managed_ref<index_entry>> _entries;
+    lsa::chunked_managed_vector<index_entry> _entries;
 public:
     partition_index_page() = default;
     partition_index_page(partition_index_page&&) noexcept = default;
@@ -305,7 +305,7 @@ public:
     size_t external_memory_usage() const {
         size_t size = _entries.external_memory_usage();
         for (auto&& e : _entries) {
-            size += sizeof(index_entry) + e->external_memory_usage();
+            size += e.external_memory_usage();
         }
         return size;
     }
