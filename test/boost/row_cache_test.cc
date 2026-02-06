@@ -4723,7 +4723,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
-        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
@@ -4774,7 +4774,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         s.add_row(m, ck3, "v3");
         cache.populate(m);
 
-        tombstone_gc_state gc_state(nullptr);
+        tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
 
         cache_entry& entry = cache.lookup(pk);
         auto& cp = entry.partition().version()->partition();
@@ -4801,7 +4801,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         set_cells_timestamp_to_min(cp.clustered_row(*s.schema(), ck3));
 
         {
-            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
+            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, gc_state, can_always_purge);
             auto close_rd1 = deferred_close(rd1);
             rd1.fill_buffer().get();
 
@@ -4813,7 +4813,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         }
 
         {
-            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
+            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, gc_state, can_always_purge);
             auto close_rd2 = deferred_close(rd2);
             rd2.fill_buffer().get();
 
@@ -4852,7 +4852,7 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
     cache.populate(m);
 
     auto pr = dht::partition_range::make_singular(pk);
-    tombstone_gc_state gc_state(nullptr);
+    tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
 
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_killed_due_to_kill_limit, 0);
     auto kill_limit_before = 0;
@@ -4862,7 +4862,7 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
         semaphore.set_resources({1, memory});
         auto permit = semaphore.obtain_permit(s.schema(), "read", 0, db::no_timeout, {}).get();
         auto create_reader_and_read_all = [&] {
-            auto rd = cache.make_reader(s.schema(), permit, pr, &gc_state);
+            auto rd = cache.make_reader(s.schema(), permit, pr, gc_state);
             auto close_rd = deferred_close(rd);
             while (rd().get());
         };
@@ -5026,7 +5026,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     // Before the fix for issue #18045, this caused a (ASAN-triggering) use-after-free,
     // because _latest_it was deferenced during the population.
 
-    tombstone_gc_state gc_state(nullptr);
+    tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
     auto slice = query::reverse_slice(*s, s->full_slice());
     auto rd = cache.make_reader(
         s->make_reversed(),
@@ -5036,7 +5036,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
         nullptr,
         streamed_mutation::forwarding::no,
         mutation_reader::forwarding::no,
-        &gc_state);
+        gc_state);
     auto close_rd = deferred_close(rd);
     read_mutation_from_mutation_reader(rd).get();
 }
@@ -5097,8 +5097,9 @@ void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_t
 
 void check_tombstone_is_gc_candidate(cql_test_env& env, table_id tid, const dht::decorated_key& dk, tombstone tomb) {
     env.db().invoke_on_all([&] (replica::database& db) {
-        auto s = db.find_column_family(tid).schema();
-        const auto gc_state = db.get_compaction_manager().get_tombstone_gc_state();
+        auto& tbl = db.find_column_family(tid);
+        auto s = tbl.schema();
+        const auto gc_state = tbl.get_tombstone_gc_state();
         const auto gc_before = gc_state.get_gc_before_for_key(s, dk, gc_clock::now());
         BOOST_REQUIRE_LE(tomb.deletion_time.time_since_epoch().count(), gc_before.time_since_epoch().count());
     }).get();
