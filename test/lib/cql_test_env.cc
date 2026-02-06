@@ -881,12 +881,12 @@ private:
                 size_t next = 0;
                 sstring seeds_str = seed_provider.parameters.find("seeds")->second;
                 while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+                    seeds.emplace(seeds_str.substr(begin,next-begin));
                     begin = next+1;
                 }
             }
             if (seeds.empty()) {
-                seeds.emplace(gms::inet_address("127.0.0.1"));
+                seeds.emplace("127.0.0.1");
             }
 
             gms::gossip_config gcfg;
