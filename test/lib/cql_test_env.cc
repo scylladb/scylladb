@@ -559,6 +559,9 @@ private:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
+            smp::invoke_on_all([&] {
+                sstables::global_cache_index_pages = cfg->cache_index_pages.operator utils::updateable_value<bool>();
+            }).get();
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->schema_commitlog_directory().c_str());
