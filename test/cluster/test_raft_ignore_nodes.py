@@ -71,10 +71,17 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
 
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
+    s3_id = await manager.get_host_id(servers[3].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
     await manager.server_stop(servers[0].server_id)
     await manager.server_stop(servers[1].server_id)
     await manager.server_stop_gracefully(servers[2].server_id)
+
+    ignore_dead = [s1_id, s2_id, s3_id]
+    logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}, expecting error")
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True,
+                                ignore_dead_nodes = ignore_dead)
+    await manager.server_add(replace_cfg=replace_cfg, expected_error=f"ignored node {s3_id} is alive")
 
     ignore_dead: list[IPAddress | HostID] = [s1_id, servers[2].ip_addr]
     logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}")
@@ -108,10 +115,15 @@ async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
 
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
+    s3_id = await manager.get_host_id(servers[3].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
     await manager.server_stop_gracefully(servers[0].server_id)
     await manager.server_stop_gracefully(servers[1].server_id)
     await manager.server_stop_gracefully(servers[2].server_id)
+
+    ignore_dead = [s1_id, s2_id, s3_id]
+    logger.info(f"Removing {servers[0]} initiated by {servers[4]}, ignore_dead_nodes = {ignore_dead}, expecting error")
+    await manager.remove_node(servers[4].server_id, servers[0].server_id, ignore_dead, f"ignored node {s3_id} is alive")
 
     ignore_dead: list[IPAddress] | list[HostID] = [s1_id, s2_id]
     logger.info(f"Removing {servers[0]} initiated by {servers[3]}, ignore_dead_nodes = {ignore_dead}")
