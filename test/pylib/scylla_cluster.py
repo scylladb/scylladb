@@ -229,6 +229,13 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
     arch = platform.machine()
     url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.0-0.20250325.9dca28d2b818.{arch}.tar.gz'
 
+    return await get_scylla_executable(url)
+
+async def get_scylla_executable(url: str) -> str:
+    async def run_process(cmd, **kwargs):
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+        await proc.communicate()
+        assert proc.returncode == 0
     archive_filename = urllib.parse.urlparse(url).path.split("/")[-1]
 
     xdg_cache_dir = pathlib.Path(os.getenv("XDG_CACHE_HOME", str(pathlib.Path.home() / ".cache")))
