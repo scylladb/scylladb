@@ -4364,6 +4364,17 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
+
+        for (auto ignored_id : ignored_ids) {
+            if (_gossiper.is_alive(locator::host_id(ignored_id.uuid()))) {
+                const std::string message = fmt::format(
+                    "removenode: Rejected removenode operation for node {}; ignored node {} is alive",
+                    id, ignored_id);
+                rtlogger.warn("{}", message);
+                throw std::runtime_error(message);
+            }
+        }
+
         // insert node that should be removed to ignore list so that other topology operations
         // can ignore it
         ignored_ids.insert(id);
@@ -7718,6 +7729,16 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
                     .reason = fmt::format("Cannot replace the token-owning node {} with a zero-token node", *params.replaced_id),
                 };
                 co_return result;
+            }
+
+            auto ignored_nodes = ignored_nodes_from_join_params(params);
+            for (auto ignored_id : ignored_nodes) {
+                if (_gossiper.is_alive(locator::host_id(ignored_id.uuid()))) {
+                    result.result = join_node_request_result::rejected{
+                        .reason = fmt::format("Cannot replace node {} because ignored node {} is alive", *params.replaced_id, ignored_id),
+                    };
+                    co_return result;
+                }
             }
 
             if (_topology_state_machine._topology.requests.find(*params.replaced_id) != _topology_state_machine._topology.requests.end()) {
