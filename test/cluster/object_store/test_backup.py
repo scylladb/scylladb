@@ -1125,16 +1125,14 @@ async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerCl
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    r_servers = servers
-
-    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in r_servers))
+    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
+    for i, s in enumerate(servers):
         log = await manager.server_open_log(s.server_id)
         res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
         streamed_to = set([ r[1].group(1) for r in res ])
-        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
+        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {servers}')
         assert len(streamed_to) == 2
