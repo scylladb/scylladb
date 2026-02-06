@@ -53,9 +53,8 @@ class index_consumer {
     schema_ptr _s;
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
+    utils::chunked_vector<parsed_partition_index_entry> _parsed_entries;
 public:
-    index_list indexes;
-
     index_consumer(logalloc::region& r, schema_ptr s)
         : _s(s)
         , _alloc_section(abstract_formatter([s] (fmt::format_context& ctx) {
@@ -64,36 +63,48 @@ public:
         , _region(r)
     { }
 
-    ~index_consumer() {
-        with_allocator(_region.allocator(), [&] {
-            indexes._entries.clear_and_release();
-        });
+    void consume_entry(parsed_partition_index_entry&& e) {
+        _parsed_entries.emplace_back(std::move(e));
     }
 
-    void consume_entry(parsed_partition_index_entry&& e) {
-        _alloc_section(_region, [&] {
+    future<index_list> finalize() {
+        index_list result;
+        auto delete_result = seastar::defer([&] {
             with_allocator(_region.allocator(), [&] {
-                managed_ref<promoted_index> pi;
-                if (e.promoted_index) {
-                    pi = make_managed<promoted_index>(*_s,
-                            e.promoted_index->del_time,
-                            e.promoted_index->promoted_index_start,
-                            e.promoted_index->promoted_index_size,
-                            e.promoted_index->num_blocks);
-                }
-                auto key = managed_bytes(reinterpret_cast<const bytes::value_type*>(e.key.get()), e.key.size());
-                indexes._entries.emplace_back(std::move(key), e.data_file_offset, std::move(pi));
+                result._entries = {};
             });
         });
+        auto i = _parsed_entries.begin();
+        while (i != _parsed_entries.end()) {
+            _alloc_section(_region, [&] {
+                with_allocator(_region.allocator(), [&] {
+                    result._entries.reserve(_parsed_entries.size());
+                    while (i != _parsed_entries.end() && !need_preempt()) {
+                        parsed_partition_index_entry& e = *i;
+                        managed_ref<promoted_index> pi;
+                        if (e.promoted_index) {
+                            pi = make_managed<promoted_index>(*_s,
+                                                              e.promoted_index->del_time,
+                                                              e.promoted_index->promoted_index_start,
+                                                              e.promoted_index->promoted_index_size,
+                                                              e.promoted_index->num_blocks);
+                        }
+                        auto key = managed_bytes(reinterpret_cast<const bytes::value_type *>(e.key.get()), e.key.size());
+                        result._entries.emplace_back(std::move(key), e.data_file_offset, std::move(pi));
+                        ++i;
+                    }
+                });
+            });
+            co_await coroutine::maybe_yield();
+        }
+        delete_result.cancel();
+        _parsed_entries.clear();
+        co_return std::move(result);
     }
 
     void prepare(uint64_t size) {
-        _alloc_section = logalloc::allocating_section();
-        _alloc_section(_region, [&] {
-            with_allocator(_region.allocator(), [&] {
-                indexes._entries.reserve(size);
-            });
-        });
+        _parsed_entries.clear();
+        _parsed_entries.reserve(size);
     }
 };
 
@@ -537,7 +548,7 @@ private:
                     if (ex) {
                         return make_exception_future<index_list>(std::move(ex));
                     }
-                    return make_ready_future<index_list>(std::move(bound.consumer->indexes));
+                    return bound.consumer->finalize();
                 });
             });
         };
