@@ -442,3 +442,29 @@ class TestWriteConsistencyLevelGuardrails(Tester):
         with pytest.raises(InvalidRequest) as exc_info:
             session.execute(stmt)
         assert "not allowed" in str(exc_info.value).lower()
+
+    def test_write_cl_default_warned(self):
+        """
+        Test that by default ANY, ONE, and LOCAL_ONE produce warnings for writes.
+        """
+        cluster = self.cluster
+        cluster.populate([1]).start(wait_for_binary_proto=True)
+
+        node = cluster.nodelist()[0]
+        session = self.patient_cql_connection(node)
+
+        create_ks(session, "ks", 1)
+        session.execute("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+        # ANY, ONE, LOCAL_ONE should produce warnings by default
+        for cl in [ConsistencyLevel.ANY, ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]:
+            stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (1, 1)", consistency_level=cl)
+            result = session.execute_async(stmt)
+            result.result()
+            assert result.warnings is not None and len(result.warnings) >= 1, f"Expected warning for {cl}"
+
+        # QUORUM should not produce warnings
+        stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (2, 2)", consistency_level=ConsistencyLevel.QUORUM)
+        result = session.execute_async(stmt)
+        result.result()
+        assert result.warnings is None or len(result.warnings) == 0
