@@ -877,12 +877,8 @@ private:
             std::set<gms::inet_address> seeds;
             auto seed_provider = db::config::seed_provider_type();
             if (seed_provider.parameters.contains("seeds")) {
-                size_t begin = 0;
-                size_t next = 0;
-                sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                    seeds.emplace(seeds_str.substr(begin,next-begin));
-                    begin = next+1;
+                for (const auto& seed : utils::split_comma_separated_list(seed_provider.parameters.at("seeds"))) {
+                    seeds.emplace(seed);
                 }
             }
             if (seeds.empty()) {
