@@ -30,11 +30,10 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
 
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.contains("seeds")) {
-        size_t begin = 0;
-        size_t next = 0;
         sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-            auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
+
+        for (const auto &token : seeds_str | std::views::split(',')) {
+            auto seed = boost::algorithm::trim_copy(sstring(token.begin(), token.end()));
             try {
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {
@@ -46,7 +45,6 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
                                seed,
                                std::current_exception());
             }
-            begin = next+1;
         }
     }
     if (seeds.empty()) {
