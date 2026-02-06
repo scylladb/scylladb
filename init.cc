@@ -50,7 +50,7 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
         }
     }
     if (seeds.empty()) {
-        seeds.emplace(gms::inet_address("127.0.0.1"));
+        seeds.emplace("127.0.0.1");
     }
     startlog.info("seeds={{{}}}, listen_address={}, broadcast_address={}",
             fmt::join(seeds, ", "), listen, broadcast_address);
