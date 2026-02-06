@@ -877,16 +877,13 @@ private:
             std::set<gms::inet_address> seeds;
             auto seed_provider = db::config::seed_provider_type();
             if (seed_provider.parameters.contains("seeds")) {
-                size_t begin = 0;
-                size_t next = 0;
                 sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-                    begin = next+1;
+                for (const auto &token : seeds_str | std::views::split(',')) {
+                    seeds.emplace(sstring(token.begin(), token.end()));
                 }
             }
             if (seeds.empty()) {
-                seeds.emplace(gms::inet_address("127.0.0.1"));
+                seeds.emplace("127.0.0.1");
             }
 
             gms::gossip_config gcfg;
