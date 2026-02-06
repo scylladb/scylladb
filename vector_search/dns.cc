@@ -56,7 +56,7 @@ dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_
             co_await coroutine::return_exception_ptr(std::move(err));
         }
         auto addr = co_await std::move(f);
-        co_return addr.addr_list;
+        co_return addr.addr_entries | std::views::transform(&net::hostent::address_entry::addr) | std::ranges::to<std::vector>();
     })
     , _hosts(std::move(hosts))
     , _listener(std::move(listener))
