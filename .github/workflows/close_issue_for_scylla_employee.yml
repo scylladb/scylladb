@@ -1,0 +1,62 @@
+name: Close issues created by Scylla employees
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  comment-and-close:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment and close if author email is scylladb.com
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const actor = context.actor;
+
+            // Get user data (only public email is available)
+            const { data: user } = await github.rest.users.getByUsername({
+              username: actor,
+            });
+
+            const email = user.email || "";
+            console.log(`Actor: ${actor}, public email: ${email || "<none>"}`);
+
+            // Only continue if email exists and ends with @scylladb.com
+            if (!email || !email.toLowerCase().endsWith("@scylladb.com")) {
+              console.log("User is not a scylladb.com email (or email not public); skipping.");
+              return;
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = issue.number;
+
+            const body = "Issues in this repository are closed automatically. Scylla employees should use Jira to manage issues.\nPlease move this issue to Jira https://scylladb.atlassian.net/jira/software/c/projects/SCYLLADB/list";
+
+            // Add the comment
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+
+            console.log(`Comment added to #${issue_number}`);
+
+            // Close the issue
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number,
+              state: "closed",
+              state_reason: "not_planned"
+            });
+
+            console.log(`Issue #${issue_number} closed.`);
