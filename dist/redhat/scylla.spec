@@ -76,7 +76,7 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
-Requires:       procps-ng, shadow-utils
+Requires:       procps-ng, shadow-utils, systemd
 AutoReqProv:    no
 Provides:       %{product}-tools:%{_bindir}/nodetool
 Provides:       %{product}-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
