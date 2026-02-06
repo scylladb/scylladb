@@ -465,6 +465,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
+            ("remote-port", bpo::value<unsigned>()->default_value(8000), "address of remote alternator port")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
             ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
@@ -500,7 +501,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         }
         
         if (!c.remote_host.empty()) {
-            c.port = 8000; // TODO: make configurable
+            c.port = opts["remote-port"].as<unsigned>();
             app_template app;
             return app.run(ac, av, [c = std::move(c)] () -> future<> {
                 return run_standalone([c = std::move(c)] (sharded<abort_source>* as) {
