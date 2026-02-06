@@ -13,7 +13,6 @@
 #include <boost/regex.hpp>
 #include <fmt/ranges.h>
 
-#include "utils/class_registrator.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
@@ -29,13 +28,6 @@ static const std::string cfg_query_attr = "query";
 
 static const std::string cfg_source_subject = "SUBJECT";
 static const std::string cfg_source_altname = "ALTNAME";
-
-static const class_registrator<auth::authenticator
-    , auth::certificate_authenticator
-    , cql3::query_processor&
-    , ::service::raft_group0_client&
-    , ::service::migration_manager&
-    , auth::cache&> cert_auth_reg(CERT_AUTH_NAME);
 
 enum class auth::certificate_authenticator::query_source {
     subject, altname

@@ -19,21 +19,11 @@ Procedure
        authenticator: PasswordAuthenticator
 
 
-#. Restart  ScyllaDB.
+#. Restart ScyllaDB.
 
     .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Start cqlsh with the default superuser username and password. 
-
-    .. code-block:: cql
-
-       cqlsh -u cassandra -p cassandra
-
-   .. note::
-
-      Before proceeding  to the next step, we recommend creating a custom superuser
-      to improve security.
-      See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
+#. Start cqlsh over the maintenance socket and create a new superuser. See :ref:`Setting Up a Superuser Using the Maintenance Socket <create-superuser-using-maintenance-socket>` for instructions.
 
 #. If you want to create users and roles, continue to :doc:`Enable Authorization </operating-scylla/security/enable-authorization>`.
 
