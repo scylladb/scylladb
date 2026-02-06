@@ -6,53 +6,30 @@
 
 from test.pylib.manager_client import ManagerClient
 
-import asyncio
 import pytest
-
-from test.pylib.util import wait_for_first_completed
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="gossiper topology mode is no longer supported, need to rewrite the test using raft topology")
 async def test_different_group0_ids(manager: ManagerClient):
     """
-    The reproducer for #14448.
+    The test starts two single-node clusters (with different group0_ids). Node B (the
+    node from the second cluster) is restarted with seeds containing node A (the node
+    from the first cluster), and thus it tries to gossip node A. The test checks that
+    node A rejects gossip_digest_syn.
 
-    The test starts two nodes with different group0_ids. The second node
-    is restarted and tries to join the cluster consisting of the first node.
-    gossip_digest_syn message should be rejected by the first node, so
-    the second node will not be able to join the cluster.
-
-    This test uses repair-based node operations to make this test easier.
-    If the second node successfully joins the cluster, their tokens metadata
-    will be merged and the repair service will allow to decommission the second node.
-    If not - decommissioning the second node will fail with an exception
-    "zero replica after the removal" thrown by the repair service.
+    Note: this test relies on the fact that the only node in a single-node cluster
+    always gossips with its seeds. This can be considered a bug, although a mild one.
+    If we ever fix it, this test can be rewritten by starting a two-node cluster and
+    recreating group0 on one of the nodes via the recovery procedure.
     """
-
-    # Consistent topology changes are disabled to use repair based node operations.
-    cfg = {'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
-    scylla_a = await manager.server_add(config = cfg)
-    scylla_b = await manager.server_add(start=False, config = cfg)
+    scylla_a = await manager.server_add()
+    scylla_b = await manager.server_add(start=False)
     await manager.server_start(scylla_b.server_id, seeds=[scylla_b.ip_addr])
 
+    id_b = await manager.get_host_id(scylla_b.server_id)
+
     await manager.server_stop(scylla_b.server_id)
-    await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr, scylla_b.ip_addr])
+    await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr])
 
     log_file_a = await manager.server_open_log(scylla_a.server_id)
-    log_file_b = await manager.server_open_log(scylla_b.server_id)
-
-    # Wait for a gossip round to finish
-    await wait_for_first_completed([
-            log_file_b.wait_for(f'InetAddress {scylla_a.ip_addr} is now UP'), # The second node joins the cluster
-            log_file_a.wait_for(f'Group0Id mismatch') # The first node discards gossip from the second node
-        ])
-
-
-    # Check if decommissioning the second node fails.
-    # Repair service throws a runtime exception "zero replica after the removal"
-    # when it tries to remove the only one node from the cluster.
-    # If it is not thrown, it means that the second node successfully send a gossip
-    # to the first node and they merged their tokens metadata.
-    with pytest.raises(Exception, match='zero replica after the removal'):
-        await manager.decommission_node(scylla_b.server_id)
+    await log_file_a.wait_for(f'Group0Id mismatch from {id_b}', timeout=30)
