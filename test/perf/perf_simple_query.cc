@@ -291,6 +291,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("memtable-partitions", bpo::value<unsigned>(), "apply this number of partitions to memtable, then flush")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
+        ("enable-index-cache", bpo::value<bool>()->default_value(true), "enable partition index cache")
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
@@ -314,8 +315,11 @@ int scylla_simple_query_main(int argc, char** argv) {
             auto db_cfg = ::make_shared<db::config>(ext);
 
             const auto enable_cache = app.configuration()["enable-cache"].as<bool>();
+            const auto enable_index_cache = app.configuration()["enable-index-cache"].as<bool>();
             std::cout << "enable-cache=" << enable_cache << '\n';
+            std::cout << "enable-index-cache=" << enable_index_cache << '\n';
             db_cfg->enable_cache(enable_cache);
+            db_cfg->cache_index_pages(enable_index_cache);
             cql_test_config cfg(db_cfg);
             if (app.configuration().contains("tablets")) {
                 cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
