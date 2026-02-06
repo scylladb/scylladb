@@ -144,6 +144,9 @@ struct stats : public write_stats {
     uint64_t read_repair_repaired_background = 0;
     uint64_t global_read_repairs_canceled_due_to_concurrent_write = 0;
 
+    // number of read-repair data requests redirected to a spare replica
+    uint64_t read_repair_spare_read_redirects = 0;
+
     // number of mutations received as a coordinator
     uint64_t received_mutations = 0;
 

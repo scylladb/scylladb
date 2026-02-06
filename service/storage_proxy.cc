@@ -1379,6 +1379,16 @@ static inline db::per_partition_rate_limit::info adjust_rate_limit_for_local_ope
     return info;
 }
 
+template <typename T, size_t N>
+std::optional<T> pop_back_if_available(utils::small_vector<T, N>& v) {
+    std::optional<T> res;
+    if (!v.empty()) {
+        res.emplace(std::move(v.back()));
+        v.pop_back();
+    }
+    return res;
+}
+
 class mutation_holder {
 protected:
     size_t _size = 0;
@@ -3086,6 +3096,10 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_total_operations("background_read_repairs", read_repair_repaired_background,
                        sm::description("number of background read repairs"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_total_operations("read_repair_spare_read_redirects", read_repair_spare_read_redirects,
+                       sm::description("number of read-repair data requests redirected to a spare replica"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
@@ -5120,6 +5134,9 @@ class data_read_resolver : public abstract_read_resolver {
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
     mutations_per_partition_key_map _diffs;
+    // Callback to send speculative data mutation request to a spare replica on failure.
+    // Returns true if a speculative request was sent, false if no spare replicas available.
+    noncopyable_function<bool(locator::host_id failed_ep)> _speculate_read_on_failure = [] (locator::host_id) { return false; };
 private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
@@ -5341,6 +5358,14 @@ public:
         }
     }
     void on_error(locator::host_id ep, error_kind kind) override {
+        // During the read-repair data-fetch phase, a replica may fail to
+        // respond (network issue, overload, shutdown, etc.).  Try redirecting
+        // the request to a spare replica so that reconciliation can still
+        // collect enough responses to proceed.
+        if (_speculate_read_on_failure(ep)) {
+            return;
+        }
+        // No spare replicas available, fail the request.
         switch (kind) {
         case error_kind::RATE_LIMIT:
             fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
@@ -5350,6 +5375,9 @@ public:
             fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
             break;
         }
+    }
+    void set_speculate_read_on_failure(noncopyable_function<bool(locator::host_id failed_ep)>&& cb) {
+        _speculate_read_on_failure = std::move(cb);
     }
     uint32_t max_live_count() const {
         return _max_live_count;
@@ -5750,7 +5778,25 @@ protected:
     uint32_t original_partition_limit() const {
         return _cmd->partition_limit;
     }
+    // Adjust _targets and _spare_targets before reconciliation.
+    // Overridden by abstract_speculating_read_executor to trim _targets
+    // to _block_for, moving excess used targets to _spare_targets.
+    // never_speculating_read_executor uses the default (no-op) because
+    // _block_for == _targets.size() — no trimming is needed.
     virtual void adjust_targets_for_reconciliation() {}
+    // Redirect a failed read-repair data request to a spare replica.
+    // Returns true if a spare was available and the request was sent, false otherwise.
+    bool redirect_read_to_spare(locator::host_id failed_ep, lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, clock_type::time_point timeout) {
+        auto spare_ep = pop_back_if_available(_spare_targets);
+        if (!spare_ep) {
+            return false;
+        }
+        slogger.trace("read-repair read: replica {} failed, redirecting to spare {}", failed_ep, *spare_ep);
+        tracing::trace(_trace_state, "Read-repair read: replica {} failed, redirecting to spare {}", failed_ep, *spare_ep);
+        _proxy->get_stats().read_repair_spare_read_redirects++;
+        make_mutation_data_requests(cmd, resolver, &*spare_ep, &*spare_ep + 1, timeout);
+        return true;
+    }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         adjust_targets_for_reconciliation();
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
@@ -5759,6 +5805,13 @@ protected:
         if (_proxy->features().empty_replica_mutation_pages) {
             cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
         }
+
+        // Set up callback to redirect failed read-repair data requests to spare replicas.
+        // Delegates to redirect_read_to_spare().
+        // Consumed spares are removed from _spare_targets via pop_back().
+        data_resolver->set_speculate_read_on_failure([this, cmd, data_resolver, timeout] (locator::host_id failed_ep) {
+            return redirect_read_to_spare(failed_ep, cmd, data_resolver, timeout);
+        });
 
         // Waited on indirectly.
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
@@ -6010,11 +6063,33 @@ public:
     }
 };
 
-// this executor always asks for one additional data reply
-class always_speculating_read_executor : public abstract_read_executor {
+// Base class for speculating executors. Provides adjust_targets_for_reconciliation()
+// which trims _targets to _block_for replicas for the read-repair data phase,
+// moving excess targets and unused digest-phase targets into _spare_targets.
+class abstract_speculating_read_executor : public abstract_read_executor {
 public:
     using abstract_read_executor::abstract_read_executor;
-    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) {
+    virtual void adjust_targets_for_reconciliation() override {
+        auto used = used_targets();
+        // Targets that didn't respond during the digest phase become spares.
+        std::ranges::copy_if(_targets, std::back_inserter(_spare_targets), [&used] (const auto& t) {
+            return !std::ranges::contains(used, t);
+        });
+        // Keep only _block_for used targets; excess become preferred spares
+        // (they responded during digest, so they are likely still healthy).
+        while (used.size() > _block_for) {
+            _spare_targets.push_back(used.back());
+            used.pop_back();
+        }
+        _targets = std::move(used);
+    }
+};
+
+// this executor always asks for one additional data reply
+class always_speculating_read_executor : public abstract_speculating_read_executor {
+public:
+    using abstract_speculating_read_executor::abstract_speculating_read_executor;
+    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         if (_targets.size() < 2) {
             on_internal_error(slogger,
                               seastar::format("always_speculating_read_executor: received {} replica(s)"
@@ -6030,10 +6105,10 @@ public:
 };
 
 // this executor sends request to an additional replica after some time below timeout
-class speculating_read_executor : public abstract_read_executor {
+class speculating_read_executor : public abstract_speculating_read_executor {
     timer<storage_proxy::clock_type> _speculate_timer;
 public:
-    using abstract_read_executor::abstract_read_executor;
+    using abstract_speculating_read_executor::abstract_speculating_read_executor;
     virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         if (_targets.size() < 2) {
             on_internal_error(slogger,
@@ -6085,9 +6160,6 @@ public:
     }
     virtual void got_cl() override {
         _speculate_timer.cancel();
-    }
-    virtual void adjust_targets_for_reconciliation() override {
-        _targets = used_targets();
     }
 };
 
