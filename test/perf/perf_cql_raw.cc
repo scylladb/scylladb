@@ -749,32 +749,6 @@ static void workload_main(raw_cql_test_config cfg) {
     }
 }
 
-static future<> run_standalone(raw_cql_test_config c) {
-    auto as = make_shared<sharded<abort_source>>();
-    co_await as->start();
-    c.as = as.get();
-
-    auto stop_handler = [as] {
-        (void)as->invoke_on_all(&abort_source::request_abort);
-    };
-
-    seastar::handle_signal(SIGINT, stop_handler);
-    seastar::handle_signal(SIGTERM, stop_handler);
-
-    std::exception_ptr ex;
-    try {
-        co_await seastar::async([c = std::move(c)] {
-            workload_main(c);
-        });
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await as->stop();
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
-}
-
 // Returns a function which launches a performance workload that
 // talks to the embedded server over the native CQL protocol using
 // handcrafted CQL binary frames (no driver). Similar to perf_alternator
@@ -783,7 +757,7 @@ static future<> run_standalone(raw_cql_test_config c) {
 //
 // Example usage:
 // ./build/dev/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
-std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config>)>* after_init_func) {
+std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config>, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         raw_cql_test_config c;
         bpo::options_description opts_desc;
@@ -844,8 +818,8 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
             // if remote-host provided (non-empty) we run standalone
             c.port = 9042; // TODO: make configurable
             app_template app;
-            return app.run(ac, av, [c = std::move(c)] () mutable -> future<> {
-                return run_standalone(std::move(c));
+            return app.run(ac, av, [c = std::move(c)] () -> future<> {
+                return run_standalone<raw_cql_test_config>(std::move(c), &workload_main);
             });
         } else {
             // in-process mode
@@ -864,10 +838,11 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
             ++ac;
         }
 
-        *after_init_func = [c](lw_shared_ptr<db::config> cfg) mutable {
+        *after_init_func = [c](lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->native_transport_port();
+            c.as = &as;
             // run workload in background-ish
-            (void)seastar::async([c]() {
+            return seastar::async([c]() {
                 try {
                     workload_main(c);
                 } catch (...) {
