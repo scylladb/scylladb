@@ -324,9 +324,7 @@ static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_se
     const auto& tm = *erm->get_token_metadata_ptr();
     const auto& sorted_tokens = tm.sorted_tokens();
     std::vector<std::pair<dht::token_range, locator::host_id>> ret;
-    if (sorted_tokens.empty()) {
-        on_internal_error(tlogger, "Token metadata is empty");
-    }
+    throwing_assert(!sorted_tokens.empty());
     auto prev_tok = sorted_tokens.back();
     for (const auto& tok : sorted_tokens) {
         co_await coroutine::maybe_yield();
@@ -563,7 +561,7 @@ static future<> scan_table_ranges(
         expiration_service::stats& expiration_stats)
 {
     const schema_ptr& s = scan_ctx.s;
-    SCYLLA_ASSERT (partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
+    throwing_assert(partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
     auto p = service::pager::query_pagers::pager(proxy, s, scan_ctx.selection, *scan_ctx.query_state_ptr,
             *scan_ctx.query_options, scan_ctx.command, std::move(partition_ranges), nullptr);
     while (!p->is_exhausted()) {
