@@ -61,7 +61,6 @@ PYTEST_RUNNER_DIRECTORIES = [
     TEST_DIR / 'raft',
     TEST_DIR / 'unit',
     TEST_DIR / 'vector_search',
-    TEST_DIR / 'vector_search_validator',
     TEST_DIR / 'alternator',
     TEST_DIR / 'broadcast_tables',
     TEST_DIR / 'cql',
