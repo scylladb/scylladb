@@ -23,11 +23,11 @@ static_assert(std::is_nothrow_move_constructible_v<gms::inet_address>);
 
 future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family, opt_family preferred) {
     return seastar::net::dns::get_host_by_name(std::move(name), family).then([preferred](seastar::net::hostent&& h) {
-        for (auto& addr : h.addr_list) {
-            if (!preferred || addr.in_family() == preferred) {
-                return gms::inet_address(addr);
+        for (auto& ent : h.addr_entries) {
+            if (!preferred || ent.addr.in_family() == preferred) {
+                return gms::inet_address(ent.addr);
             }
         }
-        return gms::inet_address(h.addr_list.front());
+        return gms::inet_address(h.addr_entries.front().addr);
     });
 }
