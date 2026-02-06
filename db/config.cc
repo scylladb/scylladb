@@ -1606,6 +1606,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
+    , write_consistency_levels_warned(this, "write_consistency_levels_warned", liveness::LiveUpdate, value_status::Used, "ANY, ONE, LOCAL_ONE", "A comma-separated list of consistency levels that will trigger a warning when used in write operations.")
+    , write_consistency_levels_disallowed(this, "write_consistency_levels_disallowed", liveness::LiveUpdate, value_status::Used, {}, "A comma-separated list of consistency levels that are not allowed for write operations. Requests using these levels will fail.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")

@@ -384,7 +384,7 @@ public:
         frame_builder fb{stream};
         // QUERY frame (v4): <long string><short consistency><byte flags>
         fb.write_long_string(q);
-        fb.write_short(0x0001); // ONE
+        fb.write_short(0x0004); // QUORUM
         fb.write_byte(0); // flags
         auto f = co_await execute_request(stream, fb.finish(cql_binary_opcode::QUERY));
         if (f.opcode == cql_binary_opcode::ERROR) {
@@ -426,7 +426,7 @@ public:
         auto stream = allocate_stream();
         frame_builder fb{stream};
         fb.write_string(id); // [short bytes]
-        fb.write_short(0x0001); // ONE
+        fb.write_short(0x0004); // QUORUM
         // Flags: VALUES (0x01) | SKIP_METADATA (0x02) = 0x03
         fb.write_byte(0x03);
         fb.write_short(1); // 1 value

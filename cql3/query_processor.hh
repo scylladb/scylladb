@@ -34,6 +34,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/auth_version.hh"
+#include "db/consistency_level_type.hh"
 #include "service/storage_proxy_fwd.hh"
 
 
@@ -142,6 +143,15 @@ private:
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
     lang::manager& _lang_manager;
+
+    db::consistency_level_set _write_consistency_levels_warned;
+    db::consistency_level_set _write_consistency_levels_disallowed;
+    utils::observer<sstring> _write_consistency_levels_warned_observer;
+    utils::observer<sstring> _write_consistency_levels_disallowed_observer;
+
+    void update_write_consistency_levels_warned(const sstring& list);
+    void update_write_consistency_levels_disallowed(const sstring& list);
+    void update_consistency_level_set(const sstring& list, std::string_view config_name, db::consistency_level_set& target);
 public:
     static const sstring CQL_VERSION;
 
@@ -187,6 +197,14 @@ public:
     }
 
     lang::manager& lang() { return _lang_manager; }
+
+    const db::consistency_level_set& write_consistency_levels_warned() const noexcept {
+        return _write_consistency_levels_warned;
+    }
+
+    const db::consistency_level_set& write_consistency_levels_disallowed() const noexcept {
+        return _write_consistency_levels_disallowed;
+    }
 
     const vector_search::vector_store_client& vector_store_client() const noexcept {
         return _vector_store_client;

@@ -152,7 +152,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, db::consistency_level::QUORUM).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -166,7 +166,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, db::consistency_level::QUORUM).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -185,7 +185,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, db::consistency_level::QUORUM).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
