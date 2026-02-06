@@ -252,6 +252,12 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--pytest-arg", action='store', type=str,
                         default=None, dest="pytest_arg",
                         help="Additional command line arguments to pass to pytest, for example ./test.py --pytest-arg=\"-v -x\"")
+    parser.add_argument('--exe-path', default=False,
+                     dest="exe_path", action="store",
+                     help="Path to the executable to run. Not working with `mode`")
+    parser.add_argument('--exe-url', default=False,
+                     dest="exe_url", action="store",
+                     help="URL to download the relocatable executable. Not working with `mode`")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
