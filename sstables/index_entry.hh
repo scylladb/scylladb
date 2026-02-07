@@ -298,6 +298,16 @@ public:
     bool empty() const { return _entries.empty(); }
     size_t size() const { return _entries.size(); }
 
+    stop_iteration clear_gently() {
+        while (!_entries.empty()) {
+            _entries.pop_back();
+             if (need_preempt()) {
+                return stop_iteration::no;
+            }
+        }
+        return stop_iteration::yes;
+    }
+
     void clear_one_entry() {
         _entries.pop_back();
     }
