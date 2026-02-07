@@ -8,6 +8,7 @@ import os
 
 import pexpect
 import pytest
+import re
 
 from test.pylib.suite.python import PythonTest
 from test.pylib.util import LogPrefixAdapter
@@ -88,5 +89,7 @@ def execute_gdb_command(
         pytest.fail("GDB command did not complete within the timeout period")
     result = gdb_process.before.decode("utf-8")
 
-    assert "Error" not in result
+    # The task_histogram command may include "error::Error" in its output, so
+    # allow it.
+    assert not re.search(r'(?<!error::)Error', result)
     return result
