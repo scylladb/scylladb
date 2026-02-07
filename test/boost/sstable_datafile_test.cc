@@ -2986,8 +2986,8 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
             sst->load(sst->get_schema()->get_sharder()).get();
         }
 
-        const auto t1 = muts.front().decorated_key()._token;
-        const auto t2 = muts.back().decorated_key()._token;
+        const auto t1 = muts.front().decorated_key().token();
+        const auto t2 = muts.back().decorated_key().token();
         dht::partition_range_vector prs;
 
         prs.emplace_back(dht::ring_position::starting_at(dht::token{t1.raw() - 200}), dht::ring_position::ending_at(dht::token{t1.raw() - 100}));

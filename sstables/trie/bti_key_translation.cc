@@ -43,7 +43,7 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
     , _weight(bound_weight::equal)
     , _pk(std::move(dk._key))
 {
-    init_first_fragment(dk._token);
+    init_first_fragment(dk.token());
 }
 
 void lazy_comparable_bytes_from_ring_position::init_first_fragment(dht::token dht_token) {
