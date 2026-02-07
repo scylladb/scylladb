@@ -236,7 +236,7 @@ public:
 class index_entry {
 private:
     managed_bytes _key;
-    mutable std::optional<dht::token> _token;
+    mutable dht::raw_token_opt _token;
     uint64_t _position;
     managed_ref<promoted_index> _index;
 
@@ -249,9 +249,9 @@ public:
     // May allocate so must be called under allocating_section.
     decorated_key_view get_decorated_key(const schema& s) const {
         if (!_token) {
-            _token.emplace(s.get_partitioner().get_token(get_key()));
+            _token = dht::raw_token(s.get_partitioner().get_token(get_key()));
         }
-        return decorated_key_view(*_token, get_key());
+        return decorated_key_view(dht::token(*_token), get_key());
     }
 
     uint64_t position() const { return _position; };
