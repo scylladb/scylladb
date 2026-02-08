@@ -1,0 +1,22 @@
+﻿name: Sync Jira Based on PR Milestone Events
+
+on:
+  pull_request_target:
+    types: [milestoned, demilestoned]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  jira-sync-milestone-set:
+    if: github.event.action == 'milestoned'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_pr_milestone_set.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  jira-sync-milestone-removed:
+    if: github.event.action == 'demilestoned'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_pr_milestone_removed.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
