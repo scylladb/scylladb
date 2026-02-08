@@ -69,6 +69,10 @@ namespace gms {
     class gossiper;
 }
 
+namespace netw {
+    class messaging_service;
+}
+
 namespace cql_transport {
 
 class request_reader;
@@ -201,6 +205,7 @@ private:
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     sharded<cql3::query_processor>& _query_processor;
+    netw::messaging_service& _ms;
     cql_server_config _config;
     semaphore& _memory_available;
     seastar::metrics::metric_groups _metrics;
@@ -219,7 +224,8 @@ public:
             qos::service_level_controller& sl_controller,
             gms::gossiper& g,
             scheduling_group_key stats_key,
-            maintenance_socket_enabled used_by_maintenance_socket);
+            maintenance_socket_enabled used_by_maintenance_socket,
+            netw::messaging_service& ms);
     ~cql_server();
 
 public:
