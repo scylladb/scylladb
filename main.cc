@@ -2341,10 +2341,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
             }).get();
 
-            sl_controller.local().maybe_start_legacy_update_from_distributed_data([cfg] () {
-                return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
-            }, ss.local(), group0_client);
-
             // Initialize virtual table in system_distributed keyspace after joining the cluster, so
             // that the keyspace is ready
             view_builder.invoke_on_all([] (db::view::view_builder& vb) {
