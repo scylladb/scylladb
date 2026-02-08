@@ -1563,10 +1563,7 @@ rest_upgrade_to_raft_topology(sharded<service::storage_service>& ss, std::unique
 static
 future<json::json_return_type>
 rest_raft_topology_upgrade_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        const auto ustate = co_await ss.invoke_on(0, [] (auto& ss) {
-            return ss.get_topology_upgrade_state();
-        });
-        co_return sstring(format("{}", ustate));
+        co_return sstring("done");
 }
 
 static

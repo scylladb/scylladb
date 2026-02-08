@@ -927,9 +927,6 @@ public:
     future<> do_clusterwide_vnodes_cleanup();
     future<> reset_cleanup_needed();
 
-    // Must be called on shard 0.
-    topology::upgrade_state_type get_topology_upgrade_state() const;
-
     node_state get_node_state(locator::host_id id);
 
     // Waits for topology state in which none of tablets has replaced_id as a replica.

@@ -1566,11 +1566,6 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     co_await _sys_ks.local().set_must_synchronize_topology(false);
 }
 
-topology::upgrade_state_type storage_service::get_topology_upgrade_state() const {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-    return _topology_state_machine._topology.upgrade_state;
-}
-
 future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     auto is_drained = [&] {
         return !get_token_metadata().tablets().has_replica_on(locator::host_id(replaced_id.uuid()));
