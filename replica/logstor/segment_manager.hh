@@ -33,6 +33,7 @@ struct segment_manager_config {
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 8;
     seastar::scheduling_group compaction_sg;
+    seastar::scheduling_group separator_sg;
 };
 
 class segment_manager_impl;

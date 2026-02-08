@@ -12,6 +12,7 @@
 #include "replica/logstor/types.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "serializer_impl.hh"
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
@@ -32,10 +33,14 @@ void log_record_writer::write(ostream& out) const {
 
 // write_buffer
 
-write_buffer::write_buffer(size_t buffer_size)
+write_buffer::write_buffer(size_t buffer_size, bool with_record_copy)
         : _buffer_size(buffer_size)
         , _buffer(seastar::allocate_aligned_buffer<char>(buffer_size, 4096))
+        , _with_record_copy(with_record_copy)
 {
+    if (_with_record_copy) {
+        _records_copy.reserve(_buffer_size / 100);
+    }
     reset();
 }
 
@@ -46,6 +51,7 @@ void write_buffer::reset() {
     _net_data_size = 0;
     _record_count = 0;
     _written = {};
+    _records_copy.clear();
 }
 
 size_t write_buffer::get_max_write_size() const noexcept {
@@ -86,6 +92,14 @@ future<log_location> write_buffer::write(log_record_writer writer) {
     // Add padding to align record
     pad_to_alignment(record_alignment);
 
+    if (_with_record_copy) {
+        _records_copy.push_back(record_in_buffer {
+            .writer = std::move(writer),
+            .offset_in_buffer = data_offset_in_buffer,
+            .data_size = data_size
+        });
+    }
+
     return _written.get_shared_future().then([data_offset_in_buffer, data_size] (log_location base_location) {
         return log_location {
             .segment = base_location.segment,
@@ -125,6 +139,13 @@ void write_buffer::abort_writes(std::exception_ptr ex) noexcept {
     }
 }
 
+std::vector<write_buffer::record_in_buffer>& write_buffer::records() {
+    if (!_with_record_copy) {
+        on_internal_error(logstor_logger, "requesting records but the write buffer has no record copy enabled");
+    }
+    return _records_copy;
+}
+
 size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
     // Calculate total size needed including headers and alignment padding
     size_t total_size = record_header_size * record_count + net_data_size;
@@ -141,12 +162,12 @@ size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t rec
 buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg)
         : _sm(sm)
         , _active_buffer({
-            .buf = write_buffer(_sm.get_segment_size()),
+            .buf = write_buffer(_sm.get_segment_size(), true),
         })
         , _available_buffers(num_flushing_buffers)
         , _flush_sg(flush_sg) {
     for (size_t i = 0; i < num_flushing_buffers; ++i) {
-        _available_buffers.push(write_buffer(_sm.get_segment_size()));
+        _available_buffers.push(write_buffer(_sm.get_segment_size(), true));
     }
 }
 

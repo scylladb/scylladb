@@ -360,7 +360,7 @@ SEASTAR_TEST_CASE(test_for_each_record) {
                 mutation mut;
             };
 
-            write_buffer wb(sm.get_segment_size());
+            write_buffer wb(sm.get_segment_size(), true);
             std::vector<write_future> write_futures;
 
             // different number of records in each buffer
@@ -449,7 +449,7 @@ SEASTAR_TEST_CASE(test_overwrites_with_compaction) {
         for (size_t i = 0; i < total_writes; i++) {
             auto m = make_mutation(s, "compaction_key", format("value_{}", i), i + 1);
 
-            write_buffer wb(sm.get_segment_size());
+            write_buffer wb(sm.get_segment_size(), true);
             log_record_writer writer(log_record {
                 .key = key,
                 .mut = canonical_mutation(m)
@@ -493,7 +493,7 @@ SEASTAR_TEST_CASE(test_segment_manager_recovery) {
     // First run: write a record
     co_await do_segment_manager_test(cfg, [&](segment_manager& sm, log_index&) -> future<> {
         // write the record and overwrite few times with different generations.
-        write_buffer wb(sm.get_segment_size());
+        write_buffer wb(sm.get_segment_size(), true);
         std::vector<future<log_location>> locs;
         for (int i = 0; i < 3; i++) {
             // the write with i=1 has the newest generation

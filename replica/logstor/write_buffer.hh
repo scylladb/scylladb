@@ -114,9 +114,18 @@ private:
 
     shared_promise<log_location> _written;
 
+    struct record_in_buffer {
+        log_record_writer writer;
+        size_t offset_in_buffer;
+        size_t data_size;
+    };
+
+    bool _with_record_copy;
+    std::vector<record_in_buffer> _records_copy;
+
 public:
 
-    write_buffer(size_t buffer_size);
+    write_buffer(size_t buffer_size, bool with_record_copy);
 
     void reset();
 
@@ -148,11 +157,23 @@ public:
 
     static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size);
 
+    static log_location get_record_location(log_location base_location, const record_in_buffer& w) noexcept {
+        return log_location {
+            .segment = base_location.segment,
+            .offset = base_location.offset + w.offset_in_buffer,
+            .size = w.data_size
+        };
+    }
+
 private:
 
     const char* data() const noexcept { return _buffer.get(); }
 
     void write_header(segment_generation);
+
+    // get all write records in the buffer.
+    // with_record_copy must be to true when creating the write_buffer.
+    std::vector<record_in_buffer>& records();
 
     /// Complete all tracked writes with their locations when the buffer is flushed to base_location
     void complete_writes(log_location base_location);

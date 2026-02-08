@@ -917,6 +917,7 @@ database::init_kv_storage() {
             .file_size = _cfg.kv_storage_file_size_in_mb() * 1024ull * 1024ull,
             .disk_size = _cfg.kv_storage_disk_size_in_mb() * 1024ull * 1024ull,
             .compaction_sg = _dbcfg.compaction_scheduling_group,
+            .separator_sg = _dbcfg.memtable_scheduling_group
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
