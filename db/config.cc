@@ -1303,8 +1303,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails.")
     , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most significant token bits to ignore in murmur3 partitioner; increase for very large clusters.")
     , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit.")
-    , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default)"
-        "bytes written to data file. Value must be between 0 and 1.")
+    , sstable_summary_memory_fraction(this, "sstable_summary_memory_fraction", liveness::LiveUpdate, value_status::Used, 0.05,
+        "Fraction of shard memory willing to dedicate to SSTable summary data. "
+        "The effective summary-to-data ratio is derived from this value and the disk-to-memory ratio "
+        "(disk capacity comes from total_data_disk_capacity if set, otherwise filesystem capacity). "
+        "Ignored when sstable_summary_ratio is explicitly set. Value must be between 0 and 1.")
+    , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005,
+        "Enforces that 1 byte of summary is written for every N (2000 by default) "
+        "bytes written to data file. Value must be between 0 and 1. "
+        "When explicitly set, overrides the ratio computed from sstable_summary_memory_fraction (preferred).")
     , components_memory_reclaim_threshold(this, "components_memory_reclaim_threshold", liveness::LiveUpdate, value_status::Used, .2, "Ratio of available memory for all in-memory components of SSTables in a shard beyond which the memory will be reclaimed from components until it falls back under the threshold. Currently, this limit is only enforced for bloom filters.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")
