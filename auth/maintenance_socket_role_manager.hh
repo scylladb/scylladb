@@ -24,8 +24,6 @@ class raft_group0_client;
 
 namespace auth {
 
-extern const std::string_view maintenance_socket_role_manager_name;
-
 // This role manager is used by the maintenance socket. It has disabled all role management operations to not depend on
 // system_auth keyspace, which may be not yet created when the maintenance socket starts listening.
 class maintenance_socket_role_manager final : public role_manager {

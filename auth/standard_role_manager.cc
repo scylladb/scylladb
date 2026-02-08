@@ -34,7 +34,6 @@
 #include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "service/raft/raft_group0_client.hh"
-#include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
 #include "utils/managed_string.hh"
@@ -43,14 +42,6 @@ namespace auth {
 
 
 static logging::logger log("standard_role_manager");
-
-static const class_registrator<
-        role_manager,
-        standard_role_manager,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        cache&> registration("org.apache.cassandra.auth.CassandraRoleManager");
 
 static db::consistency_level consistency_for_role(std::string_view role_name) noexcept {
     if (role_name == meta::DEFAULT_SUPERUSER_NAME) {

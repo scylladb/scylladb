@@ -12,24 +12,10 @@
 #include "auth/authenticated_user.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/password_authenticator.hh"
-#include "auth/cache.hh"
 #include "auth/permission.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "utils/class_registrator.hh"
 
 namespace auth {
-
-static const sstring PACKAGE_NAME("com.scylladb.auth.");
-
-static const sstring& transitional_authenticator_name() {
-    static const sstring name = PACKAGE_NAME + "TransitionalAuthenticator";
-    return name;
-}
-
-static const sstring& transitional_authorizer_name() {
-    static const sstring name = PACKAGE_NAME + "TransitionalAuthorizer";
-    return name;
-}
 
 transitional_authenticator::transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache)
         : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm, cache)) {
@@ -48,7 +34,7 @@ future<> transitional_authenticator::stop() {
 }
 
 std::string_view transitional_authenticator::qualified_java_name() const {
-    return transitional_authenticator_name();
+    return "com.scylladb.auth.TransitionalAuthenticator";
 }
 
 bool transitional_authenticator::require_authentication() const {
@@ -179,7 +165,7 @@ future<> transitional_authorizer::stop() {
 }
 
 std::string_view transitional_authorizer::qualified_java_name() const {
-    return transitional_authorizer_name();
+    return "com.scylladb.auth.TransitionalAuthorizer";
 }
 
 future<permission_set> transitional_authorizer::authorize(const role_or_anonymous&, const resource&) const {
@@ -219,22 +205,3 @@ const resource_set& transitional_authorizer::protected_resources() const {
 }
 
 }
-
-//
-// To ensure correct initialization order, we unfortunately need to use string literals.
-//
-
-static const class_registrator<
-        auth::authenticator,
-        auth::transitional_authenticator,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        auth::cache&> transitional_authenticator_reg(auth::PACKAGE_NAME + "TransitionalAuthenticator");
-
-static const class_registrator<
-        auth::authorizer,
-        auth::transitional_authorizer,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&> transitional_authorizer_reg(auth::PACKAGE_NAME + "TransitionalAuthorizer");

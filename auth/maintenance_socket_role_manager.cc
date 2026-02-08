@@ -13,23 +13,11 @@
 #include <string_view>
 #include "auth/cache.hh"
 #include "cql3/description.hh"
-#include "utils/class_registrator.hh"
 
 namespace auth {
 
-constexpr std::string_view maintenance_socket_role_manager_name = "com.scylladb.auth.MaintenanceSocketRoleManager";
-
-static const class_registrator<
-        role_manager,
-        maintenance_socket_role_manager,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        cache&> registration(sstring{maintenance_socket_role_manager_name});
-
-
 std::string_view maintenance_socket_role_manager::qualified_java_name() const noexcept {
-    return maintenance_socket_role_manager_name;
+    return "com.scylladb.auth.MaintenanceSocketRoleManager";
 }
 
 const resource_set& maintenance_socket_role_manager::protected_resources() const {

@@ -66,7 +66,6 @@
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
-#include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"

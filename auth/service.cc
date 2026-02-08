@@ -53,7 +53,6 @@
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "service/storage_service.hh"
@@ -183,26 +182,6 @@ service::service(
             , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 service::service(
-        cql3::query_processor& qp,
-        ::service::raft_group0_client& g0,
-        ::service::migration_notifier& mn,
-        ::service::migration_manager& mm,
-        const service_config& sc,
-        maintenance_socket_enabled used_by_maintenance_socket,
-        cache& cache)
-            : service(
-                      cache,
-                      qp,
-                      g0,
-                      mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
-                      used_by_maintenance_socket) {
-}
-
-service::service(
-        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,

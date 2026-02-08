@@ -26,7 +26,6 @@ extern "C" {
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/log.hh"
-#include "utils/class_registrator.hh"
 
 namespace auth {
 
@@ -39,14 +38,6 @@ static constexpr std::string_view RESOURCE_NAME = "resource";
 static constexpr std::string_view PERMISSIONS_NAME = "permissions";
 
 static logging::logger alogger("default_authorizer");
-
-// To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<
-        authorizer,
-        default_authorizer,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
 default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
         : _qp(qp)

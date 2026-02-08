@@ -44,12 +44,6 @@ namespace auth {
 
 class role_or_anonymous;
 
-struct service_config final {
-    sstring authorizer_java_name;
-    sstring authenticator_java_name;
-    sstring role_manager_java_name;
-};
-
 /// Factory function types for creating auth module instances on each shard.
 using authorizer_factory = std::function<std::unique_ptr<authorizer>()>;
 using authenticator_factory = std::function<std::unique_ptr<authenticator>()>;
@@ -110,20 +104,6 @@ public:
             std::unique_ptr<authenticator>,
             std::unique_ptr<role_manager>,
             maintenance_socket_enabled);
-
-    ///
-    /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
-    /// arguments must be copyable, which is why we delay construction with instance-construction instructions instead
-    /// of the instances themselves.
-    ///
-    service(
-            cql3::query_processor&,
-            ::service::raft_group0_client&,
-            ::service::migration_notifier&,
-            ::service::migration_manager&,
-            const service_config&,
-            maintenance_socket_enabled,
-            cache&);
 
     ///
     /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the

@@ -26,7 +26,6 @@
 #include "cql3/untyped_result_set.hh"
 #include "utils/log.hh"
 #include "service/migration_manager.hh"
-#include "utils/class_registrator.hh"
 #include "replica/database.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
@@ -41,15 +40,6 @@ static constexpr std::string_view DEFAULT_USER_NAME = meta::DEFAULT_SUPERUSER_NA
 static const sstring DEFAULT_USER_PASSWORD = sstring(meta::DEFAULT_SUPERUSER_NAME);
 
 static logging::logger plogger("password_authenticator");
-
-// To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<
-        authenticator,
-        password_authenticator,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        cache&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
