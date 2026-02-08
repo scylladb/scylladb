@@ -114,8 +114,17 @@ private:
 
     shared_promise<log_location> _written;
 
+    struct record_in_buffer {
+        log_record_writer writer;
+        size_t offset_in_buffer;
+        size_t data_size;
+    };
+
+    std::vector<record_in_buffer> _record_copy_for_separator;
+    bool _with_separator_copy;
+
 public:
-    write_buffer(size_t buffer_size);
+    write_buffer(size_t buffer_size, bool need_separator_copy = true);
 
     write_buffer(const write_buffer&) = delete;
     write_buffer& operator=(const write_buffer&) = delete;
@@ -147,11 +156,15 @@ public:
 
     static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size);
 
+    bool has_separator_copy() const noexcept { return _with_separator_copy; }
+
 private:
 
     const char* data() const noexcept { return _buffer.get(); }
 
     void write_header(segment_generation);
+
+    std::vector<record_in_buffer>& writes() noexcept { return _record_copy_for_separator; }
 
     /// Complete all tracked writes with their locations when the buffer is flushed to base_location
     void complete_writes(log_location base_location);

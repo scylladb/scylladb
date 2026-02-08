@@ -19,6 +19,7 @@ struct log_segment_id {
     uint32_t value;
 
     bool operator==(const log_segment_id& other) const noexcept = default;
+    auto operator<=>(const log_segment_id& other) const noexcept = default;
 };
 
 struct log_location {
