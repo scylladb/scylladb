@@ -256,6 +256,12 @@ private:
     std::unique_ptr<cql_server::response> make_rate_limit_error(int16_t stream, exceptions::exception_code err, sstring msg, db::operation_type op_type, bool rejected_by_coordinator, const tracing::trace_state_ptr& tr_state, bool has_rate_limit_extension) const;
     std::unique_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state) const;
 
+    std::unique_ptr<cql_server::response> make_error_result(int16_t stream, std::exception_ptr eptr, const tracing::trace_state_ptr& trace_state,
+            cql_protocol_version_type version, bool has_rate_limit_extension) const;
+    exceptions::exception_code get_error_code(std::exception_ptr eptr) const;
+    sstring make_log_message(int16_t stream, std::exception_ptr eptr) const;
+    std::optional<seastar::lowres_clock::time_point> timeout_for_sleep(std::exception_ptr eptr) const;
+
     class connection : public generic_server::connection {
         cql_server& _server;
         socket_address _server_addr;
