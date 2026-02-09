@@ -987,7 +987,7 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
     }
 
     // If the tablet is in transition,
-    // try to find it on the leaving replica, in case of tablet migration,
+    // try to find it on the leaving, then pending replicas, in case of tablet migration,
     // or get the avg tablet size of all the replicas, in case we have a rebuild
     if (trinfo) {
         switch (trinfo->transition) {
@@ -996,6 +996,10 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
                 if (trinfo->pending_replica && trinfo->pending_replica->host == host) {
                     if (auto leaving_replica = get_leaving_replica(ti, *trinfo)) {
                         tablet_size_opt = get_tablet_size(leaving_replica->host, rb_tid);
+                        if (!tablet_size_opt) {
+                            // Try finding the tablet on the pending replica
+                            tablet_size_opt = get_tablet_size(host, rb_tid);
+                        }
                     } else {
                         on_internal_error_noexcept(tablet_logger, ::format("No leaving replica for tablet migration in table {}. ti.replicas: {} trinfo->next: {}",
                                                 rb_tid.table, ti.replicas, trinfo->next));

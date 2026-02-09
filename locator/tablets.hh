@@ -497,7 +497,7 @@ struct load_stats {
 
     // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
     // other hosts based on the tablet transition info:
-    // - if the tablet is in migration, and the given host is pending, the tablet size will be searched on the leaving replica
+    // - if the tablet is in migration, and the given host is pending, the tablet size will be searched on the leaving, then pending replicas
     // - if the tablet is being rebuilt, we will return the average tablet size of all the replicas
     std::optional<uint64_t> get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const;
 
