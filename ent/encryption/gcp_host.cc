@@ -284,6 +284,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
                 }
                 [[fallthrough]];
             case httpclient::reply_status::request_timeout:
+            case httpclient::reply_status::too_many_requests:
                 if (retry < max_retries) {
                     // service unavailable etc -> backoff + retry
                     do_backoff = true;
