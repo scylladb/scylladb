@@ -3781,7 +3781,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
             &result,
             chunk_size
         ] (database& local_db, state_by_shard& local_state) -> future<> {
-            auto ticket = get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
+            auto ticket = co_await get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
 
             // In `chosen_chunks`, the sorted array of chosen chunk offsets (in the "global chunk list"),
             // find the range of offsets which belongs to us.
