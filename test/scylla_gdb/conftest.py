@@ -91,5 +91,5 @@ def execute_gdb_command(
 
     # The task_histogram command may include "error::Error" in its output, so
     # allow it.
-    assert not re.search(r'(?<!error::)Error', result)
+    assert not re.search(r'(?<!error::)Error', result), f'Unexpected error reported in {result}'
     return result
