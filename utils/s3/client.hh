@@ -231,6 +231,8 @@ public:
     future<> close();
 };
 
+std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size);
+
 } // namespace s3
 
 template <>
