@@ -9,6 +9,7 @@
 
 #include "types.hh"
 #include "utils/bptree.hh"
+#include "utils/phased_barrier.hh"
 
 namespace replica::logstor {
 
@@ -97,6 +98,8 @@ class log_index {
     const log_index_bucket& get_bucket(const index_key& key) const noexcept {
         return _buckets[bucket_index(key)];
     }
+
+    utils::phased_barrier _reads_phaser{"logstor_index_reads"};
 
 public:
     std::optional<index_entry> get(const index_key& key) const {
@@ -191,6 +194,15 @@ public:
     const_iterator end() const {
         return const_iterator(&_buckets, NUM_BUCKETS, {});
     }
+
+    utils::phased_barrier::operation start_read() {
+        return _reads_phaser.start();
+    }
+
+    future<> await_pending_reads() {
+        return _reads_phaser.advance_and_await();
+    }
+
 };
 
 }
