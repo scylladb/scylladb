@@ -187,6 +187,23 @@ You can create a keyspace with tablets enabled with the ``tablets = {'enabled': 
     the keyspace schema with ``tablets = { 'enabled': false }`` or 
     ``tablets = { 'enabled': true }``.
 
+.. _keyspace-rf-rack-valid-to-enforce-rack-list:
+
+Enforcing Rack-List Replication for Tablet Keyspaces
+------------------------------------------------------------------
+
+The ``rf_rack_valid_keyspaces`` is a legacy option that ensures that all keyspaces with tablets enabled are
+:term:`RF-rack-valid <RF-rack-valid keyspace>`.
+
+Requiring every tablet keyspace to use the rack list replication factor exclusively is enough to guarantee the keyspace is
+:term:`RF-rack-valid <RF-rack-valid keyspace>`. It reduces restrictions and provides stronger guarantees compared
+to ``rf_rack_valid_keyspaces`` option.
+
+To enforce rack list in tablet keyspaces, use ``enforce_rack_list`` option. It can be set only if all tablet keyspaces use
+rack list. To ensure that, follow a procedure of :ref:`conversion to rack list replication factor <conversion-to-rack-list-rf>`.
+After that restart all nodes in the cluster, with ``enforce_rack_list`` enabled and ``rf_rack_valid_keyspaces`` disabled. Make
+sure to avoid setting or updating replication factor (with CREATE KEYSPACE or ALTER KEYSPACE) while nodes are being restarted.
+
 .. _tablets-limitations:
 
 Limitations and Unsupported Features
