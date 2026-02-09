@@ -43,10 +43,15 @@ class random_content_file:
         os.unlink(self.filename)
 
 
+CRITICAL_DISK_UTILIZATION_LEVEL = 0.5
+# Target disk fill ratio used in tests to push the node above the critical
+# utilization level.
+DISK_FILL_TARGET_RATIO = 1.1 * CRITICAL_DISK_UTILIZATION_LEVEL
+
 # Since we create 20M volumes, we need to reduce the commitlog segment size
 # otherwise we hit out of space.
 global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1",
-                  "--critical-disk-utilization-level", "0.8",
+                  "--critical-disk-utilization-level", f"{CRITICAL_DISK_UTILIZATION_LEVEL}",
                   "--commitlog-segment-size-in-mb", "2",
                   "--schema-commitlog-segment-size-in-mb", "4",
                   "--tablet-load-stats-refresh-interval-in-seconds", "1",
@@ -80,7 +85,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
@@ -135,7 +140,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -195,7 +200,7 @@ async def test_critical_utilization_during_decommission(manager: ManagerClient, 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     mark, _ = await log.wait_for("Refreshing table load stats", from_mark=mark)
                     mark, _ = await log.wait_for("Refreshed table load stats", from_mark=mark)
@@ -231,7 +236,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain")
 
 
@@ -256,7 +261,7 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         s1_mark, _ = await s1_log.wait_for("compaction_manager - Drained", from_mark=s1_mark)
 
@@ -291,7 +296,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("repair - Drained", from_mark=mark)
 
@@ -367,7 +372,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
                 mark = await log.mark()
 
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
@@ -422,7 +427,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -505,7 +510,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
