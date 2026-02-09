@@ -316,11 +316,13 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                     req.add_header(utils::gcp::AUTHORIZATION, format_bearer(_credentials->token));
                 } catch (httpd::unexpected_status_error& e) {
                     switch (e.status()) {
-                    case status_type::request_timeout:
                     default:
                         if (reply::classify_status(e.status()) != reply::status_class::server_error) {
                             break;
                         }
+                        [[fallthrough]];
+                    case status_type::request_timeout:
+                    case status_type::too_many_requests:
                         if (retry < max_retries) {
                             gcp_storage.debug("Got {}: {}", e.status(), std::current_exception());
                             // service unavailable etc -> retry
@@ -359,7 +361,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 gcp_storage.trace("Result: {}", res);
                 if (res._status == status_type::unauthorized) {
                     throw permission_error(int(res._status), co_await get_gcp_error_message(in));
-                } else if (res._status == status_type::request_timeout || reply::classify_status(res._status) == reply::status_class::server_error) {
+                } else if (res._status == status_type::request_timeout || res._status == status_type::too_many_requests || reply::classify_status(res._status) == reply::status_class::server_error) {
                     throw storage_error(int(res._status), co_await get_gcp_error_message(in));
                 }
                 co_await handler(res, in);
@@ -375,6 +377,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 }
                 [[fallthrough]];
             case status_type::request_timeout:
+            case status_type::too_many_requests:
                 do_backoff = true;
                 [[fallthrough]];
             case status_type::unauthorized:
