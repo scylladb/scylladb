@@ -1526,7 +1526,7 @@ class client::do_upload_file : private multipart_upload {
     static std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size) {
         if (part_size > 0) {
             if (part_size < aws_minimum_part_size) {
-                on_internal_error(s3l, fmt::format("part_size too large: {} < {}", part_size, aws_minimum_part_size));
+                on_internal_error(s3l, fmt::format("part_size too small: {} is smaller than minimum part size: {}", part_size, aws_minimum_part_size));
             }
             const size_t num_parts = div_ceil(total_size, part_size);
             if (num_parts > aws_maximum_parts_in_piece) {
@@ -1534,16 +1534,15 @@ class client::do_upload_file : private multipart_upload {
             }
             return {num_parts, part_size};
         }
-        // if part_size is 0, this means the caller leaves it to us to decide
-        // the part_size. to be more reliance, say, we don't have to re-upload
-        // a giant chunk of buffer if a certain part fails to upload, we prefer
-        // small parts, let's make it a multiple of MiB.
-        part_size = div_ceil(total_size / aws_maximum_parts_in_piece, 1_MiB);
-        // The default part size for multipart upload is set to 50MiB.
-        // This value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
+        // if part_size is 0, this means the caller leaves it to us to decide the part_size. The default part size for multipart upload is set to 50MiB. This
+        // value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
         static constexpr size_t default_part_size = 50_MiB;
+        const size_t num_parts = div_ceil(total_size, default_part_size);
+        if (num_parts <= aws_maximum_parts_in_piece) {
+            return {num_parts, default_part_size};
+        }
 
-        part_size = std::max(part_size, default_part_size);
+        part_size = align_up(div_ceil(total_size, aws_maximum_parts_in_piece), 1_MiB);
         return {div_ceil(total_size, part_size), part_size};
     }
 
