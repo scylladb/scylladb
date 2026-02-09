@@ -3085,6 +3085,48 @@
             }
          ]
       },
+
+      {
+         "path":"/storage_service/tablets/snapshots",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Takes the snapshot for the given keyspaces/tables. A snapshot name must be specified.",
+               "type":"void",
+               "nickname":"take_cluster_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tag",
+                     "description":"the tag given to the snapshot",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"Keyspace(s) to snapshot. Multiple keyspaces can be provided using a comma-separated list. If omitted, snapshot all keyspaces.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table(s) to snapshot. Multiple tables (in a single keyspace) can be provided using a comma-separated list. If omitted, snapshot all tables in the given keyspace(s).",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+
       {
          "path":"/storage_service/quiesce_topology",
          "operations":[
