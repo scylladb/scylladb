@@ -979,3 +979,78 @@ BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
     BOOST_REQUIRE_EQUAL(object_name, "prefix1/prefix2/foo.bar");
 }
+
+BOOST_AUTO_TEST_CASE(part_size_calculation_test) {
+    {
+        BOOST_REQUIRE_EXCEPTION(s3::calc_part_size(490_GiB, 5_MiB), std::runtime_error, [](const std::runtime_error& e) {
+            return std::string(e.what()).starts_with("too many parts: 100352 > 10000");
+        });
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(490_GiB, 100_MiB);
+        BOOST_REQUIRE_EQUAL(size, 100_MiB);
+        BOOST_REQUIRE(parts == 5018);
+    }
+    {
+        BOOST_REQUIRE_EXCEPTION(s3::calc_part_size(490_GiB, 4_MiB), std::runtime_error, [](const std::runtime_error& e) {
+            return std::string(e.what()).starts_with("part_size too small: 4194304 is smaller than minimum part size: 5242880");
+        });
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(50_MiB, 0);
+        BOOST_REQUIRE_EQUAL(size, 50_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 1);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(49_MiB, 0);
+        BOOST_REQUIRE_EQUAL(size, 50_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 1);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(490_GiB, 0);
+        BOOST_REQUIRE_EQUAL(size, 51_MiB);
+        BOOST_REQUIRE(parts == 9839);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(50_MiB * 10000, 0);
+        BOOST_REQUIRE_EQUAL(size, 50_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 10000);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(50_MiB * 10000 + 1, 0);
+        BOOST_REQUIRE(size > 50_MiB);
+        BOOST_REQUIRE(parts <= 10000);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(10_TiB, 0);
+        BOOST_REQUIRE(parts <= 10000);
+        BOOST_REQUIRE(size >= 50_MiB);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(5_MiB * 10000, 5_MiB);
+        BOOST_REQUIRE_EQUAL(size, 5_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 10000);
+    }
+    {
+        size_t total = 5_MiB * 10001; // 10001 parts at 5 MiB
+        BOOST_REQUIRE_EXCEPTION(
+            s3::calc_part_size(total, 5_MiB), std::runtime_error, [](auto& e) { return std::string(e.what()).starts_with("too many parts: 10001 > 10000"); });
+    }
+    {
+        size_t total = 500_GiB + 123; // odd size to force non-MiB alignment
+        auto [parts, size] = s3::calc_part_size(total, 0);
+
+        BOOST_REQUIRE(size % 1_MiB == 0); // aligned
+        BOOST_REQUIRE(parts <= 10000);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(6_MiB, 0);
+        BOOST_REQUIRE_EQUAL(size, 50_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 1);
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(100_MiB, 200_MiB);
+        BOOST_REQUIRE_EQUAL(parts, 1);
+        BOOST_REQUIRE_EQUAL(size, 200_MiB);
+    }
+}
