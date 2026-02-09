@@ -25,14 +25,6 @@ namespace sstables {
 extern seastar::logger sstlog;
 extern thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 
-// Promoted index information produced by the parser.
-struct parsed_promoted_index_entry {
-    deletion_time del_time;
-    uint64_t promoted_index_start;
-    uint32_t promoted_index_size;
-    uint32_t num_blocks;
-};
-
 // Partition index entry information produced by the parser.
 struct parsed_partition_index_entry {
     temporary_buffer<char> key;
@@ -54,6 +46,7 @@ class index_consumer {
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
     utils::chunked_vector<parsed_partition_index_entry> _parsed_entries;
+    size_t _max_promoted_index_entry_plus_one = 0; // Highest index +1 in _parsed_entries which has a promoted index.
 public:
     index_consumer(logalloc::region& r, schema_ptr s)
         : _s(s)
@@ -65,13 +58,18 @@ public:
 
     void consume_entry(parsed_partition_index_entry&& e) {
         _parsed_entries.emplace_back(std::move(e));
+        if (e.promoted_index) {
+            _max_promoted_index_entry_plus_one = std::max(_max_promoted_index_entry_plus_one, _parsed_entries.size());
+        }
     }
 
     future<index_list> finalize() {
         index_list result;
+        // In case of exception, need to deallocate under region allocator.
         auto delete_result = seastar::defer([&] {
             with_allocator(_region.allocator(), [&] {
                 result._entries = {};
+                result._promoted_indexes = {};
             });
         });
         auto i = _parsed_entries.begin();
@@ -79,18 +77,14 @@ public:
             _alloc_section(_region, [&] {
                 with_allocator(_region.allocator(), [&] {
                     result._entries.reserve(_parsed_entries.size());
+                    result._promoted_indexes.resize(_max_promoted_index_entry_plus_one);
                     while (i != _parsed_entries.end() && !need_preempt()) {
                         parsed_partition_index_entry& e = *i;
-                        managed_ref<promoted_index> pi;
                         if (e.promoted_index) {
-                            pi = make_managed<promoted_index>(*_s,
-                                                              e.promoted_index->del_time,
-                                                              e.promoted_index->promoted_index_start,
-                                                              e.promoted_index->promoted_index_size,
-                                                              e.promoted_index->num_blocks);
+                            result._promoted_indexes[result._entries.size()] = *e.promoted_index;
                         }
                         auto key = managed_bytes(reinterpret_cast<const bytes::value_type *>(e.key.get()), e.key.size());
-                        result._entries.emplace_back(std::move(key), e.data_file_offset, std::move(pi));
+                        result._entries.emplace_back(std::move(key), e.data_file_offset);
                         ++i;
                     }
                 });
@@ -350,33 +344,6 @@ inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing:
     return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.index_filename()));
 }
 
-inline
-std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstable sst,
-    reader_permit permit,
-    tracing::trace_state_ptr trace_state,
-    file_input_stream_options options,
-    use_caching caching)
-{
-    if (sst->get_version() >= sstable_version_types::mc) [[likely]] {
-        seastar::shared_ptr<cached_file> cached_file_ptr = caching
-                ? sst->_cached_index_file
-                : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
-                                                    sst->manager().get_cache_tracker().get_index_cached_file_stats(),
-                                                    sst->manager().get_cache_tracker().get_lru(),
-                                                    sst->manager().get_cache_tracker().region(),
-                                                    sst->_index_file_size);
-        return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
-            _promoted_index_start, _promoted_index_size,
-            promoted_index_cache_metrics, permit,
-            sst->get_column_translation(), cached_file_ptr, _num_blocks, trace_state, sst->features());
-    }
-
-    auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
-    auto promoted_index_stream = make_file_input_stream(std::move(file), _promoted_index_start, _promoted_index_size,options);
-    return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
-        std::move(promoted_index_stream), _promoted_index_size, _num_blocks, std::nullopt);
-}
-
 // Less-comparator for lookups in the partition index.
 class index_comparator {
     dht::ring_position_comparator_for_sstables _tri_cmp;
@@ -618,6 +585,12 @@ private:
         return bound.current_list->_entries[bound.current_index_idx];
     }
 
+    // Valid if partition_data_ready(bound)
+    partition_index_page& current_page(index_bound& bound) {
+        parse_assert(bool(bound.current_list), _sstable->index_filename());
+        return *bound.current_list;
+    }
+
     future<> advance_to_next_partition(index_bound& bound) {
         sstlog.trace("index {} bound {}: advance_to_next_partition()", fmt::ptr(&bound), fmt::ptr(this));
         if (!partition_data_ready(bound)) {
@@ -811,6 +784,34 @@ public:
         }
     }
 
+    static
+    std::unique_ptr<clustered_index_cursor> make_cursor(const parsed_promoted_index_entry& pi,
+        shared_sstable sst,
+        reader_permit permit,
+        tracing::trace_state_ptr trace_state,
+        file_input_stream_options options,
+        use_caching caching)
+    {
+        if (sst->get_version() >= sstable_version_types::mc) [[likely]] {
+            seastar::shared_ptr<cached_file> cached_file_ptr = caching
+                    ? sst->_cached_index_file
+                    : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
+                                                        sst->manager().get_cache_tracker().get_index_cached_file_stats(),
+                                                        sst->manager().get_cache_tracker().get_lru(),
+                                                        sst->manager().get_cache_tracker().region(),
+                                                        sst->_index_file_size);
+            return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
+                pi.promoted_index_start, pi.promoted_index_size,
+                promoted_index_cache_metrics, permit,
+                sst->get_column_translation(), cached_file_ptr, pi.num_blocks, trace_state, sst->features());
+        }
+
+        auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
+        auto promoted_index_stream = make_file_input_stream(std::move(file), pi.promoted_index_start, pi.promoted_index_size,options);
+        return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
+            std::move(promoted_index_stream), pi.promoted_index_size, pi.num_blocks, std::nullopt);
+    }
+
     // Ensures that partition_data_ready() returns true.
     // Can be called only when !eof()
     future<> read_partition_data() override {
@@ -846,10 +847,10 @@ public:
     clustered_index_cursor* current_clustered_cursor(index_bound& bound) {
         if (!bound.clustered_cursor) {
             _alloc_section(_region, [&] {
-                index_entry& e = current_partition_entry(bound);
-                promoted_index* pi = e.get_promoted_index().get();
-                if (pi) {
-                    bound.clustered_cursor = pi->make_cursor(_sstable, _permit, _trace_state,
+                partition_index_page& page = current_page(bound);
+                if (page.has_promoted_index(bound.current_index_idx)) {
+                    promoted_index& pi = page.get_promoted_index(bound.current_index_idx);
+                    bound.clustered_cursor = make_cursor(pi, _sstable, _permit, _trace_state,
                         get_file_input_stream_options(), _use_caching);
                 }
             });
@@ -872,7 +873,7 @@ public:
     // It may be unavailable for old sstables for which this information was not generated.
     // Can be called only when partition_data_ready().
     std::optional<sstables::deletion_time> partition_tombstone() override {
-        return current_partition_entry(_lower_bound).get_deletion_time();
+        return current_page(_lower_bound).get_deletion_time(_lower_bound.current_index_idx);
     }
 
     // Returns the key for current partition.
@@ -894,8 +895,8 @@ public:
     // Returns the number of promoted index entries for the current partition.
     // Can be called only when partition_data_ready().
     uint64_t get_promoted_index_size() {
-        index_entry& e = current_partition_entry(_lower_bound);
-        return e.get_promoted_index_size();
+        partition_index_page& page = current_page(_lower_bound);
+        return page.get_promoted_index_size(_lower_bound.current_index_idx);
     }
 
     bool partition_data_ready() const override {
