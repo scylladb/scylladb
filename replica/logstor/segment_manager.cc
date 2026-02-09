@@ -223,6 +223,8 @@ class file_manager {
     seastar::gate _async_gate;
     shared_future<> _next_file_formatter{make_ready_future<>()};
 
+    std::vector<seastar::file> _open_read_files;
+
 public:
     file_manager(segment_manager_config cfg)
         : _segments_per_file(cfg.file_size / cfg.segment_size)
@@ -230,6 +232,7 @@ public:
         , _file_size(cfg.file_size)
         , _base_dir(cfg.base_dir)
         , _sched_group(cfg.compaction_sg)
+        , _open_read_files(_max_files)
     {}
 
     future<> start();
@@ -327,14 +330,25 @@ future<seastar::file> file_manager::get_file_for_write(size_t file_id) {
     auto file = co_await seastar::open_file_dma(file_path,
             seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::dsync);
 
+    if (!_open_read_files[file_id]) {
+        _open_read_files[file_id] = file;
+    }
+
     co_return file;
 }
 
 future<seastar::file> file_manager::get_file_for_read(size_t file_id) {
+    auto& cached_file = _open_read_files[file_id];
+    if (cached_file) {
+        co_return cached_file;
+    }
+
     auto file = co_await seastar::open_file_dma(
         get_file_path(file_id).string(),
         seastar::open_flags::ro
     );
+
+    _open_read_files[file_id] = file;
 
     co_return std::move(file);
 }
