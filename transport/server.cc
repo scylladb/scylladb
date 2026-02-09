@@ -385,6 +385,13 @@ void cql_server::register_forwarding_handlers() {
                 co_return co_await shard_svc.handle_forward_execute(qs, req).then_wrapped([&qs, &req, &shard_svc] (future<forward_cql_execute_response> f) mutable {
                     if (f.failed()) {
                         auto eptr = f.get_exception();
+                        if (try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+                            clogger.trace("Prepared statement not found, returning prepared_not_found status");
+                            tracing::trace(qs.get_trace_state(), "Prepared statement not found, returning prepared_not_found status");
+                            return forward_cql_execute_response{
+                                .status = forward_cql_status::prepared_not_found,
+                            };
+                        }
 
                         auto response = shard_svc.make_error_result(req.stream, eptr, qs.get_trace_state(), req.cql_version, req.has_rate_limit_extension);
                         clogger.trace("Execution of forwarded request failed with an error");
@@ -404,6 +411,34 @@ void cql_server::register_forwarding_handlers() {
                     return f.get();
                 });
             });
+        });
+
+    ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
+        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<bytes> {
+            auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            clogger.trace("Handling forward prepare request from {}", src_host);
+
+            auto now = db::timeout_clock::now();
+            auto d = db::timeout_clock::duration::max();
+            if (timeout) {
+                d = now < *timeout
+                    ? *timeout - now
+                    : db::timeout_clock::duration::zero();
+            }
+            service::client_state cs(service::client_state::internal_tag{},
+                ::timeout_config{d, d, d, d, d, d, d});
+            if (req.keyspace) {
+                cs.set_raw_keyspace(*req.keyspace);
+            }
+            service::query_state qs(cs, tracing::trace_state_ptr{}, empty_service_permit());
+
+            co_await _query_processor.invoke_on_all(
+                [req, &qs] (cql3::query_processor& qp) {
+                    return qp.prepare(req.query_string, qs.get_client_state(), req.dialect).discard_result();
+                });
+            auto prepare_id = _query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
+            clogger.trace("Successfully prepared statement {} from forward request", prepare_id);
+            co_return prepare_id;
         });
 }
 
@@ -503,8 +538,37 @@ cql_server::forward_cql(
                                                         response.response_flags, std::move(response.response_body)),
                 .error_info = std::move(response.error_info),
             };
-        case forward_cql_status::prepared_not_found:
-            throw std::runtime_error("Forward CQL: prepared_not_found handling not yet implemented");
+        case forward_cql_status::prepared_not_found: {
+
+            fragmented_temporary_buffer ftb(reinterpret_cast<const char*>(request_buffer.data()), request_buffer.size());
+            fragmented_temporary_buffer::istream temp_is = ftb.get_istream();
+            bytes_ostream temp_linearization_buffer;
+            request_reader temp_in(temp_is, temp_linearization_buffer);
+            auto cache_key_bytes = temp_in.read_short_bytes();
+            if (!cache_key_bytes) {
+                clogger.info("Prepared statement cache key not found in request buffer");
+                co_return coroutine::exception(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(bytes{})));
+            }
+
+            cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
+
+            auto prepared = _query_processor.local().get_prepared(cache_key);
+            if (!prepared) {
+                clogger.info("Prepared statement with cache key {} not found locally for prepare request, cannot prepare on target {}", cache_key.key(), current_host);
+                co_return coroutine::exception(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cache_key.key())));
+            }
+
+            sstring query_string = prepared->statement->raw_cql_statement;
+            tracing::trace(qs.get_trace_state(), "Prepared statement not found on target, preparing query on target node");
+            clogger.trace("Prepared statement {} not found on {}, preparing query on target node", cache_key.key(), current_host);
+
+            auto prepared_id = co_await send_forward_prepare(current_host, timeout, query_string, req.keyspace, dialect);
+
+            if (prepared_id != cache_key.key()) {
+                on_internal_error(clogger, format("Prepared ID returned from target node does not match local prepared ID for the same query. Local ID: {}, Target ID: {}", cache_key.key(), prepared_id));
+            }
+            continue;
+        }
         case forward_cql_status::redirect:
             tracing::trace(qs.get_trace_state(), "Target node redirecting to {} shard {}", response.target_host, response.target_shard);
             clogger.trace("Redirect from {} to {} shard {}", current_host, response.target_host, response.target_shard);
@@ -513,6 +577,23 @@ cql_server::forward_cql(
             continue;
         }
     }
+}
+
+future<bytes> cql_server::send_forward_prepare(
+    locator::host_id target_host,
+    seastar::lowres_clock::time_point timeout,
+    const sstring& query_string,
+    const std::optional<sstring>& keyspace,
+    cql3::dialect dialect)
+{
+    forward_cql_prepare_request req{
+        .query_string = query_string,
+        .keyspace = keyspace,
+        .dialect = dialect,
+    };
+
+    clogger.trace("Sending forward prepare request to {}", target_host);
+    co_return co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, target_host, timeout, req);
 }
 
 shared_ptr<generic_server::connection>

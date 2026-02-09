@@ -72,6 +72,19 @@ struct forward_cql_execute_response {
     std::optional<cql_transport::forwarded_error_info> error_info;
 };
 
+// Request to prepare a CQL statement on a remote node
+struct forward_cql_prepare_request {
+    // The query string to prepare
+    sstring query_string;
+    // Keyspace for the query
+    std::optional<sstring> keyspace;
+    // Dialect flag
+    cql3::dialect dialect;
+};
+
 verb [[with_client_info, with_timeout]] forward_cql_execute (unsigned shard, cql_transport::forward_cql_execute_request req [[ref]]) -> cql_transport::forward_cql_execute_response;
+
+// Prepare a CQL statement on a remote node
+verb [[with_client_info, with_timeout]] forward_cql_prepare (cql_transport::forward_cql_prepare_request req [[ref]]) -> bytes;
 
 }

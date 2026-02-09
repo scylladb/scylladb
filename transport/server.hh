@@ -194,6 +194,12 @@ struct forward_cql_result {
     std::optional<forwarded_error_info> error_info;
 };
 
+struct forward_cql_prepare_request {
+    sstring query_string;
+    std::optional<sstring> keyspace;
+    cql3::dialect dialect;
+};
+
 class cql_metadata_id_wrapper {
 private:
     std::optional<cql3::cql_metadata_id_type> _request_metadata_id;
@@ -418,6 +424,7 @@ private:
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
     future<forward_cql_result> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout, bytes request_buffer, cql_binary_opcode opcode,
             uint16_t stream, cql_protocol_version_type version, service::query_state& query_state, cql3::dialect dialect, cql3::computed_function_values cached_fn_calls);
+    future<bytes> send_forward_prepare(locator::host_id target_host, seastar::lowres_clock::time_point timeout, const sstring& query_string, const std::optional<sstring>& keyspace, cql3::dialect dialect);
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
     scheduling_group get_scheduling_group_for_new_connection() const override {
