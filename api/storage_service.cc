@@ -1350,7 +1350,7 @@ rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_ser
         apilog.warn("estimate_compression_ratios: called before the cluster feature was enabled");
         throw std::runtime_error("estimate_compression_ratios requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
-    auto ticket = get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+    auto ticket = co_await get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
     auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
     auto cf = api::req_param<sstring>(*req, "cf", {}).value;
     apilog.debug("estimate_compression_ratios: called with ks={} cf={}", ks, cf);
@@ -1416,7 +1416,7 @@ rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, serv
         apilog.warn("retrain_dict: called before the cluster feature was enabled");
         throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
-    auto ticket = get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+    auto ticket = co_await get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
     auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
     auto cf = api::req_param<sstring>(*req, "cf", {}).value;
     apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
