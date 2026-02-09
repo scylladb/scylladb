@@ -74,7 +74,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
                 1,
                 db::write_type::SIMPLE)));
         }
-        co_return co_await redirect_statement(qp, options, redirect->target);
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout);
     }
 
     co_return seastar::make_shared<result_message::void_message>();

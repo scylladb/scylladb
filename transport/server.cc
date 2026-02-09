@@ -1532,7 +1532,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
-        if (msg->move_to_shard()) {
+        if (dynamic_pointer_cast<messages::result_message::bounce>(msg)) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
@@ -1658,7 +1658,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     tracing::trace(trace_state, "Processing a statement");
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
-        if (msg->move_to_shard()) {
+        if (dynamic_pointer_cast<messages::result_message::bounce>(msg)) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
@@ -1805,7 +1805,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->move_to_shard()) {
+        if (dynamic_pointer_cast<messages::result_message::bounce>(msg)) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));

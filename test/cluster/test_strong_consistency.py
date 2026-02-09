@@ -67,9 +67,6 @@ async def test_basic_write_read(manager: ManagerClient):
 
         logger.info(f"Run INSERT statement on leader {leader_host}")
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (10, 20)", host=leader_host)
-        logger.info(f"Run INSERT statement on non-leader {non_leader_host}")
-        with pytest.raises(InvalidRequest, match="Strongly consistent writes can be executed only on the leader node"):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (10, 30)", host=non_leader_host)
 
         logger.info(f"Run SELECT statement on leader {leader_host}")
         rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 10;", host=leader_host)
@@ -78,12 +75,15 @@ async def test_basic_write_read(manager: ManagerClient):
         assert row.pk == 10
         assert row.c == 20
 
+        logger.info(f"Run INSERT statement on non-leader {non_leader_host}")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (10, 30)", host=non_leader_host)
+
         logger.info(f"Run SELECT statement on non-leader {non_leader_host}")
         rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 10;", host=non_leader_host)
         assert len(rows) == 1
         row = rows[0]
         assert row.pk == 10
-        assert row.c == 20
+        assert row.c == 30
 
         # Check that we can restart a server with an active tablets raft group
         await manager.server_restart(servers[2].server_id)
