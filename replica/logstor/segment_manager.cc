@@ -34,6 +34,7 @@
 #include "idl/logstor.dist.impl.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
+#include "utils/phased_barrier.hh"
 #include "utils/serialized_action.hh"
 #include "utils/lister.hh"
 
@@ -1294,7 +1295,8 @@ segment_manager_impl::allocate_segment() {
 }
 
 future<> segment_manager_impl::free_segment(log_segment_id segment_id) {
-    // TODO don't free segment while someone reads from it?
+    // Before freeing a segment, ensure there are no ongoing operations that use
+    // locations in this segment. See for example `await_pending_reads`.
 
     get_segment_descriptor(segment_id).on_free_segment();
 
@@ -1543,6 +1545,8 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
         }
     };
 
+    // TODO wait for pending writes that didn't update the index yet.
+
     compaction_buffer cb(_sm.get_segment_size());
 
     co_await _sm.for_each_record(segments,
@@ -1599,6 +1603,9 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
 
     logstor_logger.debug("Compaction complete: {} records rewritten, {} skipped from {} segments, flushed {} times",
                        records_rewritten, records_skipped, segments.size(), flush_count);
+
+    // wait for read operations that use the old locations
+    co_await _index.await_pending_reads();
 
     // Free the compacted segments
     for (auto seg_id : segments) {
@@ -1671,6 +1678,9 @@ future<> compaction_manager::flush_separator(separator& sep) {
             bufs.pop_front();
         }
     }
+
+    // wait for read operations that use the old locations
+    co_await _index.await_pending_reads();
 
     while (!sep._segments.empty()) {
         auto seg_id = sep._segments.back();

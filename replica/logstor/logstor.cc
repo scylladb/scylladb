@@ -63,6 +63,9 @@ future<> logstor::trigger_compaction(bool major) {
 future<> logstor::write(const mutation& m, group_id group) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 
+    // TODO reserve space to ensure we can complete.
+    auto op = _pending_ops_barrier.start();
+
     // TODO ?
     record_generation gen = _index.get(key)
         .transform([](const index_entry& entry) {
@@ -76,7 +79,7 @@ future<> logstor::write(const mutation& m, group_id group) {
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record)).then([this, gen, key = std::move(key)] (log_location location) {
+    return _write_buffer.write(std::move(record)).then([this, gen, key = std::move(key), op = std::move(op)] (log_location location) {
         index_entry new_entry {
             .location = location,
             .generation = gen,
@@ -95,6 +98,8 @@ future<> logstor::write(const mutation& m, group_id group) {
 }
 
 future<std::optional<log_record>> logstor::read(index_key key) {
+    auto op = _index.start_read();
+
     auto entry_opt = _index.get(key);
     if (!entry_opt.has_value()) {
         return make_ready_future<std::optional<log_record>>(std::nullopt);
@@ -102,7 +107,7 @@ future<std::optional<log_record>> logstor::read(index_key key) {
 
     const auto& entry = *entry_opt;
 
-    return _segment_manager.read(entry.location).then([key = std::move(key)] (log_record record) {
+    return _segment_manager.read(entry.location).then([key = std::move(key), op = std::move(op)] (log_record record) {
         if (record.key != key) [[unlikely]] {
             throw std::runtime_error(fmt::format(
                 "Key mismatch reading log entry: expected {}, got {}",

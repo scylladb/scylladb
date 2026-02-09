@@ -15,6 +15,7 @@
 #include "types.hh"
 #include "index.hh"
 #include "segment_manager.hh"
+#include "utils/phased_barrier.hh"
 #include "write_buffer.hh"
 #include "mutation/mutation.hh"
 #include "dht/decorated_key.hh"
@@ -65,6 +66,9 @@ public:
                                        const dht::decorated_key& key,
                                        const query::partition_slice& slice,
                                        tracing::trace_state_ptr trace_state = nullptr);
+
+private:
+    utils::phased_barrier _pending_ops_barrier{"logstor_pending_ops"};
 
 };
 
