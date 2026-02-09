@@ -436,12 +436,10 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
 
     if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
         auto target = (*bounce_msg)->move_to_node();
-        auto cached = (*bounce_msg)->take_cached_pk_function_calls();
         co_return forward_cql_execute_response{
             .status = forward_cql_status::redirect,
             .target_host = target.host,
             .target_shard = target.shard,
-            .cached_fn_calls = std::move(cached),
         };
     }
 
@@ -490,21 +488,30 @@ cql_server::forward_cql(
     clogger.trace("Forwarding CQL request to {} shard {}", target_host, target_shard);
     tracing::trace(qs.get_trace_state(), "Forwarding CQL request to {} shard {}", target_host, target_shard);
 
-    auto response = co_await ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, target_host, timeout, target_shard, req);
+    locator::host_id current_host = target_host;
+    unsigned current_shard = target_shard;
 
-    switch (response.status) {
-    case forward_cql_status::finished:
-        clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
-        tracing::trace(qs.get_trace_state(), "Forwarded CQL request executed successfully on replica: {}", target_host);
-        co_return forward_cql_result{
-            .response = cql_transport::response::make_from_body(stream, !response.error_info ? cql_binary_opcode::RESULT : cql_binary_opcode::ERROR,
-                                                    response.response_flags, std::move(response.response_body)),
-            .error_info = std::move(response.error_info),
-        };
-    case forward_cql_status::prepared_not_found:
-        throw std::runtime_error("Forward CQL: prepared_not_found handling not yet implemented");
-    case forward_cql_status::redirect:
-        throw std::runtime_error("Forward CQL: redirect handling not yet implemented");
+    while (true) {
+        auto response = co_await ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, current_host, timeout, current_shard, req);
+
+        switch (response.status) {
+        case forward_cql_status::finished:
+            clogger.trace("Forwarded CQL request executed successfully on replica: {}", current_host);
+            tracing::trace(qs.get_trace_state(), "Forwarded CQL request executed successfully on replica: {}", current_host);
+            co_return forward_cql_result{
+                .response = cql_transport::response::make_from_body(stream, !response.error_info ? cql_binary_opcode::RESULT : cql_binary_opcode::ERROR,
+                                                        response.response_flags, std::move(response.response_body)),
+                .error_info = std::move(response.error_info),
+            };
+        case forward_cql_status::prepared_not_found:
+            throw std::runtime_error("Forward CQL: prepared_not_found handling not yet implemented");
+        case forward_cql_status::redirect:
+            tracing::trace(qs.get_trace_state(), "Target node redirecting to {} shard {}", response.target_host, response.target_shard);
+            clogger.trace("Redirect from {} to {} shard {}", current_host, response.target_host, response.target_shard);
+            current_host = response.target_host;
+            current_shard = response.target_shard;
+            continue;
+        }
     }
 }
 
