@@ -62,6 +62,7 @@
 #include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
+#include "tablet_aware_loader.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -518,12 +519,40 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope, primary_replica_only);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
-
 }
 
 void unset_sstables_loader(http_context& ctx, routes& r) {
     ss::load_new_ss_tables.unset(r);
     ss::start_restore.unset(r);
+}
+
+void set_tablet_aware_sstables_loader(http_context&, routes& r, sharded<tablet_aware_loader>& loader) {
+    ss::tablet_aware_restore.set(r, [&loader](std::unique_ptr<http::request> req) -> future<json_return_type> {
+        std::string snapshot = req->get_query_param("snapshot");
+        std::string data_center = req->get_query_param("datacenter");
+        std::string rack = req->get_query_param("rack");
+        std::string keyspace = req->get_query_param("keyspace");
+        std::string table = req->get_query_param("table");
+        std::string endpoint = req->get_query_param("endpoint");
+        std::string bucket = req->get_query_param("bucket");
+
+        auto task_id = co_await loader.local().start_loading_task(snapshot, data_center, rack, keyspace, table, endpoint, bucket);
+        apilog.info(
+            "Tablet aware loading task started with id {}, for snapshot: {}, data_center: {}, rack: {}, keyspace: {}, table: {}, endpoint: {}, bucket: {}",
+            task_id,
+            snapshot,
+            data_center,
+            rack,
+            keyspace,
+            table,
+            endpoint,
+            bucket);
+        co_return json_return_type(fmt::to_string(task_id));
+    });
+}
+
+void unset_tablet_aware_sstables_loader(http_context&, routes& r) {
+    ss::tablet_aware_restore.unset(r);
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {

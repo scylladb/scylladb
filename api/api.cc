@@ -158,6 +158,14 @@ future<> unset_server_sstables_loader(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_sstables_loader(ctx, r); });
 }
 
+future<> set_server_tablet_aware_loader(http_context& ctx, sharded<tablet_aware_loader>& loader) {
+    return ctx.http_server.set_routes([&ctx, &loader] (routes& r) { set_tablet_aware_sstables_loader(ctx, r, loader); });
+}
+
+future<> unset_server_tablet_aware_loader(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_tablet_aware_sstables_loader(ctx, r); });
+}
+
 future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {
     return ctx.http_server.set_routes([&ctx, &vb, &g] (routes& r) { set_view_builder(ctx, r, vb, g); });
 }

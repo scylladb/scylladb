@@ -884,7 +884,7 @@ system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstrin
     utils::chunked_vector<sstable_info> sstables;
     auto cql = co_await _qp.execute_internal(
         format("SELECT toc_name, prefix, id, first_token, last_token FROM {}.{} WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?;", NAME, SNAPSHOT_SSTABLES),
-        db::consistency_level::LOCAL_QUORUM,
+        db::consistency_level::ONE,
         { snapshot_name, ks, table, dc, rack },
         cql3::query_processor::cache_internal::no);
 
