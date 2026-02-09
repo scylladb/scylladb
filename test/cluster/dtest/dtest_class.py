@@ -77,10 +77,12 @@ def forever_wait_for(func, step=1, text=None, **kwargs):
     start_time = time.time()
     while not ok:
         ok = func(**kwargs)
-        time.sleep(step)
+        if ok:
+            break
         time_elapsed = time.time() - start_time
         if text is not None:
             logger.debug(f"{text} ({time_elapsed} s)")
+        time.sleep(step)
     return ok
 
 
@@ -103,7 +105,6 @@ def wait_for(func, step=1, text=None, timeout=None, throw_exc=True, **kwargs):
     ok = False
     start_time = time.time()
     while not ok:
-        time.sleep(step)
         ok = func(**kwargs)
         if ok:
             break
@@ -117,6 +118,7 @@ def wait_for(func, step=1, text=None, timeout=None, throw_exc=True, **kwargs):
                 raise WaitTimeoutExpiredError(err)
             else:
                 break
+        time.sleep(step)
     return ok
 
 
