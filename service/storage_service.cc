@@ -7354,8 +7354,8 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
             // It's important to tackle the anomaly in reported size, since both leaving and
             // pending replicas could otherwise be accounted during tablet migration.
-            // If transition hasn't reached cleanup stage, then leaving replicas are accounted.
-            // If transition is past cleanup stage, then pending replicas are accounted.
+            // If transition hasn't reached write_both_read_new stage, then leaving replicas are accounted.
+            // Otherwise, pending replicas are accounted.
             // This helps to reduce the discrepancy window.
             auto tablet_filter = [&me] (const locator::tablet_map& tmap, locator::global_tablet_id id) {
                 auto transition = tmap.get_tablet_transition_info(id.tablet);
