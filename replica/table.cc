@@ -2954,8 +2954,64 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
                     || (is_pending && s == locator::read_replica_set_selector::next);
         };
 
+        // When a tablet is in migration, we want to send its size during any migration stage when
+        // we still know the tablet's size. This way the balancer will have better information about
+        // tablet sizes, and we reduce the chance that the node will be ignored during balancing
+        // due to missing tablet size. On the leaving replica we include tablets until the use_new
+        // stage (inclusive), and on the pending we include tablets after the streaming stage.
+        // There is an overlap, but that should not be a problem.
+        auto tablet_size_filter = [&] () {
+            // if tablet is not in transit, it's filtered in.
+            if (!transition) {
+                return true;
+            }
+
+            if (is_leaving) {
+                switch (transition->stage) {
+                    case locator::tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+                    case locator::tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+                    case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+                    case locator::tablet_transition_stage::streaming:                               [[fallthrough]];
+                    case locator::tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+                    case locator::tablet_transition_stage::use_new:                                 [[fallthrough]];
+                    case locator::tablet_transition_stage::cleanup_target:                          [[fallthrough]];
+                    case locator::tablet_transition_stage::revert_migration:                        [[fallthrough]];
+                    case locator::tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
+                    case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
+                    case locator::tablet_transition_stage::end_repair:
+                        return true;
+                    case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
+                    case locator::tablet_transition_stage::end_migration:
+                        return false;
+                }
+            } else if (is_pending) {
+                switch (transition->stage) {
+                    case locator::tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+                    case locator::tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+                    case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+                    case locator::tablet_transition_stage::streaming:                               [[fallthrough]];
+                    case locator::tablet_transition_stage::cleanup_target:                          [[fallthrough]];
+                    case locator::tablet_transition_stage::revert_migration:                        [[fallthrough]];
+                    case locator::tablet_transition_stage::rebuild_repair:
+                        return false;
+                    case locator::tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+                    case locator::tablet_transition_stage::use_new:                                 [[fallthrough]];
+                    case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
+                    case locator::tablet_transition_stage::end_migration:                           [[fallthrough]];
+                    case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
+                    case locator::tablet_transition_stage::end_repair:
+                        return true;
+                }
+            }
+
+            return true;
+        };
+
         if (table_size_filter()) {
             table_stats.size_in_bytes += tablet_size;
+        }
+
+        if (tablet_size_filter()) {
             const dht::token_range trange = _tablet_map->get_token_range(gid.tablet);
             // Make sure the token range is in the form (a, b]
             SCYLLA_ASSERT(!trange.start()->is_inclusive() && trange.end()->is_inclusive());
