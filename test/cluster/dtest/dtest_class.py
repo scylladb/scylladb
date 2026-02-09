@@ -86,7 +86,7 @@ def forever_wait_for(func, step=1, text=None, **kwargs):
     return ok
 
 
-def wait_for(func, step=1, text=None, timeout=None, throw_exc=True, **kwargs):
+def wait_for(func, step=0.2, text=None, timeout=None, throw_exc=True, **kwargs):
     """
     Wrapper function to wait with timeout option.
     If no timeout received, 'forever_wait_for' method will be used.
