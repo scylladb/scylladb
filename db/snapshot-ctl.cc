@@ -21,14 +21,16 @@
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
 #include "sstables/sstables_manager.hh"
+#include "service/storage_proxy.hh"
 
 logging::logger snap_log("snapshots");
 
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
     : _config(std::move(cfg))
     , _db(db)
+    , _sp(sp)
     , _ops("snapshot_ctl")
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
     , _storage_manager(sstm)
@@ -102,6 +104,45 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
     return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), opts] () mutable {
         return do_take_column_family_snapshot(std::move(ks_name), std::move(tables), std::move(tag), opts);
     });
+}
+
+future<> snapshot_ctl::take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+    if (tag.empty()) {
+        throw std::invalid_argument("You must supply a snapshot name.");
+    }
+    if (ks_names.size() != 1 && !tables.empty()) {
+        throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot");
+    }
+    if (ks_names.empty()) {
+        std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(ks_names));
+    }
+
+    return run_snapshot_modify_operation([this, ks_names = std::move(ks_names), tables = std::move(tables), tag = std::move(tag), opts] () mutable {
+        return do_take_cluster_column_family_snapshot(std::move(ks_names), std::move(tables), std::move(tag), opts);
+    });
+}
+
+future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+    if (tables.empty()) {
+        co_await coroutine::parallel_for_each(ks_names, [tag, this] (const auto& ks_name) {
+            return check_snapshot_not_exist(ks_name, tag);
+        });
+        co_await _sp.local().snapshot_keyspace(
+            ks_names | std::views::transform([&](auto& ks) { return std::make_pair(ks, sstring{}); }) 
+                | std::ranges::to<std::unordered_multimap>(),
+                tag, opts
+        );
+        co_return;
+    };
+
+    auto ks = ks_names[0];
+    co_await check_snapshot_not_exist(ks, tag, tables);
+
+    co_await _sp.local().snapshot_keyspace(
+        tables | std::views::transform([&](auto& cf) { return std::make_pair(ks, cf); }) 
+            | std::ranges::to<std::unordered_multimap>(),
+            tag, opts
+    );
 }
 
 future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
