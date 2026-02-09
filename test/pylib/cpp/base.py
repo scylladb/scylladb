@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import shlex
@@ -23,6 +24,7 @@ from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
 from test.pylib.resource_gather import get_resource_gather
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
 from test.pylib.scylla_cluster import merge_cmdline_options
+from test.pylib.suite.base import TestSuite
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -106,6 +108,11 @@ class CppFile(pytest.File, ABC):
         ...
 
     @cached_property
+    def needs_leased_host(self) -> bool:
+        """Check if this test requires a leased host from the host registry."""
+        return self.test_name in self.suite_config.get("need_leased_host", [])
+
+    @cached_property
     def test_env(self) -> dict[str, str]:
         variables = {
             **BASE_TEST_ENV,
@@ -160,6 +167,7 @@ class CppTestCase(pytest.Item):
 
         self.test_case_name = test_case_name
         self.test_custom_args = test_custom_args
+        self.leased_host: str | None = None
 
         self.fixturenames = []
         self.own_markers = [getattr(pytest.mark, mark_name) for mark_name in own_markers]
@@ -194,12 +202,18 @@ class CppTestCase(pytest.Item):
             test=self.make_testpy_test_object_mock(),
         )
         resource_gather.make_cgroup()
+
+        # Build environment with leased host if needed
+        test_env = dict(self.parent.test_env)
+        if self.leased_host is not None:
+            test_env["SCYLLA_TEST_LEASED_HOST"] = self.leased_host
+
         process = resource_gather.run_process(
             args=[self.parent.exe_path, *test_args, *self.test_custom_args],
             timeout=TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT,
             output_file=output_file,
             cwd=TOP_SRC_DIR,
-            env=self.parent.test_env,
+            env=test_env,
         )
         resource_gather.write_metrics_to_db(
             metrics=resource_gather.get_test_metrics(),
@@ -207,6 +221,23 @@ class CppTestCase(pytest.Item):
         )
         resource_gather.remove_cgroup()
         return process
+
+    def setup(self) -> None:
+        """Setup test case, including leasing a host if needed."""
+        super().setup()
+
+        if self.parent.needs_leased_host:
+            if hasattr(TestSuite, 'hosts'):
+                self.leased_host = asyncio.run(TestSuite.hosts.lease_host())
+
+    def teardown(self) -> None:
+        """Teardown test case, including releasing the leased host if any."""
+        if self.leased_host is not None:
+            if hasattr(TestSuite, 'hosts'):
+                asyncio.run(TestSuite.hosts.release_host(self.leased_host))
+            self.leased_host = None
+
+        super().teardown()
 
     def runtest(self) -> None:
         failures, output = self.parent.run_test_case(test_case=self)
