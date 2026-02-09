@@ -734,7 +734,7 @@ public:
         return *_single_sg;
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const override {
+    locator::combined_load_stats table_load_stats() const override {
         return locator::combined_load_stats{
             .table_ls = locator::table_load_stats{
                             .size_in_bytes = _single_sg->live_disk_space_used(),
@@ -900,7 +900,7 @@ public:
         return storage_group_for_id(storage_group_of(token).first);
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const override;
+    locator::combined_load_stats table_load_stats() const override;
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
@@ -2919,16 +2919,42 @@ void table::on_flush_timer() {
     });
 }
 
-locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
+locator::combined_load_stats tablet_storage_group_manager::table_load_stats() const {
     locator::table_load_stats table_stats;
     table_stats.split_ready_seq_number = _split_ready_seq_number;
 
     locator::tablet_load_stats tablet_stats;
 
     for_each_storage_group([&] (size_t id, storage_group& sg) {
-        locator::global_tablet_id gid { _t.schema()->id(), locator::tablet_id(id) };
-        if (tablet_filter(*_tablet_map, gid)) {
-            const uint64_t tablet_size = sg.live_disk_space_used();
+        auto tid = locator::tablet_id(id);
+        locator::global_tablet_id gid { _t.schema()->id(), tid };
+        locator::tablet_replica me { _my_host_id, this_shard_id() };
+        const uint64_t tablet_size = sg.live_disk_space_used();
+
+        auto transition = _tablet_map->get_tablet_transition_info(tid);
+        auto& info = _tablet_map->get_tablet_info(tid);
+        bool is_pending = transition && transition->pending_replica == me;
+        bool is_leaving = transition && locator::get_leaving_replica(info, *transition) == me;
+
+        // It's important to tackle the anomaly in reported size, since both leaving and
+        // pending replicas could otherwise be accounted during tablet migration.
+        // If transition hasn't reached write_both_read_new stage, then leaving replicas are accounted.
+        // Otherwise, pending replicas are accounted.
+        // This helps to reduce the discrepancy window.
+        auto table_size_filter = [&] () {
+            // if tablet is not in transit, it's filtered in.
+            if (!transition) {
+                return true;
+            }
+
+            auto s = transition->reads; // read selector
+
+            return (!is_pending && !is_leaving)
+                    || (is_leaving && s == locator::read_replica_set_selector::previous)
+                    || (is_pending && s == locator::read_replica_set_selector::next);
+        };
+
+        if (table_size_filter()) {
             table_stats.size_in_bytes += tablet_size;
             const dht::token_range trange = _tablet_map->get_token_range(gid.tablet);
             // Make sure the token range is in the form (a, b]
@@ -2942,8 +2968,8 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std:
     };
 }
 
-locator::combined_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
-    return _sg_manager->table_load_stats(std::move(tablet_filter));
+locator::combined_load_stats table::table_load_stats() const {
+    return _sg_manager->table_load_stats();
 }
 
 void tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {

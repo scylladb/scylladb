@@ -7348,34 +7348,8 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             if (!table) {
                 continue;
             }
-            auto erm = table->get_effective_replication_map();
-            auto& token_metadata = erm->get_token_metadata();
-            auto me = locator::tablet_replica { token_metadata.get_my_id(), this_shard_id() };
 
-            // It's important to tackle the anomaly in reported size, since both leaving and
-            // pending replicas could otherwise be accounted during tablet migration.
-            // If transition hasn't reached write_both_read_new stage, then leaving replicas are accounted.
-            // Otherwise, pending replicas are accounted.
-            // This helps to reduce the discrepancy window.
-            auto tablet_filter = [&me] (const locator::tablet_map& tmap, locator::global_tablet_id id) {
-                auto transition = tmap.get_tablet_transition_info(id.tablet);
-                auto& info = tmap.get_tablet_info(id.tablet);
-
-                // if tablet is not in transit, it's filtered in.
-                if (!transition) {
-                    return true;
-                }
-
-                bool is_pending = transition->pending_replica == me;
-                bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
-                auto s = transition->reads; // read selector
-
-                return (!is_pending && !is_leaving)
-                       || (is_leaving && s == locator::read_replica_set_selector::previous)
-                       || (is_pending && s == locator::read_replica_set_selector::next);
-            };
-
-            locator::combined_load_stats combined_ls { table->table_load_stats(tablet_filter) };
+            locator::combined_load_stats combined_ls { table->table_load_stats() };
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
             tablet_sizes_per_shard[this_shard_id()].size += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
 
