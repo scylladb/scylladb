@@ -1227,57 +1227,25 @@ template <typename Process>
                                    cql3::computed_function_values,
                                    cql3::dialect>
 future<cql_server::process_fn_return_type>
-cql_server::connection::process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
-                tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn) {
-    auto sg = _server._config.bounce_request_smp_service_group;
+cql_server::process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
+                tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn,
+                cql_protocol_version_type version)
+{
+    auto sg = _config.bounce_request_smp_service_group;
     auto gcs = cs.move_to_other_shard();
     auto gt = tracing::global_trace_state_ptr(std::move(trace_state));
-    co_return co_await _server.container().invoke_on(shard, sg, [&, stream, dialect] (cql_server& server) -> future<process_fn_return_type> {
+    co_return co_await container().invoke_on(shard, sg, [&, stream, dialect, version] (cql_server& server) -> future<process_fn_return_type> {
         bytes_ostream linearization_buffer;
         request_reader in(is, linearization_buffer);
         auto client_state = gcs.get();
         auto trace_state = gt.get();
-        co_return co_await process_fn(client_state, server._query_processor, in, stream, _version,
+        co_return co_await process_fn(client_state, server._query_processor, in, stream, version,
                 /* FIXME */empty_service_permit(), std::move(trace_state), false, cached_vals, dialect);
     });
 }
 
 static inline cql_server::result_with_foreign_response_ptr convert_error_message_to_coordinator_result(messages::result_message* msg) {
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
-}
-
-template <typename Process>
-    requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
-                                   Process,
-                                   service::client_state&,
-                                   sharded<cql3::query_processor>&,
-                                   request_reader,
-                                   uint16_t,
-                                   cql_protocol_version_type,
-                                   service_permit,
-                                   tracing::trace_state_ptr,
-                                   bool,
-                                   cql3::computed_function_values,
-                                   cql3::dialect>
-future<cql_server::result_with_foreign_response_ptr>
-cql_server::connection::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
-        tracing::trace_state_ptr trace_state, Process process_fn) {
-    fragmented_temporary_buffer::istream is = in.get_stream();
-
-    auto dialect = get_dialect();
-
-    auto f = co_await coroutine::as_future(process_fn(client_state, _server._query_processor, in, stream,
-            _version, permit, trace_state, true, {}, dialect));
-    if (f.failed()) {
-        co_return coroutine::exception(f.get_exception());
-    }
-    auto msg = std::move(f.get());
-    while (auto* bounce_msg = std::get_if<result_with_bounce>(&msg)) {
-        auto shard = (*bounce_msg)->move_to_shard().value();
-        auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-        msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
-    }
-    co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
 }
 
 static future<cql_server::process_fn_return_type>
@@ -1326,7 +1294,10 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
 
 future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state) {
-    return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_query_internal);
+    return _server.process(stream, in, client_state, std::move(permit), std::move(trace_state), cql_binary_opcode::QUERY,
+                           _version, get_dialect(), _client_state.get_remote_address()).then([] (auto&& result) {
+        return std::get<cql_server::result_with_foreign_response_ptr>(std::move(result));
+    });
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
@@ -1448,7 +1419,10 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
 future<cql_server::result_with_foreign_response_ptr> cql_server::connection::process_execute(uint16_t stream, request_reader in,
         service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state) {
-    return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_execute_internal);
+    return _server.process(stream, in, client_state, std::move(permit), std::move(trace_state), cql_binary_opcode::EXECUTE,
+                           _version, get_dialect(), _client_state.get_remote_address()).then([] (auto&& result) {
+        return std::get<cql_server::result_with_foreign_response_ptr>(std::move(result));
+    });
 }
 
 static future<cql_server::process_fn_return_type>
@@ -1591,6 +1565,40 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     });
 }
 
+static auto get_process_fn_for_opcode(cql_binary_opcode opcode) {
+    if (opcode == cql_binary_opcode::EXECUTE) {
+        return process_execute_internal;
+    } else if (opcode == cql_binary_opcode::QUERY) {
+        return process_query_internal;
+    } else if (opcode == cql_binary_opcode::BATCH) {
+        return process_batch_internal;
+    } else {
+        throw std::runtime_error(format("Unsupported opcode for processing: {}", static_cast<int>(opcode)));
+    }
+}
+
+future<cql_server::process_fn_return_type>
+cql_server::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
+        tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, std::optional<socket_address> remote_addr)
+{
+    fragmented_temporary_buffer::istream is = in.get_stream();
+
+    auto process_fn = get_process_fn_for_opcode(opcode);
+
+    auto f = co_await coroutine::as_future(process_fn(client_state, _query_processor, in, stream,
+        version, permit, trace_state, true, {}, dialect));
+    if (f.failed()) {
+        co_return coroutine::exception(f.get_exception());
+    }
+    auto msg = std::move(f).get();
+    while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
+        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
+        msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn, version);
+    }
+    co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
+}
+
 cql3::dialect
 cql_server::connection::get_dialect() const {
     return cql3::dialect{
@@ -1601,7 +1609,10 @@ cql_server::connection::get_dialect() const {
 future<cql_server::result_with_foreign_response_ptr>
 cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state) {
-    return process(stream, in, client_state, permit, std::move(trace_state), process_batch_internal);
+    return _server.process(stream, in, client_state, std::move(permit), std::move(trace_state), cql_binary_opcode::BATCH,
+                           _version, get_dialect(), _client_state.get_remote_address()).then([] (auto&& result) {
+        return std::get<cql_server::result_with_foreign_response_ptr>(std::move(result));
+    });
 }
 
 future<std::unique_ptr<cql_server::response>>
