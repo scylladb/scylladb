@@ -287,6 +287,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("counters", "test counters")
         ("tablets", "use tablets")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
+        ("sstable-summary-ratio", bpo::value<double>(), "Generate summary entry, so that summary file size / data file size ~= this ratio")
         ("flush", "flush memtables before test")
         ("memtable-partitions", bpo::value<unsigned>(), "apply this number of partitions to memtable, then flush")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
@@ -320,6 +321,10 @@ int scylla_simple_query_main(int argc, char** argv) {
             std::cout << "enable-index-cache=" << enable_index_cache << '\n';
             db_cfg->enable_cache(enable_cache);
             db_cfg->cache_index_pages(enable_index_cache);
+            if (app.configuration().contains("sstable-summary-ratio")) {
+                db_cfg->sstable_summary_ratio(app.configuration()["sstable-summary-ratio"].as<double>());
+            }
+            std::cout << "sstable-summary-ratio=" << db_cfg->sstable_summary_ratio() << '\n';
             cql_test_config cfg(db_cfg);
             if (app.configuration().contains("tablets")) {
                 cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
