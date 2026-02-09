@@ -64,6 +64,8 @@
 #include "types/user.hh"
 
 #include "transport/cql_protocol_extension.hh"
+#include "message/messaging_service.hh"
+#include "idl/forward_cql.dist.hh"
 #include "utils/bit_cast.hh"
 #include "utils/labels.hh"
 #include "utils/result.hh"
@@ -286,6 +288,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         return;
     }
 
+    register_forwarding_handlers();
+
     auto ls = {
         sm::make_counter("cql-connections", _stats.connects,
                         sm::description("Counts a number of client connections.")),
@@ -343,6 +347,136 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
 }
 
 cql_server::~cql_server() = default;
+
+future<> cql_server::stop() {
+    co_await unregister_forwarding_handlers();
+    co_await server::stop();
+}
+
+void cql_server::register_forwarding_handlers() {
+    ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
+        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req) -> future<forward_cql_execute_response> {
+            auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            clogger.trace("Handling forwarded CQL request from {} on shard {}", src_host, shard);
+
+            co_return co_await container().invoke_on(shard, [src_host, timeout, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+                auto now = db::timeout_clock::now();
+                auto d = db::timeout_clock::duration::max();
+                if (timeout) {
+                    d = now < *timeout
+                        ? *timeout - now
+                        : db::timeout_clock::duration::zero();
+                }
+                service::client_state cs(service::client_state::internal_tag{},
+                    ::timeout_config{d, d, d, d, d, d, d});
+                if (req.keyspace) {
+                    cs.set_raw_keyspace(*req.keyspace);
+                }
+
+                tracing::trace_state_ptr trace_state_ptr;
+                if (req.trace_info) {
+                    trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*req.trace_info);
+                    tracing::begin(trace_state_ptr);
+                }
+                service::query_state qs(cs, trace_state_ptr, empty_service_permit());
+                tracing::trace(qs.get_trace_state(), "Handling forwarded CQL request from {} on shard {}", src_host, this_shard_id());
+
+                auto opcode = static_cast<cql_binary_opcode>(req.opcode);
+
+                fragmented_temporary_buffer ftb(reinterpret_cast<const char*>(req.request_buffer.data()), req.request_buffer.size());
+                fragmented_temporary_buffer::istream is = ftb.get_istream();
+
+                bytes_ostream temp_linearization_buffer;
+                request_reader in(is, temp_linearization_buffer);
+
+                auto result = co_await shard_svc.process(
+                    req.stream,
+                    in,
+                    qs.get_client_state(),
+                    empty_service_permit(),
+                    qs.get_trace_state(),
+                    opcode,
+                    req.cql_version,
+                    req.dialect,
+                    std::nullopt,
+                    std::move(req.cached_fn_calls));
+
+                if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
+                    auto target = (*bounce_msg)->move_to_node();
+                    auto cached = (*bounce_msg)->take_cached_pk_function_calls();
+                    co_return forward_cql_execute_response{
+                        .status = forward_cql_status::redirect,
+                        .target_host = target.host,
+                        .target_shard = target.shard,
+                        .cached_fn_calls = std::move(cached),
+                    };
+                }
+
+                auto& final_result = std::get<cql_server::result_with_foreign_response_ptr>(result);
+
+                if (!final_result) {
+                    co_return co_await final_result.assume_error().as_exception_future<forward_cql_execute_response>();
+                }
+
+                auto response = std::move(final_result).assume_value();
+                clogger.trace("Execution of forwarded request succeeded");
+                tracing::trace(qs.get_trace_state(), "Execution of forwarded request succeeded");
+
+                co_return forward_cql_execute_response{
+                    .status = forward_cql_status::finished,
+                    .response_body = std::move(*response.get()).extract_body(),
+                    .response_flags = response->flags(),
+                };
+            });
+        });
+}
+
+future<> cql_server::unregister_forwarding_handlers() {
+    co_await ser::forward_cql_rpc_verbs::unregister(&_ms);
+}
+
+future<foreign_ptr<std::unique_ptr<cql_transport::response>>>
+cql_server::forward_cql(
+    locator::host_id target_host,
+    unsigned target_shard,
+    seastar::lowres_clock::time_point timeout,
+    bytes request_buffer,
+    cql_binary_opcode opcode,
+    uint16_t stream,
+    cql_protocol_version_type version,
+    service::query_state& qs,
+    cql3::dialect dialect,
+    cql3::computed_function_values cached_fn_calls)
+{
+    forward_cql_execute_request req{
+        .request_buffer = request_buffer,
+        .opcode = static_cast<uint8_t>(opcode),
+        .cql_version = static_cast<uint8_t>(version),
+        .dialect = dialect,
+        .stream = stream,
+        .keyspace = qs.get_client_state().get_raw_keyspace(),
+        .trace_info = tracing::make_trace_info(qs.get_trace_state()),
+        .has_rate_limit_extension = qs.get_client_state().is_protocol_extension_set(cql_protocol_extension::RATE_LIMIT_ERROR),
+        .cached_fn_calls = std::move(cached_fn_calls),
+    };
+
+    clogger.trace("Forwarding CQL request to {} shard {}", target_host, target_shard);
+    tracing::trace(qs.get_trace_state(), "Forwarding CQL request to {} shard {}", target_host, target_shard);
+
+    auto response = co_await ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, target_host, timeout, target_shard, req);
+
+    switch (response.status) {
+    case forward_cql_status::finished:
+        clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
+        tracing::trace(qs.get_trace_state(), "Forwarded CQL request executed successfully on replica: {}", target_host);
+        co_return cql_transport::response::make_from_body(stream, cql_binary_opcode::RESULT,
+                                                    response.response_flags, std::move(response.response_body));
+    case forward_cql_status::prepared_not_found:
+        throw std::runtime_error("Forward CQL: prepared_not_found handling not yet implemented");
+    case forward_cql_status::redirect:
+        throw std::runtime_error("Forward CQL: redirect handling not yet implemented");
+    }
+}
 
 shared_ptr<generic_server::connection>
 cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
@@ -1577,24 +1711,65 @@ static auto get_process_fn_for_opcode(cql_binary_opcode opcode) {
     }
 }
 
+// Linearize an istream to bytes for sending over the wire.
+// Makes a copy of the remaining bytes in the stream.
+static bytes linearize_istream(fragmented_temporary_buffer::istream is) {
+    auto size = is.bytes_left();
+    bytes result(bytes::initialized_later{}, size);
+    auto read_result = is.read_to(size, result.begin());
+    if (!read_result) {
+        std::rethrow_exception(read_result.assume_error());
+    }
+    return result;
+}
+
 future<cql_server::process_fn_return_type>
 cql_server::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
-        tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, std::optional<socket_address> remote_addr)
+        tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, std::optional<socket_address> remote_addr,
+        cql3::computed_function_values cached_fn_calls)
 {
     fragmented_temporary_buffer::istream is = in.get_stream();
 
     auto process_fn = get_process_fn_for_opcode(opcode);
 
     auto f = co_await coroutine::as_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, true, {}, dialect));
+        version, permit, trace_state, true, std::move(cached_fn_calls), dialect));
     if (f.failed()) {
         co_return coroutine::exception(f.get_exception());
     }
     auto msg = std::move(f).get();
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
-        auto shard = (*bounce_msg)->move_to_shard().value();
-        auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-        msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn, version);
+        if (auto shard = (*bounce_msg)->move_to_shard()) {
+            // Shard bounce - execute on target shard locally
+            auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
+            msg = co_await process_on_shard(*shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn, version);
+        } else {
+            // Node bounce - either forward or return to caller
+            if (!remote_addr) {
+                // Not the coordinator - return the bounce result for the caller to handle
+                co_return std::move(msg);
+            }
+
+            // Coordinator mode - forward to another node
+            auto target = (*bounce_msg)->move_to_node();
+            auto cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
+            tracing::trace(trace_state, "Forwarding to node {} shard {}", target.host, target.shard);
+
+            auto request_bytes = linearize_istream(is);
+            auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, permit);
+            auto rpc_timeout = client_state.get_timeout_config().read_timeout;
+            auto deadline = seastar::lowres_clock::now() + rpc_timeout;
+            auto response = co_await forward_cql(
+                target.host, target.shard, deadline,
+                std::move(request_bytes),
+                opcode,
+                stream, version,
+                q_state->query_state,
+                dialect,
+                std::move(cached_vals));
+
+            co_return cql_server::result_with_foreign_response_ptr(std::move(response));
+        }
     }
     co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
 }

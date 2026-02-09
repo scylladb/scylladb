@@ -156,6 +156,39 @@ struct connection_service_level_params {
     sstring scheduling_group_name;
 };
 
+struct forward_cql_execute_request {
+    bytes request_buffer;
+    uint8_t opcode;
+    uint8_t cql_version;
+    cql3::dialect dialect;
+    uint16_t stream;
+    std::optional<sstring> keyspace;
+    std::optional<tracing::trace_info> trace_info;
+    bool has_rate_limit_extension;
+    cql3::computed_function_values cached_fn_calls;
+};
+
+enum class forward_cql_status : uint8_t {
+    finished = 0,
+    prepared_not_found = 1,
+    redirect = 2,
+};
+
+struct forwarded_error_info {
+    int32_t exception_code;
+    sstring log_message;
+    std::optional<seastar::lowres_clock::time_point> timeout;
+};
+
+struct forward_cql_execute_response {
+    forward_cql_status status;
+    bytes response_body;
+    uint8_t response_flags;
+    locator::host_id target_host;
+    unsigned target_shard;
+    std::optional<forwarded_error_info> error_info;
+};
+
 class cql_metadata_id_wrapper {
 private:
     std::optional<cql3::cql_metadata_id_type> _request_metadata_id;
@@ -227,6 +260,7 @@ public:
             maintenance_socket_enabled used_by_maintenance_socket,
             netw::messaging_service& ms);
     ~cql_server();
+    future<> stop();
 
 public:
     using response = cql_transport::response;
@@ -351,7 +385,8 @@ private:
     // Helper functions to encapsulate bounce processing for query, execute and batch verbs
     future<process_fn_return_type>
     process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
-            cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, std::optional<socket_address> remote_addr);
+            cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, std::optional<socket_address> remote_addr,
+            cql3::computed_function_values cached_fn_calls = {});
 
     template <typename Process>
         requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
@@ -373,6 +408,11 @@ private:
     friend class type_codec;
 
 private:
+    void register_forwarding_handlers();
+    future<> unregister_forwarding_handlers();
+    future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout, bytes request_buffer, cql_binary_opcode opcode,
+            uint16_t stream, cql_protocol_version_type version, service::query_state& query_state, cql3::dialect dialect, cql3::computed_function_values cached_fn_calls);
+
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
     scheduling_group get_scheduling_group_for_new_connection() const override {
         if (_sl_controller.has_service_level(qos::service_level_controller::driver_service_level_name)) {
