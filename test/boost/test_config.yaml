@@ -53,3 +53,7 @@ custom_args:
         - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
+# Tests that need a leased host IP address from the host registry
+# The IP will be provided via the SCYLLA_TEST_LEASED_HOST environment variable
+need_leased_host:
+    - encryption_at_rest_test

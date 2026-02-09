@@ -607,7 +607,7 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
     } 
 
     kmip_test_info info {
-        .host = get_var_or_default("KMIP_HOST", "127.0.0.1", &host_set),
+        .host = get_var_or_default("KMIP_HOST", getenv_or_default("SCYLLA_TEST_LEASED_HOST", "127.0.0.1"), &host_set),
         .cert = get_var_or_default("KMIP_CERT", fmt::format("{}/scylla.pem", resourcedir)),
         .key = get_var_or_default("KMIP_KEY", fmt::format("{}/scylla.pem", resourcedir)),
         .ca = get_var_or_default("KMIP_CA", fmt::format("{}/cacert.pem", resourcedir)),
@@ -620,9 +620,10 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
         // Note: we set `enable_tls_client_auth=False` - client cert is still validated, 
         // but we have note generated certs with "extended usage client OID", which 
         // pykmip will check for if this is true.
+        const char* hostname = getenv_or_default("SCYLLA_TEST_LEASED_HOST", "127.0.0.1");
         auto cfg = fmt::format(R"foo(
 [server]
-hostname=127.0.0.1
+hostname={}
 port=1
 certificate_path={}
 key_path={}
@@ -632,7 +633,7 @@ policy_path={}
 enable_tls_client_auth=False
 logging_level=DEBUG
 database_path=:memory:
-        )foo", info.cert, info.key, info.ca, tmp.path().string());
+        )foo", hostname, info.cert, info.key, info.ca, tmp.path().string());
 
         auto cfgfile = fmt::format("{}/pykmip.conf", tmp.path().string());
         auto log = fmt::format("{}/pykmip.log", tmp.path().string());
@@ -693,8 +694,9 @@ database_path=:memory:
             // wait for port.
             for (;;) {
                 try {
+                    const char* connect_host = getenv_or_default("SCYLLA_TEST_LEASED_HOST", "127.0.0.1");
                     // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                    auto c = co_await seastar::tls::connect(certs, socket_address(net::inet_address("127.0.0.1"), port));
+                    auto c = co_await seastar::tls::connect(certs, socket_address(net::inet_address(connect_host), port));
                     BOOST_TEST_MESSAGE("PyKMIP server up and available"); // debug print. Why not.
                     co_await tls::check_session_is_resumed(c); // forces handshake. Make python ssl happy.
                     c.shutdown_output();
@@ -704,7 +706,7 @@ database_path=:memory:
                 co_await sleep(100ms);
             }
 
-            info.host = fmt::format("127.0.0.1:{}", port);
+            info.host = fmt::format("{}:{}", hostname, port);
 
             co_await f(info, tmp);
 
