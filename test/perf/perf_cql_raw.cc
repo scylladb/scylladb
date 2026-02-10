@@ -755,7 +755,7 @@ static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>*
 // exercises the full networking + protocol parsing path.
 //
 // Example usage:
-// ./build/dev/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
+// ./build/release/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
 std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config>, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         raw_cql_test_config c;
@@ -822,25 +822,11 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
                     workload_main(c, as);
                 });
             });
-        } else {
-            // in-process mode
-            c.remote_host = "127.0.0.1";
-        }
-
-        // Unconditionally append --api-address=127.0.0.1 so the main server binds API locally.
-        static std::string api_arg = "--api-address=127.0.0.1";
-        {
-            // Build a new argv with the extra argument (simple leak acceptable for process lifetime)
-            char** new_av = new char*[ac + 2];
-            for (int i = 0; i < ac; ++i) { new_av[i] = av[i]; }
-            new_av[ac] = const_cast<char*>(api_arg.c_str());
-            new_av[ac + 1] = nullptr;
-            av = new_av;
-            ++ac;
         }
 
         *after_init_func = [c](lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->native_transport_port();
+            c.remote_host = cfg->api_address();
             // run workload in background-ish
             return seastar::async([c, &as]() {
                 try {

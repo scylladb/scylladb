@@ -57,14 +57,10 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
 }
 
 static http::experimental::client get_client(const test_config& c, int port = 0) {
-    std::string host = "127.0.0.1";
-    if (!c.remote_host.empty()) {
-        host = c.remote_host;
-    }
     if (port == 0) {
         port = c.port;
     }
-    return http::experimental::client(socket_address(net::inet_address(host), port));
+    return http::experimental::client(socket_address(net::inet_address(c.remote_host), port));
 }
 
 static future<> make_request(http::experimental::client& cli, sstring operation, sstring body) {
@@ -450,7 +446,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
 
 // This benchmark runs the whole Scylla so it needs scylla config and
 // commandline. Example usage:
-// ./build/dev/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
+// ./build/release/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
@@ -512,6 +508,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
 
         *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->alternator_port();
+            c.remote_host = cfg->api_address();
             return seastar::async([c = std::move(c), &as] {
                 try {
                     workload_main(c, &as);
