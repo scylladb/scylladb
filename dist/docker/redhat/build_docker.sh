@@ -97,7 +97,9 @@ bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 
 run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y update
-run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip
+run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip cpio
+# Extract only systemctl binary from systemd package to avoid installing the whole systemd in the container.
+run bash -rc "microdnf download systemd && rpm2cpio systemd-*.rpm | cpio -idmv ./usr/bin/systemctl && rm -rf systemd-*.rpm"
 run curl -L --output /etc/yum.repos.d/scylla.repo ${repo_file_url}
 run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
@@ -106,6 +108,8 @@ run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
 run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --network-stack posix"/' /etc/sysconfig/scylla-server
+# Cleanup packages not needed in the final image and clean package manager cache to reduce image size.
+run bash -rc "microdnf remove -y cpio && microdnf clean all"
 
 run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
