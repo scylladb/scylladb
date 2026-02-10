@@ -47,6 +47,7 @@ class index_consumer {
     logalloc::region& _region;
     utils::chunked_vector<parsed_partition_index_entry> _parsed_entries;
     size_t _max_promoted_index_entry_plus_one = 0; // Highest index +1 in _parsed_entries which has a promoted index.
+    size_t _key_storage_size = 0;
 public:
     index_consumer(logalloc::region& r, schema_ptr s)
         : _s(s)
@@ -57,6 +58,7 @@ public:
     { }
 
     void consume_entry(parsed_partition_index_entry&& e) {
+        _key_storage_size += e.key.size();
         _parsed_entries.emplace_back(std::move(e));
         if (e.promoted_index) {
             _max_promoted_index_entry_plus_one = std::max(_max_promoted_index_entry_plus_one, _parsed_entries.size());
@@ -70,22 +72,30 @@ public:
             with_allocator(_region.allocator(), [&] {
                 result._entries = {};
                 result._promoted_indexes = {};
+                result._key_storage = {};
             });
         });
         auto i = _parsed_entries.begin();
+        size_t key_offset = 0;
         while (i != _parsed_entries.end()) {
             _alloc_section(_region, [&] {
                 with_allocator(_region.allocator(), [&] {
                     result._entries.reserve(_parsed_entries.size());
                     result._promoted_indexes.resize(_max_promoted_index_entry_plus_one);
+                    if (result._key_storage.empty()) {
+                        result._key_storage = managed_bytes(managed_bytes::initialized_later(), _key_storage_size);
+                    }
+                    managed_bytes_mutable_view key_out(result._key_storage);
+                    key_out.remove_prefix(key_offset);
                     while (i != _parsed_entries.end() && !need_preempt()) {
                         parsed_partition_index_entry& e = *i;
                         if (e.promoted_index) {
                             result._promoted_indexes[result._entries.size()] = *e.promoted_index;
                         }
-                        auto key = managed_bytes(reinterpret_cast<const bytes::value_type *>(e.key.get()), e.key.size());
-                        result._entries.emplace_back(std::move(key), e.data_file_offset);
+                        write_fragmented(key_out, std::string_view(e.key.begin(), e.key.size()));
+                        result._entries.emplace_back(index_entry{dht::raw_token().value, e.data_file_offset, key_offset});
                         ++i;
+                        key_offset += e.key.size();
                     }
                 });
             });
@@ -97,6 +107,8 @@ public:
     }
 
     void prepare(uint64_t size) {
+        _max_promoted_index_entry_plus_one = 0;
+        _key_storage_size = 0;
         _parsed_entries.clear();
         _parsed_entries.reserve(size);
     }
@@ -354,26 +366,16 @@ public:
         return _tri_cmp(e.get_decorated_key(), rp) < 0;
     }
 
-    bool operator()(const index_entry& e, dht::ring_position_view rp) const {
-        return _tri_cmp(e.get_decorated_key(_tri_cmp.s), rp) < 0;
-    }
-
-    bool operator()(const managed_ref<index_entry>& e, dht::ring_position_view rp) const {
-        return operator()(*e, rp);
-    }
-
-    bool operator()(dht::ring_position_view rp, const managed_ref<index_entry>& e) const {
-        return operator()(rp, *e);
-    }
-
     bool operator()(dht::ring_position_view rp, const summary_entry& e) const {
         return _tri_cmp(e.get_decorated_key(), rp) > 0;
     }
-
-    bool operator()(dht::ring_position_view rp, const index_entry& e) const {
-        return _tri_cmp(e.get_decorated_key(_tri_cmp.s), rp) > 0;
-    }
 };
+
+inline
+std::strong_ordering index_entry_tri_cmp(const schema& s, partition_index_page& page, size_t idx, dht::ring_position_view rp) {
+    dht::ring_position_comparator_for_sstables tri_cmp(s);
+    return tri_cmp(page.get_decorated_key(s, idx), rp);
+}
 
 // Contains information about index_reader position in the index file
 struct index_bound {
@@ -535,9 +537,10 @@ private:
             if (sstlog.is_enabled(seastar::log_level::trace)) {
                 sstlog.trace("index {} bound {}: page:", fmt::ptr(this), fmt::ptr(&bound));
                 logalloc::reclaim_lock rl(_region);
-                for (auto&& e : bound.current_list->_entries) {
+                for (size_t i = 0; i < bound.current_list->_entries.size(); ++i) {
+                    auto& e = bound.current_list->_entries[i];
                     auto dk = dht::decorate_key(*_sstable->_schema,
-                        e.get_key().to_partition_key(*_sstable->_schema));
+                        bound.current_list->get_key(i).to_partition_key(*_sstable->_schema));
                     sstlog.trace("  {} -> {}", dk, e.position());
                 }
             }
@@ -664,9 +667,13 @@ private:
         return advance_to_page(bound, summary_idx).then([this, &bound, pos, summary_idx] {
             sstlog.trace("index {}: old page index = {}", fmt::ptr(this), bound.current_index_idx);
             auto i = _alloc_section(_region, [&] {
-                auto& entries = bound.current_list->_entries;
-                return std::lower_bound(std::begin(entries) + bound.current_index_idx, std::end(entries), pos,
-                    index_comparator(*_sstable->_schema));
+                auto& page = *bound.current_list;
+                auto& s = *_sstable->_schema;
+                auto r = std::views::iota(bound.current_index_idx, page._entries.size());
+                auto it = std::ranges::partition_point(r, [&] (int idx) {
+                    return index_entry_tri_cmp(s, page, idx, pos) < 0;
+                });
+                return page._entries.begin() + bound.current_index_idx + std::ranges::distance(r.begin(), it);
             });
             // i is valid until next allocation point
             auto& entries = bound.current_list->_entries;
@@ -880,8 +887,8 @@ public:
     // Can be called only when partition_data_ready().
     std::optional<partition_key> get_partition_key() override {
         return _alloc_section(_region, [this] {
-            index_entry& e = current_partition_entry(_lower_bound);
-            return e.get_key().to_partition_key(*_sstable->_schema);
+            return current_page(_lower_bound).get_key(_lower_bound.current_index_idx)
+                .to_partition_key(*_sstable->_schema);
         });
     }
 
@@ -987,9 +994,9 @@ public:
                 return make_ready_future<bool>(false);
             }
             return read_partition_data().then([this, key] {
-                index_comparator cmp(*_sstable->_schema);
                 bool found = _alloc_section(_region, [&] {
-                    return cmp(key, current_partition_entry(_lower_bound)) == 0;
+                    auto& page = current_page(_lower_bound);
+                    return index_entry_tri_cmp(*_sstable->_schema, page, _lower_bound.current_index_idx, key) == 0;
                 });
                 return make_ready_future<bool>(found);
             });

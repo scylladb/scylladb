@@ -26,10 +26,13 @@ static void add_entry(logalloc::region& r,
     as(r, [&] {
         with_allocator(r.allocator(), [&] {
             sstables::key sst_key = sstables::key::from_partition_key(s, key);
-            page._entries.push_back(index_entry(
-                    managed_bytes(sst_key.get_bytes()),
-                    position,
-                    managed_ref<promoted_index>()));
+            auto key_offset = page._key_storage.size();
+            auto old_storage = std::move(page._key_storage);
+            page._key_storage = managed_bytes(managed_bytes::initialized_later(), key_offset + sst_key.get_bytes().size());
+            auto out = managed_bytes_mutable_view(page._key_storage);
+            write_fragmented(out, managed_bytes_view(old_storage));
+            write_fragmented(out, single_fragmented_view(bytes_view(sst_key)));
+            page._entries.push_back(index_entry{dht::raw_token_opt()->value, position, key_offset});
         });
     });
 }

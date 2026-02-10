@@ -213,40 +213,18 @@ using promoted_index = parsed_promoted_index_entry;
 
 // A partition index element.
 // Allocated inside LSA.
-class index_entry {
-private:
-    managed_bytes _key;
-    mutable dht::raw_token_opt _token;
-    uint64_t _position;
+struct [[gnu::packed]] index_entry {
+    mutable int64_t raw_token;
+    uint64_t data_file_offset;
+    uint32_t key_offset;
 
-public:
-
-    key_view get_key() const {
-        return key_view{_key};
-    }
-
-    // May allocate so must be called under allocating_section.
-    decorated_key_view get_decorated_key(const schema& s) const {
-        if (!_token) {
-            _token = dht::raw_token(s.get_partitioner().get_token(get_key()));
-        }
-        return decorated_key_view(dht::token(*_token), get_key());
-    }
-
-    uint64_t position() const { return _position; };
-
-    index_entry(managed_bytes&& key, uint64_t position)
-        : _key(std::move(key))
-        , _position(position)
-    {}
-
-    index_entry(index_entry&&) = default;
-    index_entry& operator=(index_entry&&) = default;
-
-    size_t external_memory_usage() const {
-        return _key.external_memory_usage();
-    }
+    uint64_t position() const { return data_file_offset; }
+    dht::raw_token token() const { return dht::raw_token(raw_token); }
 };
+
+// Required for optimized LSA migration of storage of managed_vector.
+static_assert(std::is_trivially_move_assignable_v<index_entry>);
+static_assert(std::is_trivially_move_assignable_v<parsed_promoted_index_entry>);
 
 // A partition index page.
 //
@@ -255,6 +233,7 @@ public:
 class partition_index_page {
 public:
     lsa::chunked_managed_vector<index_entry> _entries;
+    managed_bytes _key_storage;
 
     // Stores promoted index information of index entries.
     // The i-th element corresponds to the i-th entry in _entries.
@@ -274,13 +253,7 @@ public:
     size_t size() const { return _entries.size(); }
 
     stop_iteration clear_gently() {
-        while (!_entries.empty()) {
-            _entries.pop_back();
-             if (need_preempt()) {
-                return stop_iteration::no;
-            }
-        }
-        _promoted_indexes.clear();
+        // Vectors have trivial storage, so are fast to destroy.
         return stop_iteration::yes;
     }
 
@@ -319,12 +292,28 @@ public:
         return {};
     }
 
+    key_view get_key(size_t i) const {
+        auto start = _entries[i].key_offset;
+        auto end = i + 1 < _entries.size() ? _entries[i + 1].key_offset : _key_storage.size();
+        auto v = managed_bytes_view(_key_storage).prefix(end);
+        v.remove_prefix(start);
+        return key_view(v);
+    }
+
+    decorated_key_view get_decorated_key(const schema& s, size_t i) const {
+        auto key = get_key(i);
+        auto t = _entries[i].token();
+        if (!t) {
+            t = dht::raw_token(s.get_partitioner().get_token(key));
+            _entries[i].raw_token = t.value;
+        }
+        return decorated_key_view(dht::token(t), key);
+    }
+
     size_t external_memory_usage() const {
         size_t size = _entries.external_memory_usage();
         size += _promoted_indexes.external_memory_usage();
-        for (auto&& e : _entries) {
-            size += e.external_memory_usage();
-        }
+        size += _key_storage.external_memory_usage();
         return size;
     }
 };
