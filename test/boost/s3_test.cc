@@ -1023,9 +1023,19 @@ BOOST_AUTO_TEST_CASE(part_size_calculation_test) {
         BOOST_REQUIRE(parts <= 10000);
     }
     {
-        auto [parts, size] = s3::calc_part_size(10_TiB, 0);
-        BOOST_REQUIRE(parts <= 10000);
-        BOOST_REQUIRE(size >= 50_MiB);
+        BOOST_REQUIRE_EXCEPTION(s3::calc_part_size(50_TiB, 0), std::runtime_error, [](const std::runtime_error& e) {
+            return std::string(e.what()).starts_with("object size too large: 54975581388800 is larger than maximum S3 object size: 53687091200000");
+        });
+    }
+    {
+        BOOST_REQUIRE_EXCEPTION(s3::calc_part_size(1_TiB, 5_GiB + 1), std::runtime_error, [](const std::runtime_error& e) {
+            return std::string(e.what()).starts_with("part_size too large: 5368709121 is larger than maximum part size: 5368709120");
+        });
+    }
+    {
+        auto [parts, size] = s3::calc_part_size(5_TiB, 0);
+        BOOST_REQUIRE_EQUAL(parts, 9987);
+        BOOST_REQUIRE_EQUAL(size, 525_MiB);
     }
     {
         auto [parts, size] = s3::calc_part_size(5_MiB * 10000, 5_MiB);
