@@ -684,10 +684,6 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (!sys_ks.bootstrap_complete()) {
         // If bootstrap did not complete yet, there is no group 0 to setup at this point
         // -- it will be done after we start gossiping, in `setup_group0`.
-        // Because of this we already want to disable schema pulls so they're done exclusively
-        // through group 0 from the first moment we join the cluster.
-        group0_log.info("Disabling migration_manager schema pulls because Raft is enabled and we're bootstrapping.");
-        co_await mm.disable_schema_pulls();
         co_return;
     }
 
@@ -699,12 +695,8 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
-
-        group0_log.info("Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
-        co_await mm.disable_schema_pulls();
     } else if (qp.db().get_config().recovery_leader.is_set()) {
-        group0_log.info("Disabling migration_manager schema pulls in the Raft-based recovery procedure");
-        co_await mm.disable_schema_pulls();
+        // Recovery mode, no group0 to start
     } else {
         throw std::runtime_error("The node is bootstrapped already but Raft group0 is not present. This means that you try to upgrade"
             " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");

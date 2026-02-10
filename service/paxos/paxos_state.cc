@@ -367,14 +367,6 @@ schema_ptr paxos_store::try_get_paxos_state_schema(const schema& s) const {
     return state_table_id ? tables.get_table(state_table_id).schema() : nullptr;
 }
 
-void paxos_store::check_raft_is_enabled(const schema& s) const {
-    if (!_mm.use_raft()) {
-        throw std::runtime_error(format("Cannot create paxos state table for {}.{} "
-            "because raft-based schema management is not enabled.",
-            s.ks_name(), s.cf_name()));
-    }
-}
-
 future<> paxos_store::create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout) {
     auto retries = _mm.get_concurrent_ddl_retries();
     while (true) {
@@ -413,7 +405,6 @@ future<> paxos_store::ensure_initialized(const schema& s, db::timeout_clock::tim
     if (try_get_paxos_state_schema(s)) {
         return make_ready_future<>();
     }
-    check_raft_is_enabled(s);
     paxos_state::logger.info("Creating paxos state table for \"{}.{}\", timeout {} millis", 
         s.ks_name(), s.cf_name(), duration_cast<std::chrono::milliseconds>(timeout - lowres_clock::now()).count());
     return container().invoke_on(0, &paxos_store::create_paxos_state_table, std::ref(s), timeout);
@@ -501,7 +492,6 @@ future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::time
         co_return state_schema;
     }
 
-    check_raft_is_enabled(s);
     paxos_state::logger.debug("get_paxos_state_schema for {}.{}({}), paxos state table doesn't exist, "
         "running group0.read_barrier", s.ks_name(), s.cf_name(), s.id());
     abort_on_expiry aoe(timeout);

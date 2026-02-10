@@ -2232,7 +2232,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Setup group0 early in case the node is bootstrapped already and the group exists.
             // Need to do it before allowing incoming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
-            // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             // The call to setup_group0_if_exists() above guarantees that, if group0 is
