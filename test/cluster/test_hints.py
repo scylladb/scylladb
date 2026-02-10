@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import IPAddress, ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import ScyllaMetricsClient, inject_error
+from test.pylib.rest_client import ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
@@ -29,9 +29,9 @@ async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, me
     metrics = await client.query(server_ip)
     return metrics.get(f"scylla_hints_manager_{metric_name}")
 
-# Creates a sync point for ALL hosts.
-def create_sync_point(node: ServerInfo) -> str:
-    return requests.post(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point/").json()
+async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress) -> str:
+    response = await client.post_json("/hinted_handoff/sync_point", host=server_ip, port=10_000)
+    return response
 
 def await_sync_point(node: ServerInfo, sync_point: str, timeout: int) -> bool:
     params = {
@@ -142,7 +142,7 @@ async def test_sync_point(manager: ManagerClient):
         deadline = time.time() + 30
         await wait_for(check_no_hints_in_progress_node1, deadline)
 
-        sync_point1 = create_sync_point(node1)
+        sync_point1 = await create_sync_point(manager.api.client, node1.ip_addr)
 
         await manager.server_start(node2.server_id)
         await manager.server_sees_other_server(node1.ip_addr, node2.ip_addr)
@@ -198,7 +198,8 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
         await manager.servers_see_each_other([server1, server2, server3])
 
         # Record the current position of hints so that we can wait for them later
-        sync_points = [create_sync_point(srv) for srv in (server1, server2)]
+        sync_points = await asyncio.gather(*[create_sync_point(manager.api.client, srv.ip_addr) for srv in (server1, server2)])
+        sync_points = list(sync_points)
 
         async with asyncio.TaskGroup() as tg:
             coord = await get_topology_coordinator(manager)
@@ -262,7 +263,7 @@ async def test_hints_consistency_during_replace(manager: ManagerClient):
         # Write 100 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
         for i in range(100):
             await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
-        sync_point = create_sync_point(servers[0])
+        sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
 
         await manager.server_add(replace_cfg=ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True))
 
@@ -291,9 +292,8 @@ async def test_draining_hints(manager: ManagerClient):
     for i in range(1000):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
-    sync_point = create_sync_point(s1)
+    sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
     await manager.server_start(s2.server_id)
-
 
     async def wait():
         assert await_sync_point(s1, sync_point, 60)
@@ -326,7 +326,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     for i in range(1000):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
-    sync_point = create_sync_point(s1)
+    sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
     await manager.remove_node(s1.server_id, s2.server_id)
@@ -383,7 +383,7 @@ async def test_hint_to_pending(manager: ManagerClient):
 
         await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", False)
         await manager.server_start(servers[1].server_id)
-        sync_point = create_sync_point(servers[0])
+        sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
 
         await manager.api.enable_injection(servers[0].ip_addr, "pause_after_streaming_tablet", False)
         tablet_migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "t", host_ids[1], 0, host_ids[0], 0, 0))
