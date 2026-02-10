@@ -26,7 +26,7 @@ static raft_cluster<clock_type> get_default_cluster(test_case test_config) {
 SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     raft_cluster<std::chrono::steady_clock> cluster(
             test_case { .nodes = 1 },
-            [](raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher) {
+            [](raft::server_id id, const raft::log_entry_ptr_list& commands, lw_shared_ptr<hasher_int> hasher) {
                 return 0;
             },
             0,

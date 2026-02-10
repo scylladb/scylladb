@@ -59,12 +59,13 @@ int rand() noexcept {
     return dist(gen);
 }
 
-size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
+size_t apply_changes(raft::server_id id, const raft::log_entry_ptr_list& commands,
         lw_shared_ptr<hasher_int> hasher) {
     size_t entries = 0;
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
-    for (auto&& d : commands) {
+    for (auto&& entry : commands) {
+        auto&& d = std::get<raft::command>(entry->data);
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, std::type_identity<int>());
         if (n != dummy_command) {

@@ -51,14 +51,14 @@ public:
     {
     }
 
-    future<> apply(std::vector<raft::command_cref> command) override {
+    future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
-
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             utils::chunked_vector<frozen_mutation> muts;
             muts.reserve(command.size());
-            for (const auto& c: command) {
+            for (const auto& entry: command) {
+                auto&& c = std::get<raft::command>(entry->data);
                 auto is = ser::as_input_stream(c);
                 auto cmd = ser::deserialize(is, std::type_identity<raft_command>{});
                 muts.push_back(std::move(cmd.mutation));

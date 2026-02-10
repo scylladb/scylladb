@@ -27,10 +27,10 @@ struct fsm_output {
         size_t preserved_log_entries;
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
-    std::vector<log_entry_ptr> log_entries;
+    log_entry_ptr_list log_entries;
     std::vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
-    std::vector<log_entry_ptr> committed;
+    log_entry_ptr_list committed;
     std::optional<applied_snapshot> snp;
     // In a typical scenario contains only one item, occasionally more.
     utils::small_vector<snapshot_id, 1> snps_to_drop;

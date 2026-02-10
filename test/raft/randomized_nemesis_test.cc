@@ -131,9 +131,10 @@ public:
     impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
         : _id(id), _val(M::init), _snapshots(snapshots) {}
 
-    future<> apply(std::vector<raft::command_cref> cmds) override {
+    future<> apply(raft::log_entry_ptr_list cmds) override {
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
-            for (auto& cref : cmds) {
+            for (const auto& entry : cmds) {
+                const auto& cref = std::get<raft::command>(entry->data);
                 _gate.check();
 
                 auto is = ser::as_input_stream(cref);

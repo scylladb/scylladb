@@ -910,7 +910,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             .prev_log_idx = prev_idx,
             .prev_log_term = prev_term.value(),
             .leader_commit_idx = _commit_idx,
-            .entries = std::vector<log_entry_ptr>()
+            .entries = log_entry_ptr_list()
         };
 
         if (next_idx) {

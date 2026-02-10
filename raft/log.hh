@@ -190,7 +190,7 @@ public:
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
-    index_t maybe_append(std::vector<log_entry_ptr>&& entries);
+    index_t maybe_append(log_entry_ptr_list&& entries);
 
     friend fmt::formatter<log>;
 

@@ -245,7 +245,7 @@ struct log_entry {
 };
 
 using log_entry_ptr = seastar::lw_shared_ptr<const log_entry>;
-
+using log_entry_ptr_list = std::vector<log_entry_ptr>;
 struct error : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -353,7 +353,7 @@ struct append_request {
     index_t leader_commit_idx;
     // Log entries to store (empty vector for heartbeat; may send more
     // than one entry for efficiency).
-    std::vector<log_entry_ptr> entries;
+    log_entry_ptr_list entries;
 
     append_request copy() const {
         append_request result;
@@ -555,7 +555,7 @@ public:
     // Raft owns the data since it may be still replicating.
     // Raft will not call another apply until the returned future
     // will not become ready.
-    virtual future<> apply(std::vector<command_cref> command) = 0;
+    virtual future<> apply(log_entry_ptr_list command) = 0;
 
     // The function suppose to take a snapshot of a state machine
     // To be called during log compaction or when a leader brings
@@ -778,7 +778,7 @@ public:
     // but internally all writes should be serialized into forming
     // one contiguous log that holds entries in order of the
     // function invocation.
-    virtual future<> store_log_entries(const std::vector<log_entry_ptr>& entries) = 0;
+    virtual future<> store_log_entries(const log_entry_ptr_list& entries) = 0;
 
     // Load saved Raft log. Called during Raft server
     // initialization only, should not run in parallel with store.

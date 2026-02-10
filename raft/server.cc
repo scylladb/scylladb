@@ -148,7 +148,7 @@ private:
     struct trigger_snapshot_msg{};
 
     using applier_fiber_message = std::variant<
-        std::vector<log_entry_ptr>,
+        log_entry_ptr_list,
         snapshot_descriptor,
         removed_from_config,
         trigger_snapshot_msg>;
@@ -234,7 +234,7 @@ private:
     server_requests _new_server_requests;
 
     // Called to commit entries (on a leader or otherwise).
-    void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
+    void notify_waiters(std::map<index_t, op_status>& waiters, const log_entry_ptr_list& entries);
 
     // Drop waiter that we lost track of, can happen due to a snapshot transfer,
     // or a leader removed from cluster while some entries added on it are uncommitted.
@@ -941,7 +941,7 @@ void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply rea
 }
 
 void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
-        const std::vector<log_entry_ptr>& entries) {
+        const log_entry_ptr_list& entries) {
     index_t commit_idx = entries.back()->idx;
     index_t first_idx = entries.front()->idx;
 
@@ -1363,7 +1363,7 @@ future<> server_impl::applier_fiber() {
             auto v = co_await _apply_entries.pop_eventually();
 
             co_await std::visit(make_visitor(
-            [this] (std::vector<log_entry_ptr>& batch) -> future<> {
+            [this] (log_entry_ptr_list& batch) -> future<> {
                 if (batch.empty()) {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
                     co_return;
@@ -1376,7 +1376,7 @@ future<> server_impl::applier_fiber() {
                 // notification and snapshot application in the same fiber
                 notify_waiters(_awaited_commits, batch);
 
-                std::vector<command_cref> commands;
+                log_entry_ptr_list commands;
                 commands.reserve(batch.size());
 
                 const index_t last_idx = batch.back()->idx;
@@ -1385,8 +1385,7 @@ future<> server_impl::applier_fiber() {
 
                 std::ranges::copy(
                        batch |
-                       std::views::filter([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
-                       std::views::transform([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
+                       std::views::filter([] (const log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) ,
                        std::back_inserter(commands));
 
                 const auto size = commands.size();
