@@ -134,12 +134,17 @@ async def test_sync_point(manager: ManagerClient):
         # Mutations need to be applied to hinted handoff's commitlog before we create the sync point.
         # Otherwise, the sync point will correspond to no hints at all.
 
-        async def check_no_hints_in_progress_node1() -> bool:
-            hints = await get_hint_metrics(manager.metrics, node1.ip_addr, "size_of_hints_in_progress")
-            return hints == 0
+        async def check_written_hints(min_count: int) -> bool:
+            errors = await get_hint_metrics(manager.metrics, node1.ip_addr, "errors")
+            assert errors == 0, "Writing hints to disk failed"
+
+            hints = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+            if hints >= min_count:
+                return True
+            return None
 
         deadline = time.time() + 30
-        await wait_for(check_no_hints_in_progress_node1, deadline)
+        await wait_for(lambda: check_written_hints(2 * mutation_count), deadline)
 
         sync_point1 = await create_sync_point(manager.api.client, node1.ip_addr)
 
