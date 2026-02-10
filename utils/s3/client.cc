@@ -77,16 +77,6 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 namespace s3 {
 
 static logging::logger s3l("s3");
-// "Each part must be at least 5 MB in size, except the last part."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr size_t aws_minimum_part_size = 5_MiB;
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
-static constexpr size_t aws_maximum_part_size = 5_GiB;
-// "Part numbers can be any number from 1 to 10,000, inclusive."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr unsigned aws_maximum_parts_in_piece = 10'000;
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
-static constexpr size_t aws_maximum_object_size = aws_maximum_parts_in_piece * aws_maximum_part_size;
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
