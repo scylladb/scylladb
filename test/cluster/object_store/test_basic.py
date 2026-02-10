@@ -19,30 +19,6 @@ from test.cluster.util import new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-def create_ks_and_cf(cql, object_storage):
-    ks = 'test_ks'
-    cf = 'test_cf'
-
-    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                      'replication_factor': '1'})
-    storage_opts = format_tuples(type=f'{object_storage.type}',
-                                 endpoint=object_storage.address,
-                                 bucket=object_storage.bucket_name)
-
-    cql.execute((f"CREATE KEYSPACE {ks} WITH"
-                  f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-    cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
-
-    rows = [('0', 'zero'),
-            ('1', 'one'),
-            ('2', 'two')]
-    for row in rows:
-        cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
-        cql.execute(cql_fmt.format(ks, cf, *row))
-
-    return ks, cf
-
-
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
 @pytest.mark.asyncio
 async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
