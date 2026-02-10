@@ -9,10 +9,28 @@ on:
 
 jobs:
   trigger-jenkins:
-    if: (github.event.comment.user.login != 'scylladbbot' && contains(github.event.comment.body, '@scylladbbot') && contains(github.event.comment.body, 'trigger-ci')) || github.event.label.name == 'conflicts'
+    if: (github.event_name == 'issue_comment' && github.event.comment.user.login != 'scylladbbot') || github.event.label.name == 'conflicts'
     runs-on: ubuntu-latest
     steps:
+      - name: Validate Comment Trigger
+        if: github.event_name == 'issue_comment'
+        id: verify_comment
+        shell: bash
+        run: |
+          BODY=$(cat << 'EOF'
+          ${{ github.event.comment.body }}
+          EOF
+          )
+          CLEAN_BODY=$(echo "$BODY" | grep -v '^[[:space:]]*>')
+
+          if echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
+            echo "trigger=true" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Trigger Scylla-CI-Route Jenkins Job
+        if: github.event_name == 'pull_request_target' || steps.verify_comment.outputs.trigger == 'true'
         env:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
