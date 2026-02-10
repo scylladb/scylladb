@@ -30,6 +30,11 @@ def format_tuples(tuples=None, **kwargs):
     return f'{{ {body} }}'
 
 
+def keyspace_options(object_storage, rf=1):
+    storage_opts = format_tuples(type=f'{object_storage.type}', endpoint=object_storage.address, bucket=object_storage.bucket_name)
+    return f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND STORAGE = {storage_opts}"
+
+
 class S3_Server:
     def __init__(self, tempdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
         self.tempdir = tempdir

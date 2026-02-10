@@ -11,9 +11,10 @@ from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import reconnect_driver
-from test.cluster.object_store.conftest import format_tuples
+from test.cluster.object_store.conftest import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
+from test.cluster.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,9 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
     cql = manager.get_cql()
     workdir = await manager.server_get_workdir(server.server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    if True:
-        ks, cf = create_ks_and_cf(cql, object_storage)
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
         # Sanity check that the path is constructed correctly
@@ -75,7 +77,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
         # does it like '{<options>}' so strip the corner branches and spaces for check
         assert f"{{'type': '{object_storage.type}', 'bucket': '{object_storage.bucket_name}', 'endpoint': '{object_storage.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         rows = {x.name: x.value for x in res}
         assert len(rows) > 0, 'Test table is empty'
 
@@ -83,7 +85,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
 
         # Check that the ownership table is populated properly
         res = cql.execute("SELECT * FROM system.sstables;")
-        tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
+        tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'").one()
         for row in res:
             assert row.owner == tid.id, \
                 f'Unexpected entry owner in registry: {row.owner}'
@@ -96,12 +98,12 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
         # Shouldn't be recreated by populator code
         assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory resurrected"
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = {x.name: x.value for x in res}
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
         print('Drop table')
-        cql.execute(f"DROP TABLE {ks}.{cf};")
+        cql.execute(f"DROP TABLE {ks}.test;")
         # Check that the ownership table is de-populated
         res = cql.execute("SELECT * FROM system.sstables;")
         rows = "\n".join(f"{row.owner} {row.status}" for row in res)
@@ -122,8 +124,9 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    if True:
-        ks, cf = create_ks_and_cf(cql, object_storage)
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         await manager.api.flush_keyspace(server.ip_addr, ks)
         # Mark the sstables as "removing" to simulate the problem
@@ -139,7 +142,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
         await manager.server_restart(server.server_id)
         cql = await reconnect_driver(manager)
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = {x.name: x.value for x in res}
         # Must be empty as no sstables should have been picked up
         assert not have_res, f'Sstables not cleaned, got {have_res}'
@@ -164,10 +167,11 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    if True:
-        ks, cf = create_ks_and_cf(cql, object_storage)
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         rows = {x.name: x.value for x in res}
         assert len(rows) > 0, 'Test table is empty'
 
@@ -183,7 +187,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
         await manager.server_restart(server.server_id)
         cql = await reconnect_driver(manager)
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = {x.name: x.value for x in res}
         # Quarantine entries must have been processed normally
         assert have_res == rows, f'Unexpected table content: {have_res}'
@@ -227,9 +231,11 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     cql = manager.get_cql()
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
-    if True:
-        ks, cf = create_ks_and_cf(cql, object_storage)
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
+
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         rows = {x.name: x.value for x in res}
 
         with scylla_inject_error(cql, "s3_client_fail_authorization"):
@@ -250,7 +256,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
         await manager.server_restart(server.server_id)
         cql = await reconnect_driver(manager)
 
-        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = { x.name: x.value for x in res }
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
