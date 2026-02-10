@@ -10,13 +10,13 @@ import logging
 import requests
 import re
 
-from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
+from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import IPAddress, ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error
+from test.pylib.rest_client import ScyllaMetricsClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
@@ -26,14 +26,9 @@ from test.topology.util import get_topology_coordinator, find_server_by_host_id,
 
 logger = logging.getLogger(__name__)
 
-def get_hint_manager_metric(server: ServerInfo, metric_name: str) -> int:
-    result = 0
-    metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
-    pattern = re.compile(f"^scylla_hints_manager_{metric_name}")
-    for metric in metrics.split('\n'):
-        if pattern.match(metric) is not None:
-            result += int(float(metric.split()[1]))
-    return result
+async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, metric_name: str):
+    metrics = await client.query(server_ip)
+    return metrics.get(f"scylla_hints_manager_{metric_name}")
 
 # Creates a sync point for ALL hosts.
 def create_sync_point(node: ServerInfo) -> str:
@@ -67,10 +62,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
 
         await manager.server_stop_gracefully(servers[1].server_id)
 
-        def get_hints_written_count(server):
-            return get_hint_manager_metric(server, "written")
-
-        hints_before = get_hints_written_count(servers[0])
+        hints_before = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
 
         # Some of the inserts will be targeted to the dead node.
         # The coordinator doesn't have live targets to send the write to, but it should write a hint.
@@ -78,7 +70,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
             await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i+1})", consistency_level=ConsistencyLevel.ANY))
 
         # Verify hints are written
-        hints_after = get_hints_written_count(servers[0])
+        hints_after = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
         assert hints_after > hints_before
 
         # For dropping the keyspace
@@ -144,9 +136,9 @@ async def test_sync_point(manager: ManagerClient):
         # Mutations need to be applied to hinted handoff's commitlog before we create the sync point.
         # Otherwise, the sync point will correspond to no hints at all.
 
-        # We need to wrap the function in an async function to make `wait_for` be able to use it below.
         async def check_no_hints_in_progress_node1() -> bool:
-            return get_hint_manager_metric(node1, "size_of_hints_in_progress") == 0
+            hints = await get_hint_metrics(manager.metrics, node1.ip_addr, "size_of_hints_in_progress")
+            return hints == 0
 
         deadline = time.time() + 30
         await wait_for(check_no_hints_in_progress_node1, deadline)
