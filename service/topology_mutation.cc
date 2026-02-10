@@ -270,8 +270,8 @@ topology_mutation_builder& topology_mutation_builder::resume_rf_change_request(c
     }
 }
 
-topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
-    return apply_atomic("upgrade_state", ::format("{}", value));
+topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
+    return apply_atomic("upgrade_state", "done");
 }
 
 topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<sstring>& features) {

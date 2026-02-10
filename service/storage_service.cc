@@ -1429,7 +1429,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
     // Set the enabled_features field to our features.
     topology_mutation_builder builder(write_timestamp);
     builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
-            .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
+            .set_upgrade_state_done(); // Start right in the topology-on-raft mode
     auto enable_features_mutation = builder.build();
     insert_join_request_mutations.push_back(std::move(enable_features_mutation));
 

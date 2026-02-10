@@ -3387,12 +3387,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.tablet_balancing_enabled = true;
         }
 
-        if (some_row.has("upgrade_state")) {
-            ret.upgrade_state = service::upgrade_state_from_string(some_row.get_as<sstring>("upgrade_state"));
-        } else {
-            ret.upgrade_state = service::topology::upgrade_state_type::not_upgraded;
-        }
-
         if (some_row.has("ignore_nodes")) {
             ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
         }
