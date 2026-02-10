@@ -63,7 +63,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
         }
     }
 
-    if (!auth::legacy_mode(qp)) {
+    {
         const auto& as = *state.get_client_state().get_auth_service();
         co_await auth::revoke_all(as, auth::make_data_resource(_keyspace), mc);
         co_await auth::revoke_all(as, auth::make_functions_resource(_keyspace), mc);

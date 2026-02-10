@@ -19,8 +19,6 @@ constexpr std::string_view allow_all_authorizer_name("org.apache.cassandra.auth.
 static const class_registrator<
     authorizer,
     allow_all_authorizer,
-    cql3::query_processor&,
-    ::service::raft_group0_client&,
-    ::service::migration_manager&> registration("org.apache.cassandra.auth.AllowAllAuthorizer");
+    cql3::query_processor&> registration("org.apache.cassandra.auth.AllowAllAuthorizer");
 
 }

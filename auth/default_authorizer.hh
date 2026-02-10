@@ -27,14 +27,12 @@ namespace auth {
 class default_authorizer : public authorizer {
     cql3::query_processor& _qp;
 
-    ::service::migration_manager& _migration_manager;
-
     abort_source _as{};
 
     future<> _finished{make_ready_future<>()};
 
 public:
-    default_authorizer(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    default_authorizer(cql3::query_processor&);
 
     ~default_authorizer();
 
@@ -59,16 +57,6 @@ public:
     virtual const resource_set& protected_resources() const override;
 
 private:
-    future<> start_legacy();
-
-    bool legacy_metadata_exists() const;
-
-    future<> revoke_all_legacy(const resource&);
-
-    future<bool> legacy_any_granted() const;
-
-    future<> migrate_legacy_metadata();
-
     future<> modify(std::string_view, permission_set, const resource&, std::string_view, ::service::group0_batch&);
 
     void revoke_all_keyspace_resources(const resource& ks_resource, ::service::group0_batch& mc);

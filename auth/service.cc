@@ -64,11 +64,9 @@ static const sstring superuser_col_name("super");
 static logging::logger log("auth_service");
 
 class auth_migration_listener final : public ::service::migration_listener {
-    authorizer& _authorizer;
-    cql3::query_processor& _qp;
 
 public:
-    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
+    explicit auth_migration_listener() {
     }
 
 private:
@@ -87,63 +85,19 @@ private:
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
-        });
-
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
-        });
+        // In auth v2, revoke is part of schema change statement execution.
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_data_resource(ks_name, cf_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
-        });
+        // In auth v2, revoke is part of schema change statement execution.
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, function_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
-        });
+        // In auth v2, revoke is part of schema change statement execution.
     }
     void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, aggregate_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
-        });
+        // In auth v2, revoke is part of schema change statement execution.
     }
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
@@ -175,7 +129,7 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
+            , _migration_listener(std::make_unique<auth_migration_listener>())
             , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
             , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
@@ -198,7 +152,7 @@ service::service(
                       qp,
                       g0,
                       mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
+                      create_object<authorizer>(sc.authorizer_java_name, qp),
                       create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache),
                       create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
                       used_by_maintenance_socket) {
@@ -233,9 +187,6 @@ future<> service::create_legacy_keyspace_if_missing(::service::migration_manager
 }
 
 future<> service::start(::service::migration_manager& mm, db::system_keyspace& sys_ks) {
-    auto auth_version = co_await sys_ks.get_auth_version();
-    // version is set in query processor to be easily available in various places we call auth::legacy_mode check.
-    _qp.auth_version = auth_version;
     if (this_shard_id() == 0) {
         co_await _cache.load_all();
     }
@@ -377,11 +328,6 @@ future<> service::create_role(std::string_view name,
         ep = std::current_exception();
     }
     if (ep) {
-        // Rollback only in legacy mode as normally mutations won't be
-        // applied in case exception is raised
-        if (legacy_mode(_qp)) {
-            co_await underlying_role_manager().drop(name, mc);
-        }
         std::rethrow_exception(std::move(ep));
     }
 }
@@ -860,85 +806,6 @@ future<std::vector<permission_details>> list_filtered_permissions(
 
 future<> commit_mutations(service& ser, ::service::group0_batch&& mc) {
     return ser.commit_mutations(std::move(mc));
-}
-
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
-    // FIXME: if this function fails it may leave partial data in the new tables
-    // that should be cleared
-    auto gen = [&sys_ks] (api::timestamp_type ts) -> ::service::mutations_generator {
-        auto& qp = sys_ks.query_processor();
-        for (const auto& cf_name : std::vector<sstring>{
-                "roles", "role_members", "role_attributes", "role_permissions"}) {
-            schema_ptr schema;
-            try {
-                schema = qp.db().find_schema(meta::legacy::AUTH_KS, cf_name);
-            } catch (const data_dictionary::no_such_column_family&) {
-                continue; // some tables might not have been created if they were not used
-            }
-
-            std::vector<sstring> col_names;
-            for (const auto& col : schema->all_columns()) {
-                col_names.push_back(col.name_as_cql_string());
-            }
-            sstring val_binders_str = "?";
-            for (size_t i = 1; i < col_names.size(); ++i) {
-                val_binders_str += ", ?";
-            }
-
-            std::vector<mutation> collected;
-            // use longer than usual timeout as we scan the whole table
-            // but not infinite or very long as we want to fail reasonably fast
-            const auto t = 5min;
-            const timeout_config tc{t, t, t, t, t, t, t};
-            ::service::client_state cs(::service::client_state::internal_tag{}, tc);
-            ::service::query_state qs(cs, empty_service_permit());
-
-            co_await qp.query_internal(
-                seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
-                db::consistency_level::ALL,
-                {},
-                1000,
-                [&qp, &cf_name, &col_names, &val_binders_str, &schema, ts, &collected] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
-                    std::vector<data_value_or_unset> values;
-                    for (const auto& col : schema->all_columns()) {
-                        if (row.has(col.name_as_text())) {
-                            values.push_back(
-                                    col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
-                        } else {
-                            values.push_back(unset_value{});
-                        }
-                    }
-                    auto muts = co_await qp.get_mutations_internal(
-                            seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
-                                    db::system_keyspace::NAME,
-                                    cf_name,
-                                    fmt::join(col_names, ", "),
-                                    val_binders_str),
-                            internal_distributed_query_state(),
-                            ts,
-                            std::move(values));
-                    if (muts.size() != 1) {
-                        on_internal_error(log,
-                                format("expecting single insert mutation, got {}", muts.size()));
-                    }
-
-                    collected.push_back(std::move(muts[0]));
-                    co_return stop_iteration::no;
-                },
-                std::move(qs));
-
-            for (auto& m : collected) {
-                co_yield std::move(m);
-            }
-        }
-        co_yield co_await sys_ks.make_auth_version_mutation(ts,
-                db::system_keyspace::auth_version_t::v2);
-    };
-    co_await announce_mutations_with_batching(g0,
-            start_operation_func,
-            std::move(gen),
-            as,
-            std::nullopt);
 }
 
 }

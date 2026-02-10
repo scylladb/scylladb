@@ -101,7 +101,7 @@ bool raft_service_level_distributed_data_accessor::is_v2() const {
 }
 
 bool raft_service_level_distributed_data_accessor::can_use_effective_service_level_cache() const {
-    return !auth::legacy_mode(_qp);
+    return true;
 }
 
 ::shared_ptr<service_level_controller::service_level_distributed_data_accessor> raft_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {

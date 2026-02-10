@@ -400,7 +400,4 @@ future<std::vector<permission_details>> list_filtered_permissions(
 // Finalizes write operations performed in auth by committing mutations via raft group0.
 future<> commit_mutations(service& ser, ::service::group0_batch&& mc);
 
-// Migrates data from old keyspace to new one which supports linearizable writes via raft.
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
-
 }
