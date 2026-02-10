@@ -63,48 +63,49 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
     cql = manager.get_cql()
     workdir = await manager.server_get_workdir(server.server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    if True:
+        ks, cf = create_ks_and_cf(cql, object_storage)
 
-    assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
-    # Sanity check that the path is constructed correctly
-    assert os.path.exists(os.path.join(workdir, 'data/system')), "Datadir is elsewhere"
+        assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
+        # Sanity check that the path is constructed correctly
+        assert os.path.exists(os.path.join(workdir, 'data/system')), "Datadir is elsewhere"
 
-    desc = cql.execute(f"DESCRIBE KEYSPACE {ks}").one().create_statement
-    # The storage_opts wraps options with '{ <options> }' while the DESCRIBE
-    # does it like '{<options>}' so strip the corner branches and spaces for check
-    assert f"{{'type': '{object_storage.type}', 'bucket': '{object_storage.bucket_name}', 'endpoint': '{object_storage.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
+        desc = cql.execute(f"DESCRIBE KEYSPACE {ks}").one().create_statement
+        # The storage_opts wraps options with '{ <options> }' while the DESCRIBE
+        # does it like '{<options>}' so strip the corner branches and spaces for check
+        assert f"{{'type': '{object_storage.type}', 'bucket': '{object_storage.bucket_name}', 'endpoint': '{object_storage.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        rows = {x.name: x.value for x in res}
+        assert len(rows) > 0, 'Test table is empty'
 
-    await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.flush_keyspace(server.ip_addr, ks)
 
-    # Check that the ownership table is populated properly
-    res = cql.execute("SELECT * FROM system.sstables;")
-    tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
-    for row in res:
-        assert row.owner == tid.id, \
-            f'Unexpected entry owner in registry: {row.owner}'
-        assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
+        # Check that the ownership table is populated properly
+        res = cql.execute("SELECT * FROM system.sstables;")
+        tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
+        for row in res:
+            assert row.owner == tid.id, \
+                f'Unexpected entry owner in registry: {row.owner}'
+            assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
-    print('Restart scylla')
-    await manager.server_restart(server.server_id)
-    cql = await reconnect_driver(manager)
+        print('Restart scylla')
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
 
-    # Shouldn't be recreated by populator code
-    assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory resurrected"
+        # Shouldn't be recreated by populator code
+        assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory resurrected"
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    have_res = {x.name: x.value for x in res}
-    assert have_res == rows, f'Unexpected table content: {have_res}'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = {x.name: x.value for x in res}
+        assert have_res == rows, f'Unexpected table content: {have_res}'
 
-    print('Drop table')
-    cql.execute(f"DROP TABLE {ks}.{cf};")
-    # Check that the ownership table is de-populated
-    res = cql.execute("SELECT * FROM system.sstables;")
-    rows = "\n".join(f"{row.owner} {row.status}" for row in res)
-    assert not rows, 'Unexpected entries in registry'
+        print('Drop table')
+        cql.execute(f"DROP TABLE {ks}.{cf};")
+        # Check that the ownership table is de-populated
+        res = cql.execute("SELECT * FROM system.sstables;")
+        rows = "\n".join(f"{row.owner} {row.status}" for row in res)
+        assert not rows, 'Unexpected entries in registry'
 
 @pytest.mark.asyncio
 async def test_garbage_collect(manager: ManagerClient, object_storage):
@@ -121,32 +122,33 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    if True:
+        ks, cf = create_ks_and_cf(cql, object_storage)
 
-    await manager.api.flush_keyspace(server.ip_addr, ks)
-    # Mark the sstables as "removing" to simulate the problem
-    res = cql.execute("SELECT * FROM system.sstables;")
-    for row in res:
-        sstable_entries.append((row.owner, row.generation))
-    print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
-    for owner, gen in sstable_entries:
-        cql.execute("UPDATE system.sstables SET status = 'removing'"
-                     f" WHERE owner = {owner} AND generation = {gen};")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Mark the sstables as "removing" to simulate the problem
+        res = cql.execute("SELECT * FROM system.sstables;")
+        for row in res:
+            sstable_entries.append((row.owner, row.generation))
+        print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
+        for owner, gen in sstable_entries:
+            cql.execute("UPDATE system.sstables SET status = 'removing'"
+                         f" WHERE owner = {owner} AND generation = {gen};")
 
-    print('Restart scylla')
-    await manager.server_restart(server.server_id)
-    cql = await reconnect_driver(manager)
+        print('Restart scylla')
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    have_res = {x.name: x.value for x in res}
-    # Must be empty as no sstables should have been picked up
-    assert not have_res, f'Sstables not cleaned, got {have_res}'
-    # Make sure objects also disappeared
-    objects = object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all()
-    print(f'Found objects: {[ objects ]}')
-    for o in objects:
-        for ent in sstable_entries:
-            assert not o.key.startswith(str(ent[1])), f'Sstable object not cleaned, found {o.key}'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = {x.name: x.value for x in res}
+        # Must be empty as no sstables should have been picked up
+        assert not have_res, f'Sstables not cleaned, got {have_res}'
+        # Make sure objects also disappeared
+        objects = object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all()
+        print(f'Found objects: {[ objects ]}')
+        for o in objects:
+            for ent in sstable_entries:
+                assert not o.key.startswith(str(ent[1])), f'Sstable object not cleaned, found {o.key}'
 
 
 @pytest.mark.asyncio
@@ -162,28 +164,29 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    if True:
+        ks, cf = create_ks_and_cf(cql, object_storage)
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        rows = {x.name: x.value for x in res}
+        assert len(rows) > 0, 'Test table is empty'
 
-    await manager.api.flush_keyspace(server.ip_addr, ks)
-    # Move the sstables into "quarantine"
-    res = cql.execute("SELECT * FROM system.sstables;")
-    assert len(list(res)) > 0, 'No entries in registry'
-    for row in res:
-        cql.execute("UPDATE system.sstables SET state = 'quarantine'"
-                     f" WHERE owner = {row.owner} AND generation = {row.generation};")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Move the sstables into "quarantine"
+        res = cql.execute("SELECT * FROM system.sstables;")
+        assert len(list(res)) > 0, 'No entries in registry'
+        for row in res:
+            cql.execute("UPDATE system.sstables SET state = 'quarantine'"
+                         f" WHERE owner = {row.owner} AND generation = {row.generation};")
 
-    print('Restart scylla')
-    await manager.server_restart(server.server_id)
-    cql = await reconnect_driver(manager)
+        print('Restart scylla')
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    have_res = {x.name: x.value for x in res}
-    # Quarantine entries must have been processed normally
-    assert have_res == rows, f'Unexpected table content: {have_res}'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = {x.name: x.value for x in res}
+        # Quarantine entries must have been processed normally
+        assert have_res == rows, f'Unexpected table content: {have_res}'
 
 
 @pytest.mark.asyncio
@@ -224,31 +227,32 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     cql = manager.get_cql()
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
-    ks, cf = create_ks_and_cf(cql, object_storage)
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    rows = {x.name: x.value for x in res}
+    if True:
+        ks, cf = create_ks_and_cf(cql, object_storage)
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        rows = {x.name: x.value for x in res}
 
-    with scylla_inject_error(cql, "s3_client_fail_authorization"):
-        print(f'Flush keyspace')
-        flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
-        print(f'Wait few seconds')
-        await asyncio.sleep(8)
+        with scylla_inject_error(cql, "s3_client_fail_authorization"):
+            print(f'Flush keyspace')
+            flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
+            print(f'Wait few seconds')
+            await asyncio.sleep(8)
 
-    print(f'Wait for flush to finish')
-    await flush
+        print(f'Wait for flush to finish')
+        await flush
 
-    print(f'Check the sstables table')
-    res = cql.execute("SELECT * FROM system.sstables;")
-    ssts = "\n".join(f"{row.owner} {row.generation} {row.status}" for row in res)
-    print(f'sstables:\n{ssts}')
+        print(f'Check the sstables table')
+        res = cql.execute("SELECT * FROM system.sstables;")
+        ssts = "\n".join(f"{row.owner} {row.generation} {row.status}" for row in res)
+        print(f'sstables:\n{ssts}')
 
-    print('Restart scylla')
-    await manager.server_restart(server.server_id)
-    cql = await reconnect_driver(manager)
+        print('Restart scylla')
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
 
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    have_res = { x.name: x.value for x in res }
-    assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = { x.name: x.value for x in res }
+        assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('config_with_full_url', [True, False])
