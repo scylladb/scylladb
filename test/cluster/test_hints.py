@@ -151,7 +151,7 @@ async def test_sync_point(manager: ManagerClient):
         await manager.server_start(node2.server_id)
         await manager.server_sees_other_server(node1.ip_addr, node2.ip_addr)
 
-        assert not (await await_sync_point(manager.api.client, node1.ip_addr, sync_point1, 30))
+        assert not (await await_sync_point(manager.api.client, node1.ip_addr, sync_point1, 3))
 
         await manager.server_start(node3.server_id)
         await manager.server_sees_other_server(node1.ip_addr, node3.ip_addr)
