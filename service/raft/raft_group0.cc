@@ -700,12 +700,6 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
 
-        // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
-        // migration_manager schema pulls.
-        if (co_await sys_ks.load_group0_upgrade_state() != "use_post_raft_procedures") {
-            throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
-                " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
-        }
         group0_log.info("Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
         co_await mm.disable_schema_pulls();
     } else if (qp.db().get_config().recovery_leader.is_set()) {

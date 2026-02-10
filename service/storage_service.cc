@@ -707,19 +707,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
-    if (topology.upgrade_state != topology::upgrade_state_type::done) {
-        co_return;
-    }
-
-    if (_qp.auth_version < db::system_keyspace::auth_version_t::v2) {
-        // auth-v2 gets enabled when consistent topology changes are enabled
-        // (see topology::upgrade_state_type::done above) as we use the same migration procedure
-        co_await _qp.container().invoke_on_all([] (cql3::query_processor& qp) {
-            qp.auth_version = db::system_keyspace::auth_version_t::v2;
-        });
-        co_await auth_cache().load_all();
-    }
-
     if (!_sl_controller.local().is_v2()) {
         co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
             sl_controller.upgrade_to_v2(_qp, _group0->client());
@@ -2238,12 +2225,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         }
         slogger.info("Raft-based recovery procedure - found group 0 with ID {}", g0_info.group0_id);
     } else if (_group0->joined_group0()) {
-        // We are a part of group 0.
-        if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
-            throw std::runtime_error(
-                    "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
-                    "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
-        }
         slogger.info("The node is already in group 0");
     } else if (_sys_ks.local().bootstrap_complete()) {
         // setup_group0_if_exist() should already throw in this case, so do internal error here.

@@ -612,6 +612,8 @@ public:
 
     future<std::optional<service::topology_features>> load_topology_features_state();
 
+    future<sstring> load_topology_upgrade_state();
+
     // Read CDC generation data with the given UUID as key.
     // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).
     future<cdc::topology_description> read_cdc_generation(utils::UUID id);

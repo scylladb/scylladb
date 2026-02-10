@@ -3414,6 +3414,16 @@ future<std::optional<service::topology_features>> system_keyspace::load_topology
     co_return decode_topology_features_state(std::move(rs));
 }
 
+future<sstring> system_keyspace::load_topology_upgrade_state() {
+    auto rs = co_await execute_cql(
+        format("SELECT upgrade_state FROM system.{} WHERE key = '{}' LIMIT 1", TOPOLOGY, TOPOLOGY));
+    SCYLLA_ASSERT(rs);
+    if (rs->empty()) {
+        co_return "not_upgraded";
+    }
+    co_return rs->one().get_as<sstring>("upgrade_state");
+}
+
 std::optional<service::topology_features> system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
     service::topology_features ret;
 

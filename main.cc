@@ -1465,6 +1465,26 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sys_ks.local().build_bootstrap_info().get();
 
+            if (sys_ks.local().bootstrap_complete()) {
+                // Check as early as possible if the cluster is fully upgraded to use Raft, since if it's not, then this node cannot be started with the current version.
+                if (sys_ks.local().load_group0_upgrade_state().get() != "use_post_raft_procedures") {
+                    throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
+                        " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
+                }
+
+                if (sys_ks.local().load_topology_upgrade_state().get() != "done") {
+                    throw std::runtime_error(
+                        "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
+                        "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
+                }
+
+                if (sys_ks.local().get_auth_version().get() != db::auth_version_t::v2) {
+                    throw std::runtime_error(
+                        "Cannot start - cluster is not yet upgraded to use auth v2 and this version does not support legacy auth. "
+                        "If you are trying to upgrade the node then first upgrade the cluster to use auth v2.");
+                }
+            }
+
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
