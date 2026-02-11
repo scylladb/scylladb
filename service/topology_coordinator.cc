@@ -2035,6 +2035,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         co_await coroutine::maybe_yield();
                         locator::global_tablet_id gid { base_table, tablet };
                         const auto& tinfo = tmap.get_tablet_info(tablet);
+                        // Log only the replicas involved in the transition (leaving/pending)
+                        // rather than all replicas, to focus on what's actually changing
                         auto leaving = locator::get_leaving_replica(tinfo, trinfo);
                         auto pending = trinfo.pending_replica;
                         rtlogger.info("Active transition: tablet={}, kind={}, stage={}, leaving={}, pending={}",
