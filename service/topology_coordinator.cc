@@ -2026,6 +2026,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // to check atomically with event.wait()
             if (!_tablets_ready) {
                 rtlogger.debug("Going to sleep with active tablet transitions");
+                // Log details of each active transition for debugging
+                auto tm = get_token_metadata_ptr();
+                for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
+                    const auto& tmap = tm->tablets().get_tablet_map(base_table);
+                    for (auto&& [tablet, trinfo]: tmap.transitions()) {
+                        locator::global_tablet_id gid { base_table, tablet };
+                        const auto& tinfo = tmap.get_tablet_info(tablet);
+                        rtlogger.info("Active transition: tablet={}, kind={}, stage={}, current_replicas={}, next_replicas={}",
+                            gid, trinfo.transition, trinfo.stage, tinfo.replicas, trinfo.next);
+                    }
+                }
                 release_guard(std::move(guard));
                 co_await await_event();
             }
