@@ -37,7 +37,7 @@ float compute_cosine_similarity(const std::vector<data_value>& v1, const std::ve
     }
 
     if (squared_norm_a == 0 || squared_norm_b == 0) {
-        throw exceptions::invalid_request_exception("Function system.similarity_cosine doesn't support all-zero vectors");
+        return std::numeric_limits<float>::quiet_NaN();
     }
 
     // The cosine similarity is in the range [-1, 1].
