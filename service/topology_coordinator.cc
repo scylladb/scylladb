@@ -2035,8 +2035,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         co_await coroutine::maybe_yield();
                         locator::global_tablet_id gid { base_table, tablet };
                         const auto& tinfo = tmap.get_tablet_info(tablet);
-                        rtlogger.info("Active transition: tablet={}, kind={}, stage={}, current_replicas={}, next_replicas={}",
-                            gid, trinfo.transition, trinfo.stage, tinfo.replicas, trinfo.next);
+                        auto leaving = locator::get_leaving_replica(tinfo, trinfo);
+                        auto pending = trinfo.pending_replica;
+                        rtlogger.info("Active transition: tablet={}, kind={}, stage={}, leaving={}, pending={}",
+                            gid, trinfo.transition, trinfo.stage, leaving, pending);
                     }
                 }
                 release_guard(std::move(guard));
