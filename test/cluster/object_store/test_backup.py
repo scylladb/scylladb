@@ -782,11 +782,12 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     cf = 'cf'
 
     num_keys = 10
+    original_min_tablet_count=5
 
     scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
-    restored_min_tablet_counts = [5] if build_mode == 'debug' else [2, 5, 10]
+    restored_min_tablet_counts = [original_min_tablet_count] if build_mode == 'debug' else [2, original_min_tablet_count, 10]
     
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=5)
+    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=original_min_tablet_count)
 
     # validate replicas assertions hold on fresh dataset
     await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
@@ -817,7 +818,7 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
                 await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
 
                 await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
-                if restored_min_tablet_count == 512:
+                if restored_min_tablet_count == original_min_tablet_count:
                     await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 @pytest.mark.asyncio
