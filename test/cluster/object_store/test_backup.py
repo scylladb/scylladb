@@ -739,15 +739,16 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
     restored_min_tablet_counts = [original_min_tablet_count] if build_mode == 'debug' else [2, original_min_tablet_count, 10]
     
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=original_min_tablet_count)
+    if True:
+        schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=original_min_tablet_count)
 
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
+        # validate replicas assertions hold on fresh dataset
+        await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
 
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        prefix = f'{cf}/{snap_name}'
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+        await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
     for scope in scopes:
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
@@ -759,19 +760,20 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
         pros = [False] if scope == 'node' else [True, False]
         for pro in pros:
             for restored_min_tablet_count in restored_min_tablet_counts:
-                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=5')
-                cql.execute(f'DROP KEYSPACE {ks}')
-                cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-                schema = create_schema(ks, cf, restored_min_tablet_count)
-                cql.execute(schema)
+                if True:
+                    logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=5')
+                    cql.execute(f'DROP KEYSPACE {ks}')
+                    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+                    schema = create_schema(ks, cf, restored_min_tablet_count)
+                    cql.execute(schema)
 
-                log_marks = await mark_all_logs(manager, servers)
+                    log_marks = await mark_all_logs(manager, servers)
 
-                await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
+                    await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
 
-                await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
-                if restored_min_tablet_count == original_min_tablet_count:
-                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
+                    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
+                    if restored_min_tablet_count == original_min_tablet_count:
+                        await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
