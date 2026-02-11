@@ -40,14 +40,20 @@ def simple_no_clustering_table(cql, keyspace):
 
     cql.execute(schema)
 
+    # Ensure at least 3 live rows for tests that depend on it
+    live_rows_needed = 3
     for pk in range(0, 10):
-        x = random.randrange(0, 4)
-        if x == 0:
-            # partition tombstone
-            cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk}")
-        else:
-            # live row
+        # For the first 3 rows, always insert; for the rest, use randomness
+        if pk < live_rows_needed:
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+        else:
+            x = random.randrange(0, 4)
+            if x == 0:
+                # partition tombstone
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk}")
+            else:
+                # live row
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
 
         if pk == 5:
             nodetool.flush(cql, f"{keyspace}.{table}")
