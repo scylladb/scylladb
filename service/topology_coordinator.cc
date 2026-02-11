@@ -1643,6 +1643,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    void log_active_transitions(size_t max_count) {
+        auto tm = get_token_metadata_ptr();
+        size_t logged_count = 0;
+        size_t total_count = 0;
+
+        for (auto&& e : tm->tablets().all_table_groups()) {
+            auto& base_table = e.first;
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            total_count += tmap.transitions().size();
+
+            for (auto&& [tablet, trinfo]: tmap.transitions()) {
+                if (logged_count >= max_count) {
+                    break;
+                }
+                locator::global_tablet_id gid { base_table, tablet };
+                const auto& tinfo = tmap.get_tablet_info(tablet);
+                // Log only the replicas involved in the transition (leaving/pending)
+                // rather than all replicas, to focus on what's actually changing
+                auto leaving = locator::get_leaving_replica(tinfo, trinfo);
+                auto pending = trinfo.pending_replica;
+                rtlogger.info("Active tablet {}: tablet={}, stage={}{}{}",
+                    trinfo.transition, gid, trinfo.stage,
+                    leaving ? fmt::format(", leaving={}", *leaving) : "",
+                    pending ? fmt::format(", pending={}", *pending) : "");
+                logged_count++;
+            }
+        }
+
+        if (total_count > logged_count) {
+            rtlogger.info("(and {} more active tablet transitions)", total_count - logged_count);
+        }
+    }
+
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
     // and then change the transition state to write_both_read_old. Also, while draining,
     // we ignore pending topology requests which normally interrupt load balancing.
@@ -2228,6 +2261,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // to check atomically with event.wait()
             if (!_tablets_ready) {
                 rtlogger.debug("Going to sleep with active tablet transitions");
+                log_active_transitions(5);
                 release_guard(std::move(guard));
                 co_await await_event();
             }
