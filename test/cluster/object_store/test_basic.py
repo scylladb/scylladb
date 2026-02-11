@@ -34,14 +34,14 @@ def create_ks_and_cf(cql, object_storage, replication_factor=1) -> tuple[str, st
                   f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
     cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text ) WITH TABLETS = {{'min_tablet_count': 4}};")
 
-    rows = [('0', 'zero'),
-            ('1', 'one'),
-            ('2', 'two')]
-    for row in rows:
+    inserted_rows = [('0', 'zero'),
+                     ('1', 'one'),
+                     ('2', 'two')]
+    for row in inserted_rows:
         cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
         cql.execute(cql_fmt.format(ks, cf, *row))
 
-    return ks, cf
+    return ks, cf, inserted_rows
 
 
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
@@ -65,7 +65,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
     cql = manager.get_cql()
     workdir = await manager.server_get_workdir(server.server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage)
 
     assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
     # Sanity check that the path is constructed correctly
@@ -78,7 +78,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
 
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+    assert len(rows) == len(inserted_rows), f'Test table has {len(rows)} rows, expected {len(inserted_rows)}'
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
 
@@ -123,7 +123,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, _ = create_ks_and_cf(cql, object_storage)
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
     # Mark the sstables as "removing" to simulate the problem
@@ -164,11 +164,11 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage)
 
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+    assert len(rows) == len(inserted_rows), f'Test table has {len(rows)} rows, expected {len(inserted_rows)}'
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
     # Move the sstables into "quarantine"
@@ -226,7 +226,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     cql = manager.get_cql()
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, _ = create_ks_and_cf(cql, object_storage)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
 
@@ -328,7 +328,7 @@ async def test_rf3_with_three_servers(manager: ManagerClient, object_storage):
         servers.append(server)
     
     cql = manager.get_cql()    
-    ks, cf = create_ks_and_cf(cql, object_storage, replication_factor=num_racks)
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage, replication_factor=num_racks)
     
     print('Flush keyspace on all servers')
     for server in servers:
@@ -373,5 +373,5 @@ async def test_rf3_with_three_servers(manager: ManagerClient, object_storage):
     stmt = SimpleStatement(f"SELECT * FROM {ks}.{cf};", consistency_level=ConsistencyLevel.ALL)
     res = cql.execute(stmt)
     read_rows = {x.name: x.value for x in res}
-    assert len(read_rows) > 0, 'Test table is empty'
+    assert len(read_rows) == len(inserted_rows), f'Test table has {len(read_rows)} rows, expected {len(inserted_rows)}'
 
