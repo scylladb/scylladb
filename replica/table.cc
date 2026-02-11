@@ -4616,9 +4616,6 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     schema_ptr base = schema();
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
-    utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
-        now -= 10s;
-    });
 
     if (!db::view::should_generate_view_updates_on_this_shard(base, get_effective_replication_map(), m.token())) {
         // This could happen if we are a pending replica.
@@ -4667,7 +4664,6 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    co_await utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = co_await sem.obtain_permit(base, "push-view-updates-read-before-write", estimate_read_memory_cost(), timeout, tr_state);

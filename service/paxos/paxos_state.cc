@@ -88,7 +88,6 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
-    co_await utils::get_local_injector().inject("paxos_prepare_timeout", timeout);
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -180,7 +179,6 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
 future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_accept_proposal_wait", utils::wait_for_message(std::chrono::minutes(2)));
-    co_await utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout);
     utils::latency_counter lc;
     lc.start();
 
@@ -235,8 +233,6 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
         }
     });
 
-    co_await utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
-
     replica::table& cf = sp.get_db().local().find_column_family(schema);
     db_clock::time_point t = cf.get_truncation_time();
     auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
@@ -274,7 +270,6 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
 
     // We don't need to lock the partition key if there is no gap between loading paxos
     // state and saving it, and here we're just blindly updating.
-    co_await utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout);
     co_return co_await paxos_store.save_paxos_decision(*schema, decision, timeout);
 }
 

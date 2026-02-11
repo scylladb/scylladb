@@ -2580,14 +2580,12 @@ static future<> announce_with_raft(
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             auto host_id = _db.get_token_metadata().get_my_id();
             co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
                         return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
                     }, "view builder: mark view build STARTED");
         },
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2596,14 +2594,12 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             auto host_id = _db.get_token_metadata().get_my_id();
             co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
                         return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
                     }, "view builder: mark view build SUCCESS");
         },
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2930,8 +2926,6 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         view_builder_query_state(),
         {},
         cql3::query_processor::cache_internal::no);
-
-    co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2", utils::wait_for_message(5min));
 
     auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));

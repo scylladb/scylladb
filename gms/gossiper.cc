@@ -1383,8 +1383,6 @@ future<> gossiper::replicate(endpoint_state es, permit_id pid) {
         }
      });
 
-    co_await utils::get_local_injector().inject("gossiper_replicate_sleep", std::chrono::seconds{1});
-
     // Second pass: set replicated endpoint_state on all shards
     // Must not throw
     try {
