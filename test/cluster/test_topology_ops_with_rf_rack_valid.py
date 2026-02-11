@@ -304,7 +304,7 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
     """
     Test removing a node when it would violate RF-rack constraints with explicit rack list.
 
-    Creates a cluster with 4 racks (r1, r2, r3, r4) and a keyspace that explicitly
+    Creates a cluster with 5 racks (r1, r2, r3, r4, r5) and a keyspace that explicitly
     specifies RF as a list of racks ['r1', 'r2', 'r4'].
 
     Tests that:
@@ -323,11 +323,12 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
         elif op == "decommission":
             await manager.decommission_node(server_id, expected_error=expected_error)
 
-    servers = await manager.servers_add(4, config=cfg, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(5, config=cfg, cmdline=cmdline, property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
         {"dc": "dc1", "rack": "r4"},
+        {"dc": "dc1", "rack": "r5"},
     ])
     cql = manager.get_cql()
 
