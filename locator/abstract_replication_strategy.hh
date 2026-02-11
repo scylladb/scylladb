@@ -345,6 +345,8 @@ public:
     virtual dht::shard_replica_set shards_ready_for_reads(const schema& s, const token& token) const {
         return {shard_for_reads(s, token)};
     }
+
+    virtual bool is_leaving(locator::host_id host, const dht::token& token) const = 0;
 };
 
 using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
@@ -439,6 +441,10 @@ public:
 
     void unregister() noexcept {
         _factory = nullptr;
+    }
+
+    virtual bool is_leaving(locator::host_id host, const dht::token& token) const override {
+        return get_token_metadata().is_leaving(host);
     }
 };
 
