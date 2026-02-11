@@ -2028,7 +2028,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.debug("Going to sleep with active tablet transitions");
                 // Log details of each active transition for debugging
                 auto tm = get_token_metadata_ptr();
-                for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
+                for (auto&& [base_table, tables [[maybe_unused]]] : tm->tablets().all_table_groups()) {
                     co_await coroutine::maybe_yield();
                     const auto& tmap = tm->tablets().get_tablet_map(base_table);
                     for (auto&& [tablet, trinfo]: tmap.transitions()) {
