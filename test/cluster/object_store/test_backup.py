@@ -55,8 +55,8 @@ async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name=
 
 
 @pytest.mark.asyncio
-
-async def test_simple_backup(manager: ManagerClient, object_storage):
+@pytest.mark.parametrize("move_files", [False, True])
+async def test_simple_backup(manager: ManagerClient, object_storage, move_files):
     '''check that backing up a snapshot for a keyspace works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -76,13 +76,16 @@ async def test_simple_backup(manager: ManagerClient, object_storage):
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
     assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
+
+    # all components in the "backup" snapshot should have been moved into bucket if move_files
+    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
 
     objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
     for f in files:
@@ -93,41 +96,6 @@ async def test_simple_backup(manager: ManagerClient, object_storage):
     log = await manager.server_open_log(server.server_id)
     res = await log.grep(r'INFO.*\[shard [0-9]:([a-z]+)\] .* Backup sstables from .* to')
     assert len(res) == 1 and res[0][1].group(1) == 'strm'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("move_files", [False, True])
-async def test_backup_move(manager: ManagerClient, object_storage, move_files):
-    '''check that backing up a snapshot by _moving_ sstable to object storage'''
-
-    objconf = object_storage.create_endpoint_conf()
-    cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
-           'task_ttl_in_seconds': 300
-           }
-    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
-
-    print('Backup snapshot')
-    prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix,
-                                   move_files=move_files)
-    print(f'Started task {tid}')
-    status = await manager.api.get_task_status(server.ip_addr, tid)
-    print(f'Status: {status}, waiting to finish')
-    status = await manager.api.wait_task(server.ip_addr, tid)
-    assert (status is not None) and (status['state'] == 'done')
-    assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
-
-    # all components in the "backup" snapshot should have been moved into bucket if move_files
-    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
 
 
 @pytest.mark.asyncio
