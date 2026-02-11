@@ -29,6 +29,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "schema/schema_builder.hh"
+#include "cql3/functions/vector_similarity_fcts.hh"
 
 BOOST_AUTO_TEST_SUITE(cql_functions_test)
 
@@ -420,6 +421,98 @@ SEASTAR_TEST_CASE(test_aggregate_functions_vector_type) {
             make_list_value(vector_type_int, {2, 2, 3})
         ).test_min_max_count();
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_extract_float_vector) {
+    // Compare standard deserialization path vs optimized extraction path
+    auto serialize = [](size_t dim, const std::vector<float>& values) {
+        auto vector_type = vector_type_impl::get_instance(float_type, dim);
+        std::vector<data_value> data_vals;
+        data_vals.reserve(values.size());
+        for (float f : values) {
+            data_vals.push_back(data_value(f));
+        }
+        return vector_type->decompose(make_list_value(vector_type, data_vals));
+    };
+
+    auto deserialize_standard = [](size_t dim, const bytes_opt& serialized) {
+        auto vector_type = vector_type_impl::get_instance(float_type, dim);
+        data_value v = vector_type->deserialize(*serialized);
+        const auto& elements = value_cast<std::vector<data_value>>(v);
+        std::vector<float> result;
+        result.reserve(elements.size());
+        for (const auto& elem : elements) {
+            result.push_back(value_cast<float>(elem));
+        }
+        return result;
+    };
+
+    auto compare_vectors = [](const std::vector<float>& a, const std::vector<float>& b) {
+        BOOST_REQUIRE_EQUAL(a.size(), b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::isnan(a[i]) && std::isnan(b[i])) {
+                continue; // Both NaN, consider equal
+            }
+            BOOST_REQUIRE_EQUAL(a[i], b[i]);
+        }
+    };
+
+    // Prepare test cases
+    std::vector<std::vector<float>> test_vectors = {
+        // Small vectors with explicit values
+        {1.0f, 2.5f},
+        {-1.5f, 0.0f, 3.14159f},
+        // Special floating-point values
+        {
+            std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),
+            0.0f,
+            -0.0f,
+            std::numeric_limits<float>::min(),
+            std::numeric_limits<float>::max()
+        },
+        // NaN values (require special comparison)
+        {
+            std::numeric_limits<float>::quiet_NaN(),
+            1.0f,
+            std::numeric_limits<float>::signaling_NaN()
+        }
+    };
+
+    // Add common embedding dimensions with pattern-generated data
+    for (size_t dim : {128, 384, 768, 1024, 1536}) {
+        std::vector<float> vec(dim);
+        for (size_t i = 0; i < dim; ++i) {
+            vec[i] = static_cast<float>(i % 100) * 0.01f;
+        }
+        test_vectors.push_back(std::move(vec));
+    }
+
+    // Run tests for all test vectors
+    for (const auto& vec : test_vectors) {
+        size_t dim = vec.size();
+        auto serialized = serialize(dim, vec);
+        auto standard = deserialize_standard(dim, serialized);
+        compare_vectors(standard, cql3::functions::detail::extract_float_vector(serialized, dim));
+    }
+
+    // Null parameter should throw
+    BOOST_REQUIRE_EXCEPTION(
+        cql3::functions::detail::extract_float_vector(std::nullopt, 3),
+        exceptions::invalid_request_exception,
+        seastar::testing::exception_predicate::message_contains("Cannot extract float vector from null parameter")
+    );
+
+    // Size mismatch should throw
+    for (auto [actual_dim, expected_dim] : {std::pair{2, 3}, {4, 3}}) {
+        std::vector<float> vec(actual_dim, 1.0f);
+        auto serialized = serialize(actual_dim, vec);
+        BOOST_REQUIRE_EXCEPTION(
+            cql3::functions::detail::extract_float_vector(serialized, expected_dim),
+            exceptions::invalid_request_exception,
+            seastar::testing::exception_predicate::message_contains("Invalid vector size")
+        );
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
