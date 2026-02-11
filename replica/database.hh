@@ -526,8 +526,6 @@ private:
     db::replay_position _highest_rp;
     // Tracks the highest replay position flushed to a sstable
     db::replay_position _highest_flushed_rp;
-    // Tracks the highest position before flush actually starts
-    db::replay_position _flush_rp;
     db::replay_position _lowest_allowed_rp;
 
     // Provided by the database that owns this commitlog

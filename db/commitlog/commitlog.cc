@@ -94,6 +94,8 @@ public:
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
+const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
+
 db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, seastar::scheduling_group sg, size_t shard_available_memory) {
     config c;
 
@@ -2173,7 +2175,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     }
 
     // Now get a set of used CF ids:
-    std::unordered_set<cf_id_type> ids;
+    std::unordered_map<cf_id_type, replay_position> ids;
 
     uint64_t n = size_to_remove;
     uint64_t flushing = 0;
@@ -2198,7 +2200,8 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         flushing += size - waste;
 
         for (auto& id : s->_cf_dirty |  std::views::keys) {
-            ids.insert(id);
+            auto& target_high = ids[id];
+            target_high = std::max(target_high, rp);
         }
 
         if (size_to_remove != 0) {
@@ -2214,11 +2217,11 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
     // For each CF id: for each callback c: call c(id, high)
     for (auto& f : callbacks) {
-        for (auto& id : ids) {
+        for (auto& [id, hp] : ids) {
             try {
-                f(id, high);
+                f(id, hp);
             } catch (...) {
-                clogger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+                clogger.error("Exception during flush request {}/{}: {} ({})", id, hp, high, std::current_exception());
             }
         }
     }
