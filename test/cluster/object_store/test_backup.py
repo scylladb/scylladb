@@ -607,15 +607,7 @@ async def take_snapshot(ks, servers, manager, logger):
 
     return snap_name,sstables
 
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only, log_marks, different_min_tablet_count=False):
-    logger.info(f'Check the data is back')
-
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only)
-
-    if different_min_tablet_count:
-        logger.info(f'Skipping streaming directions checks, we restored with a different min_tablet_count, so streaming is not predictable')
-        return
-
+async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks):
     host_ids_per_dc = defaultdict(list)
     host_ids_per_dc_rack = dict()
     servers_by_host_id = dict()
@@ -824,7 +816,9 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
 
                 await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
 
-                await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks, different_min_tablet_count=(restored_min_tablet_count != 512))
+                await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
+                if restored_min_tablet_count == 512:
+                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):

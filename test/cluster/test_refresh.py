@@ -19,7 +19,7 @@ from collections import defaultdict
 from test.pylib.minio_server import MinioServer
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
-from test.cluster.object_store.test_backup import topo, create_cluster, take_snapshot, create_dataset, check_data_is_back, do_load_sstables, mark_all_logs, check_mutation_replicas
+from test.cluster.object_store.test_backup import topo, create_cluster, take_snapshot, create_dataset, do_load_sstables, mark_all_logs, check_mutation_replicas, check_streaming_directions
 from test.cluster.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
@@ -126,7 +126,8 @@ async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerCl
 
             await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, primary_replica_only=pro, load_fn=do_refresh)
 
-            await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks)
+            await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
+            await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
     shutil.rmtree(tmpbackup)
 
