@@ -39,6 +39,9 @@
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 
+namespace utils {
+class chunked_string;
+}
 
 namespace lang { class manager; }
 namespace service {
@@ -176,12 +179,12 @@ public:
     static const sstring CQL_VERSION;
 
     static prepared_cache_key_type compute_id(
-            std::string_view query_string,
+            utils::chunked_string_view query_string,
             std::string_view keyspace,
             dialect d);
 
-    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
-    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d);
+    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(utils::chunked_string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,
             memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
@@ -306,7 +309,7 @@ public:
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct(
-            const std::string_view& query_string,
+            utils::chunked_string_view query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options) {
@@ -322,7 +325,7 @@ public:
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct_without_checking_exception_message(
-            const std::string_view& query_string,
+            utils::chunked_string_view query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options);
@@ -461,10 +464,10 @@ public:
 
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, service::query_state& query_state, dialect d);
+    prepare(utils::chunked_string query_string, service::query_state& query_state, dialect d);
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, const service::client_state& client_state, dialect d);
+    prepare(utils::chunked_string query_string, const service::client_state& client_state, dialect d);
 
     future<> stop();
 
@@ -511,7 +514,7 @@ public:
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
-            const std::string_view& query,
+            utils::chunked_string_view query,
             const service::client_state& client_state,
             dialect d);
 

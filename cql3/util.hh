@@ -20,15 +20,22 @@
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/dialect.hh"
 
+#include "utils/mutable_view.hh"
+
+namespace utils {
+template <mutable_view> class chunked_string_basic_view;
+using chunked_string_view = chunked_string_basic_view<mutable_view::no>;
+}
+
 namespace cql3 {
 
 namespace util {
 
 
-void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
 
 template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
-Result do_with_parser(const std::string_view& cql, dialect d, Func&& f) {
+Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, d, [&] (cql3_parser::CqlParser& parser) {
         ret.emplace(f(parser));

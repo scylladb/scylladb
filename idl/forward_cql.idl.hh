@@ -64,7 +64,7 @@ struct forward_cql_execute_response {
 
 // Request to prepare a CQL statement on a remote node
 struct forward_cql_prepare_request {
-    sstring query_string;
+    utils::chunked_string query_string;
     service::forwarded_client_state client_state;
     std::optional<tracing::trace_info> trace_info;
     cql3::dialect dialect;

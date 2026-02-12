@@ -15,6 +15,7 @@
 #include "utils/result.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/reactor.hh>
 #include <bit>
 #include <concepts>
 
@@ -50,6 +51,7 @@ protected:
 public:
     size_t size() const noexcept { return _buf_size; }
     size_t reallocs() const noexcept { return _reallocs; }
+    bool used() const noexcept { return _refcount > 0; }
 protected:
     // The guard keeps a reference to the buffer, so it must have a stable address.
     reusable_buffer_impl(const reusable_buffer_impl&) = delete;
@@ -285,8 +287,10 @@ public:
     reusable_buffer(period_type period)
         : _decay_period(period)
     {
-        _decay_timer.set_callback([this] {decay();});
-        _decay_timer.arm_periodic(_decay_period);
+        if (engine_is_ready()) { // To accomodate BOOST_AUTO_TEST_CASE which have no reactor setup
+            _decay_timer.set_callback([this] {decay();});
+            _decay_timer.arm_periodic(_decay_period);
+        }
     }
 };
 

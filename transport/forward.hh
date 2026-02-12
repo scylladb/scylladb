@@ -13,6 +13,7 @@
 #include "service/client_state.hh"
 #include "tracing/tracing.hh"
 #include "cql3/query_options.hh"
+#include "utils/chunked_string.hh"
 
 namespace cql_transport {
 
@@ -44,7 +45,7 @@ struct forward_cql_execute_response {
 };
 
 struct forward_cql_prepare_request {
-    sstring query_string;
+    utils::chunked_string query_string;
     service::forwarded_client_state client_state;
     std::optional<tracing::trace_info> trace_info;
     cql3::dialect dialect;
