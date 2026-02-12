@@ -91,9 +91,6 @@ public:
     // Reverse of `make_full_token_string`.
     static std::unordered_set<dht::token> tokens_from_string(const sstring&);
 
-    // Reverse of `make_cdc_generation_id_string`.
-    static std::optional<cdc::generation_id> cdc_generation_id_from_string(const sstring&);
-
     static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
         return versioned_value(value.value());
     }

@@ -34,16 +34,6 @@ namespace seastar {
     class abort_source;
 } // namespace seastar
 
-namespace db {
-    class config;
-    class system_distributed_keyspace;
-} // namespace db
-
-namespace gms {
-    class inet_address;
-    class gossiper;
-} // namespace gms
-
 namespace locator {
     class tablet_map;
 } // namespace locator
@@ -152,23 +142,6 @@ struct cdc_stream_diff {
 };
 
 using table_streams = std::map<api::timestamp_type, committed_stream_set>;
-
-class no_generation_data_exception : public std::runtime_error {
-public:
-    no_generation_data_exception(cdc::generation_id generation_ts)
-        : std::runtime_error(fmt::format("could not find generation data for timestamp {}", generation_ts))
-    {}
-};
-
-/* Should be called when we're restarting and we noticed that we didn't save any streams timestamp in our local tables,
- * which means that we're probably upgrading from a non-CDC/old CDC version (another reason could be
- * that there's a bug, or the user messed with our local tables).
- *
- * It checks whether we should be the node to propose the first generation of CDC streams.
- * The chosen condition is arbitrary, it only tries to make sure that no two nodes propose a generation of streams
- * when upgrading, and nothing bad happens if they for some reason do (it's mostly an optimization).
- */
-bool should_propose_first_generation(const locator::host_id& me, const gms::gossiper&);
 
 /*
  * Checks if the CDC generation is optimal, which is true if its `topology_description` is consistent

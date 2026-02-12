@@ -544,7 +544,6 @@ scylla_tests = set([
     'test/boost/caching_options_test',
     'test/boost/canonical_mutation_test',
     'test/boost/cartesian_product_test',
-    'test/boost/cdc_generation_test',
     'test/boost/cell_locker_test',
     'test/boost/checksum_utils_test',
     'test/boost/chunked_managed_vector_test',

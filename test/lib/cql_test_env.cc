@@ -1082,7 +1082,6 @@ private:
             }).get();
 
             cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             /*
              * Currently used when choosing the timestamp of the first CDC stream generation:
              * normally we choose a timestamp in the future so other nodes have a chance to learn about it
@@ -1090,7 +1089,7 @@ private:
              * and would only slow down tests (by having them wait).
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
-            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db)).get();
+            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_sys_ks), std::ref(_db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC generation service", [this] {
                 _cdc_generation_service.stop().get();
             });

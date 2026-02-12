@@ -2129,29 +2129,6 @@ future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id
     co_return cdc::generation_id_v2{ts, id};
 }
 
-static const sstring CDC_REWRITTEN_KEY = "rewritten";
-
-future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1> gen_id) {
-    if (gen_id) {
-        return execute_cql(
-                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", CDC_LOCAL),
-                CDC_REWRITTEN_KEY, gen_id->ts).discard_result();
-    } else {
-        // Insert just the row marker.
-        return execute_cql(
-                format("INSERT INTO system.{} (key) VALUES (?)", CDC_LOCAL),
-                CDC_REWRITTEN_KEY).discard_result();
-    }
-}
-
-future<bool> system_keyspace::cdc_is_rewritten() {
-    // We don't care about the actual timestamp; it's additional information for debugging purposes.
-    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", CDC_LOCAL), CDC_REWRITTEN_KEY)
-            .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        return !msg->empty();
-    });
-}
-
 future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
         noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f) {
     static const sstring all_tables_query = format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);

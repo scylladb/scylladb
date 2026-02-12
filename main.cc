@@ -2043,23 +2043,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting CDC Generation Management service");
-            /* This service uses the system distributed keyspace.
-             * It will only do that *after* the node has joined the token ring, and the token ring joining
-             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
-             * Hence the service will start using sys_dist_ks only after it was initialized.
-             *
-             * However, there is a problem with the service shutdown order: sys_dist_ks is stopped
-             * *before* CDC generation service is stopped (`storage_service::drain_on_shutdown` below),
-             * so CDC generation service takes sharded<db::sys_dist_ks> and must check local_is_initialized()
-             * every time it accesses it (because it may have been stopped already), then take local_shared()
-             * which will prevent sys_dist_ks from being destroyed while the service operates on it.
-             */
             cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
-            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
-                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
+            cdc_generation_service.start(std::move(cdc_config), std::ref(sys_ks), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
             });
