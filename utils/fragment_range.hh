@@ -19,8 +19,6 @@
 #include "bytes.hh"
 #include "utils/bit_cast.hh"
 
-enum class mutable_view { no, yes, };
-
 /// Fragmented buffer
 ///
 /// Concept `FragmentedBuffer` is satisfied by any class that is a range of

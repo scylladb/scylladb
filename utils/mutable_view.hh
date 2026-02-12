@@ -13,6 +13,8 @@
 
 #include "seastarx.hh"
 
+enum class mutable_view { no, yes, };
+
 template<typename CharT>
 class basic_mutable_view {
     CharT* _begin = nullptr;
