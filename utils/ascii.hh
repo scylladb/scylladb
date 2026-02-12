@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include "bytes_fwd.hh"
+#include "utils/managed_bytes_fwd.hh"
 
 namespace utils {
 
@@ -25,6 +26,8 @@ inline bool validate(bytes_view string) {
 
     return validate(data, len);
 }
+
+bool validate(managed_bytes_view string);
 
 } // namespace ascii
 
