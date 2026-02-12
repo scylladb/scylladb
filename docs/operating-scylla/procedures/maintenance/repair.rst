@@ -31,8 +31,7 @@ which can run repairs for you.
 To synchronize all data in clusters that have both tablets- and vnodes-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair/>` on **all**
 of the nodes in the cluster, and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` on  **any** of the nodes in the cluster.
 
-.. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` command regularly. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
-
+.. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` command regularly and after every node restart or crash. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
 In most cases, the proportion of data that is out of sync is very small.  In a few cases, for example, if a node was down for a day, the difference might be more significant.
 
 .. _row-level-repair:
