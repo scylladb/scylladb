@@ -189,6 +189,8 @@ public:
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() = 0;
 
+    virtual sharded<db::system_distributed_keyspace>& get_system_distributed_keyspace() = 0;
+
     virtual sharded<service::tablet_allocator>& get_tablet_allocator() = 0;
 
     virtual sharded<service::storage_proxy>& get_storage_proxy() = 0;
