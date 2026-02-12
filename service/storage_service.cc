@@ -1570,7 +1570,6 @@ future<> storage_service::start_sys_dist_ks() const {
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
-        std::unordered_map<locator::host_id, sstring> loaded_peer_features,
         start_hint_manager start_hm,
         gms::generation_type new_generation) {
     gms::application_state_map app_states;
@@ -1597,7 +1596,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        ri = co_await prepare_replacement_info(initial_contact_nodes);
 
         const auto& my_location = tmptr->get_topology().get_location();
         if (my_location != ri->dc_rack) {
@@ -1611,7 +1610,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
     } else if (should_bootstrap()) {
-        co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
+        co_await check_for_endpoint_collision(initial_contact_nodes);
     } else {
         slogger.info("Performing gossip shadow round, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::no);
@@ -2241,7 +2240,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
     }
 
     co_return co_await join_topology(proxy, std::move(initial_contact_nodes),
-            std::move(loaded_endpoints), std::move(loaded_peer_features), start_hm, new_generation);
+            std::move(loaded_endpoints), start_hm, new_generation);
 }
 
 future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter) {
@@ -2479,10 +2478,10 @@ future<> storage_service::wait_for_group0_stop() {
     }
 }
 
-future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<locator::host_id, sstring>& loaded_peer_features) {
+future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
 
-    return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
+    return seastar::async([this, initial_contact_nodes] {
         bool found_bootstrapping_node = false;
         auto local_features = _feature_service.supported_feature_set();
         do {
@@ -2513,7 +2512,7 @@ future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id 
 }
 
 future<storage_service::replacement_info>
-storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<locator::host_id, sstring>& loaded_peer_features) {
+storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes) {
     locator::host_id replace_host_id;
     gms::inet_address replace_address;
 

@@ -450,13 +450,11 @@ private:
         locator::endpoint_dc_rack dc_rack;
         locator::host_id host_id;
     };
-    future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<locator::host_id, sstring>& loaded_peer_features);
+    future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes);
 
 public:
 
-    future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<locator::host_id, sstring>& loaded_peer_features);
+    future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes);
 
     future<> join_cluster(sharded<service::storage_proxy>& proxy,
             start_hint_manager start_hm, gms::generation_type new_generation);
@@ -481,7 +479,6 @@ private:
     future<> join_topology(sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
-            std::unordered_map<locator::host_id, sstring> loaded_peer_features,
             start_hint_manager start_hm,
             gms::generation_type new_generation);
 public:
