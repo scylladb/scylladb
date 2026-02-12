@@ -207,6 +207,11 @@ struct fragment_range {
     bool empty() const { return view.empty(); }
 };
 
+template <FragmentedView View>
+inline bool is_single_fragment(View v) {
+    return v.empty() || v.size_bytes() == v.current_fragment().size();
+}
+
 template<FragmentedView View>
 requires (!FragmentRange<View>)
 bytes linearized(View v)
