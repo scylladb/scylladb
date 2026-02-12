@@ -10,6 +10,7 @@
 
 #include <memory>
 #include "bytes_fwd.hh"
+#include "managed_bytes_fwd.hh"
 #include "utils/hashing.hh"
 
 template<typename H>
@@ -35,6 +36,8 @@ public:
 
     // Use update and finalize to compute the hash over the full view.
     static bytes calculate(const std::string_view& s);
+
+    static bytes calculate(managed_bytes_view s);
 };
 
 class md5_hasher final : public cryptopp_hasher<md5_hasher, 16> {};
