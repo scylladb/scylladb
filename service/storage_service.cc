@@ -2202,13 +2202,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             if (!_sys_ks.local().bootstrap_complete()) {
                 throw std::runtime_error("Cannot bootstrap in the Raft-based recovery procedure");
             }
-            // The Raft-based topology has been enabled if and only if features in system.topology are non-empty.
-            // Note that we cannot use the in-memory state machine here. It is not loaded at this point since
-            // the node hasn't joined the new group 0 yet.
-            if (!co_await _sys_ks.local().load_topology_features_state()) {
-                throw std::runtime_error(
-                        "Cannot start in the Raft-based recovery procedure - Raft-based topology has not been enabled");
-            }
         }
     }
 
