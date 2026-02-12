@@ -32,8 +32,10 @@ seastar::future<seastar::shared_ptr<seastar::tls::certificate_credentials>> trus
                                 if (self._credentials) {
                                     b.rebuild(*self._credentials);
                                 }
+                                self._reload_count++;
                                 return make_ready_future();
                             });
+                            _reload_count++;
                         }
                     });
         } else {
