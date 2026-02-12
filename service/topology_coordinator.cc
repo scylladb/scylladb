@@ -1076,72 +1076,72 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
-                        auto tables_with_mvs = ks.metadata()->tables();
-                        auto views = ks.metadata()->views();
-                        tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
-                        auto rf_change_kind = co_await choose_keyspace_rf_change_kind(req_id, ks.metadata(), ks_md, tables_with_mvs);
+                    auto tables_with_mvs = ks.metadata()->tables();
+                    auto views = ks.metadata()->views();
+                    tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+                    auto rf_change_kind = co_await choose_keyspace_rf_change_kind(req_id, ks.metadata(), ks_md, tables_with_mvs);
                     switch (rf_change_kind) {
-                      case keyspace_rf_change_kind::default_rf_change: {
-                        if (!tables_with_mvs.empty()) {
-                            auto table = tables_with_mvs.front();
-                            auto tablet_count = tmptr->tablets().get_tablet_map(table->id()).tablet_count();
-                            locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
-                            auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+                        case keyspace_rf_change_kind::default_rf_change: {
+                            if (!tables_with_mvs.empty()) {
+                                auto table = tables_with_mvs.front();
+                                auto tablet_count = tmptr->tablets().get_tablet_map(table->id()).tablet_count();
+                                locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
+                                auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
 
-                            for (const auto& table_or_mv : tables_with_mvs) {
-                                if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
-                                    // Apply the transition only on base tables.
-                                    // If this table has a base table then the transition will be applied on the base table, and
-                                    // the base table will coordinate the transition for the entire group.
-                                    continue;
-                                }
-                                auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                                new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
-
-                                replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
-                                co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
-                                    auto last_token = new_tablet_map.get_last_token(tablet_id);
-                                    updates.emplace_back(co_await make_canonical_mutation_gently(
-                                            replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
-                                                    .set_new_replicas(last_token, tablet_info.replicas)
-                                                    .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-                                                    .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
-                                                    .build()
-                                    ));
-
-                                    // Calculate abandoning replica and abort view building tasks on them
-                                    auto old_tablet_info = old_tablets.get_tablet_info(last_token);
-                                    auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
-                                    if (!abandoning_replicas.empty()) {
-                                        if (abandoning_replicas.size() != 1) {
-                                            on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
-                                        }
-                                        _vb_coordinator->abort_tasks(updates, guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
+                                for (const auto& table_or_mv : tables_with_mvs) {
+                                    if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
+                                        // Apply the transition only on base tables.
+                                        // If this table has a base table then the transition will be applied on the base table, and
+                                        // the base table will coordinate the transition for the entire group.
+                                        continue;
                                     }
+                                    auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
 
-                                    co_await coroutine::maybe_yield();
-                                });
+                                    replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
+                                    co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                                        auto last_token = new_tablet_map.get_last_token(tablet_id);
+                                        updates.emplace_back(co_await make_canonical_mutation_gently(
+                                                replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
+                                                        .set_new_replicas(last_token, tablet_info.replicas)
+                                                        .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                                        .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
+                                                        .build()
+                                        ));
+
+                                        // Calculate abandoning replica and abort view building tasks on them
+                                        auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                                        auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                                        if (!abandoning_replicas.empty()) {
+                                            if (abandoning_replicas.size() != 1) {
+                                                on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
+                                            }
+                                            _vb_coordinator->abort_tasks(updates, guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
+                                        }
+
+                                        co_await coroutine::maybe_yield();
+                                    });
+                                }
                             }
-                        }
-                        auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
-                        for (auto& m: schema_muts) {
-                            updates.emplace_back(m);
-                        }
+                            auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                            for (auto& m: schema_muts) {
+                                updates.emplace_back(m);
+                            }
 
                             updates.push_back(canonical_mutation(tbuilder_with_request_drop().build()));
                             updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
-                                                         .done()
-                                                         .build()));
+                                                        .done()
+                                                        .build()));
                             break;
-                      }
-                      case keyspace_rf_change_kind::conversion_to_rack_list: {
+                        }
+                        case keyspace_rf_change_kind::conversion_to_rack_list: {
                             rtlogger.info("keyspace_rf_change for keyspace {} postponed for colocation", ks_name);
                             topology_mutation_builder tbuilder = tbuilder_with_request_drop();
                             tbuilder.pause_rf_change_request(req_id);
                             updates.push_back(canonical_mutation(tbuilder.build()));
                             break;
-                      }
-                      case keyspace_rf_change_kind::multi_rf_change: {
+                        }
+                        case keyspace_rf_change_kind::multi_rf_change: {
                             rtlogger.info("keyspace_rf_change for keyspace {} will use multi-rf change procedure", ks_name);
                             ks_md->set_previous_strategy_options(ks.metadata()->strategy_options());
                             ks_md->set_next_strategy_options(ks_md->strategy_options());
@@ -1155,7 +1155,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             tbuilder.start_rf_change_migrations(req_id);
                             updates.push_back(canonical_mutation(tbuilder.build()));
                             break;
-                      }
+                        }
                     }
                 } catch (const std::exception& e) {
                     error = e.what();
