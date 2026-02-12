@@ -76,9 +76,9 @@ async def test_autoretrain_dict(manager: ManagerClient):
     await asyncio.gather(*[manager.api.disable_autocompaction(s.ip_addr, ks_name, cf_name) for s in servers])
 
     async def repopulate():
-        blob = random.randbytes(blob_size);
+        blob = random.randbytes(blob_size)
         insert = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?);")
-        insert.consistency_level = ConsistencyLevel.ALL;
+        insert.consistency_level = ConsistencyLevel.ALL
         for pks in itertools.batched(range(n_blobs), n=100):
             await asyncio.gather(*[
                 cql.run_async(insert, [k, blob])
