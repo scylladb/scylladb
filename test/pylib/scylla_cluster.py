@@ -216,9 +216,13 @@ async def with_file_lock(lock_path: pathlib.Path) -> AsyncIterator[None]:
 
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
     async def run_process(cmd, **kwargs):
-        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
-        await proc.communicate()
-        assert proc.returncode == 0
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stderr=asyncio.subprocess.PIPE, **kwargs)
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Command {cmd} failed with exit code {proc.returncode}: {stderr.decode(errors='replace').strip()}"
+            )
 
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "scylla-debug" if is_debug else "scylla"
