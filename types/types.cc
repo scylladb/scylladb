@@ -1802,8 +1802,14 @@ private:
         auto value_length = t.get_elements_type()->value_length_if_fixed();
         vector_type_impl::native_type ret;
         ret.reserve(t.get_dimension());
-        for (size_t i = 0; i < t.get_dimension(); i++) {
-            ret.push_back(func(read_vector_element(v, value_length)));
+        if (value_length) {
+            for (size_t i = 0; i < t.get_dimension(); i++) {
+                ret.push_back(func(read_vector_element_fixed(v, *value_length)));
+            }
+        } else {
+            for (size_t i = 0; i < t.get_dimension(); i++) {
+                ret.push_back(func(read_vector_element_variable(v)));
+            }
         }
         return data_value::make(t.shared_from_this(),
             std::make_unique<vector_type_impl::native_type>(std::move(ret)));

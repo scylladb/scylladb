@@ -32,9 +32,16 @@ public:
                         
     std::vector<managed_bytes> split_fragmented(FragmentedView auto v) const {
         std::vector<managed_bytes> elements;
-        for (size_t i = 0; i < _dimension; ++i) {
-            auto element = read_vector_element(v, _elements_type->value_length_if_fixed());
-            elements.push_back(managed_bytes(element));
+        elements.reserve(_dimension);
+        auto fixed_len = _elements_type->value_length_if_fixed();
+        if (fixed_len) {
+            for (size_t i = 0; i < _dimension; ++i) {
+                elements.push_back(managed_bytes(read_vector_element_fixed(v, *fixed_len)));
+            }
+        } else {
+            for (size_t i = 0; i < _dimension; ++i) {
+                elements.push_back(managed_bytes(read_vector_element_variable(v)));
+            }
         }
         return elements;
     }
@@ -98,16 +105,26 @@ private:
 
 };
 
+// Read a vector element with known fixed size.
 template <FragmentedView View>
-View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
-    uint64_t element_size;
-    if (value_length_if_fixed) {
-        element_size = value_length_if_fixed.value();
-    } else {
-        element_size = with_linearized(v, unsigned_vint::deserialize);
-        v.remove_prefix(unsigned_vint::serialized_size(element_size));
+View read_vector_element_fixed(View& v, size_t element_size) {
+    if (element_size == 0) {
+        throw exceptions::invalid_request_exception("null/unset is not supported inside vectors");
     }
-    
+
+    if (element_size > v.size_bytes()) {
+        throw exceptions::invalid_request_exception("Not enough bytes to read a vector element");
+    }
+
+    return read_simple_bytes(v, element_size);
+}
+
+// Read a vector element with variable-length encoding (vint-prefixed size).
+template <FragmentedView View>
+View read_vector_element_variable(View& v) {
+    auto element_size = with_linearized(v, unsigned_vint::deserialize);
+    v.remove_prefix(unsigned_vint::serialized_size(element_size));
+
     if (element_size == 0) {
         throw exceptions::invalid_request_exception("null/unset is not supported inside vectors");
     }
@@ -117,6 +134,15 @@ View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
     }
 
     return read_simple_bytes(v, element_size);
+}
+
+template <FragmentedView View>
+View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
+    if (value_length_if_fixed) {
+        return read_vector_element_fixed(v, *value_length_if_fixed);
+    } else {
+        return read_vector_element_variable(v);
+    }
 }
 
 data_value make_vector_value(data_type type, vector_type_impl::native_type value);
