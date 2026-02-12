@@ -25,6 +25,7 @@
 #include "types/user.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "utils/like_matcher.hh"
+#include "utils/chunked_string.hh"
 
 #include <ranges>
 
@@ -708,12 +709,12 @@ untyped_constant_parsed_value(const untyped_constant uc, data_type validator)
         if (uc.partial_type == untyped_constant::type_class::hex && validator == bytes_type) {
             auto v = static_cast<std::string_view>(uc.raw_text);
             v.remove_prefix(2);
-            return validator->from_string(v);
+            return to_bytes(validator->from_string(v));
         }
         if (validator->is_counter()) {
-            return long_type->from_string(uc.raw_text);
+            return to_bytes(long_type->from_string(uc.raw_text));
         }
-        return validator->from_string(uc.raw_text);
+        return to_bytes(validator->from_string(uc.raw_text));
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }

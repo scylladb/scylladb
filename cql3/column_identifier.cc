@@ -8,6 +8,7 @@
 
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
+#include "utils/chunked_string.hh"
 
 namespace cql3 {
 
@@ -81,7 +82,7 @@ column_identifier_raw::prepare_column_identifier(const schema& schema) const {
         return ::make_shared<column_identifier>(std::move(text_bytes), _text);
     }
 
-    return ::make_shared<column_identifier>(schema.regular_column_name_type()->from_string(_raw_text), _text);
+    return ::make_shared<column_identifier>(to_bytes(schema.regular_column_name_type()->from_string(_raw_text)), _text);
 }
 
 bool column_identifier_raw::operator==(const column_identifier_raw& other) const {

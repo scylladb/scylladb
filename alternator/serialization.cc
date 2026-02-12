@@ -9,6 +9,7 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "utils/log.hh"
+#include "utils/chunked_string.hh"
 #include "serialization.hh"
 #include "error.hh"
 #include "types/concrete_types.hh"
@@ -164,7 +165,7 @@ struct from_json_visitor {
 
     void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), from_json_visitor{v, bo}); };
     void operator()(const string_type_impl& t) {
-        bo.write(t.from_string(rjson::to_string_view(v)));
+        bo.write(managed_bytes_view(t.from_string(rjson::to_string_view(v))));
     }
     void operator()(const bytes_type_impl& t) const {
         // FIXME: it's difficult at this point to get information if value was provided
@@ -346,7 +347,7 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
     } else if (column.type == decimal_type) {
         return decimal_type->decompose(parse_and_validate_number(rjson::to_string_view(value)));
     } else {
-        return column.type->from_string(value_view);
+        return to_bytes(column.type->from_string(value_view));
     }
 
 }

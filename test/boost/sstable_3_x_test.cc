@@ -42,6 +42,7 @@
 #include "test/lib/exception_utils.hh"
 #include "db/large_data_handler.hh"
 #include "readers/combined.hh"
+#include "utils/chunked_string.hh"
 
 #include <fmt/ranges.h>
 
@@ -1295,8 +1296,8 @@ SEASTAR_TEST_CASE(test_uncompressed_compound_static_row_read) {
         std::vector<mutation_reader_assertions::expected_column> columns;
 
         columns.push_back({s_int_cdef, int32_type->decompose(int_val)});
-        columns.push_back({s_text_cdef, utf8_type->from_string(text_val)});
-        columns.push_back({s_inet_cdef, inet_addr_type->from_string(inet_val)});
+        columns.push_back({s_text_cdef, to_bytes(utf8_type->from_string(text_val))});
+        columns.push_back({s_inet_cdef, to_bytes(inet_addr_type->from_string(inet_val))});
 
         return columns;
     };
@@ -1661,10 +1662,10 @@ static future<> test_partition_key_with_values_of_different_types_read(const sst
         columns.push_back({float_cdef, float_type->decompose(float_val)});
         columns.push_back({int_cdef, int32_type->decompose(int_val)});
         columns.push_back({long_cdef, long_type->decompose(long_val)});
-        columns.push_back({timestamp_cdef, timestamp_type->from_string(timestamp_val)});
-        columns.push_back({timeuuid_cdef, timeuuid_type->from_string(timeuuid_val)});
-        columns.push_back({uuid_cdef, uuid_type->from_string(uuid_val)});
-        columns.push_back({text_cdef, utf8_type->from_string(text_val)});
+        columns.push_back({timestamp_cdef, to_bytes(timestamp_type->from_string(timestamp_val))});
+        columns.push_back({timeuuid_cdef, to_bytes(timeuuid_type->from_string(timeuuid_val))});
+        columns.push_back({uuid_cdef, to_bytes(uuid_type->from_string(uuid_val))});
+        columns.push_back({text_cdef, to_bytes(utf8_type->from_string(text_val))});
 
         return columns;
     };
@@ -1911,16 +1912,16 @@ SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
             columns.push_back({long_cdef, long_type->decompose(*long_val)});
         }
         if (timestamp_val) {
-            columns.push_back({timestamp_cdef, timestamp_type->from_string(*timestamp_val)});
+            columns.push_back({timestamp_cdef, to_bytes(timestamp_type->from_string(*timestamp_val))});
         }
         if (timeuuid_val) {
-            columns.push_back({timeuuid_cdef, timeuuid_type->from_string(*timeuuid_val)});
+            columns.push_back({timeuuid_cdef, to_bytes(timeuuid_type->from_string(*timeuuid_val))});
         }
         if (uuid_val) {
-            columns.push_back({uuid_cdef, uuid_type->from_string(*uuid_val)});
+            columns.push_back({uuid_cdef, to_bytes(uuid_type->from_string(*uuid_val))});
         }
         if (text_val) {
-            columns.push_back({text_cdef, utf8_type->from_string(*text_val)});
+            columns.push_back({text_cdef, to_bytes(utf8_type->from_string(*text_val))});
         }
 
         return columns;
@@ -2792,45 +2793,45 @@ SEASTAR_TEST_CASE(test_uncompressed_compound_ck_read) {
         .produces_partition_start(to_key(5))
         .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
                           int32_type->decompose(105),
-                          utf8_type->from_string("This is a string for 5"),
-                          uuid_type->from_string("f1badb6f-80a0-4eef-90df-b3651d9a5578"),
-                          inet_addr_type->from_string("10.0.0.5")
+                          to_bytes(utf8_type->from_string("This is a string for 5")),
+                          to_bytes(uuid_type->from_string("f1badb6f-80a0-4eef-90df-b3651d9a5578")),
+                          to_bytes(inet_addr_type->from_string("10.0.0.5"))
                       }),
                       {{int_cdef, int32_type->decompose(1005)}})
         .produces_partition_end()
         .produces_partition_start(to_key(1))
         .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
                           int32_type->decompose(101),
-                          utf8_type->from_string("This is a string for 1"),
-                          uuid_type->from_string("f7fdcbd2-4544-482c-85fd-d9572adc3cd6"),
-                          inet_addr_type->from_string("10.0.0.1")
+                          to_bytes(utf8_type->from_string("This is a string for 1")),
+                          to_bytes(uuid_type->from_string("f7fdcbd2-4544-482c-85fd-d9572adc3cd6")),
+                          to_bytes(inet_addr_type->from_string("10.0.0.1"))
                       }),
                       {{int_cdef, int32_type->decompose(1001)}})
         .produces_partition_end()
         .produces_partition_start(to_key(2))
         .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
                           int32_type->decompose(102),
-                          utf8_type->from_string("This is a string for 2"),
-                          uuid_type->from_string("c25ae960-07a2-467d-8f35-5bd38647b367"),
-                          inet_addr_type->from_string("10.0.0.2")
+                          to_bytes(utf8_type->from_string("This is a string for 2")),
+                          to_bytes(uuid_type->from_string("c25ae960-07a2-467d-8f35-5bd38647b367")),
+                          to_bytes(inet_addr_type->from_string("10.0.0.2"))
                       }),
                       {{int_cdef, int32_type->decompose(1002)}})
         .produces_partition_end()
         .produces_partition_start(to_key(4))
         .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
                           int32_type->decompose(104),
-                          utf8_type->from_string("This is a string for 4"),
-                          uuid_type->from_string("4549e2c2-786e-4b30-90aa-5dd37ae1db8f"),
-                          inet_addr_type->from_string("10.0.0.4")
+                          to_bytes(utf8_type->from_string("This is a string for 4")),
+                          to_bytes(uuid_type->from_string("4549e2c2-786e-4b30-90aa-5dd37ae1db8f")),
+                          to_bytes(inet_addr_type->from_string("10.0.0.4"))
                       }),
                       {{int_cdef, int32_type->decompose(1004)}})
         .produces_partition_end()
         .produces_partition_start(to_key(3))
         .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
                           int32_type->decompose(103),
-                          utf8_type->from_string("This is a string for 3"),
-                          uuid_type->from_string("f7e8ebc0-dbae-4c06-bae0-656c23f6af6a"),
-                          inet_addr_type->from_string("10.0.0.3")
+                          to_bytes(utf8_type->from_string("This is a string for 3")),
+                          to_bytes(uuid_type->from_string("f7e8ebc0-dbae-4c06-bae0-656c23f6af6a")),
+                          to_bytes(inet_addr_type->from_string("10.0.0.3"))
                       }),
                       {{int_cdef, int32_type->decompose(1003)}})
         .produces_partition_end()

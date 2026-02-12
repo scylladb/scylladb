@@ -17,6 +17,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "types/set.hh"
+#include "utils/chunked_string.hh"
 
 
 BOOST_AUTO_TEST_SUITE(aggregate_fcts_test)
@@ -66,9 +67,9 @@ SEASTAR_TEST_CASE(test_aggregate_avg) {
                                                           {long_type->decompose(int64_t(1))},
                                                           {float_type->decompose((1.f+2.f)/2L)},
                                                           {double_type->decompose((1.+2.)/2L)},
-                                                          {decimal_type->from_string("2")},
-                                                          {decimal_type->from_string("1.50")},
-                                                          {varint_type->from_string("1")}});
+                                                          {to_bytes(decimal_type->from_string("2"))},
+                                                          {to_bytes(decimal_type->from_string("1.50"))},
+                                                          {to_bytes(varint_type->from_string("1"))}});
     });
 }
 
@@ -92,9 +93,9 @@ SEASTAR_TEST_CASE(test_aggregate_sum) {
                                                           {long_type->decompose(int64_t(3))},
                                                           {float_type->decompose(3.f)},
                                                           {double_type->decompose(3.)},
-                                                          {decimal_type->from_string("3")},
-                                                          {decimal_type->from_string("3.00")},
-                                                          {varint_type->from_string("3")}});
+                                                          {to_bytes(decimal_type->from_string("3"))},
+                                                          {to_bytes(decimal_type->from_string("3.00"))},
+                                                          {to_bytes(varint_type->from_string("3"))}});
     });
 }
 
@@ -124,15 +125,15 @@ SEASTAR_TEST_CASE(test_aggregate_max) {
                                                           {long_type->decompose(int64_t(2))},
                                                           {float_type->decompose(2.f)},
                                                           {double_type->decompose(2.)},
-                                                          {decimal_type->from_string("2")},
-                                                          {decimal_type->from_string("2.00")},
-                                                          {varint_type->from_string("2")},
-                                                          {utf8_type->from_string("b")},
-                                                          {simple_date_type->from_string("2017-12-02")},
-                                                          {timestamp_type->from_string("2017-12-02t03:00:00")},
-                                                          {timeuuid_type->from_string("b650cbe0-f914-11e7-8892-000000000004")},
-                                                          {bytes_type->from_string("0101")},
-                                                          {boolean_type->from_string("true")},
+                                                          {to_bytes(decimal_type->from_string("2"))},
+                                                          {to_bytes(decimal_type->from_string("2.00"))},
+                                                          {to_bytes(varint_type->from_string("2"))},
+                                                          {to_bytes(utf8_type->from_string("b"))},
+                                                          {to_bytes(simple_date_type->from_string("2017-12-02"))},
+                                                          {to_bytes(timestamp_type->from_string("2017-12-02t03:00:00"))},
+                                                          {to_bytes(timeuuid_type->from_string("b650cbe0-f914-11e7-8892-000000000004"))},
+                                                          {to_bytes(bytes_type->from_string("0101"))},
+                                                          {to_bytes(boolean_type->from_string("true"))},
         });
     });
 }
@@ -163,15 +164,15 @@ SEASTAR_TEST_CASE(test_aggregate_min) {
                                                           {long_type->decompose(int64_t(1))},
                                                           {float_type->decompose(1.f)},
                                                           {double_type->decompose(1.)},
-                                                          {decimal_type->from_string("1")},
-                                                          {decimal_type->from_string("1.00")},
-                                                          {varint_type->from_string("1")},
-                                                          {utf8_type->from_string("a")},
-                                                          {simple_date_type->from_string("2016-12-02")},
-                                                          {timestamp_type->from_string("2016-12-02t06:00:00")},
-                                                          {timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3")},
-                                                          {bytes_type->from_string("01")},
-                                                          {boolean_type->from_string("false")},
+                                                          {to_bytes(decimal_type->from_string("1"))},
+                                                          {to_bytes(decimal_type->from_string("1.00"))},
+                                                          {to_bytes(varint_type->from_string("1"))},
+                                                          {to_bytes(utf8_type->from_string("a"))},
+                                                          {to_bytes(simple_date_type->from_string("2016-12-02"))},
+                                                          {to_bytes(timestamp_type->from_string("2016-12-02t06:00:00"))},
+                                                          {to_bytes(timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3"))},
+                                                          {to_bytes(bytes_type->from_string("01"))},
+                                                          {to_bytes(boolean_type->from_string("false"))},
         });
     });
 }
