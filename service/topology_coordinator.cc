@@ -1441,6 +1441,44 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    void log_active_transitions(size_t max_count) {
+        auto tm = get_token_metadata_ptr();
+        size_t logged_count = 0;
+        size_t total_count = 0;
+        bool should_break = false;
+        for (auto&& [base_table, tables [[maybe_unused]]] : tm->tablets().all_table_groups()) {
+            if (should_break) {
+                const auto& tmap = tm->tablets().get_tablet_map(base_table);
+                total_count += tmap.transitions().size();
+                continue;
+            }
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            for (auto&& [tablet, trinfo]: tmap.transitions()) {
+                total_count++;
+                if (logged_count < max_count) {
+                    locator::global_tablet_id gid { base_table, tablet };
+                    const auto& tinfo = tmap.get_tablet_info(tablet);
+                    // Log only the replicas involved in the transition (leaving/pending)
+                    // rather than all replicas, to focus on what's actually changing
+                    auto leaving = locator::get_leaving_replica(tinfo, trinfo);
+                    auto pending = trinfo.pending_replica;
+                    rtlogger.info("Active {} transition: tablet={}, stage={}{}{}",
+                        trinfo.transition, gid, trinfo.stage,
+                        leaving ? fmt::format(", leaving={}", *leaving) : "",
+                        pending ? fmt::format(", pending={}", *pending) : "");
+                    logged_count++;
+                    if (logged_count >= max_count) {
+                        should_break = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (total_count > max_count) {
+            rtlogger.info("... and {} more active transitions", total_count - max_count);
+        }
+    }
+
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
     // and then change the transition state to write_both_read_old. Also, while draining,
     // we ignore pending topology requests which normally interrupt load balancing.
@@ -2026,43 +2064,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // to check atomically with event.wait()
             if (!_tablets_ready) {
                 rtlogger.debug("Going to sleep with active tablet transitions");
-                // Log details of up to 5 active transitions for debugging
-                auto tm = get_token_metadata_ptr();
-                size_t logged_count = 0;
-                size_t total_count = 0;
-                constexpr size_t max_logged = 5;
-                bool should_break = false;
-                for (auto&& [base_table, tables [[maybe_unused]]] : tm->tablets().all_table_groups()) {
-                    if (should_break) {
-                        const auto& tmap = tm->tablets().get_tablet_map(base_table);
-                        total_count += tmap.transitions().size();
-                        continue;
-                    }
-                    const auto& tmap = tm->tablets().get_tablet_map(base_table);
-                    for (auto&& [tablet, trinfo]: tmap.transitions()) {
-                        total_count++;
-                        if (logged_count < max_logged) {
-                            locator::global_tablet_id gid { base_table, tablet };
-                            const auto& tinfo = tmap.get_tablet_info(tablet);
-                            // Log only the replicas involved in the transition (leaving/pending)
-                            // rather than all replicas, to focus on what's actually changing
-                            auto leaving = locator::get_leaving_replica(tinfo, trinfo);
-                            auto pending = trinfo.pending_replica;
-                            rtlogger.info("Active transition: tablet={}, kind={}, stage={}{}{}",
-                                gid, trinfo.transition, trinfo.stage,
-                                leaving ? fmt::format(", leaving={}", *leaving) : "",
-                                pending ? fmt::format(", pending={}", *pending) : "");
-                            logged_count++;
-                            if (logged_count >= max_logged) {
-                                should_break = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (total_count > max_logged) {
-                    rtlogger.info("... and {} more active transitions", total_count - max_logged);
-                }
+                log_active_transitions(5);
                 release_guard(std::move(guard));
                 co_await await_event();
             }
