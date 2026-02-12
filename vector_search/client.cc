@@ -55,9 +55,13 @@ private:
     future<connected_socket> connect() {
         auto addr = socket_address(_endpoint.ip, _endpoint.port);
         if (_creds) {
-            return tls::connect(_creds, addr, tls::tls_options{.server_name = _endpoint.host});
+            auto socket = co_await tls::connect(_creds, addr, tls::tls_options{.server_name = _endpoint.host});
+            // tls::connect() only performs the TCP handshake — the TLS handshake is deferred until the first I/O operation.
+            // Force the TLS handshake to happen here so that the connection timeout applies to it.
+            co_await tls::check_session_is_resumed(socket);
+            co_return socket;
         }
-        return seastar::connect(addr, {}, transport::TCP);
+        co_return co_await seastar::connect(addr, {}, transport::TCP);
     }
 
     std::chrono::milliseconds timeout() const {
