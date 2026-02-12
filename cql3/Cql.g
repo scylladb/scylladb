@@ -1838,7 +1838,7 @@ property[cql3::statements::property_definitions& props]
     ;
 
 propertyValue returns [sstring str]
-    : c=constant           { $str = c.raw_text; }
+    : c=constant           { $str = c.raw_text.linearize(); }
     // FIXME: unreserved keywords below are indistinguishable from their string representation,
     // which might be problematic in the future. A possible solution is to use a more complicated
     // type for storing property values instead of just plain strings. For the specific case
