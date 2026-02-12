@@ -29,6 +29,10 @@ public:
     seastar::future<seastar::shared_ptr<seastar::tls::certificate_credentials>> get();
     seastar::future<> stop();
 
+    unsigned reload_count() const {
+        return _reload_count;
+    }
+
 private:
     seastar::future<seastar::tls::credentials_builder> create_builder() const;
 
@@ -37,6 +41,7 @@ private:
     seastar::shared_ptr<seastar::tls::certificate_credentials> _credentials;
     invoke_on_others_type _invoke_on_others;
     seastar::gate _gate;
+    unsigned _reload_count = 0;
 };
 
 } // namespace vector_search
