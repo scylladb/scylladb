@@ -447,11 +447,8 @@ private:
     future<> shutdown_protocol_servers();
 
     struct replacement_info {
-        std::unordered_set<token> tokens;
         locator::endpoint_dc_rack dc_rack;
         locator::host_id host_id;
-        gms::inet_address address;
-        std::unordered_map<locator::host_id, gms::loaded_endpoint_state> ignore_nodes;
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<locator::host_id, sstring>& loaded_peer_features);

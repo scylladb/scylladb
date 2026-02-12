@@ -165,10 +165,6 @@ namespace {
     return resulting_node_list;
 }
 
-[[nodiscard]] locator::host_id_or_endpoint_list parse_node_list(const std::string_view comma_separated_list) {
-    return string_list_to_endpoint_list(utils::split_comma_separated_list(comma_separated_list));
-}
-
 void check_raft_rpc_scheduling_group(const replica::database& db, const gms::feature_service& feature_service, const std::string_view rpc_name) {
     if (!feature_service.enforced_raft_rpc_scheduling_group) {
         return;
@@ -1605,8 +1601,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
         const auto& my_location = tmptr->get_topology().get_location();
         if (my_location != ri->dc_rack) {
-            auto msg = fmt::format("Cannot replace node {}/{} with a node on a different data center or rack. Current location={}/{}, new location={}/{}",
-                    ri->host_id, ri->address, ri->dc_rack.dc, ri->dc_rack.rack, my_location.dc, my_location.rack);
+            auto msg = fmt::format("Cannot replace node {} with a node on a different data center or rack. Current location={}/{}, new location={}/{}",
+                    ri->host_id, ri->dc_rack.dc, ri->dc_rack.rack, my_location.dc, my_location.rack);
             slogger.error("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -2567,58 +2563,14 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         throw std::runtime_error(::format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
     }
 
-    std::unordered_set<dht::token> tokens;
     auto dc_rack = get_dc_rack_for(replace_host_id).value_or(locator::endpoint_dc_rack::default_location);
 
     auto ri = replacement_info {
-        .tokens = std::move(tokens),
         .dc_rack = std::move(dc_rack),
         .host_id = std::move(replace_host_id),
-        .address = replace_address,
     };
 
-    bool node_ip_specified = false;
-    for (auto& hoep : parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace())) {
-        locator::host_id host_id;
-        gms::loaded_endpoint_state st;
-        // Resolve both host_id and endpoint
-        if (hoep.has_endpoint()) {
-            st.endpoint = hoep.endpoint();
-            node_ip_specified = true;
-        } else {
-            host_id = hoep.id();
-            auto res = _gossiper.get_node_ip(host_id);
-            if (!res) {
-                throw std::runtime_error(::format("Could not find ignored node with host_id {}", host_id));
-            }
-            st.endpoint = *res;
-        }
-        auto host_id_opt = _gossiper.try_get_host_id(st.endpoint);
-        if (!host_id_opt) {
-            throw std::runtime_error(::format("Ignore node {}/{} has no endpoint state", host_id, st.endpoint));
-        }
-        if (!host_id) {
-            host_id = *host_id_opt;
-            if (!host_id) {
-                throw std::runtime_error(::format("Could not find host_id for ignored node {}", st.endpoint));
-            }
-        }
-        auto esp = _gossiper.get_endpoint_state_ptr(host_id);
-        st.tokens = esp->get_tokens();
-        st.opt_dc_rack = esp->get_dc_rack();
-        ri.ignore_nodes.emplace(host_id, std::move(st));
-    }
-
-    if (node_ip_specified) {
-        slogger.warn("Warning: Using IP addresses for '--ignore-dead-nodes-for-replace' is deprecated and will"
-                     " be disabled in the next release. Please use host IDs instead. Provided values: {}",
-                     _db.local().get_config().ignore_dead_nodes_for_replace());
-    }
-
-    slogger.info("Host {}/{} is replacing {}/{} ignore_nodes={}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address,
-            fmt::join(ri.ignore_nodes | std::views::transform ([] (const auto& x) {
-                return fmt::format("{}/{}", x.first, x.second.endpoint);
-            }), ","));
+    slogger.info("Host {}/{} is replacing {}/{}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return ri;
