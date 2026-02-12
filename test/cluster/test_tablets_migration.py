@@ -455,6 +455,9 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
         # Restart the leaving replica (src_server)
         await manager.server_restart(src_server.server_id)
 
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
 
         await asyncio.gather(*[manager.api.enable_tablet_balancing(s.ip_addr) for s in servers])
