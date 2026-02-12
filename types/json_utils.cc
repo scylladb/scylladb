@@ -18,6 +18,7 @@
 #include "types/user.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 #include "exceptions/exceptions.hh"
 #include <limits>
 #include <utility>
@@ -293,19 +294,21 @@ struct from_json_object_visitor {
     bytes operator()(const reversed_type_impl& t) { return from_json_object(*t.underlying_type(), value); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) {
         if (value.IsString()) {
-            return t.from_string(rjson::to_string_view(value));
+            return to_bytes(t.from_string(rjson::to_string_view(value)));
         }
 
         return t.decompose(to_int<T>(value));
     }
-    bytes operator()(const string_type_impl& t) { return t.from_string(rjson::to_string_view(value)); }
+    bytes operator()(const string_type_impl& t) {
+        return to_bytes(t.from_string(rjson::to_string_view(value)));
+    }
     bytes operator()(const bytes_type_impl& t) {
         std::string_view string_v = validated_to_string_view(value, "bytes_type");
         if (string_v.size() < 2 || string_v[0] != '0' || string_v[1] != 'x') {
             throw marshal_exception("Blob JSON strings must start with 0x");
         }
         string_v.remove_prefix(2);
-        return bytes_type->from_string(string_v);
+        return to_bytes(bytes_type->from_string(string_v));
     }
     bytes operator()(const boolean_type_impl& t) {
         if (!value.IsBool()) {
@@ -331,16 +334,16 @@ struct from_json_object_visitor {
         if (value.IsNumber()) {
             return long_type->decompose(to_int<int64_t>(value));
         }
-        return t.from_string(rjson::to_string_view(value));
+        return to_bytes(t.from_string(rjson::to_string_view(value)));
     }
-    bytes operator()(const timeuuid_type_impl& t) { return t.from_string(validated_to_string_view(value, "timeuuid_type")); }
-    bytes operator()(const simple_date_type_impl& t) { return t.from_string(validated_to_string_view(value, "simple_date_type")); }
-    bytes operator()(const time_type_impl& t) { return t.from_string(validated_to_string_view(value, "time_type")); }
-    bytes operator()(const uuid_type_impl& t) { return t.from_string(validated_to_string_view(value, "uuid_type")); }
-    bytes operator()(const inet_addr_type_impl& t) { return t.from_string(validated_to_string_view(value, "inet_addr_type")); }
+    bytes operator()(const timeuuid_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "timeuuid_type"))); }
+    bytes operator()(const simple_date_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "simple_date_type"))); }
+    bytes operator()(const time_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "time_type"))); }
+    bytes operator()(const uuid_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "uuid_type"))); }
+    bytes operator()(const inet_addr_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "inet_addr_type"))); }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (value.IsString()) {
-            return t.from_string(rjson::to_string_view(value));
+            return to_bytes(t.from_string(rjson::to_string_view(value)));
         }
         if (!value.IsNumber()) {
             throw marshal_exception("JSON value must be represented as double or string");
@@ -355,19 +358,19 @@ struct from_json_object_visitor {
     }
     bytes operator()(const varint_type_impl& t) {
         if (value.IsString()) {
-            return t.from_string(rjson::to_string_view(value));
+            return to_bytes(t.from_string(rjson::to_string_view(value)));
         }
-        return t.from_string(rjson::print(value));
+        return to_bytes(t.from_string(rjson::print(value)));
     }
     bytes operator()(const decimal_type_impl& t) {
         if (value.IsString()) {
-            return t.from_string(rjson::to_string_view(value));
+            return to_bytes(t.from_string(rjson::to_string_view(value)));
         } else if (!value.IsNumber()) {
             throw marshal_exception(
                     format("{} must be represented as numeric or string in JSON", value));
         }
 
-        return t.from_string(rjson::print(value));
+        return to_bytes(t.from_string(rjson::print(value)));
     }
     bytes operator()(const counter_type_impl& t) {
         if (!value.IsNumber()) {
@@ -375,7 +378,7 @@ struct from_json_object_visitor {
         }
         return counter_cell_view::total_value_type()->decompose(to_int<int64_t>(value));
     }
-    bytes operator()(const duration_type_impl& t) { return t.from_string(validated_to_string_view(value, "duration_type")); }
+    bytes operator()(const duration_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "duration_type"))); }
     bytes operator()(const empty_type_impl& t) { return bytes(); }
     bytes operator()(const map_type_impl& t) { return from_json_object_aux(t, value); }
     bytes operator()(const set_type_impl& t) { return from_json_object_aux(t, value); }

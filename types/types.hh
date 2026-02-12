@@ -44,6 +44,8 @@ class big_decimal;
 namespace utils {
 
 class multiprecision_int;
+template <mutable_view> class chunked_string_basic_view;
+using chunked_string_view = chunked_string_basic_view<mutable_view::no>;
 
 }
 
@@ -447,7 +449,7 @@ public:
         return to_string(bytes_view(b));
     }
     sstring to_string_impl(const data_value& v) const;
-    bytes from_string(std::string_view text) const;
+    managed_bytes from_string(utils::chunked_string_view text) const;
     bool is_counter() const;
     /// True for numeric types that support arithmetic operations, including
     /// integers and floating point of all sizes, decimal and varint.

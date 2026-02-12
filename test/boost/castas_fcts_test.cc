@@ -19,6 +19,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
+#include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(castas_fcts_test)
 
@@ -484,38 +485,38 @@ SEASTAR_TEST_CASE(test_time_casts_in_selection_clause) {
         e.execute_cql("INSERT INTO test (a, b, c, d) VALUES (d2177dd0-eaa2-11de-a572-001b779c76e3, '2015-05-21 11:03:02+00', '2015-05-21', '11:03:02')").get();
         {
             auto msg = e.execute_cql("SELECT CAST(a AS timestamp), CAST(a AS date), CAST(b as date), CAST(c AS timestamp) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->from_string("2009-12-17t00:26:29.805+00")},
-                                                              {simple_date_type->from_string("2009-12-17")},
-                                                              {simple_date_type->from_string("2015-05-21")},
-                                                              {timestamp_type->from_string("2015-05-21t00:00:00+00")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(timestamp_type->from_string("2009-12-17t00:26:29.805+00"))},
+                                                              {to_bytes(simple_date_type->from_string("2009-12-17"))},
+                                                              {to_bytes(simple_date_type->from_string("2015-05-21"))},
+                                                              {to_bytes(timestamp_type->from_string("2015-05-21t00:00:00+00"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS text), CAST(CAST(a AS date) AS text), CAST(CAST(b as date) AS text), CAST(CAST(c AS timestamp) AS text) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("2009-12-17T00:26:29.805Z")},
-                                                              {utf8_type->from_string("2009-12-17")},
-                                                              {utf8_type->from_string("2015-05-21")},
-                                                              {utf8_type->from_string("2015-05-21T00:00:00.000Z")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(utf8_type->from_string("2009-12-17T00:26:29.805Z"))},
+                                                              {to_bytes(utf8_type->from_string("2009-12-17"))},
+                                                              {to_bytes(utf8_type->from_string("2015-05-21"))},
+                                                              {to_bytes(utf8_type->from_string("2015-05-21T00:00:00.000Z"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text), CAST(d AS text) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
-                                                              {utf8_type->from_string("2015-05-21T11:03:02.000Z")},
-                                                              {utf8_type->from_string("2015-05-21")},
-                                                              {utf8_type->from_string("11:03:02.000000000")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(utf8_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3"))},
+                                                              {to_bytes(utf8_type->from_string("2015-05-21T11:03:02.000Z"))},
+                                                              {to_bytes(utf8_type->from_string("2015-05-21"))},
+                                                              {to_bytes(utf8_type->from_string("11:03:02.000000000"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS ascii), CAST(CAST(a AS date) AS ascii), CAST(CAST(b as date) AS ascii), CAST(CAST(c AS timestamp) AS ascii) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("2009-12-17T00:26:29.805Z")},
-                                                              {ascii_type->from_string("2009-12-17")},
-                                                              {ascii_type->from_string("2015-05-21")},
-                                                              {ascii_type->from_string("2015-05-21T00:00:00.000Z")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(ascii_type->from_string("2009-12-17T00:26:29.805Z"))},
+                                                              {to_bytes(ascii_type->from_string("2009-12-17"))},
+                                                              {to_bytes(ascii_type->from_string("2015-05-21"))},
+                                                              {to_bytes(ascii_type->from_string("2015-05-21T00:00:00.000Z"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii), CAST(d AS ascii) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
-                                                              {ascii_type->from_string("2015-05-21T11:03:02.000Z")},
-                                                              {ascii_type->from_string("2015-05-21")},
-                                                              {ascii_type->from_string("11:03:02.000000000")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(ascii_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3"))},
+                                                              {to_bytes(ascii_type->from_string("2015-05-21T11:03:02.000Z"))},
+                                                              {to_bytes(ascii_type->from_string("2015-05-21"))},
+                                                              {to_bytes(ascii_type->from_string("11:03:02.000000000"))}});
         }
     });
 }
@@ -528,15 +529,15 @@ SEASTAR_TEST_CASE(test_other_type_casts_in_selection_clause) {
         e.execute_cql("INSERT INTO test (a, b, c) VALUES ('test', '127.0.0.1', true)").get();
         {
             auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("test")},
-                                                              {utf8_type->from_string("127.0.0.1")},
-                                                              {utf8_type->from_string("true")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(utf8_type->from_string("test"))},
+                                                              {to_bytes(utf8_type->from_string("127.0.0.1"))},
+                                                              {to_bytes(utf8_type->from_string("true"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("test")},
-                                                              {ascii_type->from_string("127.0.0.1")},
-                                                              {ascii_type->from_string("true")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(ascii_type->from_string("test"))},
+                                                              {to_bytes(ascii_type->from_string("127.0.0.1"))},
+                                                              {to_bytes(ascii_type->from_string("true"))}});
         }
     });
 }
@@ -550,33 +551,33 @@ SEASTAR_TEST_CASE(test_casts_with_revrsed_order_in_selection_clause) {
         e.execute_cql("INSERT INTO test (a, b, c) VALUES (1, 2, 6.3)").get();
         {
             auto msg = e.execute_cql("SELECT CAST(a AS tinyint), CAST(b as tinyint), CAST(c AS tinyint) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{byte_type->from_string("1")},
-                                                              {byte_type->from_string("2")},
-                                                              {byte_type->from_string("6")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(byte_type->from_string("1"))},
+                                                              {to_bytes(byte_type->from_string("2"))},
+                                                              {to_bytes(byte_type->from_string("6"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS smallint), CAST(b as smallint), CAST(c AS smallint) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{short_type->from_string("1")},
-                                                              {short_type->from_string("2")},
-                                                              {short_type->from_string("6")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(short_type->from_string("1"))},
+                                                              {to_bytes(short_type->from_string("2"))},
+                                                              {to_bytes(short_type->from_string("6"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS double), CAST(b as double), CAST(c AS double) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{double_type->from_string("1")},
-                                                              {double_type->from_string("2")},
-                                                              {double_type->from_string("6.3")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(double_type->from_string("1"))},
+                                                              {to_bytes(double_type->from_string("2"))},
+                                                              {to_bytes(double_type->from_string("6.3"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("1")},
-                                                              {utf8_type->from_string("2")},
-                                                              {utf8_type->from_string("6.3")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(utf8_type->from_string("1"))},
+                                                              {to_bytes(utf8_type->from_string("2"))},
+                                                              {to_bytes(utf8_type->from_string("6.3"))}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get();
-            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("1")},
-                                                              {ascii_type->from_string("2")},
-                                                              {ascii_type->from_string("6.3")}});
+            assert_that(msg).is_rows().with_size(1).with_row({{to_bytes(ascii_type->from_string("1"))},
+                                                              {to_bytes(ascii_type->from_string("2"))},
+                                                              {to_bytes(ascii_type->from_string("6.3"))}});
         }
     });
 }
