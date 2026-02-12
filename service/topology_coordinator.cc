@@ -2048,19 +2048,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             // rather than all replicas, to focus on what's actually changing
                             auto leaving = locator::get_leaving_replica(tinfo, trinfo);
                             auto pending = trinfo.pending_replica;
-                            if (leaving && pending) {
-                                rtlogger.info("Active transition: tablet={}, kind={}, stage={}, leaving={}, pending={}",
-                                    gid, trinfo.transition, trinfo.stage, *leaving, *pending);
-                            } else if (leaving) {
-                                rtlogger.info("Active transition: tablet={}, kind={}, stage={}, leaving={}",
-                                    gid, trinfo.transition, trinfo.stage, *leaving);
-                            } else if (pending) {
-                                rtlogger.info("Active transition: tablet={}, kind={}, stage={}, pending={}",
-                                    gid, trinfo.transition, trinfo.stage, *pending);
-                            } else {
-                                rtlogger.info("Active transition: tablet={}, kind={}, stage={}",
-                                    gid, trinfo.transition, trinfo.stage);
-                            }
+                            rtlogger.info("Active transition: tablet={}, kind={}, stage={}{}{}",
+                                gid, trinfo.transition, trinfo.stage,
+                                leaving ? fmt::format(", leaving={}", *leaving) : "",
+                                pending ? fmt::format(", pending={}", *pending) : "");
                             logged_count++;
                             if (logged_count >= max_logged) {
                                 should_break = true;
