@@ -172,6 +172,7 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // when freeing a record, increase by the record's net data size
     size_t free_space{0};
     size_t record_count{0};
+    segment_generation seg_gen{1};
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
@@ -180,6 +181,10 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
     size_t net_data_size(size_t segment_size) const noexcept {
         return segment_size - free_space;
+    }
+
+    void on_free_segment() noexcept {
+        ++seg_gen;
     }
 
     void on_write(size_t net_data_size, size_t cnt = 1) noexcept {
@@ -841,12 +846,12 @@ future<log_location> segment_manager_impl::write(write_buffer& wb) {
 
     auto alloc = seg->allocate(data.size());
     auto loc = alloc.location;
+    auto& desc = get_segment_descriptor(loc);
 
-    wb.write_header();
+    wb.write_header(desc.seg_gen);
 
     co_await seg->write(std::move(alloc), data);
 
-    auto& desc = get_segment_descriptor(loc);
     desc.on_write(wb.get_net_data_size(), wb.get_record_count());
 
     _stats.bytes_written += data.size();
@@ -874,12 +879,12 @@ future<log_location> segment_manager_impl::write_from_compaction(write_buffer& w
 
     auto alloc = seg->allocate(data.size());
     auto loc = alloc.location;
+    auto& desc = get_segment_descriptor(loc);
 
-    wb.write_header();
+    wb.write_header(desc.seg_gen);
 
     co_await seg->write(std::move(alloc), data);
 
-    auto& desc = get_segment_descriptor(loc);
     desc.on_write(wb.get_net_data_size(), wb.get_record_count());
 
     _stats.compaction_bytes_written += data.size();
@@ -1024,6 +1029,10 @@ segment_manager_impl::allocate_segment() {
 future<> segment_manager_impl::free_segment(log_segment_id segment_id) {
     // TODO don't free segment while someone reads from it?
 
+    get_segment_descriptor(segment_id).on_free_segment();
+
+    // TODO write new generation?
+
     _free_segments.push_back(segment_id);
     _segment_freed_cv.signal();
 
@@ -1045,6 +1054,7 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
             .read_ahead = 1,
     });
     size_t current_position = 0;
+    auto seg_gen = get_segment_descriptor(segment_id).seg_gen;
 
     logstor_logger.trace("Reading records from segment {} at file {} offset {}",
                         segment_id, file_id, file_offset);
@@ -1072,6 +1082,10 @@ future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
 
         // if buffer header is not valid, skip to next block
         if (bh.magic != write_buffer::buffer_header_magic) {
+            continue;
+        }
+
+        if (bh.seg_gen != seg_gen) {
             continue;
         }
 

@@ -109,8 +109,9 @@ void write_buffer::finalize(size_t alignment) {
     pad_to_alignment(alignment);
 }
 
-void write_buffer::write_header() {
+void write_buffer::write_header(segment_generation seg_gen) {
     _buffer_header.magic = buffer_header_magic;
+    _buffer_header.seg_gen = seg_gen;
     ser::serialize<buffer_header>(_header_stream, _buffer_header);
 }
 

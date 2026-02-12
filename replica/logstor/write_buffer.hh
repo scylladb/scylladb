@@ -86,10 +86,11 @@ public:
     struct buffer_header {
         uint32_t magic;
         uint32_t data_size; // size of all records data following the buffer_header
-        uint32_t reserved1;
+        segment_generation seg_gen;
+        uint16_t reserved1;
         uint32_t reserved2;
     };
-    static constexpr size_t buffer_header_size = 4 * sizeof(uint32_t);
+    static constexpr size_t buffer_header_size = 3 * sizeof(uint32_t) + sizeof(uint16_t) + sizeof(segment_generation::underlying);
 
     static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
 
@@ -151,7 +152,7 @@ private:
 
     const char* data() const noexcept { return _buffer.get(); }
 
-    void write_header();
+    void write_header(segment_generation);
 
     /// Complete all tracked writes with their locations when the buffer is flushed to base_location
     void complete_writes(log_location base_location);
@@ -209,7 +210,8 @@ struct serializer<replica::logstor::write_buffer::buffer_header> {
     static void write(Output& out, const replica::logstor::write_buffer::buffer_header& h) {
         serializer<uint32_t>::write(out, h.magic);
         serializer<uint32_t>::write(out, h.data_size);
-        serializer<uint32_t>::write(out, h.reserved1);
+        serializer<replica::logstor::segment_generation>::write(out, h.seg_gen);
+        serializer<uint16_t>::write(out, h.reserved1);
         serializer<uint32_t>::write(out, h.reserved2);
     }
     template <typename Input>
@@ -217,7 +219,8 @@ struct serializer<replica::logstor::write_buffer::buffer_header> {
         replica::logstor::write_buffer::buffer_header h;
         h.magic = serializer<uint32_t>::read(in);
         h.data_size = serializer<uint32_t>::read(in);
-        h.reserved1 = serializer<uint32_t>::read(in);
+        h.seg_gen = serializer<replica::logstor::segment_generation>::read(in);
+        h.reserved1 = serializer<uint16_t>::read(in);
         h.reserved2 = serializer<uint32_t>::read(in);
         return h;
     }
@@ -225,7 +228,8 @@ struct serializer<replica::logstor::write_buffer::buffer_header> {
     static void skip(Input& in) {
         serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
-        serializer<uint32_t>::skip(in);
+        serializer<replica::logstor::segment_generation>::skip(in);
+        serializer<uint16_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
 };

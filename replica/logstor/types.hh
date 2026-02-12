@@ -46,6 +46,7 @@ struct index_key {
 };
 
 using record_generation = generation_base<uint16_t>;
+using segment_generation = generation_base<uint16_t>;
 
 struct index_entry {
     log_location location;
