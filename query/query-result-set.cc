@@ -17,6 +17,9 @@
 
 namespace query {
 
+static_assert(std::is_nothrow_move_constructible_v<non_null_data_value>);
+static_assert(std::is_nothrow_move_assignable_v<non_null_data_value>);
+
 class deserialization_error : public std::runtime_error {
 public:
     using runtime_error::runtime_error;
