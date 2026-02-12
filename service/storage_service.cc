@@ -1620,13 +1620,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         slogger.info("Performing gossip shadow round, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::no);
         _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
-        // Check if the node is already removed from the cluster
-        auto local_host_id = get_token_metadata().get_my_id();
-        auto my_ip = get_broadcast_address();
-        if (!_gossiper.is_safe_for_restart(local_host_id)) {
-            throw std::runtime_error(::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
-                    my_ip, local_host_id));
-        }
         co_await _gossiper.reset_endpoint_state_map();
         for (const auto& [host_id, st] : loaded_endpoints) {
             // gossiping hasn't started yet

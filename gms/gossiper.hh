@@ -372,7 +372,6 @@ public:
     future<version_type> get_current_heart_beat_version(locator::host_id endpoint) const;
 
     bool is_safe_for_bootstrap(inet_address endpoint) const;
-    bool is_safe_for_restart(locator::host_id host_id) const;
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise

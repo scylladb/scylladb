@@ -2422,32 +2422,6 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) const {
     return allowed;
 }
 
-bool gossiper::is_safe_for_restart(locator::host_id host_id) const {
-    // Reject to restart a node in case:
-    // *) if the node has been removed from the cluster by nodetool decommission or
-    //    nodetool removenode
-    std::unordered_set<std::string_view> not_allowed_statuses{
-        versioned_value::STATUS_LEFT,
-        versioned_value::REMOVED_TOKEN,
-    };
-    bool allowed = true;
-    for (auto& x : _endpoint_state_map) {
-        auto node = x.first;
-        try {
-            auto status = get_gossip_status(node);
-            logger.debug("is_safe_for_restart: node with host_id={}, status={}", node, status);
-            if (host_id == node && not_allowed_statuses.contains(status)) {
-                allowed = false;
-                logger.error("is_safe_for_restart: node with host_id={}, status={}", node, status);
-                break;
-            }
-        } catch (...) {
-            logger.info("is_safe_for_restart: node={} doesn't not have status or host_id yet in gossip", node);
-        }
-    }
-    return allowed;
-}
-
 std::set<sstring> gossiper::get_supported_features(locator::host_id endpoint) const {
     auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
     if (!app_state) {
