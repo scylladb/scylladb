@@ -702,19 +702,19 @@ template <> struct fmt::formatter<cql3::expr::untyped_constant::type_class> : fm
 namespace cql3::expr {
 
 static
-bytes
-untyped_constant_parsed_value(const untyped_constant uc, data_type validator)
+managed_bytes
+untyped_constant_parsed_value(const untyped_constant& uc, data_type validator)
 {
     try {
         if (uc.partial_type == untyped_constant::type_class::hex && validator == bytes_type) {
-            auto v = static_cast<std::string_view>(uc.raw_text);
+            auto v = utils::chunked_string_view(uc.raw_text);
             v.remove_prefix(2);
-            return to_bytes(validator->from_string(v));
+            return validator->from_string(v);
         }
         if (validator->is_counter()) {
-            return to_bytes(long_type->from_string(uc.raw_text));
+            return long_type->from_string(uc.raw_text);
         }
-        return to_bytes(validator->from_string(uc.raw_text));
+        return validator->from_string(uc.raw_text);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -810,7 +810,7 @@ untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary:
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
       if (uc.partial_type != untyped_constant::type_class::null) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
-            uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
+            uc.partial_type, uc.raw_text.linearize(), *receiver->name, receiver->type->as_cql3_type().to_string()));
       } else {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
       }
