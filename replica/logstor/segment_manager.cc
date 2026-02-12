@@ -566,6 +566,7 @@ public:
     future<> write_to_separator_buffer(separator& sep, log_record_writer writer,
             noncopyable_function<future<>(future<log_location>)> on_written);
     future<> write_to_separator(separator&, write_buffer&, log_location base_location);
+    future<> write_to_separator(separator&, log_segment_id);
     future<> flush_separator(separator&);
     future<> abort_separator(separator&);
 
@@ -1666,6 +1667,28 @@ future<> compaction_manager::write_to_separator(separator& sep, write_buffer& wb
     }
 }
 
+future<> compaction_manager::write_to_separator(separator& sep, log_segment_id seg_id) {
+    co_await _sm.for_each_record(seg_id,
+        [this, &sep] (log_location read_location, log_record record) -> future<> {
+            if (!is_record_alive(record.key, read_location)) {
+                co_return;
+            }
+
+            auto key = record.key;
+
+            co_await write_to_separator_buffer(sep, log_record_writer(std::move(record)),
+                [this, key = std::move(key), prev_loc = read_location] (future<log_location> new_loc_fut) mutable {
+                    return new_loc_fut.then([this, key = std::move(key), prev_loc] (log_location new_loc) {
+                        if (!update_record_location(key, prev_loc, new_loc)) {
+                            _sm.free_record(new_loc);
+                        }
+                    });
+                }
+            );
+        }
+    );
+}
+
 future<> compaction_manager::flush_separator(separator& sep) {
     for (auto&& [gid, bufs] : sep._group_buffers) {
         logstor_logger.trace("Flushing separator buffers for group {} with {} buffers from {} segments", gid, bufs.size(), sep._segments.size());
@@ -1784,11 +1807,20 @@ future<> segment_manager_impl::do_recovery() {
                 logstor_logger.trace("Recovered segment {} with group id {}", seg_id, *desc.gid);
                 _compaction_mgr.add_segment(desc);
             } else {
-                // TODO recover mixed segments
                 logstor_logger.trace("Recovered segment {} with mixed groups", seg_id);
+                if (!_active_separator) {
+                    _active_separator = make_lw_shared<separator>(_separator_flush_threshold);
+                    _active_separator->start(_segment_phaser.start());
+                }
+                _active_separator->add_segment(seg_id);
+                co_await _compaction_mgr.write_to_separator(*_active_separator, seg_id);
             }
         }
         co_await coroutine::maybe_yield();
+    }
+
+    if (_active_separator) {
+        _active_separator->request_switch();
     }
 
     _next_new_segment_id = allocated_segment_count;
