@@ -19,6 +19,7 @@
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
 #include "utils/chunked_string.hh"
+#include "utils/managed_bytes.hh"
 #include "types/json_utils.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -588,6 +589,60 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     };
 
     test_string_conversion({10, {}, "a@@:b:c"}, "10:@:a\\@\\@\\:b\\:c");
+}
+
+// Build a managed_bytes from `data` whose internal allocator limits each
+// fragment's payload to `frag_size` bytes, forcing multiple chunks.
+// The returned managed_bytes must not outlive this call's stack frame because
+// it holds a raw pointer to the local allocation strategy — wrap usage inside
+// a lambda that runs while this object is alive, or keep it on the same stack.
+static managed_bytes make_fragmented_managed_bytes(bytes_view data, size_t frag_size) {
+    // The allocator limit must cover both the payload and the per-fragment
+    // metadata overhead so that managed_bytes' internal max_seg() computes
+    // back to frag_size.
+    size_t alloc_limit = frag_size
+        + std::max(sizeof(multi_chunk_blob_storage), sizeof(single_chunk_blob_storage));
+    class limited_alloc : public standard_allocation_strategy {
+    public:
+        explicit limited_alloc(size_t limit) {
+            _preferred_max_contiguous_allocation = limit;
+        }
+    };
+    limited_alloc alloc(alloc_limit);
+    managed_bytes result;
+    with_allocator(alloc, [&] {
+        result = managed_bytes(data);
+    });
+    return result;
+}
+
+// Test that tuple from_string correctly handles an escaped colon (\:) when
+// the backslash and the colon fall in different chunks of a chunked_string.
+// Without correct cross-chunk handling the `:` would be mistaken for a field
+// separator, splitting a single-field tuple into two — causing an exception or
+// returning the wrong value.
+BOOST_AUTO_TEST_CASE(test_tuple_from_string_escaped_colon_cross_chunk_boundary) {
+    // Single-field tuple<text> whose value is "a:b" — serialised as "a\:b".
+    // Raw bytes of the serialised form: 'a', '\\', ':', 'b'  (4 bytes total).
+    // With frag_size=2 the managed_bytes splits as:
+    //   chunk 0: { 'a', '\\' }   ← escape character is the LAST byte
+    //   chunk 1: { ':',  'b' }   ← colon is the FIRST byte of the next chunk
+    // This is the boundary case for split_field_strings / count_segments.
+    auto tuple_t = tuple_type_impl::get_instance({utf8_type});
+
+    const bytes_view raw = bytes_view(reinterpret_cast<const int8_t*>("a\\:b"), 4); // 4 bytes: a \ : b
+    const size_t frag_size = 2;                           // forces boundary between \ and :
+    auto mb = make_fragmented_managed_bytes(raw, frag_size);
+    auto csv = utils::chunked_string_view(mb);
+
+    // from_string must treat \: as an escaped colon and parse a single field.
+    managed_bytes result = tuple_t->from_string(csv);
+
+    // Deserialise and check that the single field is "a:b" (colon unescaped).
+    auto native = value_cast<tuple_type_impl::native_type>(tuple_t->deserialize(result));
+    BOOST_REQUIRE_EQUAL(native.size(), 1u);
+    BOOST_REQUIRE(!native[0].is_null());
+    BOOST_REQUIRE_EQUAL(value_cast<sstring>(native[0]), "a:b");
 }
 
 BOOST_AUTO_TEST_CASE(test_vector) {
