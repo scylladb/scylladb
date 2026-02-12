@@ -573,6 +573,7 @@ public:
     }
 
     future<> write_to_separator(separator&, write_buffer&, log_location base_location);
+    future<> write_to_separator(separator&, log_segment_id);
     future<> flush_separator(separator&);
     future<> abort_separator(separator&);
 
@@ -1677,6 +1678,28 @@ future<> compaction_manager::write_to_separator(separator& sep, write_buffer& wb
     }
 }
 
+future<> compaction_manager::write_to_separator(separator& sep, log_segment_id seg_id) {
+    co_await _sm.for_each_record(seg_id, [this, &sep] (log_location read_location, log_record record) -> future<> {
+        if (!is_record_alive(record.key, read_location)) {
+            co_return;
+        }
+
+        auto key = record.key;
+        auto writer = log_record_writer(std::move(record));
+
+        auto& buf = get_separator_buffer(sep, writer);
+        auto f = buf.write(std::move(writer)).then(
+            [this, key = std::move(key), prev_loc = read_location] (log_location new_loc) {
+                if (!update_record_location(key, prev_loc, new_loc)) {
+                    _sm.free_record(new_loc);
+                }
+                return make_ready_future<>();
+            }
+        );
+        buf.pending_updates.push_back(std::move(f));
+    });
+}
+
 future<> compaction_manager::flush_separator(separator& sep) {
     logstor_logger.debug("Flushing separator with {} segments and {} buffers from {} groups",
             sep._segments.size(), sep._buffer_count, sep.group_count());
@@ -1795,11 +1818,21 @@ future<> segment_manager_impl::do_recovery() {
                 logstor_logger.trace("Recovered segment {} with group id {}", seg_id, *desc.gid);
                 _compaction_mgr.add_segment(desc);
             } else {
-                // TODO recover mixed segments
                 logstor_logger.trace("Recovered segment {} with mixed groups", seg_id);
+                if (!_active_separator) {
+                    _active_separator = make_lw_shared<separator>(_separator_flush_threshold);
+                }
+                _active_separator->add_segment(seg_id);
+                co_await with_scheduling_group(_cfg.separator_sg, [this, seg_id] {
+                     return _compaction_mgr.write_to_separator(*_active_separator, seg_id);
+                });
             }
         }
         co_await coroutine::maybe_yield();
+    }
+
+    if (_active_separator) {
+        _active_separator->request_switch();
     }
 
     _next_new_segment_id = allocated_segment_count;
