@@ -196,7 +196,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         )
 
 
-@pytest.hookimpl(trylast=True)
+@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
     """Add custom XML attributes to JUnit testcase elements.
 
@@ -208,7 +208,7 @@ def pytest_runtest_logreport(report):
     Attributes added:
     - function_path: The function path of the test case (excluding parameters).
 
-    Uses trylast=True to run after LogXML's hook has created the node_reporter.
+    Uses tryfirst=True to run before LogXML's hook has created the node_reporter to avoid double recording.
     """
     # Get the XML reporter
     config = _pytest_config
