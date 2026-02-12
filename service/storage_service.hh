@@ -485,7 +485,6 @@ private:
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
             std::unordered_map<locator::host_id, sstring> loaded_peer_features,
-            std::chrono::milliseconds,
             start_hint_manager start_hm,
             gms::generation_type new_generation);
 public:

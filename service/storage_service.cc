@@ -1575,10 +1575,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
         std::unordered_map<locator::host_id, sstring> loaded_peer_features,
-        std::chrono::milliseconds delay,
         start_hint_manager start_hm,
         gms::generation_type new_generation) {
-    std::unordered_set<token> bootstrap_tokens;
     gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
      * This value is nullopt only when:
@@ -1596,7 +1594,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     std::optional<cdc::generation_id> cdc_gen_id;
 
     std::optional<replacement_info> ri;
-    std::optional<gms::inet_address> replace_address;
     std::optional<raft_group0::replace_info> raft_replace_info;
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -1614,14 +1611,12 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             throw std::runtime_error(msg);
         }
 
-        replace_address = ri->address;
         raft_replace_info = raft_group0::replace_info {
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
-        auto local_features = _feature_service.supported_feature_set();
         slogger.info("Performing gossip shadow round, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::no);
         _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
@@ -2257,7 +2252,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
     }
 
     co_return co_await join_topology(proxy, std::move(initial_contact_nodes),
-            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
+            std::move(loaded_endpoints), std::move(loaded_peer_features), start_hm, new_generation);
 }
 
 future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter) {
