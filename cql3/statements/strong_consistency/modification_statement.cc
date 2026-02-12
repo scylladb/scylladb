@@ -55,7 +55,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
             auto muts = _statement->apply_updates(keys, ranges, params, json_cache);
             if (muts.size() != 1) {
                 on_internal_error(logger, ::format("statement '{}' has unexpected number of mutations {}",
-                    raw_cql_statement, muts.size()));
+                    raw_cql_statement.linearize(), muts.size()));
             }
             return std::move(*muts.begin());
         });

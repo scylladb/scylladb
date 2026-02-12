@@ -561,7 +561,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
             co_return co_await fn(query_state, statement, options, std::move(guard));
         } catch (const service::group0_concurrent_modification& ex) {
             log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.",
-                    statement->raw_cql_statement, retries ? " Retrying" : " Number of retries exceeded, giving up");
+                    statement->raw_cql_statement.linearize(), retries ? " Retrying" : " Number of retries exceeded, giving up");
             if (retries--) {
                 continue;
             }
@@ -688,13 +688,13 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, service::query_state& query_state, cql3::dialect d) {
+query_processor::prepare(utils::chunked_string query_string, service::query_state& query_state, cql3::dialect d) {
     auto& client_state = query_state.get_client_state();
     return prepare(std::move(query_string), client_state, d);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
+query_processor::prepare(utils::chunked_string query_string, const service::client_state& client_state, cql3::dialect d) {
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
@@ -719,25 +719,29 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
         }
         co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
     } catch(typename prepared_statements_cache::statement_is_too_big&) {
-        throw prepared_statement_is_too_big(query_string);
+        throw prepared_statement_is_too_big(query_string.linearize());
     }
 }
 
-static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
-    std::string ret(keyspace);
-    ret += query_string;
-    return ret;
+static utils::chunked_string hash_target(utils::chunked_string_view query_string, std::string_view keyspace) {
+    managed_bytes ret(managed_bytes::initialized_later(), query_string.size() + keyspace.size());
+
+    auto dest = managed_bytes_mutable_view(ret);
+    write_fragmented(dest, utils::to_managed_bytes_view(keyspace));
+    write_fragmented(dest, query_string.data());
+
+    return utils::chunked_string(std::move(ret));
 }
 
 prepared_cache_key_type query_processor::compute_id(
-        std::string_view query_string,
+        utils::chunked_string_view query_string,
         std::string_view keyspace,
         dialect d) {
-    return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)), d);
+    return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
+query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d) {
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
@@ -747,22 +751,23 @@ query_processor::get_statement(const std::string_view& query, const service::cli
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats);
-    p->statement->raw_cql_statement = sstring(query);
+    p->statement->raw_cql_statement = utils::chunked_string(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
-        audit_info->set_query_string(query);
+        audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
         p->statement->sanitize_audit_info();
     }
     return p;
 }
 
 std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(const std::string_view& query, dialect d) {
+query_processor::parse_statement(utils::chunked_string_view query, dialect d) {
     try {
         {
             const char* error_injection_key = "query_processor-parse_statement-test_failure";
             utils::get_local_injector().inject(error_injection_key, [&]() {
-                if (query.find(error_injection_key) != std::string_view::npos) {
+                auto query_sv = query.linearize();
+                if (query_sv.find(error_injection_key) != std::string_view::npos) {
                     throw std::runtime_error(error_injection_key);
                 }
             });
@@ -777,13 +782,13 @@ query_processor::parse_statement(const std::string_view& query, dialect d) {
     } catch (const exceptions::cassandra_exception& e) {
         throw;
     } catch (const std::exception& e) {
-        log.error("The statement: {} could not be parsed: {}", query, e.what());
-        throw exceptions::syntax_exception(seastar::format("Failed parsing statement: [{}] reason: {}", query, e.what()));
+        log.error("The statement: {} could not be parsed: {}", query.linearize(), e.what());
+        throw exceptions::syntax_exception(seastar::format("Failed parsing statement: [{}] reason: {}", query.linearize(), e.what()));
     }
 }
 
 std::vector<std::unique_ptr<raw::parsed_statement>>
-query_processor::parse_statements(std::string_view queries, dialect d) {
+query_processor::parse_statements(utils::chunked_string_view queries, dialect d) {
     try {
         auto statements = util::do_with_parser(queries, d, std::mem_fn(&cql3_parser::CqlParser::queries));
         if (statements.empty()) {
@@ -795,8 +800,8 @@ query_processor::parse_statements(std::string_view queries, dialect d) {
     } catch (const exceptions::cassandra_exception& e) {
         throw;
     } catch (const std::exception& e) {
-        log.error("The statements: {} could not be parsed: {}", queries, e.what());
-        throw exceptions::syntax_exception(seastar::format("Failed parsing statements: [{}] reason: {}", queries, e.what()));
+        log.error("The statements: {} could not be parsed: {}", queries.linearize(), e.what());
+        throw exceptions::syntax_exception(seastar::format("Failed parsing statements: [{}] reason: {}", queries.linearize(), e.what()));
     }
 }
 
@@ -859,8 +864,8 @@ query_options query_processor::make_internal_options(
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
-        auto np = parse_statement(query_string, internal_dialect())->prepare(_db, _cql_stats);
-        np->statement->raw_cql_statement = query_string;
+        auto np = parse_statement(utils::chunked_string(query_string), internal_dialect())->prepare(_db, _cql_stats);
+        np->statement->raw_cql_statement = utils::chunked_string(query_string);
         p = std::move(np); // inserts it into map
     }
     return p->checked_weak_from_this();
@@ -970,8 +975,8 @@ query_processor::execute_internal(
         return execute_with_params(std::move(p), cl, query_state, values);
     } else {
         // For internal queries, we want the default dialect, not the user provided one
-        auto p = parse_statement(query_string, dialect{})->prepare(_db, _cql_stats);
-        p->statement->raw_cql_statement = query_string;
+        auto p = parse_statement(utils::chunked_string(query_string), dialect{})->prepare(_db, _cql_stats);
+        p->statement->raw_cql_statement = utils::chunked_string(query_string);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
@@ -1047,7 +1052,7 @@ query_processor::execute_batch_without_checking_exception_message(
    if (log.is_enabled(logging::log_level::trace)) {
         std::ostringstream oss;
         for (const auto& s: batch->get_statements()) {
-            oss << std::endl <<  s.statement->raw_cql_statement;
+            oss << std::endl <<  s.statement->raw_cql_statement.linearize();
         }
         log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
     }
@@ -1099,7 +1104,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 }
 
 future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::group0_batch& mc) {
-    auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
+    auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement.linearize());
     auto [remote_, holder] = remote();
     auto [m, guard] = co_await std::move(mc).extract();
     if (m.empty()) {
@@ -1113,7 +1118,7 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
         co_await remote_.get().ss.wait_for_topology_not_busy();
         if (!error.empty()) {
-            log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement, request_id, error);
+            log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement.linearize(), request_id, error);
             throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
         }
         co_return;
