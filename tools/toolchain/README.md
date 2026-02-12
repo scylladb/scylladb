@@ -70,7 +70,7 @@ If you add dependencies (to `install-dependencies.sh` or
 
 Run the command
 
-    podman build --no-cache --pull -f tools/toolchain/Dockerfile .
+    podman build --no-cache --pull -f tools/toolchain/Dockerfile . -v "$(realpath ./):/mnt:Z" -t $(<tools/toolchain/image)
 
 and use the resulting image.
 
