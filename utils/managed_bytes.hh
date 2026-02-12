@@ -509,6 +509,20 @@ bytes_opt to_bytes_opt(const managed_bytes_opt&);
 managed_bytes_opt to_managed_bytes_opt(const bytes_opt&);
 
 template<FragmentedView View>
+managed_bytes from_hex(View view) {
+    if (view.size_bytes() % 2) {
+        throw std::invalid_argument("A hex string representing bytes must have an even length");
+    }
+    managed_bytes result{managed_bytes::initialized_later(), view.size_bytes() / 2};
+    managed_bytes_mutable_view dest(result);
+    for (auto frag : fragment_range(view)) {
+        auto v = std::string_view(reinterpret_cast<const char*>(frag.data()), frag.size());
+        write_fragmented(dest, single_fragmented_view(from_hex(v)));
+    }
+    return result;
+}
+
+template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
