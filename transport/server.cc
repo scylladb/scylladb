@@ -48,6 +48,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/chunked_string.hh"
 #include "client_data.hh"
 #include "cql3/query_processor.hh"
 #include "auth/authenticator.hh"
@@ -1216,14 +1217,14 @@ cql_server::connection::process_query(uint16_t stream, request_reader in, servic
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
 
-    utils::result_with_exception_ptr<std::string_view> query_sv = in.read_long_string_view();
-    if (!query_sv) {
-        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(query_sv).assume_error());
+    utils::result_with_exception_ptr<utils::chunked_string> query_result = in.read_long_chunked_string();
+    if (!query_result) {
+        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(query_result).assume_error());
     }
-    auto query = sstring(query_sv.assume_value());
+    auto query = std::move(query_result).assume_value();
     auto dialect = get_dialect();
 
-    tracing::add_query(trace_state, query);
+    tracing::add_query(trace_state, query.linearize());
     tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
 
     return _server._query_processor.invoke_on_others([query, &client_state, dialect] (auto& qp) mutable {
@@ -1291,7 +1292,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     if (init_trace) {
         tracing::set_page_size(trace_state, options.get_page_size());
-        tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
+        tracing::add_query(trace_state, sstring(prepared->statement->raw_cql_statement.linearize()));
         tracing::add_prepared_statement(trace_state, prepared);
         tracing::set_common_query_parameters(trace_state, options.get_consistency(),
             options.get_serial_consistency(), options.get_specific_options().timestamp);
@@ -1402,7 +1403,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
             }
             if (init_trace) {
-                tracing::add_query(trace_state, ps->statement->raw_cql_statement);
+                tracing::add_query(trace_state, sstring(ps->statement->raw_cql_statement.linearize()));
             }
             break;
         }

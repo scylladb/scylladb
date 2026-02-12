@@ -6429,6 +6429,15 @@ class scylla_prepared_statements(gdb.Command):
         except SystemExit:
             return
 
+        chunked_string_type = gdb.lookup_type('utils::chunked_string')
+
+        def try_decode(raw_stmt: bytes):
+            try:
+                return raw_stmt.decode("utf-8", "replace")
+            except Exception:
+                gdb.write("try_decode(): falied to decode raw statement: {}\n".format(e))
+                return str(raw_stmt)
+
         qp = sharded(gdb.parse_and_eval("debug::the_query_processor").dereference()).local()
         for lst in ['_lru_list', '_unprivileged_lru_list']:
             for x in intrusive_list(qp['_prepared_cache']['_cache'][lst]):
@@ -6437,11 +6446,11 @@ class scylla_prepared_statements(gdb.Command):
                 if val:
                     value = std_unique_ptr(val.get()['_value']).get().dereference()
                     stmt = seastar_shared_ptr(value['statement']).get().dereference()
-                    try:
-                        gdb.write("(cql3::cql_statement*)({}): {}\n".format(stmt.address, sstring(stmt['raw_cql_statement']).as_bytes().decode("utf-8", "replace")))
-                    except Exception as e:
-                        gdb.write("Error: {}\n".format(e))
-                        gdb.write("(cql3::cql_statement*)({}): {}\n".format(stmt.address, sstring(stmt['raw_cql_statement']).as_bytes()))
+                    if stmt['raw_cql_statement'].type == chunked_string_type:
+                        stmt_str = try_decode(managed_bytes(stmt['raw_cql_statement']['_data']).get())
+                    else:
+                        stmt_str = try_decode(sstring(stmt['raw_cql_statement']).as_bytes())
+                    gdb.write("(cql3::cql_statement*)({}): {}\n".format(stmt.address, stmt_str))
                 else:
                     gdb.write("{}\n".format(val))
 
