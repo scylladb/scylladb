@@ -19,6 +19,8 @@ namespace query {
 
 static_assert(std::is_nothrow_move_constructible_v<non_null_data_value>);
 static_assert(std::is_nothrow_move_assignable_v<non_null_data_value>);
+static_assert(std::is_nothrow_move_constructible_v<result_set_row>);
+static_assert(std::is_nothrow_move_assignable_v<result_set_row>);
 
 class deserialization_error : public std::runtime_error {
 public:
@@ -50,7 +52,7 @@ private:
 };
 
 std::ostream& operator<<(std::ostream& out, const result_set_row& row) {
-    for (auto&& cell : row._cells) {
+    for (auto&& cell : row.cells()) {
         auto&& type = static_cast<const data_value&>(cell.second).type();
         auto&& value = cell.second;
         out << cell.first << "=\"" << type->to_string(type->decompose(value)) << "\" ";

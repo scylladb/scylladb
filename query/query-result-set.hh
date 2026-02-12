@@ -46,7 +46,7 @@ inline bool operator==(const non_null_data_value& x, const non_null_data_value& 
 // including regular column cells, partition keys, as well as static values.
 class result_set_row {
     schema_ptr _schema;
-    const std::unordered_map<sstring, non_null_data_value> _cells;
+    std::unordered_map<sstring, non_null_data_value> _cells;
 public:
     result_set_row(schema_ptr schema, std::unordered_map<sstring, non_null_data_value>&& cells)
         : _schema{schema}
@@ -54,15 +54,16 @@ public:
     { }
     result_set_row(result_set_row&&) = default;
     result_set_row(const result_set_row&) = delete;
+    result_set_row& operator=(result_set_row&&) = default;
     result_set_row& operator=(const result_set_row&) = delete;
     result_set_row copy() const {
-        return {_schema, std::unordered_map{_cells}};
+        return {_schema, std::unordered_map{cells()}};
     }
     // Look up a deserialized row cell value by column name
     const data_value*
     get_data_value(const sstring& column_name) const {
-        auto it = _cells.find(column_name);
-        if (it == _cells.end()) {
+        auto it = cells().find(column_name);
+        if (it == cells().end()) {
             return nullptr;
         }
         return &static_cast<const data_value&>(it->second);
