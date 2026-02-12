@@ -455,6 +455,9 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
         # Restart the leaving replica (src_server)
         await manager.server_restart(src_server.server_id)
 
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
 
         await manager.api.enable_tablet_balancing(servers[0].ip_addr)
@@ -475,9 +478,6 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
                 return True
         await wait_for(tablets_merged, time.time() + 60)
 
-        # Workaround for https://github.com/scylladb/scylladb/issues/21779. We don't want the keyspace drop at the end
-        # of new_test_keyspace to fail because of concurrent tablet migrations.
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
