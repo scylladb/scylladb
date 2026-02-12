@@ -889,11 +889,16 @@ private:
                 seeds.emplace(gms::inet_address("127.0.0.1"));
             }
 
+            _topology_state_machine.start().get();
+            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
+                _topology_state_machine.stop().get();
+            });
+
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
             gcfg.shutdown_announce_ms = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map), std::ref(_topology_state_machine)).get();
             auto stop_ms_fd_gossiper = defer_verbose_shutdown("gossiper", [this] {
                 _gossiper.stop().get();
             });
@@ -933,11 +938,6 @@ private:
             _tablet_allocator.start(service::tablet_allocator::config{}, std::ref(_mnotifier), std::ref(_db)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [this] {
                 _tablet_allocator.stop().get();
-            });
-
-            _topology_state_machine.start().get();
-            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
-                _topology_state_machine.stop().get();
             });
 
             _view_building_state_machine.start().get();

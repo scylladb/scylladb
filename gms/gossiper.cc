@@ -85,14 +85,10 @@ const std::set<inet_address>& gossiper::get_seeds() const noexcept {
     return _gcfg.seeds;
 }
 
-std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
-    auto delay = std::max(unsigned(30000), _gcfg.ring_delay_ms);
-    auto ring_delay = std::chrono::milliseconds(delay);
-    return ring_delay * 2;
-}
-
-gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map)
-        : _abort_source(as)
+gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map,
+    service::topology_state_machine& tsm)
+        : _topo_sm(tsm)
+        , _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
         , _address_map(address_map)
@@ -103,8 +99,6 @@ gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, 
     }
 
     _scheduled_gossip_task.set_callback(_gcfg.gossip_scheduling_group, [this] { run(); });
-    // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
-    fat_client_timeout = quarantine_delay() / 2;
     // Register this instance with JMX
     namespace sm = seastar::metrics;
     auto ep = my_host_id();
@@ -697,16 +691,9 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
             logger.trace("Ignoring gossip for {} because it maps to local id, but is not local address", ep);
             return make_ready_future<>();
         }
-        if (_topo_sm) {
-            if (_topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
-                logger.trace("Ignoring gossip for {} because it left", ep);
-                return make_ready_future<>();
-            }
-        } else {
-            if (_just_removed_endpoints.contains(hid)) {
-                logger.trace("Ignoring gossip for {} because it is quarantined", hid);
-                return make_ready_future<>();
-            }
+        if (_topo_sm._topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
+            logger.trace("Ignoring gossip for {} because it left", ep);
+            return make_ready_future<>();
         }
         return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, hid, state = std::move(it->second)] () mutable {
             return do_apply_state_locally(hid, std::move(state), false);
@@ -776,7 +763,6 @@ future<> gossiper::remove_endpoint(locator::host_id endpoint, permit_id pid) {
     });
     _syn_handlers.erase(host_id);
     _ack_handlers.erase(host_id);
-    quarantine_endpoint(host_id);
     logger.info("Removed endpoint {}", endpoint);
 
     if (was_alive) {
@@ -785,63 +771,6 @@ future<> gossiper::remove_endpoint(locator::host_id endpoint, permit_id pid) {
             co_await do_on_dead_notifications(ip, std::move(state), pid);
         } catch (...) {
             logger.warn("Fail to call on_dead callback: {}", std::current_exception());
-        }
-    }
-}
-
-future<> gossiper::do_status_check() {
-    logger.trace("Performing status check ...");
-
-    auto now = this->now();
-
-    for (const auto& host_id : get_endpoints()) {
-        if (host_id == my_host_id()) {
-            continue;
-        }
-
-        auto permit = co_await lock_endpoint(host_id, null_permit_id);
-        const auto& pid = permit.id();
-
-        auto eps = get_endpoint_state_ptr(host_id);
-        if (!eps) {
-            continue;
-        }
-        auto& ep_state = *eps;
-        if (host_id != ep_state.get_host_id()) {
-            on_internal_error(logger, fmt::format("Gossiper entry with id {} has state with id {}", host_id, ep_state.get_host_id()));
-        }
-        bool is_alive = this->is_alive(host_id);
-        auto update_timestamp = ep_state.get_update_timestamp();
-
-        // check if this is a fat client. fat clients are removed automatically from
-        // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(host_id)
-            && !_just_removed_endpoints.contains(host_id)
-            && ((now - update_timestamp) > fat_client_timeout)) {
-            logger.info("FatClient {} has been silent for {}ms, removing from gossip", host_id, fat_client_timeout.count());
-            co_await remove_endpoint(host_id, pid); // will put it in _just_removed_endpoints to respect quarantine delay
-            co_await evict_from_membership(host_id, pid); // can get rid of the state immediately
-            continue;
-        }
-
-        // check for dead state removal
-        auto expire_time = get_expire_time_for_endpoint(host_id);
-        if (!is_alive && (now > expire_time)) {
-            const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
-            if (!host_id || !node || !node->is_member()) {
-                logger.debug("time is expiring for endpoint : {} ({})", host_id, expire_time.time_since_epoch().count());
-                co_await evict_from_membership(host_id, pid);
-            }
-        }
-    }
-
-    for (auto it = _just_removed_endpoints.begin(); it != _just_removed_endpoints.end();) {
-        auto& t= it->second;
-        if ((now - t) > quarantine_delay()) {
-            logger.info("{} ms elapsed, {} gossip quarantine over", quarantine_delay().count(), it->first);
-            it = _just_removed_endpoints.erase(it);
-        } else {
-            it++;
         }
     }
 }
@@ -1189,9 +1118,6 @@ void gossiper::run() {
                         logger.trace("Failed to send gossip to unreachable members: {}", ep);
                     });
                 });
-                if (!_topo_sm) {
-                    do_status_check().get();
-                }
             }
     }).then_wrapped([this] (auto&& f) {
         try {
@@ -1316,19 +1242,7 @@ future<> gossiper::evict_from_membership(locator::host_id hid, permit_id pid) {
         g._endpoint_state_map.erase(hid);
     });
     _expire_time_endpoint_map.erase(hid);
-    quarantine_endpoint(hid);
     logger.debug("evicting {} from gossip", hid);
-}
-
-void gossiper::quarantine_endpoint(locator::host_id id) {
-    quarantine_endpoint(id, now());
-}
-
-void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start) {
-    if (!_topo_sm) {
-        // In raft topology mode the coodinator maintains banned nodes list
-        _just_removed_endpoints[id] = quarantine_start;
-    }
 }
 
 utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const {
@@ -1416,64 +1330,7 @@ future<> gossiper::advertise_token_removed(locator::host_id host_id, permit_id p
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    if (_topo_sm) {
-        throw std::runtime_error("Assassinating endpoint is not supported in topology over raft mode");
-    }
-    co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
-        auto endpoint_opt = gossiper.try_get_host_id(inet_address(address));
-        if (!endpoint_opt) {
-            logger.warn("There is no endpoint {} to assassinate", address);
-            throw std::runtime_error(format("There is no endpoint {} to assassinate", address));
-        }
-        auto endpoint = *endpoint_opt;
-        auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
-        auto es = gossiper.get_endpoint_state_ptr(endpoint);
-        auto now = gossiper.now();
-        generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
-        version_type ver(9999);
-        if (!es) {
-            logger.warn("There is no endpoint {} to assassinate", endpoint);
-            throw std::runtime_error(format("There is no endpoint {} to assassinate", endpoint));
-        }
-        endpoint_state ep_state = *es;
-        std::vector<dht::token> tokens;
-        logger.warn("Assassinating {} via gossip", endpoint);
-
-        tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
-        if (tokens.empty()) {
-            logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-            throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
-        }
-
-        auto generation = ep_state.get_heart_beat_state().get_generation();
-        auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-        auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
-        logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
-        // make sure it did not change
-        co_await sleep_abortable(ring_delay, gossiper._abort_source);
-
-        es = gossiper.get_endpoint_state_ptr(endpoint);
-        if (!es) {
-            logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-        } else {
-            auto& new_state = *es;
-            if (new_state.get_heart_beat_state().get_generation() != generation) {
-                throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
-            } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
-            }
-        }
-        ep_state.update_timestamp(); // make sure we don't evict it too soon
-        ep_state.get_heart_beat_state().force_newer_generation_unsafe();
-
-        // do not pass go, do not collect 200 dollars, just gtfo
-        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-        auto expire_time = gossiper.compute_expire_time();
-        ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-        co_await gossiper.handle_major_state_change(std::move(ep_state), permit.id(), true);
-        co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
-        logger.warn("Finished assassinating {}", endpoint);
-    });
+    throw std::runtime_error("Assassinating endpoint is not supported in topology over raft mode");
 }
 
 future<generation_type> gossiper::get_current_generation_number(locator::host_id endpoint) const {
@@ -1517,15 +1374,6 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         }
     }
     return make_ready_future<>();
-}
-
-bool gossiper::is_gossip_only_member(locator::host_id host_id) const {
-    auto es = get_endpoint_state_ptr(host_id);
-    if (!es) {
-        return false;
-    }
-    const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
-    return !is_dead_state(*es) && (!node || !node->is_member());
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(locator::host_id id) const noexcept {
@@ -1801,9 +1649,6 @@ future<> gossiper::real_mark_alive(locator::host_id host_id) {
     }
 
     logger.debug("Mark Node {} alive after EchoMessage", host_id);
-
-    // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
-    update_timestamp(es);
 
     logger.debug("removing expire time for endpoint : {}", host_id);
     bool was_live = false;

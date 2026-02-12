@@ -2249,8 +2249,6 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         }
     }
 
-    _gossiper.set_topology_state_machine(&_topology_state_machine);
-
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
             initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
@@ -2486,7 +2484,6 @@ future<> storage_service::stop() {
     co_await _async_gate.close();
     _tablet_split_monitor_event.signal();
     co_await std::move(_tablet_split_monitor);
-    _gossiper.set_topology_state_machine(nullptr);
 }
 
 future<> storage_service::wait_for_group0_stop() {

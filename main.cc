@@ -1623,6 +1623,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             auto group0_id = sys_ks.local().get_raft_group0_id().get();
 
+            checkpoint(stop_signal, "starting topology state machine");
+            sharded<service::topology_state_machine> tsm;
+            tsm.start().get();
+            auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
+                tsm.stop().get();
+            });
+            auto notify_topology = [&tsm] (auto) {
+                tsm.local().event.broadcast();
+            };
+            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
+            auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
+
             // Fail on a gossiper seeds lookup error only if the node is not bootstrapped.
             const bool fail_on_lookup_error = !sys_ks.local().bootstrap_complete();
 
@@ -1646,7 +1658,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map), std::ref(tsm)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
@@ -1748,18 +1760,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-
-            checkpoint(stop_signal, "starting topology state machine");
-            sharded<service::topology_state_machine> tsm;
-            tsm.start().get();
-            auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
-                tsm.stop().get();
-            });
-            auto notify_topology = [&tsm] (auto) {
-                tsm.local().event.broadcast();
-            };
-            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
-            auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
             auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
                 auto dict = co_await sys_ks.local().query_dict(name);

@@ -218,9 +218,7 @@ public:
     // value this node would get if this node were restarted that we are
     // willing to accept about a peer.
     static constexpr generation_type::value_type MAX_GENERATION_DIFFERENCE = 86400 * 365;
-    std::chrono::milliseconds fat_client_timeout;
 
-    std::chrono::milliseconds quarantine_delay() const noexcept;
 private:
     mutable std::default_random_engine _random_engine{std::random_device{}()};
 
@@ -246,17 +244,11 @@ private:
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
 
-    /* map where key is endpoint and value is timestamp when this endpoint was removed from
-     * gossip. We will ignore any gossip regarding these endpoints for QUARANTINE_DELAY time
-     * after removal to prevent nodes from falsely reincarnating during the time when removal
-     * gossip gets propagated to all nodes */
-    std::map<locator::host_id, clk::time_point> _just_removed_endpoints;
-
     std::map<locator::host_id, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
 
-    service::topology_state_machine* _topo_sm = nullptr;
+    service::topology_state_machine& _topo_sm;
 
     // Must be called on shard 0.
     future<semaphore_units<>> lock_endpoint_update_semaphore();
@@ -286,7 +278,8 @@ private:
     // Must be called under lock_endpoint.
     future<> replicate(endpoint_state, permit_id);
 public:
-    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map,
+        service::topology_state_machine& tsm);
 
     /**
      * Register for interesting state changes.
@@ -326,14 +319,6 @@ public:
      */
     version_type get_max_endpoint_state_version(const endpoint_state& state) const noexcept;
 
-    void set_topology_state_machine(service::topology_state_machine* m) {
-        _topo_sm = m;
-        if (m) {
-            // In raft topology mode the coodinator maintains banned nodes list
-            _just_removed_endpoints.clear();
-        }
-    }
-
 private:
     /**
      * @param endpoint end point that is convicted.
@@ -355,22 +340,6 @@ public:
     future<> remove_endpoint(locator::host_id endpoint, permit_id);
     // Returns true if an endpoint was removed
     future<> force_remove_endpoint(locator::host_id id, permit_id);
-private:
-    /**
-     * Quarantines the endpoint for QUARANTINE_DELAY
-     *
-     * @param endpoint
-     */
-    void quarantine_endpoint(locator::host_id id);
-
-    /**
-     * Quarantines the endpoint until quarantine_start + QUARANTINE_DELAY
-     *
-     * @param endpoint
-     * @param quarantine_start
-     */
-    void quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start);
-
 private:
     /**
      * The gossip digest is built based on randomization
@@ -402,7 +371,6 @@ public:
     future<generation_type> get_current_generation_number(locator::host_id endpoint) const;
     future<version_type> get_current_heart_beat_version(locator::host_id endpoint) const;
 
-    bool is_gossip_only_member(locator::host_id endpoint) const;
     bool is_safe_for_bootstrap(inet_address endpoint) const;
     bool is_safe_for_restart(locator::host_id host_id) const;
 private:
@@ -422,8 +390,6 @@ private:
 
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
-
-    future<> do_status_check();
 
 public:
     clk::time_point get_expire_time_for_endpoint(locator::host_id endpoint) const noexcept;
