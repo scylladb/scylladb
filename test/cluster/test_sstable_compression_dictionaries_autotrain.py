@@ -53,6 +53,9 @@ async def test_autoretrain_dict(manager: ManagerClient):
     n_blobs = 1024
     uncompressed_size = blob_size * n_blobs * rf
 
+    # Start with compressor without a dictionary
+    cfg = { "sstable_compression_user_table_options": "ZstdCompressor" }
+
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(2, cmdline=[
         '--logger-log-level=storage_service=debug',
@@ -61,7 +64,7 @@ async def test_autoretrain_dict(manager: ManagerClient):
         '--sstable-compression-dictionaries-retrain-period-in-seconds=1',
         '--sstable-compression-dictionaries-autotrainer-tick-period-in-seconds=1',
         f'--sstable-compression-dictionaries-min-training-dataset-bytes={int(uncompressed_size/2)}',
-    ], auto_rack_dc="dc1")
+    ], auto_rack_dc="dc1", config=cfg)
 
     logger.info("Creating table")
     cql = manager.get_cql()
