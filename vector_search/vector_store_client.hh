@@ -87,6 +87,7 @@ struct vector_store_client_tester {
     static void set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<net::inet_address>>(sstring const&)> resolver);
     static void trigger_dns_resolver(vector_store_client& vsc);
     static auto resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::vector<net::inet_address>>;
+    static unsigned truststore_reload_count(vector_store_client& vsc);
 };
 
 } // namespace vector_search
