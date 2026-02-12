@@ -11,6 +11,7 @@
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
+#include "utils/chunked_string.hh"
 #include <boost/algorithm/string.hpp>
 
 logging::logger klog("keys");
@@ -58,7 +59,7 @@ partition_key partition_key::from_string_components(const schema_ptr s, const st
     std::vector<bytes> r;
     r.reserve(components.size());
     for (auto t : s->partition_key_type()->types()) {
-        r.emplace_back(t->from_string(*it++));
+        r.emplace_back(to_bytes(t->from_string(*it++)));
     }
     return partition_key::from_range(std::move(r));
 }

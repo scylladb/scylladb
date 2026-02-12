@@ -15,6 +15,7 @@
 #include "tools/utils.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 
 using namespace seastar;
 using namespace tools::utils;
@@ -65,7 +66,7 @@ struct serializing_visitor {
         std::vector<bytes> serialized_values;
         serialized_values.reserve(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
-            serialized_values.push_back(type.types().at(i)->from_string(values.at(i)));
+            serialized_values.push_back(to_bytes(type.types().at(i)->from_string(values.at(i))));
         }
         return type.serialize_value(serialized_values);
     }

@@ -45,6 +45,7 @@
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/managed_string.hh"
+#include "utils/chunked_string.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
@@ -2881,8 +2882,8 @@ utils::UUID timeuuid_type_impl::from_string_view(std::string_view s) {
 namespace {
 struct from_string_visitor {
     std::string_view s;
-    bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
-    bytes operator()(const counter_type_impl&) { return long_type->from_string(s); }
+    bytes operator()(const reversed_type_impl& r) { return to_bytes(r.underlying_type()->from_string(s)); }
+    bytes operator()(const counter_type_impl&) { return to_bytes(long_type->from_string(s)); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
     bytes operator()(const ascii_type_impl&) {
         auto bv = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
@@ -3004,7 +3005,7 @@ struct from_string_visitor {
         for (std::size_t i = 0; i < field_strings.size(); ++i) {
             if (field_strings[i] != "@") {
                 std::string field_string = unescape(field_strings[i]);
-                fields[i] = t.type(i)->from_string(field_string);
+                fields[i] = to_bytes(t.type(i)->from_string(field_string));
                 field_len[i] = fields[i].size();
             }
         }
@@ -3023,7 +3024,11 @@ struct from_string_visitor {
 };
 }
 
-bytes abstract_type::from_string(std::string_view s) const { return visit(*this, from_string_visitor{s}); }
+managed_bytes abstract_type::from_string(utils::chunked_string_view s) const {
+    return s.with_linearized([this] (std::string_view sv) {
+        return managed_bytes(visit(*this, from_string_visitor{sv}));
+    });
+}
 
 static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::native_type& b) {
     std::ostringstream out;
