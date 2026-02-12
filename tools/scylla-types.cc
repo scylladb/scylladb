@@ -419,7 +419,8 @@ $ scylla types {{action}} --help
         switch (handler.index()) {
             case 0:
                 {
-                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex) | std::ranges::to<std::vector>();
+                    auto from_hex_func = [] (const sstring& hex_str) { return from_hex(hex_str); };
+                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex_func) | std::ranges::to<std::vector>();
                     std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);
                 }
                 break;
