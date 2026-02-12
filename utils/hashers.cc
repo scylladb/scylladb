@@ -9,6 +9,7 @@
 #include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/simple_hashers.hh"
+#include "utils/managed_bytes.hh"
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
@@ -88,6 +89,16 @@ template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(con
     unsigned char digest[size];
     hash.CalculateDigest(digest, reinterpret_cast<const unsigned char*>(s.data()), s.size());
     return bytes{reinterpret_cast<const int8_t*>(digest), size};
+}
+
+template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(managed_bytes_view s) {
+    cryptopp_hasher<T, size> hasher;
+
+    for (bytes_view frag : fragment_range(s)) {
+        hasher.update(reinterpret_cast<const char*>(frag.data()), frag.size());
+    }
+
+    return hasher.finalize();
 }
 
 template class cryptopp_hasher<md5_hasher, 16>;
