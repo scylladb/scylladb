@@ -1447,12 +1447,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         size_t total_count = 0;
         bool should_break = false;
         for (auto&& [base_table, tables [[maybe_unused]]] : tm->tablets().all_table_groups()) {
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
             if (should_break) {
-                const auto& tmap = tm->tablets().get_tablet_map(base_table);
                 total_count += tmap.transitions().size();
                 continue;
             }
-            const auto& tmap = tm->tablets().get_tablet_map(base_table);
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 total_count++;
                 if (logged_count < max_count) {
