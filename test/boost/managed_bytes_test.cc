@@ -9,6 +9,7 @@
 #define BOOST_TEST_MODULE core
 
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
 #include <boost/test/unit_test.hpp>
@@ -565,5 +566,92 @@ BOOST_AUTO_TEST_CASE(test_byte_iterator_mutable) {
     size_t idx = 0;
     for (auto it = v.begin(); it != v.end(); ++it, ++idx) {
         BOOST_CHECK_EQUAL(as_u8(*it), static_cast<uint8_t>(as_u8(b[idx]) + 1));
+    }
+}
+
+// Round-trip helper: encode `data` as hex, store it as a managed_bytes
+// fragmented at `frag_size`, run the fragmented from_hex(), and check the
+// result equals the original bytes.
+static void check_fragmented_from_hex(bytes_view data, size_t frag_size) {
+    sstring hex = to_hex(data);
+    bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+    managed_bytes_factory factory(frag_size);
+    auto fragmented_hex = factory.make(hex_bv);
+    managed_bytes result = utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex)));
+    BOOST_CHECK_EQUAL(to_bytes(result), bytes(data));
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_empty) {
+    // Empty input should produce an empty managed_bytes.
+    managed_bytes result = utils::from_hex(utils::chunked_string_view());
+    BOOST_CHECK(result.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_single_fragment) {
+    // The entire hex string lives in one fragment — baseline correctness.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        // Large fragment so it never splits.
+        check_fragmented_from_hex(b, 8192);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_even_fragment_size) {
+    // Fragment size is even: hex pairs always land inside a single fragment.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        // Fragment size of 4 hex chars == 2 decoded bytes.
+        check_fragmented_from_hex(b, 4);
+        check_fragmented_from_hex(b, 8);
+        check_fragmented_from_hex(b, 64);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_odd_fragment_size) {
+    // Fragment size is odd: hex pairs regularly straddle fragment boundaries.
+    // This is the critical case fixed by the carry-over logic.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        check_fragmented_from_hex(b, 1);  // every nibble is its own fragment
+        check_fragmented_from_hex(b, 3);
+        check_fragmented_from_hex(b, 5);
+        check_fragmented_from_hex(b, 7);
+        check_fragmented_from_hex(b, alloc_size);      // 63 — odd
+        check_fragmented_from_hex(b, alloc_size + 2);  // 65 — odd
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_nibble_per_fragment) {
+    // Extreme case: fragment size = 1, so every character is its own fragment.
+    // All pairs straddle boundaries.
+    auto b = tests::random::get_bytes(16);
+    check_fragmented_from_hex(b, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_known_value) {
+    // Sanity check against a known hex/bytes pair.
+    // "deadbeef" -> {0xde, 0xad, 0xbe, 0xef}
+    const sstring hex = "deadbeef";
+    const bytes expected = {'\xde', '\xad', '\xbe', '\xef'};
+
+    for (size_t frag_size : {1, 2, 3, 4, 7, 8, 16}) {
+        bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+        managed_bytes_factory factory(frag_size);
+        auto fragmented_hex = factory.make(hex_bv);
+        managed_bytes result = utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex)));
+        BOOST_CHECK_EQUAL(to_bytes(result), expected);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_odd_length_throws) {
+    // A hex string with odd total length must always throw, regardless of
+    // fragmentation.
+    const sstring hex = "abc";  // 3 chars — odd
+    bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+
+    for (size_t frag_size : {1, 2, 3, 8}) {
+        managed_bytes_factory factory(frag_size);
+        auto fragmented_hex = factory.make(hex_bv);
+        BOOST_CHECK_THROW(utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex))), std::invalid_argument);
     }
 }

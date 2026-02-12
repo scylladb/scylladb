@@ -10,6 +10,7 @@ target_sources(utils
     ascii.cc
     base64.cc
     big_decimal.cc
+    chunked_string.cc
     bloom_calculations.cc
     bloom_filter.cc
     build_id.cc
