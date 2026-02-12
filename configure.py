@@ -2288,31 +2288,9 @@ user_ldflags += ' -fvisibility-inlines-hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 
-kmip_lib_ver = '1.9.2a';
-
-def kmiplib():
-    os_ids = get_os_ids()
-    for id in os_ids:
-        if id in { 'centos', 'fedora', 'rhel' }:
-            return 'rhel84'
-    print('Could not resolve libkmip.a for platform {}'.format(os_ids))
-    sys.exit(1)
-
-def target_cpu():
-    cpu, _, _ = subprocess.check_output([cxx, '-dumpmachine']).decode('utf-8').partition('-')
-    return cpu    
-
-def kmip_arch():
-    arch = target_cpu()
-    if arch == 'x86_64':
-        return '64'
-    return arch 
-
-kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
-kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
-if os.path.exists(kmipc_lib):
-    libs += f' {kmipc_lib}'
-    user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
+libkmip_dir = 'libkmip'
+libs += ' -lboost_filesystem'
+user_cflags += f' -I{libkmip_dir}/include -DHAVE_KMIP'
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = [
@@ -2569,6 +2547,13 @@ def write_build_file(f,
                 wasms = str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & wasms)]),
             )
         )
+        kmip_srcs = ' '.join([f'{libkmip_dir}/src/{file}' for file in ['kmip.c', 'kmip_io.c', 'kmip_memset.c', 'kmip_bio.c']])
+        kmip_headers = ' '.join([f'{libkmip_dir}/include/{file}' for file in ['kmip.h', 'kmip_io.h', 'kmip_memset.h', 'kmip_bio.h']])
+        f.write(textwrap.dedent('''\
+            rule libkmip.{mode}
+                command = make -f $in/Makefile SRC_DIR=$in/src INC_DIR=$in/include LIB_DIR=`dirname $out` OBJ_DIR=`dirname $out` $out
+            build $builddir/{mode}/libkmip.a: libkmip.{mode} {libkmip_dir} | {kmip_srcs} {kmip_headers}
+        ''').format(mode=mode, libkmip_dir=libkmip_dir, kmip_srcs=kmip_srcs, kmip_headers = kmip_headers, **modeval))
         if profile_recipe := modes[mode].get('profile_recipe'):
             f.write(profile_recipe)
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
@@ -2639,6 +2624,7 @@ def write_build_file(f,
 
             local_libs = f'$seastar_libs_{mode} $libs'
             objs.extend([f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs])
+            objs.extend([f'$builddir/{mode}/libkmip.a'])
 
             if do_lto:
                 local_libs += ' -flto=thin -ffat-lto-objects'
