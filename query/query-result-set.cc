@@ -21,6 +21,8 @@ static_assert(std::is_nothrow_move_constructible_v<non_null_data_value>);
 static_assert(std::is_nothrow_move_assignable_v<non_null_data_value>);
 static_assert(std::is_nothrow_move_constructible_v<result_set_row>);
 static_assert(std::is_nothrow_move_assignable_v<result_set_row>);
+static_assert(std::is_nothrow_move_constructible_v<result_set>);
+static_assert(std::is_nothrow_move_assignable_v<result_set>);
 
 class deserialization_error : public std::runtime_error {
 public:
@@ -33,7 +35,7 @@ public:
 class result_set_builder {
     schema_ptr _schema;
     const partition_slice& _slice;
-    std::vector<result_set_row> _rows;
+    result_set::rows_type _rows;
     std::unordered_map<sstring, non_null_data_value> _pkey_cells;
     uint64_t _row_count;
 public:
