@@ -13,16 +13,12 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
+#include "utils/managed_bytes_fwd.hh"
 #include <seastar/util/alloc_failure_injector.hh>
 #include <type_traits>
 #include <utility>
 
 class bytes_ostream;
-
-template <mutable_view is_mutable_view>
-class managed_bytes_basic_view;
-using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
-using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 // Used to store managed_bytes data in layout 3. (See the doc comment of managed_bytes).
 // Also used as the underlying storage for bytes_ostream.
