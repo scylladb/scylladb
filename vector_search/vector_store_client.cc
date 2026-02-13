@@ -414,4 +414,8 @@ auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abor
     co_return ret;
 }
 
+unsigned vector_store_client_tester::truststore_reload_count(vector_store_client& vsc) {
+    return vsc._impl->_truststore.reload_count();
+}
+
 } // namespace vector_search
