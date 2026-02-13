@@ -8,7 +8,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
+from test.cluster.util import reconnect_driver, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
 
 from cassandra.query import ConsistencyLevel
 
@@ -703,7 +703,7 @@ async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(ma
             table = cf.split('.')[-1]
 
             coord = await get_topology_coordinator(manager)
-            coord_serv = await find_server_by_host_id(manager, servers, coord)
+            coord_serv = await manager.find_server_by_host_id(servers, coord)
             coord_log = await manager.server_open_log(coord_serv.server_id)
             coord_mark = await coord_log.mark()
 
@@ -730,7 +730,7 @@ async def test_incremental_repair_rejoin_do_tablet_operation(manager):
 
             async def get_coord():
                 coord = await get_topology_coordinator(manager)
-                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_serv = await manager.find_server_by_host_id(servers, coord)
                 coord_log = await manager.server_open_log(coord_serv.server_id)
                 return coord, coord_serv, coord_log
 
@@ -778,7 +778,7 @@ async def test_incremental_retry_end_repair_stage(manager):
 
             async def get_coord():
                 coord = await get_topology_coordinator(manager)
-                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_serv = await manager.find_server_by_host_id(servers, coord)
                 coord_log = await manager.server_open_log(coord_serv.server_id)
                 return coord, coord_serv, coord_log
 

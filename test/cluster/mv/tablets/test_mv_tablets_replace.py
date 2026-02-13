@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id
+from test.cluster.util import get_topology_coordinator
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 from test.cluster.util import new_test_keyspace, wait_for
 
@@ -61,15 +61,15 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         logger.info(f'{ks}.test replicas: {base_replicas}')
         view_replicas = await get_tablet_replicas(manager, servers[0], ks, "tv", 0)
         logger.info(f'{ks}.tv replicas: {view_replicas}')
-        server_to_replace = await find_server_by_host_id(manager, servers, HostID(str(view_replicas[0][0])))
-        server_to_down = await find_server_by_host_id(manager, servers, HostID(str(base_replicas[0][0])))
+        server_to_replace = await manager.find_server_by_host_id(servers, HostID(str(view_replicas[0][0])))
+        server_to_down = await manager.find_server_by_host_id(servers, HostID(str(base_replicas[0][0])))
 
         logger.info('Downing a node to be replaced')
         await manager.server_stop(server_to_replace.server_id)
 
         logger.info('Blocking tablet rebuild')
         coord = await get_topology_coordinator(manager)
-        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_serv = await manager.find_server_by_host_id(servers, coord)
         await manager.api.enable_injection(coord_serv.ip_addr, "tablet_transition_updates", one_shot=True)
         coord_log = await manager.server_open_log(coord_serv.server_id)
         coord_mark = await coord_log.mark()

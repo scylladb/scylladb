@@ -310,6 +310,12 @@ class ManagerClient:
             result[await self.get_host_id(s.server_id)] = s
         return result
 
+    async def find_server_by_host_id(self, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
+        for s in servers:
+            if await self.get_host_id(s.server_id) == host_id:
+                return s
+        raise Exception(f"Host ID {host_id} not found in {servers}")
+
     async def starting_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of servers currently
            starting. Can be useful for killing (with server_stop()) a server

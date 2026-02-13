@@ -12,8 +12,7 @@ from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
-        wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
-        find_server_by_host_id
+        wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -386,7 +385,7 @@ async def test_driver_service_level(manager: ManagerClient) -> None:
 
     logger.info("Verify that sl:driver is not re-created even after topology coordinator reload")
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
 
     hosts = await wait_for_cql_and_get_hosts(cql, servers + new_servers, time.time() + 60)
@@ -417,7 +416,7 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
 
     logger.info("Check the logs to see that sl:driver creation failed")
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     log_file = await manager.server_open_log(coord_serv.server_id)
     mark = await log_file.mark()
 

@@ -17,7 +17,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -621,7 +621,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
     [await manager.api.disable_injection(s.ip_addr, numeric_injection) for s in servers]
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     s1_log = await manager.server_open_log(coord_serv.server_id)
     s1_mark = await s1_log.mark()
 
