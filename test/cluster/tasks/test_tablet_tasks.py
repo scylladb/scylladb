@@ -14,7 +14,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
 from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator, find_server_by_host_id
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator
 from test.cluster.test_incremental_repair import trigger_tablet_merge
 from test.cluster.test_tablets2 import inject_error_on
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -222,7 +222,7 @@ async def test_tablet_repair_wait(manager: ManagerClient):
         await message_injection(manager, servers, stop_repair_injection)
 
         # Merge tablets.
-        coord = await find_server_by_host_id(manager, servers, await get_topology_coordinator(manager))
+        coord = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
         log2 = await manager.server_open_log(coord.server_id)
         await trigger_tablet_merge(manager, servers, [log2])
 

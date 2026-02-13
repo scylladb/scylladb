@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Callable
 
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id
+from test.cluster.util import get_topology_coordinator
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 from test.cluster.util import new_test_keyspace, wait_for
 
@@ -40,8 +40,8 @@ async def get_disjoint_paired_replicas(manager, servers, ks):
     if base_ids & view_ids:
         logger.info("Waiting for disjoint base/view replicas: base=%s view=%s", base_replicas, view_replicas)
         return None
-    base_servers = [ await find_server_by_host_id(manager, servers, host) for host, _ in base_replicas ]
-    view_servers = [ await find_server_by_host_id(manager, servers, host) for host, _ in view_replicas ]
+    base_servers = [ await manager.find_server_by_host_id(servers, host) for host, _ in base_replicas ]
+    view_servers = [ await manager.find_server_by_host_id(servers, host) for host, _ in view_replicas ]
     base_by_rack = {(s.datacenter, s.rack): s for s in base_servers}
     view_by_rack = {(s.datacenter, s.rack): s for s in view_servers}
     if len(base_by_rack) != len(base_servers) or len(view_by_rack) != len(view_servers):
@@ -99,7 +99,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient, 
 
         # get topology coordinator so we wont stop it
         coord = await get_topology_coordinator(manager)
-        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_serv = await manager.find_server_by_host_id(servers, coord)
 
         # make sure that our replicas are still in a good shape and paired correctly
         base_replicas, view_replicas, base_by_rack, view_by_rack = await wait_for(read_disjoint_paired_replicas, time.time() + scale_timeout(60))
