@@ -4350,7 +4350,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 
         if (_gossiper.is_alive(host_id)) {
             const std::string message = ::format(
-                "removenode: Rejected removenode operation for node {}"
+                "removenode: Rejected removenode operation for node {}; "
                 "the node being removed is alive, maybe you should use decommission instead?",
                 id);
             rtlogger.warn("{}", message);
