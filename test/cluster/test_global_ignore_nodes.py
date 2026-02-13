@@ -28,7 +28,7 @@ async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) 
     # test that non existing uuid is rejected
     rnd_id = str(uuid.uuid4())
     await manager.remove_node(servers[1].server_id, servers[4].server_id, [rnd_id],
-                        expected_error=f"Node {rnd_id} is not found in the cluster")
+                        expected_error=f"Node {rnd_id} is not found in the cluster", wait_dead=False)
     # now remove one dead node while ignoring another one
     s3_id = await manager.get_host_id(servers[3].server_id)
     await manager.remove_node(servers[1].server_id, servers[4].server_id, [s3_id])

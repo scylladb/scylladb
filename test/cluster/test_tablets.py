@@ -1080,7 +1080,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
             await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id])
 
         logger.info(f"Replacing {node_to_replace} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True,
                                     ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
@@ -1155,7 +1155,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
                                 expected_error="Removenode failed")
 
         logger.info(f"Replacing {node_to_remove} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
@@ -1197,12 +1197,12 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
             await manager.server_stop_gracefully(node.server_id)
 
         logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True,
                                     ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[0].property_file())
 
         logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[1].property_file())
 
         logger.info("Verifying data")

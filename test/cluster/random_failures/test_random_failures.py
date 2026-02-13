@@ -226,7 +226,7 @@ async def test_random_failures(manager: ManagerClient,
             await manager.remove_node(
                 initiator_id=(await manager.running_servers())[0].server_id,
                 server_id=s_info.server_id,
-                wait_removed_dead=False,
+                wait_dead=False,
                 timeout=TOPOLOGY_TIMEOUT,
             )
 
