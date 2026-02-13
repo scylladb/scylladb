@@ -124,7 +124,7 @@ seastar::future<client::request_result> client::request(
             co_return std::unexpected{aborted_error{}};
         }
         if (is_server_problem(err)) {
-            handle_server_unavailable();
+            handle_server_unavailable(err);
         }
         co_return std::unexpected{co_await map_err(err)};
     }
@@ -165,8 +165,9 @@ seastar::future<> client::close() {
     co_await _http_client.close();
 }
 
-void client::handle_server_unavailable() {
+void client::handle_server_unavailable(std::exception_ptr err) {
     if (!is_checking_status_in_progress()) {
+        _logger.warn("Request to vector store {} {}:{} failed: {}", _endpoint.host, _endpoint.ip, _endpoint.port, err);
         _checking_status_future = run_checking_status();
     }
 }
