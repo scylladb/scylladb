@@ -262,14 +262,17 @@ async def manager(request: pytest.FixtureRequest,
 
     # Check if the test has the check_nodes_for_errors marker
     found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
-    failed = failed or found_errors
 
-    if failed:
+    failed_test_dir_path = None
+    if failed or found_errors:
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(str.maketrans('[]', '()'))
+        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(
+            str.maketrans('[]', '()'))
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
+
+    if failed:
         await manager_client.gather_related_logs(
             failed_test_dir_path,
             {'pytest.log': test_log, 'test_py.log': test_py_log_test}
@@ -285,7 +288,9 @@ async def manager(request: pytest.FixtureRequest,
 
     cluster_status = await manager_client.after_test(test_case_name, not failed)
     await manager_client.stop()  # Stop client session and close driver after each test
-    if cluster_status["server_broken"]:
+
+    if cluster_status["server_broken"] and not failed:
+        failed = True
         pytest.fail(
             f"test case {test_case_name} left unfinished tasks on Scylla server. Server marked as broken,"
             f" server_broken_reason: {cluster_status["message"]}"
@@ -324,7 +329,8 @@ async def manager(request: pytest.FixtureRequest,
 
         with open(failed_test_dir_path / "found_errors.txt", "w") as f:
             f.write("\n".join(full_message))
-        pytest.fail(f"\n{'\n'.join(full_message)}")
+        if not failed:
+            pytest.fail(f"\n{'\n'.join(full_message)}")
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
