@@ -9,6 +9,7 @@
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/types.hh"
+#include <chrono>
 #include <linux/if_link.h>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
@@ -507,6 +508,14 @@ private:
         uint64_t separator_segments_freed{0};
     } _stats;
 
+    struct controller {
+        float _compaction_overhead{1.0}; // running average ratio
+
+        void update(size_t total_segments, size_t segment_write_count);
+    };
+    controller _controller;
+    timer<lowres_clock> _adjust_shares_timer;
+
 public:
     compaction_manager(segment_manager_impl& sm, log_index& index, compaction_config cfg)
         : _sm(sm)
@@ -515,6 +524,7 @@ public:
         , _compaction_action([this] {
             return start_compaction();
         })
+        , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
     {}
 
     future<> start();
@@ -583,9 +593,17 @@ private:
     void remove_segment(segment_descriptor& desc) {
         _compaction_groups[*desc.gid]._segment_hist.erase(desc);
     }
+
+    void adjust_shares() {
+        auto shares = std::max<float>(1000 * _controller._compaction_overhead, 100);
+        _cfg.compaction_sg.set_shares(shares);
+    }
 };
 
 future<> compaction_manager::start() {
+    if (_cfg.compaction_sg != default_scheduling_group()) {
+        _adjust_shares_timer.arm_periodic(std::chrono::milliseconds(50));
+    }
     co_return;
 }
 
@@ -1614,6 +1632,14 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
         co_await _sm.free_segment(seg_id);
     }
     _stats.segments_compacted += segments.size();
+
+    _controller.update(segments.size(), flush_count);
+}
+
+void compaction_manager::controller::update(size_t total_segments, size_t segment_write_count) {
+    auto new_free_segments = total_segments - segment_write_count;
+    float new_overhead = static_cast<float>(segment_write_count) / std::max<size_t>(1, new_free_segments);
+    _compaction_overhead = 0.8 * _compaction_overhead + 0.2 * new_overhead;
 }
 
 future<> compaction_manager::write_to_separator_buffer(separator& sep, log_record_writer writer,
