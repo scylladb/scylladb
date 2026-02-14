@@ -10,6 +10,7 @@
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/types.hh"
 #include <absl/container/flat_hash_map.h>
+#include <chrono>
 #include <linux/if_link.h>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
@@ -515,6 +516,14 @@ private:
         uint64_t separator_segments_freed{0};
     } _stats;
 
+    struct controller {
+        float _compaction_overhead{1.0}; // running average ratio
+
+        void update(size_t segment_write_count, size_t new_segments);
+    };
+    controller _controller;
+    timer<lowres_clock> _adjust_shares_timer;
+
 public:
     compaction_manager(segment_manager_impl& sm, log_index& index, compaction_config cfg)
         : _sm(sm)
@@ -524,6 +533,7 @@ public:
             return start_compaction();
         })
         , _next_group_for_compaction(_compaction_groups.end())
+        , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
     {}
 
     future<> start();
@@ -590,9 +600,17 @@ private:
     void remove_segment(segment_descriptor& desc);
 
     separator::buffer& get_separator_buffer(separator& sep, const log_record_writer& writer);
+
+    void adjust_shares() {
+        auto shares = std::max<float>(1000 * _controller._compaction_overhead, 1000);
+        _cfg.compaction_sg.set_shares(shares);
+    }
 };
 
 future<> compaction_manager::start() {
+    if (_cfg.compaction_sg != default_scheduling_group()) {
+        _adjust_shares_timer.arm_periodic(std::chrono::milliseconds(50));
+    }
     co_return;
 }
 
@@ -1617,6 +1635,13 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
     _stats.compaction_segments_freed += new_segments;
     _stats.compaction_records_rewritten += records_rewritten;
     _stats.compaction_records_skipped += records_skipped;
+
+    _controller.update(cb.flush_count, new_segments);
+}
+
+void compaction_manager::controller::update(size_t segment_write_count, size_t new_segments) {
+    float new_overhead = static_cast<float>(segment_write_count) / std::max<size_t>(1, new_segments);
+    _compaction_overhead = 0.8 * _compaction_overhead + 0.2 * new_overhead;
 }
 
 void compaction_manager::remove_segment(segment_descriptor& desc) {
