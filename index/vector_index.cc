@@ -102,6 +102,9 @@ const static std::unordered_map<sstring, std::function<void(const sstring&, cons
         {"oversampling", std::bind_front(validate_factor_option, 1.0f, 100.0f)},
         // 'rescoring' enables recalculating of similarity scores of candidates retrieved from vector store when quantization is used.
         {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
+        // 'source_model' is a Cassandra SAI option specifying the embedding model.
+        // Accepted for compatibility with CassIO/LangChain but not used by ScyllaDB.
+        {"source_model", [](const sstring&, const sstring&) { /* accepted for Cassandra compatibility */ }},
     };
 
 bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
