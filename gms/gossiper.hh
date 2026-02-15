@@ -679,6 +679,7 @@ private:
     netw::messaging_service& _messaging;
     gossip_address_map& _address_map;
     gossip_config _gcfg;
+    condition_variable _failure_detector_loop_cv;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(locator::host_id endpoint) const;
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
@@ -705,6 +706,7 @@ public:
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(locator::host_id node, generation_type gossip_generation, uint64_t live_endpoints_version);
+    future<> failure_detector_loop_sleep(std::chrono::seconds duration);
 };
 
 
