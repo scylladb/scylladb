@@ -22,6 +22,7 @@
 
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
@@ -71,6 +72,9 @@ bool is_internal_keyspace(std::string_view name);
 namespace cql3 {
 
 namespace statements {
+
+static logging::logger logger("select_statement");
+
 namespace {
 
 constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
@@ -83,15 +87,23 @@ auto measure_index_latency(const schema& schema, const secondary_index::index& i
 
     auto stats = schema.table().get_index_manager().get_index_stats(index.metadata().name());
     if (stats) {
+        logger.info("REPRODUCER: Acquired stats reference for index {} in keyspace {}",
+                    index.metadata().name(), schema.ks_name());
         stats->add_latency(duration);
+        // REPRODUCER DELAY: Keep the stats lw_shared_ptr reference alive longer
+        // to increase the chance of hitting the double metrics registration bug
+        // when a table with index is dropped and recreated while queries are running.
+        logger.info("REPRODUCER: Sleeping for 5 seconds while holding stats reference for index {}",
+                    index.metadata().name());
+        co_await seastar::sleep(std::chrono::seconds(5));
+        logger.info("REPRODUCER: About to release stats reference for index {}",
+                    index.metadata().name());
     }
 
     co_return result;
 }
 
 } // namespace
-
-static logging::logger logger("select_statement");
 
 template<typename C>
 struct result_to_error_message_wrapper {
