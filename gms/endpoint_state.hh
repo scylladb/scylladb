@@ -116,21 +116,6 @@ public:
     }
 
 public:
-    std::string_view get_status() const noexcept {
-        constexpr std::string_view empty;
-        const auto* app_state = get_application_state_ptr(application_state::STATUS);
-        if (!app_state) {
-            return empty;
-        }
-        const std::string_view value = app_state->value();
-        if (value.empty()) {
-            return empty;
-        }
-        const auto pos = value.find(',');
-        // npos allowed (full value)
-        return value.substr(0, pos);
-    }
-
     bool is_cql_ready() const noexcept;
 
     // Return the value of the HOST_ID application state
@@ -145,10 +130,6 @@ public:
         _ip = ip;
     }
     std::optional<locator::endpoint_dc_rack> get_dc_rack() const;
-
-    // Return the value of the TOKENS application state
-    // or an empty set if the application state is not found.
-    std::unordered_set<dht::token> get_tokens() const;
 
     friend fmt::formatter<endpoint_state>;
 };

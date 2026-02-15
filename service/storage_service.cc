@@ -2029,14 +2029,6 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
     return ret;
 }
 
-std::unordered_set<locator::token> storage_service::get_tokens_for(locator::host_id endpoint) {
-    auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
-    slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
-    auto ret = versioned_value::tokens_from_string(tokens_string);
-    slogger.trace("endpoint={}, tokens={}", endpoint, ret);
-    return ret;
-}
-
 std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(const gms::endpoint_state& ep_state) {
     auto* dc = ep_state.get_application_state_ptr(gms::application_state::DC);
     auto* rack = ep_state.get_application_state_ptr(gms::application_state::RACK);
