@@ -17,6 +17,7 @@
 #include "replica/database.hh"
 #include "seastarx.hh"
 #include <random>
+#include <sys/resource.h>
 
 namespace tests {
 
@@ -139,6 +140,23 @@ sstring make_random_numeric_string(size_t size) {
 }
 
 namespace tests {
+
+void adjust_rlimit() {
+    // Tests should use 1024 file descriptors, but don't punish them
+    // with weird behavior if they do.
+    //
+    // Since this more of a courtesy, don't make the situation worse if
+    // getrlimit/setrlimit fail for some reason.
+    struct rlimit lim;
+    int r = getrlimit(RLIMIT_NOFILE, &lim);
+    if (r == -1) {
+        return;
+    }
+    if (lim.rlim_cur < lim.rlim_max) {
+        lim.rlim_cur = lim.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &lim);
+    }
+}
 
 future<bool> compare_files(std::string fa, std::string fb) {
     auto cont_a = co_await util::read_entire_file_contiguous(fa);
