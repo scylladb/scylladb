@@ -386,11 +386,7 @@ bool storage_service::should_bootstrap() {
 static future<> set_gossip_tokens(gms::gossiper& g,
         const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id) {
     // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-    return g.add_local_application_state(
-        std::pair(gms::application_state::TOKENS, gms::versioned_value::tokens(tokens)),
-        std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(cdc_gen_id)),
-        std::pair(gms::application_state::STATUS, gms::versioned_value::normal(tokens))
-    );
+    return g.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::normal(tokens)));
 }
 
 static locator::node::state to_topology_node_state(node_state ns) {
@@ -532,11 +528,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
             sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
-            co_await _gossiper.add_local_application_state(
-                std::pair(gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens)),
-                std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.committed_cdc_generations.back())),
-                std::pair(gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens))
-            );
+            co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens)));
         }
         update_topology(host_id, rs);
         co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
@@ -1690,8 +1682,6 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     if (restarting_normal_node) {
         // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
         // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
-        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(my_tokens));
-        app_states.emplace(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id));
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
