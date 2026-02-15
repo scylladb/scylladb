@@ -706,7 +706,17 @@ view_indexed_table_select_statement::do_execute_base_query(
     }
 
     const bool is_paged = bool(paging_state);
-    base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
+    const auto row_limit = [&] {
+        if (!needs_post_query_ordering() && _selection->is_trivial() && !_restrictions_need_filtering) { // fast path
+            auto old_paging_state = options.get_paging_state();
+            if (old_paging_state) {
+                return old_paging_state->get_remaining();
+            }
+            return cmd->get_row_limit();
+        }
+        return cmd->get_row_limit() * queried_ranges_count;
+    }();
+    base_query_state query_state{row_limit, std::move(ranges_to_vnodes)};
     {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
@@ -720,33 +730,85 @@ view_indexed_table_select_statement::do_execute_base_query(
             dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
             auto command = ::make_lw_shared<query::read_command>(*cmd);
             auto old_paging_state = options.get_paging_state();
+            // Clustering ranges - Lower bound:
+            //
+            // If:
+            //
+            // * we are resuming a paged query (i.e., there is an old_paging_state),
+            // * and the old paging state contains an index view clustering key (recall that {index view ck} is a {base table primary key}),
+            // * and the base table has a clustering key,
+            //
+            // then we need to intersect the slice with [base_ck, +inf) so that
+            // the base table read resumes from the same position as the index
+            // view read.
+            //
+            // In the special case where the secondary index is on the first column
+            // of a clustering key, we have an *additional* restriction: we should not
+            // read the entire clustering range - only a range in which first column
+            // of clustering key has the correct value. This restriction is already
+            // encoded in partition_slice::_row_ranges (see prepare_command_for_base_query()),
+            // and is *orthogonal* to the paging state restriction mentioned above.
+            // If both are present, they need to be intersected (which is why the code
+            // below initializes row_ranges with partition_slice::default_row_ranges()
+            // and not an open_ended_both_sides clustering range on base_pk).
+            //
+            // If none of the above conditions are met, we read an entire
+            // partition (whole clustering range).
             if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
                 auto row_ranges = command->slice.default_row_ranges();
-                if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0 && !target_cdef->is_static()) {
+
+                // Check if the base partition key from the old paging state is smaller than the first partition in prange (in token order).
+                // This will be true only if the last page stopped at the end of a partition.
+                // If so, we're starting the new page from a different partition and don't need to trim clustering row ranges.
+                // Even worse: it's not only redundant, but it would also prohibit applying an upper bound (happens later in this function) because specific_ranges only work with a single partition.
+                auto base_pk_is_before_prange = [&] {
+                    auto dk = dht::decorate_key(*_schema, base_pk);
+                    auto prange_start_opt = prange.front().start();
+                    if (prange_start_opt.has_value()) {
+                        return dk.less_compare(*_schema, prange_start_opt.value().value());
+                    }
+                    return false;
+                };
+                if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0 && !target_cdef->is_static() && !base_pk_is_before_prange()) {
                     auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                             old_paging_state->get_clustering_key(), *_schema, *_view_schema);
 
                     query::trim_clustering_row_ranges_to(*_schema, row_ranges, base_ck);
                     command->slice.set_range(*_schema, base_pk, row_ranges);
-                } else {
-                    // There is no clustering key in old_paging_state and/or no clustering key in 
-                    // _schema, therefore read an entire partition (whole clustering range).
-                    //
-                    // The only exception to applying no restrictions on clustering key
-                    // is a case when we have a secondary index on the first column
-                    // of clustering key. In such a case we should not read the
-                    // entire clustering range - only a range in which first column
-                    // of clustering key has the correct value. 
-                    //
-                    // This means that we should not set a open_ended_both_sides
-                    // clustering range on base_pk, instead intersect it with
-                    // _row_ranges (which contains the restrictions necessary for the
-                    // case described above). The result of such intersection is just
-                    // _row_ranges, which we explicitly set on base_pk.
-                    command->slice.set_range(*_schema, base_pk, row_ranges);
                 }
+            }
+            // Clustering ranges - Upper bound:
+            //
+            // If:
+            //
+            // * we are reading the last partition range,
+            // * and the index view read returned a paging state with a base table clustering key,
+            //
+            // we need to intersect the slice with (-inf, base_ck] so that the base table
+            // read stops at the same position as the index view read.
+            // This ensures that the result will respect the page size and the
+            // limit will not be exceeded.
+            if (ranges_to_vnodes.empty() && paging_state && paging_state->get_clustering_key() && _schema->clustering_key_size() > 0 && !target_cdef->is_static()) {
+                auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                        paging_state->get_clustering_key(), *_schema, *_view_schema);
+                auto base_ck = generate_base_key_from_index_pk<clustering_key>(paging_state->get_partition_key(),
+                        paging_state->get_clustering_key(), *_schema, *_view_schema);
+                auto row_ranges = command->slice.row_ranges(*_schema, base_pk);
+                query::trim_clustering_row_ranges_from(*_schema, row_ranges, position_in_partition::for_key(base_ck));
+                // Range must be cleared first because set_range() throws an
+                // error if a range already exists for a different partition key.
+                // This can happen if the loop established a lower bound for the
+                // first partition (taken from the old paging state), and later
+                // establishes an upper bound for the last partition (taken from
+                // the new paging state). The two partitions may be different.
+                command->slice.clear_range(*_schema, base_pk);
+                if (command->slice.get_specific_ranges() != nullptr) {
+                    on_internal_error(logger, seastar::format("Specific ranges still exist after clear_range() for partition key: {}. Remaining ranges: {}",
+                            base_pk, *command->slice.get_specific_ranges()));
+                }
+                command->slice.set_range(*_schema, base_pk, row_ranges);
             }
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
@@ -775,9 +837,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(partition_ranges), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -855,9 +917,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(primary_keys), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -921,11 +983,17 @@ view_indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state,
-        uint32_t internal_page_size) const
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
-        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+        auto remaining_from_prev_page = [&] {
+            auto old_paging_state = options.get_paging_state();
+            if (old_paging_state) {
+                return old_paging_state->get_remaining();
+            }
+            return cmd->get_row_limit();
+        }();
+        paging_state = generate_view_paging_state_from_base_query_results(remaining_from_prev_page, paging_state, results, state, options);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -1119,8 +1187,8 @@ bytes view_indexed_table_select_statement::compute_idx_token(const partition_key
     return cdef.get_computation().compute_value(*_schema, key);
 }
 
-lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const {
+lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(uint64_t remaining_from_prev_page, lw_shared_ptr<const service::pager::paging_state> paging_state,
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -1167,7 +1235,13 @@ lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_stat
     }
 
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
-    paging_state_copy->set_remaining(internal_page_size);
+    if (!(results->row_count() && *results->row_count() <= remaining_from_prev_page)) {
+        on_internal_error(logger, seastar::format(
+                "generate_view_paging_state_from_base_query_results: Paging state invariant violated: results->row_count()={}, remaining_from_prev_page={}",
+                results->row_count(), remaining_from_prev_page)
+        );
+    }
+    paging_state_copy->set_remaining(remaining_from_prev_page - *results->row_count());
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return paging_state_copy;
@@ -1260,9 +1334,16 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto internal_page_size = qp.db().get_config().select_internal_page_size();
         internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_page_size));
         do {
-            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+            auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                 if (paging_state) {
-                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+                    auto remaining_from_prev_page = [&] {
+                        auto old_paging_state = options.get_paging_state();
+                        if (old_paging_state) {
+                            return old_paging_state->get_remaining();
+                        }
+                        return cmd->get_row_limit();
+                    }();
+                    paging_state = generate_view_paging_state_from_base_query_results(remaining_from_prev_page, paging_state, results, state, options);
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                 if (_restrictions_need_filtering) {
@@ -1494,7 +1575,8 @@ view_indexed_table_select_statement::find_index_partition_ranges(query_processor
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
-        if (_options.get_paging_state()) {
+        if (_index.target_type() == cql3::statements::index_target::target_type::collection_values &&
+                _options.get_paging_state()) {
             auto paging_state = _options.get_paging_state();
             auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
                 paging_state->get_clustering_key(), *_schema, *_view_schema);

@@ -111,6 +111,15 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 
 /// Trim the clustering ranges.
 ///
+/// Equivalent of intersecting each clustering range with (-inf, pos] position
+/// in partition range. Ranges that do not intersect are dropped. Ranges that
+/// partially overlap are trimmed.
+/// Result: each range will overlap fully with (-inf, pos].
+/// Works both with forward schema and ranges, and reversed schema and native reversed ranges
+void trim_clustering_row_ranges_from(const schema& s, clustering_row_ranges& ranges, position_in_partition pos);
+
+/// Trim the clustering ranges.
+///
 /// Equivalent of intersecting each clustering range with [pos, +inf) position
 /// in partition range. Ranges that do not intersect are dropped. Ranges that
 /// partially overlap are trimmed.
