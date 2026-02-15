@@ -25,6 +25,8 @@ skip_in_release:
   - test_cluster_features
   - dtest/limits_test
   - dtest/schema_management_test
+skip_in_dev:
+  - test_audit
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
@@ -44,6 +46,7 @@ run_in_dev:
   - dtest/bypass_cache_test
   - dtest/auth_roles_test
   - dtest/audit_test
+  - audit/test_audit
   - dtest/commitlog_test
   - dtest/cfid_test
   - dtest/rebuild_test
