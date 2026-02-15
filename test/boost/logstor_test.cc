@@ -36,6 +36,9 @@ inline std::ostream& operator<<(std::ostream& os, const log_location& loc) {
 inline std::ostream& operator<<(std::ostream& os, const index_entry& entry) {
     return os << "index_entry(" << entry.location << ")";
 }
+inline std::ostream& operator<<(std::ostream& os, const group_id& gid) {
+    return os << "group_id(" << gid.table << ", " << gid.compaction_group_id << ")";
+}
 }
 
 BOOST_AUTO_TEST_SUITE(logstor_test)
@@ -464,6 +467,71 @@ SEASTAR_TEST_CASE(test_segment_manager_recovery) {
         auto read_record = co_await sm.read(index_entry->location);
         auto read_mutation = read_record.mut.to_mutation(s);
         assert_that(read_mutation).is_equal_to(m);
+    });
+}
+
+SEASTAR_TEST_CASE(test_separator) {
+    logstor::init_crypto();
+    auto free_crypto = defer([] { logstor::free_crypto(); });
+
+    tmpdir tmp;
+    segment_manager_config sm_cfg = {
+        .base_dir = tmp.path(),
+        .segment_size = 8 * 1024,
+        .file_size = 64 * 8 * 1024,
+        .disk_size = 64 * 8 * 1024,
+        .compaction_enabled = true,
+    };
+
+    co_await do_segment_manager_test(sm_cfg, [] (segment_manager& sm, log_index& index) -> future<> {
+        auto s = make_kv_schema();
+
+        group_id group1 = {table_id(utils::UUID_gen::get_time_UUID()), 1};
+        group_id group2 = {table_id(utils::UUID_gen::get_time_UUID()), 2};
+
+        std::vector<future<>> ops;
+        std::vector<index_key> keys;
+
+        write_buffer wb(sm.get_segment_size());
+
+        // all writes fit in a single segment
+        for (size_t i = 0; i < 4; i++) {
+            auto pk = make_key(*s, format("key_{}", i));
+            auto key = logstor::calculate_key(*s, dht::decorate_key(*s, pk));
+            auto m = make_mutation(s, format("key_{}", i), format("value_{}", i), i + 1);
+            keys.push_back(key);
+
+            log_record_writer writer(log_record {
+                .key = key,
+                .group = (i % 2 == 0) ? group1 : group2,
+                .mut = canonical_mutation(m)
+            });
+
+            ops.push_back(wb.write(std::move(writer)).then([&index, key] (log_location loc) {
+                (void)index.exchange(key, index_entry{.location = loc});
+            }));
+        }
+
+        co_await sm.write(wb);
+        co_await when_all_succeed(ops.begin(), ops.end());
+
+        co_await sm.do_barrier();
+
+        auto group1_segment = index.get(keys[0])->location.segment;
+        auto group2_segment = index.get(keys[1])->location.segment;
+
+        BOOST_REQUIRE_NE(group1_segment, group2_segment);
+        BOOST_REQUIRE_EQUAL(group1_segment, index.get(keys[2])->location.segment);
+        BOOST_REQUIRE_EQUAL(group2_segment, index.get(keys[3])->location.segment);
+
+        for (auto gid : {group1, group2}) {
+            co_await sm.for_each_record({gid == group1 ? group1_segment : group2_segment},
+                [&](log_location loc, log_record record) -> future<> {
+                    BOOST_REQUIRE_EQUAL(record.group, gid);
+                    co_return;
+                }
+            );
+        }
     });
 }
 

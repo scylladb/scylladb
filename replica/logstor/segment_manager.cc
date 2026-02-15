@@ -77,6 +77,7 @@ protected:
 
 class writeable_segment : public segment {
     seastar::gate _write_gate;
+    utils::phased_barrier::operation _barrier_op;
     seastar::gate::holder _separator_holder;
 
     uint32_t _current_offset = 0; // next offset for write
@@ -89,7 +90,7 @@ public:
         seastar::gate::holder holder;
     };
 
-    void start(seastar::gate::holder separator_holder);
+    void start(utils::phased_barrier::operation barrier_op, seastar::gate::holder separator_holder);
 
     future<> stop();
 
@@ -136,7 +137,8 @@ future<log_record> segment::read(log_location loc) {
     });
 }
 
-void writeable_segment::start(seastar::gate::holder separator_holder) {
+void writeable_segment::start(utils::phased_barrier::operation barrier_op, seastar::gate::holder separator_holder) {
+    _barrier_op = std::move(barrier_op);
     _separator_holder = std::move(separator_holder);
 }
 
@@ -146,6 +148,7 @@ future<> writeable_segment::stop() {
     }
     co_await _write_gate.close();
     _separator_holder.release();
+    _barrier_op = {};
 }
 
 writeable_segment::allocation writeable_segment::allocate(size_t data_size) {
@@ -509,6 +512,7 @@ struct separator {
     std::unordered_map<group_id, std::deque<buffer>> _group_buffers;
     std::vector<log_segment_id> _segments;
     seastar::gate _async_gate;
+    utils::phased_barrier::operation _barrier_op;
     size_t _buffer_count{0};
     bool _switch_requested{false};
 
@@ -521,6 +525,10 @@ struct separator {
 
     separator(const separator&) = delete;
     separator& operator=(const separator&) = delete;
+
+    void start(utils::phased_barrier::operation barrier_op) {
+        _barrier_op = std::move(barrier_op);
+    }
 
     future<> close() {
         if (_async_gate.is_closed()) {
@@ -810,6 +818,7 @@ class segment_manager_impl {
     seg_ptr _active_segment;
     segment_pool _segment_pool;
     std::optional<shared_future<>> _switch_segment_fut;
+    utils::phased_barrier _segment_phaser{"logstor_segment_phaser"};
 
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
@@ -870,6 +879,8 @@ public:
     size_t get_segment_size() const noexcept {
         return _cfg.segment_size;
     }
+
+    future<> do_barrier();
 
 private:
 
@@ -1265,6 +1276,8 @@ future<> segment_manager_impl::switch_active_segment() {
     if (new_sep) {
         auto old_sep = std::exchange(_active_separator, std::move(*new_sep));
 
+        _active_separator->start(_segment_phaser.start());
+
         // flush old separator in background
         if (old_sep) {
             (void)with_gate(_async_gate, [this, sep = std::move(old_sep)] () mutable {
@@ -1282,8 +1295,27 @@ future<> segment_manager_impl::switch_active_segment() {
         });
     }
 
-    _active_segment->start(_active_separator->hold());
+    _active_segment->start(_segment_phaser.start(), _active_separator->hold());
     _active_separator->add_segment(_active_segment->id());
+}
+
+future<> segment_manager_impl::do_barrier() {
+    // The barrier forces switch of the active segment and separator and waits for
+    // them and all previous segments and separators to be closed and flushed.
+    logstor_logger.debug("Starting barrier operation");
+    auto phaser_fut =  _segment_phaser.advance_and_await();
+
+    if (_active_separator) {
+        _active_separator->request_switch();
+    }
+
+    if (_switch_segment_fut) {
+        co_await _switch_segment_fut->get_future();
+    }
+    co_await request_segment_switch();
+
+    co_await std::move(phaser_fut);
+    logstor_logger.debug("Barrier operation completed");
 }
 
 future<> segment_manager_impl::close_segment(seg_ptr seg) {
@@ -2088,6 +2120,10 @@ future<> segment_manager::trigger_compaction(bool major) {
 
 size_t segment_manager::get_segment_size() const noexcept {
     return _impl->get_segment_size();
+}
+
+future<> segment_manager::do_barrier() {
+    return _impl->do_barrier();
 }
 
 }

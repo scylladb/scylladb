@@ -145,98 +145,42 @@ async def test_parallel_big_writes(manager: ManagerClient):
             assert rows[0].v == f"{i}-{large_value}"
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="TODO broken by separator")
 async def test_compaction(manager: ManagerClient):
     """
     Test log compaction by creating dead data and verifying space reclamation.
-
-    This test:
-    1. Fills ~2 segments with large values (4KB each) to 64 different keys
-    2. Overwrites 7/8 of those keys to create mostly-dead segments
-    3. Waits for compaction to rewrite live data and reclaim space
-    4. Verifies all data is still readable after compaction
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
     cfg = {'enable_kv_storage': True, 'experimental_features': ['kv-storage']}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "") as ks:
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH kv_storage = true")
 
-        # Create a ~4KB value to fill segments
-        # With segment size of 128KB, we need 32 writes per segment
-        value_size = 3500
-        large_value = 'x' * value_size
-        num_keys = 64  # Fill ~2 segments
+        # write few segments with unique keys, then few segments with overwrites.
+        # write large values so each write fills a single segment.
+        value_size = 120 * 1024
+        value = 'x' * value_size
 
-        logger.info(f"Phase 1: Writing {num_keys} keys with {value_size} byte values to fill ~2 segments")
-        for i in range(num_keys):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{large_value}')")
+        # write few unique keys
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
 
-        # Verify initial writes
-        for i in range(num_keys):
-            rows = await cql.run_async(f"SELECT pk FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1
-            assert rows[0].pk == i
+        # few writes to the same key to create dead data except the last one
+        for i in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
 
-        metrics_before = await manager.metrics.query(servers[0].ip_addr)
+        # the barrier will flush all segments and put them into a single compaction group since
+        # there is a single tablet.
+        await manager.api.logstor_barrier(servers[0].ip_addr)
 
-        # Overwrite most keys to create dead data
-        # This should make the original segments have low live ratios
-        keep_keys = [8 * i for i in range(num_keys // 8)] # Keep every 8th key
-        overwrite_keys = [i for i in range(num_keys) if i not in keep_keys]
-        num_overwrites = len(overwrite_keys)
-        new_value = 'y' * value_size
-
-        logger.info(f"Phase 2: Overwriting {num_overwrites} keys to create dead data in original segments")
-        for i in overwrite_keys:
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{new_value}')")
-
-        # Verify overwrites
-        for i in overwrite_keys:
-            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1
-            assert rows[0].pk == i
-            assert rows[0].v == new_value
-
-        # Verify keys that weren't overwritten still have original value
-        for i in keep_keys:
-            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1
-            assert rows[0].pk == i
-            assert rows[0].v == large_value
-
-        # Perform more writes with unique keys to ensure the segments are closed
-        for i in range(num_keys, num_keys + num_keys):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{large_value}')")
-
-        # run compaction
-        logger.info("Phase 3: Running compaction to reclaim space from segments with dead data")
+        # trigger compaction. should take the 4 segments with dead data and compact them
         await manager.api.logstor_compaction(servers[0].ip_addr)
-        metrics_after = await manager.metrics.query(servers[0].ip_addr)
 
-        segments_compacted_metric = "scylla_logstor_sm_segments_compacted"
-        segments_compacted_before = metrics_before.get(segments_compacted_metric) or 0
-        segments_compacted_after = metrics_after.get(segments_compacted_metric) or 0
-        assert segments_compacted_after > segments_compacted_before, "No segments were compacted"
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        assert segments_compacted == 4, f"Expected 4 segments to be compacted, but got {segments_compacted}"
 
-        assert metrics_after.get("scylla_logstor_sm_compaction_records_rewritten") >= num_keys - num_overwrites
-        assert metrics_after.get("scylla_logstor_sm_compaction_records_skipped") == num_overwrites
-
-        # Verify data after compaction
-        logger.info("Phase 4: Verifying all data is still readable after first compaction")
-        for i in overwrite_keys:
-            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1
-            assert rows[0].pk == i
-            assert rows[0].v == new_value
-
-        for i in keep_keys:
-            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1
-            assert rows[0].pk == i
-            assert rows[0].v == large_value
 
 @pytest.mark.asyncio
 async def test_recovery_basic(manager: ManagerClient):

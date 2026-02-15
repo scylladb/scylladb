@@ -1320,6 +1320,21 @@
          ]
       },
       {
+         "path":"/storage_service/logstor_barrier",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Trigger barrier of the key-value storage",
+               "type":"void",
+               "nickname":"logstor_barrier",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/active_repair/",
          "operations":[
             {

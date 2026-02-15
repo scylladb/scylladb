@@ -60,6 +60,10 @@ future<> logstor::trigger_compaction(bool major) {
     return _segment_manager.trigger_compaction(major);
 }
 
+future<> logstor::do_barrier() {
+    return _segment_manager.do_barrier();
+}
+
 future<> logstor::write(const mutation& m, group_id group) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 

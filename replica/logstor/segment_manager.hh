@@ -72,6 +72,10 @@ public:
 
     size_t get_segment_size() const noexcept;
 
+    // After the barrier, all previous writes will be written in a non-mixed segment according
+    // to their group_id.
+    future<> do_barrier();
+
     friend class segment_manager_impl;
 
 };
