@@ -6,7 +6,11 @@
 import asyncio
 import pytest
 from test.pylib.manager_client import ManagerClient
+<<<<<<< HEAD
 from test.pylib.util import wait_for_view
+=======
+from test.pylib.util import wait_for_view, gather_safely_and_ignore_specific_exceptions
+>>>>>>> c8c7cab809 (test:cluster:mv: use new util function to wait and ignore abort exceptions for shutdown sequence)
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
@@ -80,4 +84,15 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
         # For dropping the keyspace
         await manager.server_start(server.server_id)
         await reconnect_driver(manager)
-        asyncio.gather(create_task1, create_task2)
+        expected_shutdown_errors = [
+            "abort requested",
+            "semaphore aborted",
+            "broken semaphore",
+            "connection is closed",
+            "connection was closed",
+            "connection shutdown",
+            "unable to complete the operation against any hosts",
+            "host has been marked down",
+            "timed out",
+        ]
+        await gather_safely_and_ignore_specific_exceptions([create_task1, create_task2], expected_shutdown_errors)
