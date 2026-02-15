@@ -16,6 +16,7 @@
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sharded.hh>
@@ -190,6 +191,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     // Guard the whole startup routine with a semaphore so that it's not intercepted by
     // `on_drop_view`, `on_create_view`, or `on_update_view` events.
     seastar::named_semaphore _sem{view_builder_semaphore_units, named_semaphore_exception_factory{"view builder"}};
+    seastar::gate _ops_gate;
     seastar::abort_source _as;
     future<> _step_fiber = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
