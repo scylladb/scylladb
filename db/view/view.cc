@@ -2747,25 +2747,29 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
     }));
 }
 
-void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+future<> view_builder::dispatch_update_view(sstring ks_name, sstring view_name) {
     if (should_ignore_tablet_keyspace(_db, ks_name)) {
-        return;
+        co_return;
     }
 
+    [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::nullopt);
+
+    auto view = view_ptr(_db.find_schema(ks_name, view_name));
+    auto step_it = _base_to_build_step.find(view->view_info()->base_id());
+    if (step_it == _base_to_build_step.end()) {
+        co_return; // In case all the views for this CF have finished building already.
+    }
+    auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+        return bs.view->id() == view->id();
+    });
+    if (status_it != step_it->second.build_status.end()) {
+        status_it->view = std::move(view);
+    }
+}
+
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
     // Do it in the background, serialized.
-    (void)with_semaphore(_sem, view_builder_semaphore_units, [ks_name, view_name, this] {
-        auto view = view_ptr(_db.find_schema(ks_name, view_name));
-        auto step_it = _base_to_build_step.find(view->view_info()->base_id());
-        if (step_it == _base_to_build_step.end()) {
-            return;// In case all the views for this CF have finished building already.
-        }
-        auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
-            return bs.view->id() == view->id();
-        });
-        if (status_it != step_it->second.build_status.end()) {
-            status_it->view = std::move(view);
-        }
-    }).handle_exception_type([] (replica::no_such_column_family&) { });
+    static_cast<void>(dispatch_update_view(ks_name, view_name).handle_exception_type([] (replica::no_such_column_family&) { }));
 }
 
 future<> view_builder::dispatch_drop_view(sstring ks_name, sstring view_name) {

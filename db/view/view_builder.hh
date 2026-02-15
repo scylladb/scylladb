@@ -284,6 +284,7 @@ private:
     future<> mark_as_built(view_ptr);
     void setup_metrics();
     future<> dispatch_create_view(sstring ks_name, sstring view_name);
+    future<> dispatch_update_view(sstring ks_name, sstring view_name);
     future<> dispatch_drop_view(sstring ks_name, sstring view_name);
     future<> handle_seed_view_build_progress(const sstring& ks_name, const sstring& view_name);
     future<> handle_create_view_local(const sstring& ks_name, const sstring& view_name, view_builder_units_opt units);
