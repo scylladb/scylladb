@@ -1143,9 +1143,13 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 }
 
 future<> database::make_column_family_directory(schema_ptr schema) {
+    dblog.info("REPRODUCER: make_column_family_directory() - Starting for {}.{}", schema->ks_name(), schema->cf_name());
     auto& cf = find_column_family(schema);
+    dblog.info("REPRODUCER: make_column_family_directory() - Calling reload() for {}.{}", schema->ks_name(), schema->cf_name());
     cf.get_index_manager().reload();
+    dblog.info("REPRODUCER: make_column_family_directory() - reload() completed for {}.{}, calling init_storage()", schema->ks_name(), schema->cf_name());
     co_await cf.init_storage();
+    dblog.info("REPRODUCER: make_column_family_directory() - init_storage() completed for {}.{}", schema->ks_name(), schema->cf_name());
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
@@ -1166,6 +1170,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
+    dblog.info("REPRODUCER: update_column_family() - Starting for {}.{}", new_schema->ks_name(), new_schema->cf_name());
     column_family& cfm = find_column_family(new_schema->id());
     bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
     auto s = local_schema_registry().learn(new_schema);
@@ -1176,7 +1181,9 @@ bool database::update_column_family(schema_ptr new_schema) {
         // We already tested that the base table exists
         find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
     }
+    dblog.info("REPRODUCER: update_column_family() - Calling reload() for {}.{}", new_schema->ks_name(), new_schema->cf_name());
     cfm.get_index_manager().reload();
+    dblog.info("REPRODUCER: update_column_family() - reload() completed for {}.{}", new_schema->ks_name(), new_schema->cf_name());
     return columns_changed;
 }
 
