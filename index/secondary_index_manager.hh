@@ -114,8 +114,11 @@ struct stats {
 private:
     seastar::metrics::metric_groups metrics;
     utils::time_estimated_histogram query_latency;
+    sstring _ks_name;
+    sstring _index_name;
 public:
     stats(const sstring& ks_name, const sstring& index_name);
+    ~stats();
     stats(const stats&) = delete;
     stats& operator=(const stats&) = delete;
     void add_latency(std::chrono::steady_clock::duration d);

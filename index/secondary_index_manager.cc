@@ -14,6 +14,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include <string_view>
 #include <unordered_map>
+#include <thread>
+#include <chrono>
 
 #include "index/secondary_index_manager.hh"
 #include "index/secondary_index.hh"
@@ -23,9 +25,12 @@
 #include "index/target_parser.hh"
 #include "schema/schema.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "utils/log.hh"
 
 seastar::metrics::label idx{"idx"};
 seastar::metrics::label ks{"ks"};
+
+static logging::logger sidx_logger("secondary_index");
 
 namespace secondary_index {
 
@@ -48,7 +53,7 @@ index::supports_expression_v index::supports_expression(const column_definition&
 
     switch (op) {
         case cql3::expr::oper_t::EQ:
-            return supports_expression_v::from_bool(_target_type == target_type::regular_values); 
+            return supports_expression_v::from_bool(_target_type == target_type::regular_values);
         case cql3::expr::oper_t::CONTAINS:
             if (cdef.type->is_set() && _target_type == target_type::keys) {
                 return collection_yes;
@@ -93,8 +98,16 @@ void secondary_index_manager::reload() {
     while (it != _indices.end()) {
         auto index_name = it->first;
         if (!table_indices.contains(index_name)) {
+            sidx_logger.info("REPRODUCER: reload() - Removing index {} from keyspace {}",
+                            index_name, _cf.schema()->ks_name());
             it = _indices.erase(it);
+            sidx_logger.info("REPRODUCER: reload() - Erasing metrics for index {} (may not destroy stats if references exist)",
+                            index_name);
             _metrics.erase(index_name);
+            // REPRODUCER DELAY: Sleep to widen the race window where old stats might still be referenced
+            sidx_logger.info("REPRODUCER: reload() - Sleeping 2 seconds after erasing metrics for {}", index_name);
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            sidx_logger.info("REPRODUCER: reload() - Done sleeping, proceeding with schema changes");
         } else {
             ++it;
         }
@@ -109,7 +122,16 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
     if (!_metrics.contains(im.name())) {
+        // REPRODUCER DELAY: Sleep before creating new stats to increase chance of overlapping with old stats
+        sidx_logger.info("REPRODUCER: add_index() - Sleeping 1 second before creating new stats for index {} in keyspace {}",
+                        im.name(), _cf.schema()->ks_name());
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        sidx_logger.info("REPRODUCER: add_index() - Creating new stats object for index {} in keyspace {}",
+                        im.name(), _cf.schema()->ks_name());
         _metrics.emplace(im.name(), make_lw_shared<stats>(_cf.schema()->ks_name(), im.name()));
+    } else {
+        sidx_logger.info("REPRODUCER: add_index() - Stats already exists for index {} (should not happen in reload scenario)",
+                        im.name());
     }
 }
 
@@ -226,7 +248,10 @@ std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom
     return (*custom_class_factory)();
 }
 
-stats::stats(const sstring& ks_name, const sstring& index_name) {
+stats::stats(const sstring& ks_name, const sstring& index_name)
+    : _ks_name(ks_name), _index_name(index_name) {
+    sidx_logger.info("REPRODUCER: stats::stats() @ {} - Constructor called for index {} in keyspace {}",
+                    std::chrono::steady_clock::now().time_since_epoch().count(), index_name, ks_name);
     metrics.add_group("index",
             {seastar::metrics::make_histogram("query_latencies", seastar::metrics::description("Index query latencies"), {idx(index_name), ks(ks_name)},
                     [this]() {
@@ -234,6 +259,13 @@ stats::stats(const sstring& ks_name, const sstring& index_name) {
                     })
                             .aggregate({seastar::metrics::shard_label})
                             .set_skip_when_empty()});
+    sidx_logger.info("REPRODUCER: stats::stats() @ {} - Metrics registered for index {} in keyspace {}",
+                    std::chrono::steady_clock::now().time_since_epoch().count(), index_name, ks_name);
+}
+
+stats::~stats() {
+    sidx_logger.info("REPRODUCER: stats::~stats() @ {} - Destructor called for index {} in keyspace {} - metrics will be unregistered",
+                    std::chrono::steady_clock::now().time_since_epoch().count(), _index_name, _ks_name);
 }
 
 void stats::add_latency(std::chrono::steady_clock::duration d) {
