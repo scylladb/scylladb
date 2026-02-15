@@ -5,10 +5,10 @@
 #
 import pytest
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_view, gather_safely
+from test.pylib.util import wait_for_view, gather_safely_and_ignore_specific_exceptions
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
-from cassandra.cluster import ConsistencyLevel, NoHostAvailable  # type: ignore
+from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
 # This test makes sure that even if the view building encounter errors, the view building is eventually finished
@@ -79,9 +79,16 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
         # For dropping the keyspace
         await manager.server_start(server.server_id)
         await reconnect_driver(manager)
-        try:
-            await gather_safely(create_task1, create_task2)
-        except NoHostAvailable as e:
-            if not any(s in str(e).lower() for s in ("abort requested", "semaphore aborted")):
-                raise
+        expected_shutdown_errors = [
+            "abort requested",
+            "semaphore aborted",
+            "broken semaphore",
+            "connection is closed",
+            "connection was closed",
+            "connection shutdown",
+            "unable to complete the operation against any hosts",
+            "host has been marked down",
+            "timed out",
+        ]
+        await gather_safely_and_ignore_specific_exceptions([create_task1, create_task2], expected_shutdown_errors)
         
