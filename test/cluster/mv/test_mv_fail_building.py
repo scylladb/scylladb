@@ -84,3 +84,4 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
         except NoHostAvailable as e:
             if not any(s in str(e).lower() for s in ("abort requested", "semaphore aborted")):
                 raise
+        
