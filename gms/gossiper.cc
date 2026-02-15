@@ -2543,8 +2543,7 @@ locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
 } // namespace gms
 
 auto fmt::formatter<gms::loaded_endpoint_state>::format(const gms::loaded_endpoint_state& st, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{{ endpoint={} dc={} rack={} tokens={} }}", st.endpoint,
+    return fmt::format_to(ctx.out(), "{{ endpoint={} dc={} rack={} }}", st.endpoint,
             st.opt_dc_rack ? st.opt_dc_rack->dc : "",
-            st.opt_dc_rack ? st.opt_dc_rack->rack : "",
-            st.tokens);
+            st.opt_dc_rack ? st.opt_dc_rack->rack : "");
 }

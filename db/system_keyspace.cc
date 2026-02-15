@@ -1775,7 +1775,7 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
 future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_keyspace::load_endpoint_state() {
     co_await peers_table_read_fixup();
 
-    const auto msg = co_await execute_cql(format("SELECT peer, host_id, tokens, data_center, rack from system.{}", PEERS));
+    const auto msg = co_await execute_cql(format("SELECT peer, host_id, data_center, rack from system.{}", PEERS));
 
     std::unordered_map<locator::host_id, gms::loaded_endpoint_state> ret;
     for (const auto& row : *msg) {
@@ -1786,9 +1786,6 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
             on_internal_error_noexcept(slogger, format("load_endpoint_state: node {} has no host_id in system.{}", ep, PEERS));
         }
         auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
-        if (row.has("tokens")) {
-            st.tokens = decode_tokens(deserialize_set_column(*peers(), row, "tokens"));
-        }
         if (row.has("data_center") && row.has("rack")) {
             st.opt_dc_rack.emplace(locator::endpoint_dc_rack {
                 row.get_as<sstring>("data_center"),

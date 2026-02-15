@@ -73,7 +73,6 @@ struct gossip_config {
 
 struct loaded_endpoint_state {
     gms::inet_address endpoint;
-    std::unordered_set<dht::token> tokens;
     std::optional<locator::endpoint_dc_rack> opt_dc_rack;
 };
 
