@@ -2867,6 +2867,19 @@ future<> database::trigger_logstor_compaction(bool major) {
     return make_ready_future<>();
 }
 
+future<> database::trigger_logstor_barrier_on_all_shards(sharded<database>& sharded_db) {
+    return sharded_db.invoke_on_all([] (replica::database& db) {
+        return db.trigger_logstor_barrier();
+    });
+}
+
+future<> database::trigger_logstor_barrier() {
+    if (_logstor) {
+        return _logstor->do_barrier();
+    }
+    return make_ready_future<>();
+}
+
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts) {
     if (!opts.skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, uuid);

@@ -52,6 +52,8 @@ public:
     future<> disable_auto_compaction();
     future<> trigger_compaction(bool major = false);
 
+    future<> do_barrier();
+
     static index_key calculate_key(const schema&, const dht::decorated_key&);
 
     future<> write(const mutation&, group_id);

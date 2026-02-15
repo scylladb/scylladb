@@ -2019,6 +2019,8 @@ public:
 
     static future<> trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major);
     future<> trigger_logstor_compaction(bool major);
+    static future<> trigger_logstor_barrier_on_all_shards(sharded<database>& sharded_db);
+    future<> trigger_logstor_barrier();
 
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 
