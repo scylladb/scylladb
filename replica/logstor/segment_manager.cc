@@ -416,15 +416,87 @@ std::optional<size_t> file_manager::file_name_to_file_id(const std::string& fnam
     return std::nullopt;
 }
 
+struct debt_counter {
+
+    struct units {
+        debt_counter& counter;
+        size_t count;
+
+        units(debt_counter& counter, size_t count)
+            : counter(counter)
+            , count(count) {}
+
+        ~units() {
+            release();
+        }
+
+        units(units&& other) noexcept
+            : counter(other.counter)
+            , count(std::exchange(other.count, 0)) {}
+
+        units& operator=(units&& other) noexcept {
+            if (this != &other) {
+                release();
+                counter = other.counter;
+                count = std::exchange(other.count, 0);
+            }
+            return *this;
+
+        }
+
+        void release() {
+            if (count > 0) {
+                counter -= count;
+                count = 0;
+            }
+        }
+
+        units(const units&) = delete;
+        units& operator=(const units&) = delete;
+
+        units& operator+=(size_t n) {
+            counter += n;
+            count += n;
+            return *this;
+        }
+    };
+
+    friend class units;
+
+    units consume(size_t amount) {
+        _cnt += amount;
+        return units{*this, amount};
+    }
+
+    size_t count() const noexcept {
+        return _cnt;
+    }
+
+private:
+    size_t _cnt{0};
+
+    debt_counter& operator+=(size_t n) {
+        _cnt += n;
+        return *this;
+    }
+
+    debt_counter& operator-=(size_t n) {
+        _cnt -= n;
+        return *this;
+    }
+};
+
 struct separator {
     struct buffer {
         write_buffer buf;
         utils::chunked_vector<future<>> pending_updates;
         group_id gid;
+        debt_counter::units debt_units;
 
-        buffer(size_t segment_size, group_id gid)
+        buffer(size_t segment_size, group_id gid, debt_counter& counter)
             : buf(segment_size, false)
             , gid(gid)
+            , debt_units(counter.consume(0))
         {}
 
         buffer(const buffer&) = delete;
@@ -434,6 +506,7 @@ struct separator {
         buffer& operator=(buffer&&) noexcept = default;
 
         future<log_location> write(log_record_writer writer) {
+            debt_units += writer.size();
             return buf.write(std::move(writer));
         }
     };
@@ -754,8 +827,11 @@ class segment_manager_impl {
     std::vector<segment_descriptor> _segment_descs;
     seastar::circular_buffer<log_segment_id> _free_segments;
 
+    static constexpr size_t separator_debt_target = 2;
+
     sep_ptr _active_separator;
     size_t _separator_flush_threshold;
+    debt_counter _separator_debt;
 
 public:
     static constexpr size_t block_alignment = segment_manager::block_alignment;
@@ -843,6 +919,7 @@ private:
     future<> switch_active_segment();
     future<> close_segment(seg_ptr seg);
     future<> flush_separator(sep_ptr sep);
+    std::chrono::microseconds calculate_separator_delay() const;
 
     future<std::pair<segment_allocation_guard, seg_ptr>> allocate_and_create_new_segment();
     future<segment_allocation_guard> allocate_segment();
@@ -981,6 +1058,10 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
                        sm::description("Counts number of times the separator buffer has been flushed.")),
         sm::make_counter("separator_segments_freed", _compaction_mgr.get_stats().separator_segments_freed,
                        sm::description("Counts number of segments freed by the separator.")),
+        sm::make_gauge("separator_debt", [this]() { return _separator_debt.count(); },
+                       sm::description("Counts the current separator debt in bytes.")),
+        sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
+                       sm::description("Current delay applied to writes to control separator debt in microseconds.")),
     });
 }
 
@@ -1052,32 +1133,41 @@ future<log_location> segment_manager_impl::write(write_buffer& wb) {
         co_await request_segment_switch();
     }
 
-    seg_ptr seg = _active_segment;
-    sep_ptr sep = _active_separator;
+    log_location loc;
 
-    // hold the segment for the duration of the write to the segment and separator.
-    // the segment holds also the separator.
-    auto seg_holder = seg->hold();
+    {
+        seg_ptr seg = _active_segment;
+        sep_ptr sep = _active_separator;
 
-    auto alloc = seg->allocate(data.size());
-    auto loc = alloc.location;
-    auto& desc = get_segment_descriptor(loc);
+        // hold the segment for the duration of the write to the segment and separator.
+        // the segment holds also the separator.
+        auto seg_holder = seg->hold();
 
-    wb.write_header(desc.seg_gen);
+        auto alloc = seg->allocate(data.size());
+        loc = alloc.location;
+        auto& desc = get_segment_descriptor(loc);
 
-    co_await seg->write(std::move(alloc), data);
+        wb.write_header(desc.seg_gen);
 
-    desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+        co_await seg->write(std::move(alloc), data);
 
-    _stats.bytes_written += data.size();
-    _stats.data_bytes_written += wb.get_net_data_size();
+        desc.on_write(wb.get_net_data_size(), wb.get_record_count());
 
-    // complete all buffered writes with their individual locations
-    wb.complete_writes(loc);
+        _stats.bytes_written += data.size();
+        _stats.data_bytes_written += wb.get_net_data_size();
 
-    co_await with_scheduling_group(_cfg.separator_sg, [&] {
-        return _compaction_mgr.write_to_separator(*sep, wb, loc);
-    });
+        // complete all buffered writes with their individual locations
+        wb.complete_writes(loc);
+
+        co_await with_scheduling_group(_cfg.separator_sg, [&] {
+            return _compaction_mgr.write_to_separator(*sep, wb, loc);
+        });
+    }
+
+    // flow control for separator debt
+    if (auto separator_delay = calculate_separator_delay(); separator_delay.count() > 0) {
+        co_await seastar::sleep(separator_delay);
+    }
 
     co_return loc;
 }
@@ -1183,7 +1273,6 @@ future<> segment_manager_impl::switch_active_segment() {
         auto old_sep = std::exchange(_active_separator, std::move(*new_sep));
 
         // flush old separator in background
-        // TODO controller
         if (old_sep) {
             (void)with_gate(_async_gate, [this, sep = std::move(old_sep)] mutable {
                 return with_scheduling_group(_cfg.separator_sg, [this, sep = std::move(sep)] mutable {
@@ -1671,7 +1760,7 @@ separator::buffer& compaction_manager::get_separator_buffer(separator& sep, cons
 
     auto& group_bufs = it->second;
     if (group_bufs.empty() || !group_bufs.back().buf.can_fit(writer)) {
-        group_bufs.emplace_back(_sm.get_segment_size(), gid);
+        group_bufs.emplace_back(_sm.get_segment_size(), gid, _sm._separator_debt);
         sep._buffer_count++;
     }
 
@@ -1765,6 +1854,15 @@ future<> compaction_manager::abort_separator(separator& sep) {
             bufs.pop_front();
         }
     }
+}
+
+std::chrono::microseconds segment_manager_impl::calculate_separator_delay() const {
+    size_t min_debt = _separator_flush_threshold * _cfg.segment_size;
+    size_t debt_target = separator_debt_target * _separator_flush_threshold * _cfg.segment_size;
+    size_t current_debt = (_separator_debt.count() > min_debt) ? (_separator_debt.count() - min_debt) : 0;
+    float debt_ratio = float(current_debt) / debt_target;
+    auto adjust = [] (float x) { return x * x * x; };
+    return std::chrono::microseconds(size_t(adjust(debt_ratio) * _cfg.separator_delay_limit_ms * 1000));
 }
 
 future<> segment_manager_impl::do_recovery() {
