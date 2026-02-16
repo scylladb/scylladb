@@ -53,6 +53,22 @@ async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name=
     return ks, cf
 
 
+async def take_snapshot(ks, servers, manager, logger):
+    logger.info(f'Take snapshot and collect sstables lists')
+    snap_name = unique_name('backup_')
+    sstables = dict()
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
+        sstables[s] = tocs
+
+    return snap_name,sstables
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("move_files", [False, True])
 async def test_simple_backup(manager: ManagerClient, object_storage, move_files):
@@ -543,21 +559,6 @@ async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primar
     tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
-
-async def take_snapshot(ks, servers, manager, logger):
-    logger.info(f'Take snapshot and collect sstables lists')
-    snap_name = unique_name('backup_')
-    sstables = dict()
-    for s in servers:
-        await manager.api.flush_keyspace(s.ip_addr, ks)
-        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
-        workdir = await manager.server_get_workdir(s.server_id)
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
-        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
-        sstables[s] = tocs
-
-    return snap_name,sstables
 
 async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks):
     host_ids_per_dc = defaultdict(list)
