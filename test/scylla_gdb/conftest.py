@@ -56,7 +56,6 @@ def execute_gdb_command(gdb_cmd, scylla_command: str = None, full_command: str =
         gdb_cmd: Base GDB argv list returned by the `gdb_cmd` fixture.
         scylla_command: Scylla GDB command name/args (from scylla-gdb.py). Mutually exclusive with `full_command`.
         full_command: Raw GDB command string to execute. Mutually exclusive with `scylla_command`.
-
     Returns:
         Command stdout as a decoded string.
     """
