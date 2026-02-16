@@ -106,26 +106,6 @@ future<> migration_manager::drain()
 
 void migration_manager::init_messaging_service()
 {
-    ser::migration_manager_rpc_verbs::register_definitions_update(&_messaging, [this] (const rpc::client_info& cinfo, utils::chunked_vector<frozen_mutation>, rpc::optional<utils::chunked_vector<canonical_mutation>> cm) {
-        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        if (!cm) {
-            on_internal_error(mlogger, ::format(
-                "definitions_update handler: canonical mutations not supported by {}", src));
-        }
-        // Start a new fiber.
-        (void)do_with(std::move(*cm), [this, src] (const utils::chunked_vector<canonical_mutation>& mutations) {
-            return with_gate(_background_tasks, [this, src, &mutations] {
-                return merge_schema_from(src, mutations);
-            });
-        }).then_wrapped([src] (auto&& f) {
-            if (f.failed()) {
-                mlogger.error("Failed to update definitions from {}: {}", src, f.get_exception());
-            } else {
-                mlogger.debug("Applied definitions update from {}.", src);
-            }
-        });
-        return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
-    });
     ser::migration_manager_rpc_verbs::register_migration_request(&_messaging, [this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
         return container().invoke_on(0, std::bind_front(
             [] (locator::host_id src, rpc::optional<netw::schema_pull_options> options, migration_manager& self)
@@ -939,14 +919,6 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
     }
 }
 
-future<> migration_manager::push_schema_mutation(locator::host_id id, const utils::chunked_vector<mutation>& schema)
-{
-    auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-    auto cm = utils::chunked_vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
-    return ser::migration_manager_rpc_verbs::send_definitions_update(&_messaging, id, utils::chunked_vector<frozen_mutation>{}, std::move(cm));
-}
-
 template<typename mutation_type>
 future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout) {
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -962,39 +934,14 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
     return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, timeout.value_or(raft_timeout{}));
 }
 
-future<> migration_manager::announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard guard) {
-    auto ss = _ss.get_permit();
-    if (!ss) {
-        co_return;
-    }
-    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), ss.get()->container(), _feat, schema);
-
-    try {
-        using namespace std::placeholders;
-        auto all_live = _gossiper.get_live_members();
-        auto live_members = all_live | std::views::filter([my_address = _gossiper.my_host_id()] (const locator::host_id& endpoint) {
-            // only push schema to nodes with known and equal versions
-            return endpoint != my_address;
-        });
-        co_await coroutine::parallel_for_each(live_members,
-            std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
-    } catch (...) {
-        mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
-    }
-
-    co_return co_await std::move(f);
-}
-
 static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {
     auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
     auto* cdef = s->get_column_definition("value");
     SCYLLA_ASSERT(cdef);
 
     mutation m(s, partition_key::from_singular(*s, "group0_schema_version"));
-    auto cell = guard.with_raft()
-        ? atomic_cell::make_live(*cdef->type, guard.write_timestamp(),
-                                 cdef->type->decompose(fmt::to_string(guard.new_group0_state_id())))
-        : atomic_cell::make_dead(guard.write_timestamp(), gc_clock::now());
+    auto cell = atomic_cell::make_live(*cdef->type, guard.write_timestamp(),
+                                 cdef->type->decompose(fmt::to_string(guard.new_group0_state_id())));
     m.set_clustered_cell(clustering_key::make_empty(), *cdef, std::move(cell));
     return m;
 }
@@ -1003,7 +950,6 @@ static mutation make_group0_schema_version_mutation(const data_dictionary::datab
 //
 // See the description of this column in db/schema_tables.cc.
 static void add_committed_by_group0_flag(utils::chunked_vector<mutation>& schema, const group0_guard& guard) {
-    auto committed_by_group0 = guard.with_raft();
     auto timestamp = guard.write_timestamp();
 
     for (auto& mut: schema) {
@@ -1017,7 +963,7 @@ static void add_committed_by_group0_flag(utils::chunked_vector<mutation>& schema
 
         for (auto& cr: mut.partition().clustered_rows()) {
             cr.row().cells().apply(*cdef, atomic_cell::make_live(
-                    *cdef->type, timestamp, cdef->type->decompose(committed_by_group0)));
+                    *cdef->type, timestamp, cdef->type->decompose(true)));
         }
     }
 }
@@ -1030,11 +976,7 @@ future<> migration_manager::announce(utils::chunked_vector<mutation> schema, gro
         add_committed_by_group0_flag(schema, guard);
     }
 
-    if (guard.with_raft()) {
-        return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description), std::move(timeout));
-    } else {
-        return announce_without_raft(std::move(schema), std::move(guard));
-    }
+    return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description), std::move(timeout));
 }
 template
 future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);

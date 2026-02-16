@@ -105,16 +105,12 @@ struct group0_guard::impl {
     utils::UUID _observed_group0_state_id;
     utils::UUID _new_group0_state_id;
 
-    rwlock::holder _upgrade_lock_holder;
-    bool _raft_enabled;
-
     impl(const impl&) = delete;
     impl& operator=(const impl&) = delete;
 
-    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id, rwlock::holder upgrade_lock_holder, bool raft_enabled)
+    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id)
         : _operation_mutex_holder(std::move(operation_mutex_holder)), _read_apply_mutex_holder(std::move(read_apply_mutex_holder))
         , _observed_group0_state_id(observed_group0_state_id), _new_group0_state_id(new_group0_state_id)
-        , _upgrade_lock_holder(std::move(upgrade_lock_holder)), _raft_enabled(raft_enabled)
     {}
 
     void release_read_apply_mutex() {
@@ -141,10 +137,6 @@ utils::UUID group0_guard::new_group0_state_id() const {
 
 api::timestamp_type group0_guard::write_timestamp() const {
     return utils::UUID_gen::micros_timestamp(_impl->_new_group0_state_id);
-}
-
-bool group0_guard::with_raft() const {
-    return _impl->_raft_enabled;
 }
 
 void release_guard(group0_guard guard) {}
@@ -273,10 +265,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
             std::move(operation_holder),
             std::move(read_apply_holder),
             observed_group0_state_id,
-            new_group0_state_id,
-            // Not holding any lock in this case, but move the upgrade lock holder for consistent code
-            rwlock::holder{},
-            true
+            new_group0_state_id
         )
     };
 }

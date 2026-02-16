@@ -118,8 +118,7 @@ public:
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     // Parameters:
-    //   timeout -- Optional. Applies only if raft is used (group0_guard.with_raft returns true).
-    //              If set, this timeout is used for the group0.add_entry operation.
+    //   timeout -- Optional. If set, this timeout is used for the group0.add_entry operation.
     //              If the timeout is reached and there is no Raft quorum, an exception is thrown.
     //              The exception will include information about the current set of alive and
     //              unavailable voters, which 
@@ -146,13 +145,10 @@ private:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
-    future<> push_schema_mutation(locator::host_id endpoint, const utils::chunked_vector<mutation>& schema);
-
     future<> passive_announce();
 
     template<typename mutation_type = schema_change>
     future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
-    future<> announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard);
 
 public:
     void register_feature_listeners();

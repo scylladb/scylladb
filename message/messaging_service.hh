@@ -135,7 +135,7 @@ enum class messaging_verb : int32_t {
     GOSSIP_ECHO = 9,
     GOSSIP_SHUTDOWN = 10,
     // end of gossip verb
-    DEFINITIONS_UPDATE = 11,
+    UNUSED__DEFINITIONS_UPDATE = 11,
     TRUNCATE = 12,
     UNUSED__REPLICATION_FINISHED = 13,
     MIGRATION_REQUEST = 14,

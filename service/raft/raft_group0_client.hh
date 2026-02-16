@@ -14,7 +14,6 @@
 #include <optional>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/abort_source.hh>
-#include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/generator.hh>
 
@@ -64,11 +63,6 @@ public:
 
     // Use this timestamp when creating group 0 mutations.
     api::timestamp_type write_timestamp() const;
-
-    // Are we *actually* using group 0 yet?
-    // Until the upgrade procedure finishes, we will perform operations such as schema changes using the old way,
-    // but still pass the guard around to synchronize operations with the upgrade procedure.
-    bool with_raft() const;
 
     explicit operator bool() const { return bool(_impl); }
 };

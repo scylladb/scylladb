@@ -734,7 +734,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::READ_DATA:
     case messaging_verb::READ_MUTATION_DATA:
     case messaging_verb::READ_DIGEST:
-    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::UNUSED__DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
     case messaging_verb::TRUNCATE_WITH_TABLETS:
     case messaging_verb::ESTIMATE_SSTABLE_VOLUME:
