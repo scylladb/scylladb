@@ -95,3 +95,10 @@ ninja build/<mode>/scylla
 - Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
 - Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
 
+## Code Review
+When performing code reviews, follow the comprehensive patterns and checks documented in:
+- **`.github/instructions/reviewer.instructions.md`** - Complete review skill with examples and feedback templates
+- **`.github/instructions/review-checklist.md`** - Quick reference checklist for reviews
+
+These documents capture common review patterns from ScyllaDB maintainers and provide structured guidance for high-quality code reviews.
+
