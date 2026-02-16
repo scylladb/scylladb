@@ -312,8 +312,11 @@ class ManagerClient:
 
     async def find_server_by_host_id(self, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
         for s in servers:
-            if await self.get_host_id(s.server_id) == host_id:
-                return s
+            try:
+                if await self.get_host_id(s.server_id) == host_id:
+                    return s
+            except Exception:
+                logger.warning(f"Failed to get host ID of server {s} while looking for a server with host ID {host_id}")
         raise Exception(f"Host ID {host_id} not found in {servers}")
 
     async def starting_servers(self) -> list[ServerInfo]:
