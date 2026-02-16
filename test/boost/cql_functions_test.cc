@@ -415,9 +415,9 @@ SEASTAR_TEST_CASE(test_aggregate_functions_vector_type) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto vector_type_int = vector_type_impl::get_instance(int32_type, 3);
         aggregate_function_test(e, vector_type_int,
-            make_list_value(vector_type_int, {1, 2, 3}),
-            make_list_value(vector_type_int, {1, 2, 4}),
-            make_list_value(vector_type_int, {2, 2, 3})
+            make_vector_value(vector_type_int, std::vector<data_value>{1, 2, 3}),
+            make_vector_value(vector_type_int, std::vector<data_value>{1, 2, 4}),
+            make_vector_value(vector_type_int, std::vector<data_value>{2, 2, 3})
         ).test_min_max_count();
     });
 }

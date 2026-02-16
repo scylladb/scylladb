@@ -1723,7 +1723,7 @@ SEASTAR_TEST_CASE(test_vectors) {
         }).then([&e, vt] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({{
-                     {vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1001), int32_t(2001), int32_t(3001)})))},
+                     {vt->decompose(make_vector_value(vt, std::vector<data_value>{int32_t(1001), int32_t(2001), int32_t(3001)}))},
                 }});
             return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 vector<int, 3>)").discard_result();
         }).then([&e] {
@@ -1732,7 +1732,7 @@ SEASTAR_TEST_CASE(test_vectors) {
             return e.execute_cql("select * from cf2 where p1 = 1;");
         }).then([vt] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(int32_t(1)), vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1), int32_t(2), int32_t(3)}))) }
+                { int32_type->decompose(int32_t(1)), vt->decompose(make_vector_value(vt, std::vector<data_value>{int32_t(1), int32_t(2), int32_t(3)})) }
             });
         });
     });
@@ -1750,10 +1750,10 @@ SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
             { int32_type->decompose(1), vt->decompose(
                 make_vector_value(
                     vt,
-                    vector_type_impl::native_type({
+                    std::vector<data_value>{
                         sstring("abc"),
                         sstring("")
-                    })
+                    }
                 )
             )}
         });
@@ -1768,10 +1768,10 @@ SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
             { int32_type->decompose(1), vt->decompose(
                 make_vector_value(
                     vt,
-                    vector_type_impl::native_type({
+                    std::vector<data_value>{
                         make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({1, 2})),
                         make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({3, 4, 5}))
-                    })
+                    }
                 )
             )}
         });
@@ -1786,10 +1786,10 @@ SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
             { int32_type->decompose(1), vt->decompose(
                 make_vector_value(
                     vt,
-                    vector_type_impl::native_type({
+                    std::vector<data_value>{
                         make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({123, sstring("abc")})),
                         make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({456, sstring("")}))
-                    })
+                    }
                 )
             )}
         });

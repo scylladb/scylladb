@@ -9,40 +9,13 @@
 #include "vector_similarity_fcts.hh"
 #include "types/types.hh"
 #include "types/vector.hh"
+#include "types/vector_native_value.hh"
 #include "exceptions/exceptions.hh"
 #include <span>
-#include <bit>
 
 namespace cql3 {
 namespace functions {
 namespace {
-
-// Extract float vector directly from serialized bytes, bypassing data_value overhead.
-// Vector<float, N> wire format: N floats as big-endian uint32_t values, 4 bytes each.
-std::vector<float> extract_float_vector(const bytes_opt& param, size_t dimension) {
-    if (!param) {
-        throw exceptions::invalid_request_exception("Cannot extract float vector from null parameter");
-    }
-
-    const size_t expected_size = dimension * sizeof(float);
-    if (param->size() != expected_size) {
-        throw exceptions::invalid_request_exception(
-            fmt::format("Invalid vector size: expected {} bytes for {} floats, got {} bytes",
-                       expected_size, dimension, param->size()));
-    }
-
-    std::vector<float> result;
-    result.reserve(dimension);
-
-    bytes_view view(*param);
-    for (size_t i = 0; i < dimension; ++i) {
-        // read_simple handles network byte order (big-endian) conversion
-        uint32_t raw = read_simple<uint32_t>(view);
-        result.push_back(std::bit_cast<float>(raw));
-    }
-
-    return result;
-}
 
 // The computations of similarity scores match the exact formulas of Cassandra's (jVector's) implementation to ensure compatibility.
 // There exist tests checking the compliance of the results.
@@ -165,15 +138,22 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
         return std::nullopt;
     }
 
-    // Extract dimension from the vector type
-    const auto& type = static_cast<const vector_type_impl&>(*arg_types()[0]);
-    size_t dimension = type.get_dimension();
+    // Use standard deserialization - already creates optimized vector_native_value.
+    // For vector<float, N>, the native value stores floats as contiguous bytes in native endianness,
+    // enabling zero-copy access via as_span<float>().
+    const auto& type = arg_types()[0];
+    data_value v1 = type->deserialize(*parameters[0]);
+    data_value v2 = type->deserialize(*parameters[1]);
+    
+    // Extract the native representation (contiguous floats in native endianness)
+    const auto& native_v1 = value_cast<vector_native_value>(v1);
+    const auto& native_v2 = value_cast<vector_native_value>(v2);
 
-    // Optimized path: extract floats directly from bytes, bypassing data_value overhead
-    std::vector<float> v1 = extract_float_vector(parameters[0], dimension);
-    std::vector<float> v2 = extract_float_vector(parameters[1], dimension);
+    // Zero-copy access to float arrays - no additional allocations!
+    auto v1_floats = native_v1.as_span<float>();
+    auto v2_floats = native_v2.as_span<float>();
 
-    float result = SIMILARITY_FUNCTIONS.at(_name)(v1, v2);
+    float result = SIMILARITY_FUNCTIONS.at(_name)(v1_floats, v2_floats);
     return float_type->decompose(result);
 }
 

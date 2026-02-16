@@ -10,10 +10,11 @@
 
 
 #include "types/types.hh"
+#include "types/vector_native_value.hh"
 #include "exceptions/exceptions.hh"
 #include "vint-serialization.hh"
 
-class vector_type_impl : public concrete_type<std::vector<data_value>> {
+class vector_type_impl : public concrete_type<vector_native_value> {
     using intern = type_interning_helper<vector_type_impl, data_type, size_t>;
 protected:
     data_type _elements_type;
@@ -119,4 +120,8 @@ View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
     return read_simple_bytes(v, element_size);
 }
 
-data_value make_vector_value(data_type type, vector_type_impl::native_type value);
+data_value make_vector_value(data_type type, vector_native_value value);
+// Convenience overload: construct a fixed-size vector from a span of floats.
+data_value make_vector_value(data_type type, std::span<const float> values);
+// Compatibility overload: construct from a vector of data_values (variable-size or mixed).
+data_value make_vector_value(data_type type, std::vector<data_value> values);

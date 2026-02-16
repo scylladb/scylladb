@@ -818,6 +818,25 @@ bool abstract_type::is_multi_cell() const {
 
 bool abstract_type::is_native() const { return !is_collection() && !is_tuple() && !is_vector(); }
 
+size_t abstract_type::dimension() const {
+    struct visitor {
+        size_t operator()(const abstract_type&) { return 1; }
+        size_t operator()(const reversed_type_impl& t) { return t.underlying_type()->dimension(); }
+        size_t operator()(const vector_type_impl& t) { return t.get_dimension(); }
+    };
+    return visit(*this, visitor{});
+}
+
+data_type abstract_type::element_type() const {
+    struct visitor {
+        const abstract_type& self;
+        data_type operator()(const abstract_type&) { return self.shared_from_this(); }
+        data_type operator()(const reversed_type_impl& t) { return t.underlying_type()->element_type(); }
+        data_type operator()(const vector_type_impl& t) { return t.get_elements_type(); }
+    };
+    return visit(*this, visitor{*this});
+}
+
 bool abstract_type::is_string() const {
     struct visitor {
         bool operator()(const abstract_type&) { return false; }
@@ -1563,6 +1582,53 @@ static sstring vector_to_string(const std::vector<data_value>& v, std::string_vi
             sep));
 }
 
+static sstring vector_native_to_string(const vector_type_impl& vt, const vector_native_value& v, std::string_view sep) {
+    if (!v.is_fixed_size()) {
+        return vector_to_string(v.as_data_values(), sep);
+    }
+    // Fixed-size: serialize each element to bytes, then use element type's to_string.
+    auto elem_type = vt.get_elements_type();
+    std::vector<sstring> parts;
+    parts.reserve(v.size());
+    auto elem_size = v.element_size();
+    auto raw = v.raw_bytes();
+    for (size_t i = 0; i < v.size(); ++i) {
+        // Byte-swap back to big-endian for to_string.
+        bytes buf(bytes::initialized_later(), elem_size);
+        auto src = raw.data() + i * elem_size;
+        if (elem_size == 1) {
+            buf[0] = static_cast<bytes::value_type>(src[0]);
+        } else if (elem_size == 2) {
+            uint16_t val;
+            std::memcpy(&val, src, 2);
+            val = seastar::net::hton(val);
+            std::memcpy(buf.data(), &val, 2);
+        } else if (elem_size == 4) {
+            uint32_t val;
+            std::memcpy(&val, src, 4);
+            val = seastar::net::hton(val);
+            std::memcpy(buf.data(), &val, 4);
+        } else if (elem_size == 8) {
+            uint64_t val;
+            std::memcpy(&val, src, 8);
+            val = seastar::net::hton(val);
+            std::memcpy(buf.data(), &val, 8);
+        } else if (elem_size == 16) {
+            uint64_t v1, v2;
+            std::memcpy(&v1, src, 8);
+            std::memcpy(&v2, src + 8, 8);
+            v1 = seastar::net::hton(v1);
+            v2 = seastar::net::hton(v2);
+            std::memcpy(buf.data(), &v1, 8);
+            std::memcpy(buf.data() + 8, &v2, 8);
+        } else {
+            std::memcpy(buf.data(), src, elem_size);
+        }
+        parts.push_back(elem_type->to_string(buf));
+    }
+    return fmt::to_string(fmt::join(parts, sep));
+}
+
 template <typename F>
 static std::optional<data_type> update_listlike(
         const listlike_collection_type_impl& c, F&& f, shared_ptr<const user_type_impl> updated) {
@@ -1664,17 +1730,55 @@ vector_type_impl::get_instance(data_type elements, size_t dimension) {
 
 static void serialize_vector(const vector_type_impl& type, const vector_type_impl::native_type* val, bytes::iterator& out) {
     auto elements_type = type.get_elements_type();
-    if (type.value_length_if_fixed()) {
-        for (const auto& value : *val) {
-            value.serialize(out);
+    if (val->is_fixed_size()) {
+        // Fixed-size: write native-endian values back to big-endian serialized form.
+        auto elem_size = val->element_size();
+        auto raw = val->raw_bytes();
+        for (size_t i = 0; i < val->size(); ++i) {
+            auto src = raw.data() + i * elem_size;
+            // Byte-swap each element to network (big-endian) order.
+            // For 1-byte types, no swap needed.
+            if (elem_size == 1) {
+                *out++ = static_cast<bytes::value_type>(src[0]);
+            } else if (elem_size == 2) {
+                uint16_t v;
+                std::memcpy(&v, src, 2);
+                v = seastar::net::hton(v);
+                std::memcpy(&*out, &v, 2);
+                out += 2;
+            } else if (elem_size == 4) {
+                uint32_t v;
+                std::memcpy(&v, src, 4);
+                v = seastar::net::hton(v);
+                std::memcpy(&*out, &v, 4);
+                out += 4;
+            } else if (elem_size == 8) {
+                uint64_t v;
+                std::memcpy(&v, src, 8);
+                v = seastar::net::hton(v);
+                std::memcpy(&*out, &v, 8);
+                out += 8;
+            } else if (elem_size == 16) {
+                // UUID: two 8-byte halves, each swapped
+                uint64_t v1, v2;
+                std::memcpy(&v1, src, 8);
+                std::memcpy(&v2, src + 8, 8);
+                v1 = seastar::net::hton(v1);
+                v2 = seastar::net::hton(v2);
+                std::memcpy(&*out, &v1, 8);
+                std::memcpy(&*out + 8, &v2, 8);
+                out += 16;
+            } else {
+                // Fallback: copy raw bytes (assumes already in correct order)
+                std::memcpy(&*out, src, elem_size);
+                out += elem_size;
+            }
         }
     } else {
-        for (const auto& value : *val) {
+        // Variable-size: serialize each data_value with vint length prefix.
+        for (const auto& value : val->as_data_values()) {
             size_t val_len = value.serialized_size();
-
             out += unsigned_vint::serialize(val_len, out);
-            
-
             value.serialize(out);
         }
     }
@@ -1703,36 +1807,74 @@ vector_type_impl::compare_vectors(data_type elements, size_t dimension, managed_
 template <FragmentedView View>
 data_value
 deserialize_vector(const vector_type_impl& t, View v){
-    vector_type_impl::native_type ret;
-    ret.reserve(t.get_dimension());
-
     auto value_length = t.get_elements_type()->value_length_if_fixed();
 
-    for (size_t i = 0; i < t.get_dimension(); i++) {
-        ret.push_back(t.get_elements_type()->deserialize(read_vector_element(v, value_length)));
-    }
+    if (value_length) {
+        // Fixed-size elements: bulk-read into contiguous buffer with byte-swap to native endianness.
+        // Use read_simple<T> which efficiently handles both contiguous and fragmented data,
+        // performing network byte order conversion in one operation.
+        size_t elem_size = *value_length;
+        size_t total_bytes = t.get_dimension() * elem_size;
+        std::vector<std::byte> buf;
+        buf.resize(total_bytes);
 
-    return data_value::make(t.shared_from_this(), std::make_unique<vector_type_impl::native_type>(std::move(ret)));
+        for (size_t i = 0; i < t.get_dimension(); i++) {
+            auto dst = buf.data() + i * elem_size;
+            if (elem_size == 1) {
+                *dst = static_cast<std::byte>(read_simple<uint8_t>(v));
+            } else if (elem_size == 2) {
+                uint16_t val = read_simple<uint16_t>(v);
+                std::memcpy(dst, &val, 2);
+            } else if (elem_size == 4) {
+                uint32_t val = read_simple<uint32_t>(v);
+                std::memcpy(dst, &val, 4);
+            } else if (elem_size == 8) {
+                uint64_t val = read_simple<uint64_t>(v);
+                std::memcpy(dst, &val, 8);
+            } else if (elem_size == 16) {
+                // UUID: two 8-byte halves
+                uint64_t v1 = read_simple<uint64_t>(v);
+                uint64_t v2 = read_simple<uint64_t>(v);
+                std::memcpy(dst, &v1, 8);
+                std::memcpy(dst + 8, &v2, 8);
+            } else {
+                // For other sizes, fall back to element extraction
+                auto element_view = read_vector_element(v, value_length);
+                with_linearized(element_view, [&](bytes_view bv) {
+                    std::memcpy(dst, bv.data(), elem_size);
+                });
+            }
+        }
+
+        auto native_val = vector_native_value(t.get_dimension(), elem_size, std::move(buf));
+        return data_value::make(t.shared_from_this(), std::make_unique<vector_type_impl::native_type>(std::move(native_val)));
+    } else {
+        // Variable-size elements: deserialize each to data_value (same as before).
+        std::vector<data_value> ret;
+        ret.reserve(t.get_dimension());
+        for (size_t i = 0; i < t.get_dimension(); i++) {
+            ret.push_back(t.get_elements_type()->deserialize(read_vector_element(v, value_length)));
+        }
+        auto native_val = vector_native_value(t.get_dimension(), std::move(ret));
+        return data_value::make(t.shared_from_this(), std::make_unique<vector_type_impl::native_type>(std::move(native_val)));
+    }
 }
 
 static size_t vector_serialized_size(const vector_type_impl::native_type* v) {
-    if (v->empty()) {
+    if (v->size() == 0) {
         return 0;
     }
 
-    auto type = v->front().type();
-
-    size_t len = 0;
-
-    if (type->value_length_if_fixed()) {
-        len = v->size() * type->value_length_if_fixed().value();
+    if (v->is_fixed_size()) {
+        return v->size() * v->element_size();
     } else {
-        for (const auto& value : *v) {
+        size_t len = 0;
+        for (const auto& value : v->as_data_values()) {
             size_t val_len = value.serialized_size();
             len += (size_t)unsigned_vint::serialized_size(val_len) + val_len;
         }
+        return len;
     }
-    return len;
 }
 
 template <FragmentedView View>
@@ -3121,8 +3263,10 @@ struct to_string_impl_visitor {
         return format_if_not_empty(t, v, [&t] (const tuple_type_impl::native_type& b) { return tuple_to_string(t, b); });
     }
     sstring operator()(const vector_type_impl& vt, const vector_type_impl::native_type* v) {
-        return format_if_not_empty(
-                vt, v, [] (const vector_type_impl::native_type& v) { return vector_to_string(v, ", "); });
+        if (!v || v->empty()) {
+            return sstring();
+        }
+        return vector_native_to_string(vt, *v, ", ");
     }
     sstring operator()(const uuid_type_impl& u, const uuid_type_impl::native_type* v) {
         return format_if_not_empty(u, v, [] (const utils::UUID& v) { return fmt::to_string(v); });
@@ -3879,13 +4023,42 @@ sstring data_value::to_parsable_string() const {
 
     if (_type->without_reversed().is_vector()) {
         const vector_type_impl::native_type* vector_elements = (const vector_type_impl::native_type*)_value;
+        const auto& vtype = static_cast<const vector_type_impl&>(_type->without_reversed());
         std::ostringstream result;
         result << "[";
-        for (std::size_t i = 0; i < vector_elements->size(); i++) {
-            if (i != 0) {
-                result << ", ";
+        if (vector_elements->is_fixed_size()) {
+            // Fixed-size: serialize each element to bytes, then to parsable string.
+            auto elem_type = vtype.get_elements_type();
+            auto elem_size = vector_elements->element_size();
+            auto raw = vector_elements->raw_bytes();
+            for (std::size_t i = 0; i < vector_elements->size(); i++) {
+                if (i != 0) {
+                    result << ", ";
+                }
+                bytes buf(bytes::initialized_later(), elem_size);
+                auto src = raw.data() + i * elem_size;
+                if (elem_size == 4) {
+                    uint32_t val;
+                    std::memcpy(&val, src, 4);
+                    val = seastar::net::hton(val);
+                    std::memcpy(buf.data(), &val, 4);
+                } else if (elem_size == 8) {
+                    uint64_t val;
+                    std::memcpy(&val, src, 8);
+                    val = seastar::net::hton(val);
+                    std::memcpy(buf.data(), &val, 8);
+                } else {
+                    std::memcpy(buf.data(), src, elem_size);
+                }
+                result << elem_type->deserialize(buf).to_parsable_string();
             }
-            result << (*vector_elements)[i].to_parsable_string();
+        } else {
+            for (std::size_t i = 0; i < vector_elements->size(); i++) {
+                if (i != 0) {
+                    result << ", ";
+                }
+                result << vector_elements->element_as_data_value(i).to_parsable_string();
+            }
         }
         result << "]";
         return std::move(result).str();
@@ -3929,8 +4102,59 @@ make_tuple_value(data_type type, tuple_type_impl::native_type value) {
 }
 
 data_value
-make_vector_value(data_type type, vector_type_impl::native_type value) {
+make_vector_value(data_type type, vector_native_value value) {
     return data_value::make_new(std::move(type), std::move(value));
+}
+
+data_value
+make_vector_value(data_type type, std::span<const float> values) {
+    // Build a fixed-size vector_native_value from contiguous floats (already native endian).
+    std::vector<std::byte> buf;
+    buf.resize(values.size() * sizeof(float));
+    std::memcpy(buf.data(), values.data(), values.size() * sizeof(float));
+    auto native_val = vector_native_value(values.size(), sizeof(float), std::move(buf));
+    return data_value::make_new(std::move(type), std::move(native_val));
+}
+
+data_value
+make_vector_value(data_type type, std::vector<data_value> values) {
+    const auto& vtype = static_cast<const vector_type_impl&>(*type);
+    auto elem_fixed = vtype.get_elements_type()->value_length_if_fixed();
+    if (elem_fixed) {
+        // Fixed-size: extract each data_value's serialized bytes into contiguous buffer.
+        size_t elem_size = *elem_fixed;
+        std::vector<std::byte> buf;
+        buf.resize(values.size() * elem_size);
+        for (size_t i = 0; i < values.size(); ++i) {
+            // Serialize the data_value to bytes (big-endian), then byte-swap to native.
+            bytes ser = values[i].serialize_nonnull();
+            auto dst = buf.data() + i * elem_size;
+            if (elem_size == 1) {
+                *dst = static_cast<std::byte>(ser[0]);
+            } else if (elem_size == 2) {
+                uint16_t v = seastar::net::ntoh(read_unaligned<uint16_t>(ser.data()));
+                std::memcpy(dst, &v, 2);
+            } else if (elem_size == 4) {
+                uint32_t v = seastar::net::ntoh(read_unaligned<uint32_t>(ser.data()));
+                std::memcpy(dst, &v, 4);
+            } else if (elem_size == 8) {
+                uint64_t v = seastar::net::ntoh(read_unaligned<uint64_t>(ser.data()));
+                std::memcpy(dst, &v, 8);
+            } else if (elem_size == 16) {
+                uint64_t v1 = seastar::net::ntoh(read_unaligned<uint64_t>(ser.data()));
+                uint64_t v2 = seastar::net::ntoh(read_unaligned<uint64_t>(ser.data() + 8));
+                std::memcpy(dst, &v1, 8);
+                std::memcpy(dst + 8, &v2, 8);
+            } else {
+                std::memcpy(dst, ser.data(), elem_size);
+            }
+        }
+        auto native_val = vector_native_value(values.size(), elem_size, std::move(buf));
+        return data_value::make_new(std::move(type), std::move(native_val));
+    } else {
+        auto native_val = vector_native_value(values.size(), std::move(values));
+        return data_value::make_new(std::move(type), std::move(native_val));
+    }
 }
 
 data_value

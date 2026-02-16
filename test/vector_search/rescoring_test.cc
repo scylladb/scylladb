@@ -82,8 +82,9 @@ float get_similarity_col_value(const auto& row, int index = 1) {
 std::vector<float> get_embedding_col_value(const auto& row, int index = 1) {
     auto bytes = row.at(index).value();
     auto vec_type = vector_type_impl::get_instance(float_type, 2);
-    auto values = value_cast<vector_type_impl::native_type>(vec_type->deserialize(bytes));
-    return cql3::util::to_vector<float>(values);
+    auto native_val = value_cast<vector_type_impl::native_type>(vec_type->deserialize(bytes));
+    auto span = native_val.template as_span<float>();
+    return std::vector<float>(span.begin(), span.end());
 }
 
 auto to_embedding(const std::vector<float>& vec) {
