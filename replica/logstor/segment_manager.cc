@@ -493,8 +493,8 @@ struct separator {
         utils::chunked_vector<future<>> pending_updates;
         debt_counter::units debt_units;
 
-        buffer(size_t segment_size, debt_counter& counter)
-            : buf(segment_size, false)
+        buffer(write_buffer wb, debt_counter& counter)
+            : buf(std::move(wb))
             , debt_units(counter.consume(0))
         {}
 
@@ -831,6 +831,7 @@ class segment_manager_impl {
     size_t _separator_flush_threshold;
     debt_counter _separator_debt;
     size_t _separator_debt_target = 2;
+    seastar::queue<write_buffer> _separator_buffer_pool;
 
 public:
     static constexpr size_t block_alignment = segment_manager::block_alignment;
@@ -976,7 +977,7 @@ static size_t calculate_separator_flush_threshold(const segment_manager_config& 
     threshold = std::min(threshold, cfg.disk_size / cfg.segment_size / 20);
 
     // don't hold too much segments because we need to keep them all in memory
-    threshold = std::min(threshold, 512 * 1024 * 1024 / cfg.segment_size);
+    threshold = std::min(threshold, cfg.max_separator_memory / cfg.segment_size);
 
     threshold = std::max<size_t>(threshold, 1);
 
@@ -991,13 +992,15 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
     , _compaction_mgr(*this, index, compaction_manager::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
-            .compaction_sg = config.compaction_sg
+            .compaction_sg = config.compaction_sg,
+            .separator_sg = config.separator_sg
         })
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
     , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
     , _segment_descs((config.disk_size / config.file_size) * _segments_per_file)
-    , _separator_flush_threshold(calculate_separator_flush_threshold(config)) {
+    , _separator_flush_threshold(calculate_separator_flush_threshold(config))
+    , _separator_buffer_pool(std::min<size_t>(_cfg.max_separator_memory / _cfg.segment_size, _separator_flush_threshold * 2)) {
 
     namespace sm = seastar::metrics;
 
@@ -1067,6 +1070,10 @@ future<> segment_manager_impl::start() {
     co_await _file_mgr.start();
 
     co_await do_recovery();
+
+    while (!_separator_buffer_pool.full()) {
+        _separator_buffer_pool.push(write_buffer(_cfg.segment_size, false));
+    }
 
     // Start background replenisher before creating initial segment
     _reserve_replenisher = with_scheduling_group(_cfg.compaction_sg, [this] {
@@ -1264,7 +1271,8 @@ future<> segment_manager_impl::switch_active_segment() {
     std::optional<sep_ptr> new_sep;
     if (!_active_separator
             || _active_separator->switch_requested()
-            || _active_separator->segment_count() >= _separator_flush_threshold) {
+            || _active_separator->segment_count() >= _separator_flush_threshold
+            || _separator_buffer_pool.size() < _active_separator->group_count()) {
         new_sep = make_lw_shared<separator>(_separator_flush_threshold);
     }
 
@@ -1772,7 +1780,8 @@ future<> compaction_manager::write_to_separator_buffer(separator& sep, log_recor
 
     auto& group_bufs = sep._group_buffers[gid];
     if (group_bufs.empty() || !group_bufs.back().buf.can_fit(writer)) {
-        group_bufs.emplace_back(_sm.get_segment_size(), _sm._separator_debt);
+        auto wb = _sm._separator_buffer_pool.empty() ? write_buffer(_sm.get_segment_size(), false) : _sm._separator_buffer_pool.pop();
+        group_bufs.emplace_back(std::move(wb), _sm._separator_debt);
         sep._buffer_count++;
     }
 
@@ -1844,7 +1853,11 @@ future<> compaction_manager::flush_separator(separator& sep) {
                 co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
                 _stats.separator_buffer_flushed++;
             }
+            auto wb = std::move(bufs.front().buf);
             bufs.pop_front();
+
+            wb.reset();
+            _sm._separator_buffer_pool.push(std::move(wb));
         }
     }
 

@@ -919,6 +919,7 @@ database::init_kv_storage() {
             .compaction_sg = _dbcfg.compaction_scheduling_group,
             .separator_sg = _dbcfg.memtable_scheduling_group,
             .separator_delay_limit_ms = _cfg.kv_storage_separator_delay_limit_ms(),
+            .max_separator_memory = _cfg.kv_storage_separator_max_memory_in_mb() * 1024ull * 1024ull,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
