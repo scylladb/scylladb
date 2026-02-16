@@ -398,36 +398,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         num_keys = 10000
         await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), str(i))) for i in range(num_keys)))
 
-        # Flush keyspace on all servers
-        logger.info("Flushing keyspace on all servers...")
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, keyspace)
-
-        # Take snapshot for keyspace
-        snapshot_name = unique_name('backup_')
-        logger.info(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
-        for server in servers:
-            await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
-
-        # Collect snapshot files from each server
-        async def get_snapshot_files(server, snapshot_name):
-            workdir = await manager.server_get_workdir(server.server_id)
-            data_path = os.path.join(workdir, 'data', keyspace)
-            cf_dirs = os.listdir(data_path)
-            if not cf_dirs:
-                raise RuntimeError(f"No column family directories found in {data_path}")
-            # Assumes that there is only one column family directory under the keyspace.
-            cf_dir = cf_dirs[0]
-            snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
-            return [
-                f.name for f in os.scandir(snapshot_path)
-                if f.is_file() and f.name.endswith('TOC.txt')
-            ]
-
-        sstables = {}
-        for server in servers:
-            snapshot_files = await get_snapshot_files(server, snapshot_name)
-            sstables[server.server_id] = snapshot_files
+        snapshot_name, sstables = await take_snapshot(keyspace, servers, manager, logger)
 
         # Backup the keyspace on each server to S3
         prefix = f"{table}/{snapshot_name}"
@@ -465,7 +436,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
                 object_storage.address,
                 object_storage.bucket_name,
                 prefix,
-                sstables[server.server_id]
+                sstables[server]
             )
             restore_task_ids[server.server_id] = restore_tid
 
