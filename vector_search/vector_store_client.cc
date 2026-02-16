@@ -179,7 +179,7 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         }
         keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck});
     }
-    return std::move(keys);
+    return keys;
 }
 
 bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
