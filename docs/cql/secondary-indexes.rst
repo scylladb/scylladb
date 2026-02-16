@@ -275,7 +275,9 @@ Dropping a secondary index uses the ``DROP INDEX`` statement:
    drop_index_statement: DROP INDEX [ IF EXISTS ] `index_name`
 
 The ``DROP INDEX`` statement is used to drop an existing secondary index. The argument of the statement is the index
-name, which may optionally specify the keyspace of the index.
+name, which may optionally specify the keyspace of the index. Ongoing Builds: If an index is currently being built, 
+DROP INDEX can still be executed, once the drop command is issued, the system will cease the build process and clean
+up any partial data associated with that index.
 
 .. If the index does not exists, the statement will return an error, unless ``IF EXISTS`` is used in which case the
 .. operation is a no-op.
