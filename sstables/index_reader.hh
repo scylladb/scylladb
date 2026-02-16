@@ -215,10 +215,14 @@ public:
 
         switch (_state) {
         // START comes first, to make the handling of the 0-quantity case simpler
+            state_START:
         case state::START:
             sstlog.trace("{}: pos {} state {} - data.size()={}", fmt::ptr(this), current_pos(), state::START, data.size());
             _state = state::KEY_SIZE;
-            break;
+            if (data.size() == 0) {
+                break;
+            }
+            [[fallthrough]];
         case state::KEY_SIZE:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::KEY_SIZE);
             _entry_offset = current_pos();
@@ -244,7 +248,16 @@ public:
         case state::PROMOTED_SIZE:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::PROMOTED_SIZE);
             _position = this->_u64;
-            if (read_vint_or_uint32(data) != continuous_data_consumer::read_status::ready) {
+            if (is_mc_format() && data.size() && *data.begin() == 0) { // promoted_index_size == 0
+                data.trim_front(1);
+                _consumer.consume_entry(parsed_partition_index_entry{
+                    .key = std::move(_key),
+                    .data_file_offset = _position,
+                    .index_offset = _entry_offset,
+                    .promoted_index = std::nullopt
+                });
+                goto state_START;
+            } else if (read_vint_or_uint32(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PARTITION_HEADER_LENGTH_1;
                 break;
             }
