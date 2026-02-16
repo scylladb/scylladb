@@ -15,6 +15,7 @@
 
 namespace service::strong_consistency {
 
+class coordinator;
 class raft_server;
 
 /// A sharded service (currently pinned to shard 0) responsible for the lifecycle and access
@@ -153,6 +154,14 @@ public:
 
     // Called during node shutdown. Waits for all raft::server instances to stop.
     future<> stop();
+
+    // This is a temporary solution before we have tablet migrations
+    // and proper shutdown management for strongly consistent tablets.
+    //
+    // It should only be called at shutdown to cancel all remaining
+    // ongoing Raft operations to prevent getting stuck (see the comment
+    // in main.cc where I elaborated on that).
+    void schedule_groups_removal();
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,
@@ -164,6 +173,9 @@ public:
 /// the shutdown sequence will wait until this handle is destroyed, preventing use-after-free
 /// errors during ongoing operations.
 class raft_server {
+private:
+    friend class coordinator;
+
 private:
     groups_manager::raft_group_state& _state;
     gate::holder _holder;
@@ -187,6 +199,11 @@ public:
         future<> future;
     };
     using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
+    // Exceptions:
+    // * raft::request_aborted: If the result is need_wait_for_leader,
+    //      the corresponding future may throw an exception if the Raft
+    //      group started being removed before the operation finishes.
+    // * No other exceptions.
     begin_mutate_result begin_mutate();
 };
 
