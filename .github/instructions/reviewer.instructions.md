@@ -1,14 +1,20 @@
 # ScyllaDB Code Review Skill
 
 **Purpose:** Perform in-depth code reviews similar to ScyllaDB maintainers  
-**Based on:** Analysis of 200+ PRs and 700+ review comments from maintainers  
+**Based on:** Analysis of **1,009 PRs** (2022-2025) and **~12,222 review comments**  
 **Last Updated:** February 2026
 
 ---
 
 ## Overview
 
-This document captures common review patterns, feedback themes, and critical checks from ScyllaDB maintainers. When reviewing code, follow this structured approach to provide high-quality feedback that maintains ScyllaDB's standards for correctness, performance, and readability.
+This document captures common review patterns, feedback themes, and critical checks from ScyllaDB maintainers. Based on comprehensive analysis of over 1,000 pull requests spanning 4 years, it provides structured guidance for high-quality code reviews that maintain ScyllaDB's standards for correctness, performance, and readability.
+
+**Analysis Scope:**
+- 1,009 merged PRs analyzed (2022-2025)
+- ~12,222 review comments examined
+- 169 high-activity PRs (30+ comments) analyzed in depth
+- 25+ distinct review patterns identified
 
 ## Review Priority Levels
 
@@ -67,8 +73,15 @@ seastar::future<T> func() {
 - Throwing exceptions in loops or per-row operations
 - Using exceptions for control flow
 - Missing `noexcept` when functions truly don't throw
-- Incorrect `noexcept` on functions that can throw
+- Incorrect `noexcept` on functions that can throw (including transitive calls)
 - Unhandled exceptions in coroutines
+- Functions with `noexcept` that call throwing functions
+
+**Common noexcept Issues (from PR #27476 analysis):**
+- Container operations beyond inline capacity throw (e.g., `small_vector` when exceeding N)
+- Functions marked `noexcept` but calling other functions that can throw
+- Need to check entire call chain, not just direct function body
+- Coroutines can keep `noexcept` - exceptions convert to exceptional futures
 
 **Example Issues:**
 ```cpp
@@ -93,6 +106,33 @@ void process() noexcept {
 void process() {
     vector.push_back(item);
 }
+
+// ❌ WRONG: small_vector exceeds capacity
+small_vector<T, 3> get_items() noexcept {
+    small_vector<T, 3> result;
+    for (int i = 0; i < 10; i++) {  // Will exceed capacity=3!
+        result.push_back(compute(i));  // Throws std::bad_alloc
+    }
+    return result;
+}
+
+// ✅ CORRECT: Either remove noexcept or ensure size <= capacity
+small_vector<T, 10> get_items() noexcept {  // Increased capacity
+    small_vector<T, 10> result;
+    for (int i = 0; i < 10; i++) {
+        result.push_back(compute(i));  // Won't exceed inline capacity
+    }
+    return result;
+}
+
+// ✅ CORRECT: Coroutines can keep noexcept (exceptions → futures)
+seastar::future<void> process() noexcept {
+    try {
+        co_await work_that_might_throw();
+    } catch (...) {
+        // Exception converted to exceptional future automatically
+    }
+}
 ```
 
 **Feedback Template:**
@@ -104,6 +144,12 @@ In the data path, avoid exceptions for performance. Consider:
 
 Also, this function is marked `noexcept` but can throw `std::bad_alloc` from 
 vector allocation. Either remove `noexcept` or ensure the operation truly cannot throw.
+
+Note: Check the entire call chain - if this function calls other functions that
+can throw, this function cannot be noexcept (unless it's a coroutine where exceptions
+automatically convert to exceptional futures).
+
+See PR #27476 for detailed discussion on noexcept specifications.
 ```
 
 ### 3. Memory Management Issues
@@ -203,6 +249,50 @@ This test has potential reliability issues:
    the test with your fix temporarily disabled to confirm it catches the bug.
 
 3. **Stability**: Consider running with `--repeat 100` to check for flakiness.
+```
+
+### 5. Tablets Compatibility Issues
+
+**Why Critical:** Code using vnodes assumptions breaks with tablets feature (modern ScyllaDB)
+
+**Check for:**
+- Using `calculate_natural_endpoints()` (vnodes only)
+- Accessing `token_metadata` directly instead of through ERM
+- Assumptions about token ownership without tablets support
+- Maintenance/recovery operations incompatible with tablets
+
+**Example Issues:**
+```cpp
+// ❌ WRONG: Doesn't work with tablets (vnodes only)
+auto& strat = table.get_replication_strategy();
+auto endpoints = strat.calculate_natural_endpoints(token, tm);
+
+// ✅ CORRECT: Works with both vnodes and tablets
+auto erm = table.get_effective_replication_map();
+auto endpoints = erm->get_natural_endpoints(token);
+
+// ❌ WRONG: Direct token_metadata access
+auto& tm = get_token_metadata();
+auto endpoints = tm.get_topology().get_endpoints(token);
+
+// ✅ CORRECT: Use ERM abstraction
+auto endpoints = erm->get_natural_endpoints(token);
+```
+
+**Feedback Template:**
+```
+This code uses `calculate_natural_endpoints()` which only works with vnodes. 
+With tablets enabled, this will not work correctly.
+
+Use the effective replication map (ERM) instead:
+```cpp
+auto erm = table.get_effective_replication_map();
+auto endpoints = erm->get_natural_endpoints(token);
+```
+
+This works for both vnodes and tablets configurations.
+
+See PR #15974, #21207 for examples.
 ```
 
 ---

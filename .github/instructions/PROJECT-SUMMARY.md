@@ -8,7 +8,7 @@
 
 ## 🎯 Mission Accomplished
 
-Created a comprehensive code review skill for AI coding agents based on analysis of 200+ ScyllaDB pull requests and 700+ maintainer review comments. The skill captures the expertise of ScyllaDB maintainers and provides structured guidance for automated code reviews.
+Created a comprehensive code review skill for AI coding agents based on analysis of **1,009 ScyllaDB pull requests** (2022-2025) and **~12,222 maintainer review comments**. The skill captures the expertise of ScyllaDB maintainers and provides structured guidance for automated code reviews.
 
 ---
 
@@ -18,12 +18,13 @@ Created a comprehensive code review skill for AI coding agents based on analysis
 
 1. **reviewer.instructions.md** ⭐ PRIMARY SKILL (21 KB, 787 lines)
    - Complete P0/P1/P2 prioritized review checks
-   - 12 major issue categories with code examples
+   - 12+ major issue categories with code examples
    - Feedback templates for each issue type
    - Common anti-patterns to catch
    - 10 key reviewer mantras
    - 3-phase review workflow
    - Integration with existing C++/Python guidelines
+   - **Updated with findings from 1,009 PRs**
 
 2. **review-checklist.md** ⚡ QUICK REFERENCE (3 KB, 124 lines)
    - Condensed checkbox format
@@ -62,23 +63,24 @@ Created a comprehensive code review skill for AI coding agents based on analysis
 
 ---
 
-## 🔍 Research Foundation
+## 🔍 Research Foundation (UPDATED)
 
 ### Analysis Scope
-- **PRs Examined:** ~200 merged pull requests
-- **Detailed Analysis:** 16 PRs with 40+ comments each
-- **Comments Analyzed:** 700+ review comments
-- **Time Period:** Q4 2025 - Q1 2026
-- **Pattern Categories:** 16 major review patterns identified
+- **PRs Examined:** 1,009 merged pull requests
+- **Detailed Analysis:** 169 PRs with 30+ comments each
+- **Comments Analyzed:** ~12,222 review comments
+- **Time Period:** 2022-2025 (4 years)
+- **Pattern Categories:** 25+ major review patterns identified
 
 ### Key Data Sources
-- High-comment PRs (40-80 comments): #21649, #24129, #25068, #27397, #27435, #27528, #27891, #27894, #26834
-- Technical deep-dives (30-40 comments): #25990, #28093, #27204, #28109, #27476
+- Most discussed PRs (50+ comments): #26528 (108), #20729 (73), #21527 (59), #21207 (59)
+- High-activity PRs (30-50 comments): 89 PRs analyzed
+- Medium-activity PRs (15-30 comments): 211 PRs analyzed
 - Maintainer review patterns from: avikivity, denesb, bhalevy, tgrabiec, nyh, patjed41
 
 ---
 
-## 🎖️ Top Findings
+## 🎖️ Top Findings (UPDATED FROM 1,009 PRs)
 
 ### P0 Critical Patterns (Can Cause Outages/Crashes)
 
@@ -91,34 +93,60 @@ Created a comprehensive code review skill for AI coding agents based on analysis
 2. **Exception Handling in Data Path**
    - Exceptions in hot paths hurt performance
    - Exceptions used for control flow
-   - Wrong `noexcept` specifications
+   - Wrong `noexcept` specifications (check entire call chain!)
+   - **New finding:** small_vector capacity issues with noexcept
+   - **New finding:** Coroutines can keep noexcept (exceptions → exceptional futures)
    - Example: Prefer `std::expected` over exceptions in data path
 
 3. **Memory Management Issues**
    - Raw `new`/`delete` usage
    - Missing RAII patterns
    - Unnecessary copies in hot paths
+   - **New finding:** Missing pre-allocation when size known
    - Example: Use `std::unique_ptr` or `seastar::lw_shared_ptr`
 
 4. **Test Quality Problems**
    - Hardcoded `sleep()` causes race conditions
    - Missing consistency levels (should use CL=ALL)
    - Tests that don't validate the fix
+   - **New finding:** Tests must be run with --repeat to verify stability
    - Example: Use `consistency_level=Consistency.ALL` not `sleep()`
+
+5. **Tablets Compatibility Issues** ⭐ **NEW CRITICAL PATTERN**
+   - Using `calculate_natural_endpoints()` (vnodes only!)
+   - Direct token_metadata access instead of ERM
+   - Maintenance operations incompatible with tablets
+   - **Evidence:** PR #15974, #21207, #20729 (73 comments!)
+   - Example: Use `erm->get_natural_endpoints()` not `strat->calculate_natural_endpoints()`
 
 ### P1 High Priority Patterns (Impact Maintainability)
 
-5. **Poor Naming & API Design** - Generic names like `process()` without context
-6. **Missing Error Handling** - Unchecked function calls, missing null checks
-7. **Resource Management Issues** - Manual management instead of RAII
-8. **Missing Test Coverage** - Bug fixes without tests
+6. **Poor Naming & API Design** - Generic names like `process()`, unclear abbreviations
+7. **Missing Error Handling** - get_node() vs find_node(), unchecked calls
+8. **Resource Management Issues** - Manual management, missing pre-allocation
+9. **Missing Test Coverage** - Bug fixes without tests, no negative cases
+10. **Performance Issues** - Allocations in loops, unnecessary intermediates
 
 ### P2 Medium Priority (Code Quality)
 
-9. **Code Style** - Formatting, old patterns (streams vs fmt)
-10. **Documentation** - Obvious comments, missing "why"
-11. **Organization** - Missing subsystem prefixes in commits
-12. **Minor Optimizations** - Redundant operations, inefficient structures
+11. **Code Style** - Formatting, old patterns (streams vs fmt)
+12. **Documentation** - Obvious comments, missing "why"
+13. **Organization** - Missing subsystem prefixes in commits
+14. **Minor Optimizations** - Redundant operations, inefficient structures
+
+### New Patterns Discovered (From 1,009 PR Analysis)
+
+15. **Preprocessor Macros** - "Shunned upon" in this repository
+16. **Backport Compatibility** - Large changes shouldn't be backported
+17. **Alternator Preferences** - Static functions preferred over members
+18. **Friend Test Access** - Pattern for testing private methods
+19. **BOOST_CHECK_THROW** - Simpler than manual exception checking
+20. **C++23 Modernization** - std::ranges vs boost::ranges
+21. **Schema Consistency** - Operations must respect cluster state
+22. **Container Evolution** - small_vector, chunked_vector patterns
+23. **Unnecessary co_return** - Can be omitted in coroutines
+24. **Namespace Disambiguation** - Prefer using over fully qualified names
+25. **Precondition Documentation** - Document assumptions with on_internal_error
 
 ---
 

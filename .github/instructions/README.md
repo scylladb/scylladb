@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains the **ScyllaDB Code Review Skill** - a comprehensive guide for performing in-depth code reviews similar to ScyllaDB maintainers. The skill is based on analysis of 200+ pull requests and 700+ review comments from ScyllaDB maintainers.
+This directory contains the **ScyllaDB Code Review Skill** - a comprehensive guide for performing in-depth code reviews similar to ScyllaDB maintainers. The skill is based on analysis of **1,009 pull requests (2022-2025)** and **~12,222 review comments** from ScyllaDB maintainers.
 
 ## Purpose
 
@@ -50,11 +50,12 @@ Python-specific coding guidelines including:
 
 ## Key Findings from Analysis
 
-### Top 4 Critical Patterns (P0)
+### Top 5 Critical Patterns (P0)
 1. **Async/Seastar Violations** - Can crash the reactor
 2. **Exception Handling in Data Path** - Performance and correctness issues
 3. **Memory Management Issues** - Safety violations and leaks
 4. **Test Quality Issues** - Flakiness and reliability problems
+5. **Tablets Compatibility** ⭐ NEW - Vnodes assumptions break with tablets
 
 ### Top 10 Reviewer Mantras
 1. "Make it obvious" - Self-documenting code
