@@ -25,8 +25,6 @@ skip_in_release:
   - test_cluster_features
   - dtest/limits_test
   - dtest/schema_management_test
-skip_in_dev:
-  - test_audit
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
