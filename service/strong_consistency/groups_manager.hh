@@ -76,6 +76,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         //   this shouldn't throw anything.
         shared_future<> server_control_op = make_ready_future<>();
 
+        // Responsible for controlling the ongoing Raft operations.
+        //
+        // The entity responsible for triggering it is groups_manager.
+        // No other code should trigger it directly.
+        //
+        // Invariants:
+        // * Triggered iff the Raft group is being removed.
+        abort_source raft_ops_as;
+
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
@@ -99,6 +108,8 @@ private:
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
+
+    void abort_raft_group_operations(raft::group_id group_id) noexcept;
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
