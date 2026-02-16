@@ -88,7 +88,7 @@ def execute_gdb_command(
         gdb_process.expect_exact("(gdb)", timeout=1)
         pytest.fail("GDB command did not complete within the timeout period")
     result = gdb_process.before.decode("utf-8")
-    # The task_histogram command may include "error::Error" in its output, so
+    # The task_histogram command may include "::Error" in its output, so
     # allow it.
-    assert not re.search(r'(?<!error::)Error', result), f"Unexpected Error string in output:\n{result}"
+    assert not re.search(r'(?<!::)Error', result), f"Unexpected Error string in output:\n{result}"
     return result
