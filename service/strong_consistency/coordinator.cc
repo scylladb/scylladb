@@ -36,6 +36,15 @@ struct coordinator::operation_ctx {
     const locator::tablet_info& tablet_info;
 };
 
+// Create a context object for an operation on the tablet corresponding to
+// the passed schema and token.
+//
+// Preconditions:
+// * The Raft group corresponding to the tablet must exist on groups_manager.
+//
+// Exceptions:
+// * If this function throws an exception, it's critical and unexpected.
+//   Under normal circumstances, it shouldn't throw any exceptions.
 auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token) 
     -> future<value_or_redirect<operation_ctx>>
 {

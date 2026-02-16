@@ -46,7 +46,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     };
 
     struct raft_group_state {
+        // Invariants:
+        // * This is equal to true iff the corresponding tablet has a replica
+        //   on this (node, shard).
         bool has_tablet = false;
+
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
 
@@ -55,14 +59,33 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // before the raft::server has finished initializing, or conversely,
         // when a tablet is migrated back to this node before deinitialization completes.
         // Subsequent operations wait for the previous one to complete.
+        //
+        // Invariants:
+        // * The future is resolved iff the chain of starting and stopping tasks
+        //   of this Raft group is empty.
+        // * The future is resolved iff the Raft group has started and exists.
+        //   As a result, if the group has been removed, this raft_group_state
+        //   must no longer exist.
+        // * Subsequent control operations are ordered by their scheduling, i.e.
+        //   if an operation A was scheduled before operation B, then
+        //   operation B starts ONLY after operation A is completed.
+        //
+        // Exceptions:
+        // * If the corresponding future throws an exception, it's critical,
+        //   e.g. starting the Raft group failed. Under normal circumstances,
+        //   this shouldn't throw anything.
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
+        // Exceptions:
+        // * If the future throws an exception, it's critical.
+        //   Under normal circumstances, this shouldn't throw anything.
         future<> leader_info_updater = make_ready_future<>();
     };
 
+private:
     netw::messaging_service& _ms;
     raft_group_registry& _raft_gr;
     cql3::query_processor& _qp;
@@ -72,6 +95,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
 
+private:
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
@@ -96,9 +120,20 @@ public:
     //
     // Note that the method is synchronous: it only initiates these operations
     // and does not wait for their completion.
+    //
+    // Exceptions:
+    // * The function doesn't throw any exceptions.
     void update(locator::token_metadata_ptr new_tm);
 
-    // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
+    // The raft_server instance is used to submit write commands
+    // and perform read_barrier() before reads.
+    //
+    // Preconditions:
+    // * The group corresponding to the passed group_id must exist.
+    //
+    // Exceptions:
+    // * If this function throws an exception, it's critical and unexpected.
+    //   Under normal circumstances, it shouldn't throw any exceptions.
     future<raft_server> acquire_server(raft::group_id group_id);
 
     // Called during node boot. Waits for all raft::server instances corresponding

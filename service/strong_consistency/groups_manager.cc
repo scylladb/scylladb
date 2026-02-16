@@ -156,12 +156,18 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     });
 }
 
+// Conditionally schedule a group removal.
+//
+// Exceptions:
+// * The function doesn't throw any exceptions.
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
     if (state.gate->is_closed()) {
         return;
     }
     logger.info("schedule_raft_group_deletion(): group id {}", id);
     state.server_control_op = futurize_invoke([this, &state, id, g = state.gate](this auto) -> future<> {
+        // If this throws an exception, it's critical and something has
+        // gone really wrong. It shouldn't happen under normal circumstances.
         co_await state.server_control_op.get_future();
         co_await g->close();
         co_await _raft_gr.abort_server(id);
@@ -179,6 +185,17 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     });
 }
 
+// Schedule removals of Raft groups.
+//
+// Behavior based on the value of `all`:
+//
+// * true:  all groups will be scheduled to be removed.
+// * false: if a group doesn't correspond to a tablet belonging to this
+//          replica (node, shard), it will be scheduled to be removed.
+//          Otherwise, a group won't be scheduled to be removed.
+//
+// Exceptions:
+// * The function doesn't throw any exceptions.
 void groups_manager::schedule_raft_groups_deletion(bool all) {
     for (auto it = _raft_groups.begin(); it != _raft_groups.end(); ) {
         const auto next = std::next(it);
@@ -206,6 +223,9 @@ future<> groups_manager::wait_for_groups_to_start() {
     }
 }
 
+// Exceptions:
+// * If this function throws an exception, it's critical and not expected.
+//   Under normal circumstances, this shouldn't throw anything.
 future<> groups_manager::leader_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
     try {
         const auto schema = _db.find_schema(tablet.table);
