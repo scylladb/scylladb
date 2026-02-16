@@ -251,7 +251,7 @@ private:
             std::derived_from<TaskType, compaction_task_impl>
 
     future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
-                                                                               get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args);
+                                                                               get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, double stop_threshold, Args... args);
 
     future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
@@ -390,7 +390,7 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::compaction_group_view& t);
+    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::compaction_group_view& t, double stop_threshold = 1.0);
 
     future<compaction_reenabler> await_and_disable_compaction(compaction::compaction_group_view& t);
 
@@ -398,7 +398,11 @@ public:
     future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation");
+    //
+    // Stop compaction only if their progress is less than the stop_threshold.
+    // stop_threshold=1: to stop all compactions
+    // stop_threshold=0: to wait for all compactions
+    future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation", double stop_threshold = 1.0);
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
@@ -431,12 +435,12 @@ public:
 
 private:
     std::vector<shared_ptr<compaction_task_executor>>
-    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept;
-    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt = {}) noexcept;
+    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt, double stop_threshold) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt = {}, double stop_threshold = 1.0) noexcept;
 
 public:
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}, double stop_threshold = 1.0) noexcept;
 
     future<> await_ongoing_compactions(compaction_group_view* t);
 
@@ -614,6 +618,10 @@ public:
 
     const sstring& description() const noexcept {
         return _description;
+    }
+
+    const compaction_progress_monitor& progress_monitor() const noexcept {
+        return _progress_monitor;
     }
 private:
     // Before _compaction_done is set in compaction_task_executor::run_compaction(), compaction_done() returns ready future.
