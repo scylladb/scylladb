@@ -659,8 +659,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
             auto& auth_service = *client_state.get_auth_service();
 
             if (config.with_hashed_passwords) {
-                const auto maybe_user = client_state.user();
-                if (!maybe_user || !co_await auth::has_superuser(auth_service, *maybe_user)) {
+                if (!co_await client_state.has_superuser()) {
                     co_await coroutine::return_exception(exceptions::unauthorized_exception(
                             "DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
                 }
