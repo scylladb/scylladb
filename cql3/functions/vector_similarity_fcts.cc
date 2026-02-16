@@ -9,7 +9,9 @@
 #include "vector_similarity_fcts.hh"
 #include "types/types.hh"
 #include "types/vector.hh"
+#include "types/vector_native_value.hh"
 #include "exceptions/exceptions.hh"
+#include <span>
 
 namespace cql3 {
 namespace functions {
@@ -22,14 +24,14 @@ namespace {
 
 // You should only use this function if you need to preserve the original vectors and cannot normalize
 // them in advance.
-float compute_cosine_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+float compute_cosine_similarity(std::span<const float> v1, std::span<const float> v2) {
     double dot_product = 0.0;
     double squared_norm_a = 0.0;
     double squared_norm_b = 0.0;
 
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = value_cast<float>(v1[i]);
-        double b = value_cast<float>(v2[i]);
+        double a = v1[i];
+        double b = v2[i];
 
         dot_product += a * b;
         squared_norm_a += a * a;
@@ -46,12 +48,12 @@ float compute_cosine_similarity(const std::vector<data_value>& v1, const std::ve
     return (1 + (dot_product / (std::sqrt(squared_norm_a * squared_norm_b)))) / 2;
 }
 
-float compute_euclidean_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+float compute_euclidean_similarity(std::span<const float> v1, std::span<const float> v2) {
     double sum = 0.0;
 
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = value_cast<float>(v1[i]);
-        double b = value_cast<float>(v2[i]);
+        double a = v1[i];
+        double b = v2[i];
 
         double diff = a - b;
         sum += diff * diff;
@@ -65,12 +67,12 @@ float compute_euclidean_similarity(const std::vector<data_value>& v1, const std:
 
 // Assumes that both vectors are L2-normalized.
 // This similarity is intended as an optimized way to perform cosine similarity calculation.
-float compute_dot_product_similarity(const std::vector<data_value>& v1, const std::vector<data_value>& v2) {
+float compute_dot_product_similarity(std::span<const float> v1, std::span<const float> v2) {
     double dot_product = 0.0;
 
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = value_cast<float>(v1[i]);
-        double b = value_cast<float>(v2[i]);
+        double a = v1[i];
+        double b = v2[i];
         dot_product += a * b;
     }
 
@@ -136,13 +138,22 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
         return std::nullopt;
     }
 
+    // Use standard deserialization - already creates optimized vector_native_value.
+    // For vector<float, N>, the native value stores floats as contiguous bytes in native endianness,
+    // enabling zero-copy access via as_span<float>().
     const auto& type = arg_types()[0];
     data_value v1 = type->deserialize(*parameters[0]);
     data_value v2 = type->deserialize(*parameters[1]);
-    const auto& v1_elements = value_cast<std::vector<data_value>>(v1);
-    const auto& v2_elements = value_cast<std::vector<data_value>>(v2);
+    
+    // Extract the native representation (contiguous floats in native endianness)
+    const auto& native_v1 = value_cast<vector_native_value>(v1);
+    const auto& native_v2 = value_cast<vector_native_value>(v2);
 
-    float result = SIMILARITY_FUNCTIONS.at(_name)(v1_elements, v2_elements);
+    // Zero-copy access to float arrays - no additional allocations!
+    auto v1_floats = native_v1.as_span<float>();
+    auto v2_floats = native_v2.as_span<float>();
+
+    float result = SIMILARITY_FUNCTIONS.at(_name)(v1_floats, v2_floats);
     return float_type->decompose(result);
 }
 

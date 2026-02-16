@@ -667,7 +667,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, vectorval, asciival from mv_vectorval where vectorval = [1, 2, 3]").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, vector_type_impl::native_type({1, 2, 3})).serialize(), {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, std::vector<data_value>{1, 2, 3}).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, vectorval) values (0, [3, 2, 1]);").get();
@@ -675,7 +675,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, vectorval, asciival from mv_vectorval where vectorval = [3, 2, 1]").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, vector_type_impl::native_type({3, 2, 1})).serialize(), {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, std::vector<data_value>{3, 2, 1}).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         // ================ UDTs ================

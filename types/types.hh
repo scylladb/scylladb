@@ -39,6 +39,7 @@
 
 class tuple_type_impl;
 class vector_type_impl;
+class vector_native_value;
 class big_decimal;
 
 namespace utils {
@@ -282,7 +283,9 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
-    friend data_value make_vector_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_vector_value(data_type, vector_native_value);
+    friend data_value make_vector_value(data_type, std::span<const float>);
+    friend data_value make_vector_value(data_type, std::vector<data_value>);
     friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
@@ -462,6 +465,13 @@ public:
     bool is_vector() const;
     bool is_user_type() const { return _kind == kind::user; }
     bool is_native() const;
+    // Returns the number of elements this type holds.
+    // Scalar types return 1, vector types return their dimension.
+    size_t dimension() const;
+    // Returns the element type for vector types, or self for scalar types.
+    data_type element_type() const;
+    // Returns true if this is a scalar type (dimension == 1 and not a collection/tuple).
+    bool is_scalar() const { return dimension() == 1 && is_native(); }
     cql3::cql3_type as_cql3_type() const;
     const sstring& cql3_type_name() const;
     // The type is guaranteed to be wrapped within double quotation marks

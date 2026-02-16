@@ -579,13 +579,14 @@ BOOST_AUTO_TEST_CASE(test_vector) {
     auto t = vector_type_impl::get_instance(int32_type, 3);
     using native_type = vector_type_impl::native_type;
     using c_type = std::array<int32_t, 3>;
-    auto native_to_c = [] (native_type v) {
-        return std::array<int32_t, 3>{value_cast<int32_t>(v[0]), value_cast<int32_t>(v[1]), value_cast<int32_t>(v[2])};
+    auto native_to_c = [] (const native_type& v) {
+        auto span = v.as_span<int32_t>();
+        return std::array<int32_t, 3>{span[0], span[1], span[2]};
     };
-    auto c_to_native = [] (c_type v) {
-        return native_type({std::get<0>(v), std::get<1>(v), std::get<2>(v)});
+    auto c_to_native = [t] (c_type v) {
+        return value_cast<native_type>(make_vector_value(t, std::vector<data_value>{std::get<0>(v), std::get<1>(v), std::get<2>(v)}));
     };
-    auto native_to_bytes = [t] (native_type v) {
+    auto native_to_bytes = [t] (const native_type& v) {
         return t->decompose(make_vector_value(t, v));
     };
     auto bytes_to_native = [t] (bytes v) {

@@ -2174,8 +2174,12 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
     if (expr_value.is_null()) {
         throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering.first->name_as_text()));
     }
-    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
-    return util::to_vector<float>(values);
+    auto native_val = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
+    if (native_val.is_fixed_size()) {
+        auto span = native_val.as_span<float>();
+        return std::vector<float>(span.begin(), span.end());
+    }
+    return util::to_vector<float>(native_val.as_data_values());
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,

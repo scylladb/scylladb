@@ -12,11 +12,13 @@
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
 #include "types/concrete_types.hh"
+#include "types/vector_native_value.hh"
 #include "utils/assert.hh"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
 #include "utils/date.h"
 #include <seastar/core/align.hh>
+#include <seastar/net/byteorder.hh>
 #include <lua.hpp>
 #include "seastarx.hh"
 
@@ -1008,6 +1010,41 @@ struct to_lua_visitor {
         for (const data_value& dv : *v) {
             push_argument(l, dv);
             lua_rawseti(l, -2, ++i);
+        }
+    }
+
+    void operator()(const vector_type_impl& t, const vector_native_value* v) {
+        // returns the table {v1, v2, ...}
+        lua_createtable(l, v->size(), 0);
+        if (v->is_fixed_size()) {
+            auto elem_type = t.get_elements_type();
+            for (size_t i = 0; i < v->size(); ++i) {
+                // Deserialize the element from native bytes to data_value
+                auto elem_size = v->element_size();
+                bytes buf(bytes::initialized_later(), elem_size);
+                auto src = v->raw_bytes().data() + i * elem_size;
+                // Byte-swap from native to big-endian for deserialization
+                if (elem_size == 4) {
+                    uint32_t val;
+                    std::memcpy(&val, src, 4);
+                    val = seastar::net::hton(val);
+                    std::memcpy(buf.data(), &val, 4);
+                } else if (elem_size == 8) {
+                    uint64_t val;
+                    std::memcpy(&val, src, 8);
+                    val = seastar::net::hton(val);
+                    std::memcpy(buf.data(), &val, 8);
+                } else {
+                    std::memcpy(buf.data(), src, elem_size);
+                }
+                push_argument(l, elem_type->deserialize(buf));
+                lua_rawseti(l, -2, i + 1);
+            }
+        } else {
+            for (size_t i = 0; i < v->size(); ++i) {
+                push_argument(l, v->element_as_data_value(i));
+                lua_rawseti(l, -2, i + 1);
+            }
         }
     }
 

@@ -4,7 +4,8 @@ target_sources(types
     comparable_bytes.cc
     duration.cc
     json_utils.cc
-    types.cc)
+    types.cc
+    vector_native_value.cc)
 target_include_directories(types
   PUBLIC
     ${CMAKE_SOURCE_DIR})

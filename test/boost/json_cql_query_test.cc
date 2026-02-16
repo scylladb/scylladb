@@ -727,7 +727,7 @@ SEASTAR_TEST_CASE(test_json_vector) {
         auto msg = e.execute_cql("SELECT * FROM t;").get();
         assert_that(msg).is_rows().with_rows({{
             {int32_type->decompose(7)},
-            {vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(5), int32_t(123), int32_t(25)})))},
+            {vt->decompose(make_vector_value(vt, std::vector<data_value>{int32_t(5), int32_t(123), int32_t(25)}))},
         }});
 
         e.execute_cql("INSERT INTO t (id, v) VALUES (3, [5, 543, 45]);").get();
