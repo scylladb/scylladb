@@ -20,7 +20,8 @@ static void add_entry(logalloc::region& r,
       const schema& s,
       partition_index_page& page,
       const partition_key& key,
-      uint64_t position)
+      uint64_t position,
+      std::optional<parsed_promoted_index_entry> promoted_index = std::nullopt)
 {
     logalloc::allocating_section as;
     as(r, [&] {
@@ -33,6 +34,10 @@ static void add_entry(logalloc::region& r,
             write_fragmented(out, managed_bytes_view(old_storage));
             write_fragmented(out, single_fragmented_view(bytes_view(sst_key)));
             page._entries.push_back(index_entry{dht::raw_token_opt()->value, position, key_offset});
+            if (promoted_index) {
+                page._promoted_indexes.resize(page._entries.size());
+                page._promoted_indexes[page._entries.size() - 1] = *promoted_index;
+            }
         });
     });
 }
@@ -140,6 +145,59 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
         BOOST_REQUIRE_EQUAL(stats.misses, old_stats.misses + 2);
         BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 2);
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sparse_promoted_index) {
+    ::lru lru;
+    simple_schema s;
+    logalloc::region r;
+    partition_index_cache_stats stats;
+    partition_index_cache cache(lru, r, stats);
+
+    auto page0_loader = [&] (partition_index_cache::key_type k) -> future<partition_index_page> {
+        partition_index_page page;
+        auto destroy_page = defer([&] {
+            with_allocator(r.allocator(), [&] {
+                auto p = std::move(page);
+            });
+        });
+
+        add_entry(r, *s.schema(), page, s.make_pkey(0).key(), 0);
+        add_entry(r, *s.schema(), page, s.make_pkey(1).key(), 1, parsed_promoted_index_entry{
+            .promoted_index_start = 1,
+            .promoted_index_size = 10,
+            .num_blocks = 3
+        });
+        add_entry(r, *s.schema(), page, s.make_pkey(2).key(), 2);
+        add_entry(r, *s.schema(), page, s.make_pkey(3).key(), 3, parsed_promoted_index_entry{
+            .promoted_index_start = 2,
+            .promoted_index_size = 13,
+            .num_blocks = 1
+        });
+        add_entry(r, *s.schema(), page, s.make_pkey(4).key(), 4);
+        destroy_page.cancel();
+        co_return std::move(page);
+    };
+
+    auto page = cache.get_or_load(0, page0_loader).get();
+
+    BOOST_REQUIRE_EQUAL(page->has_promoted_index(0), false);
+    BOOST_REQUIRE_EQUAL(page->has_promoted_index(1), true);
+    BOOST_REQUIRE_EQUAL(page->has_promoted_index(2), false);
+    BOOST_REQUIRE_EQUAL(page->has_promoted_index(3), true);
+    BOOST_REQUIRE_EQUAL(page->has_promoted_index(4), false);
+
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(1).promoted_index_start, 1);
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(1).promoted_index_size, 10);
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(1).num_blocks, 3);
+
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(3).promoted_index_start, 2);
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(3).promoted_index_size, 13);
+    BOOST_REQUIRE_EQUAL(page->get_promoted_index(3).num_blocks, 1);
+
+    with_allocator(r.allocator(), [&] {
+        lru.evict_all();
+    });
 }
 
 template <typename T>
