@@ -252,28 +252,64 @@ private:
     }
 
     bool can_purge_tombstone(const tombstone& t, is_shadowable is_shadowable, const gc_clock::time_point deletion_time) {
+<<<<<<< HEAD
         bool purgeable = false;
         auto timestamp_source = max_purgeable::timestamp_source::none;
+||||||| parent of f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
+        max_purgeable::can_purge_result purge_res { };
+=======
+        max_purgeable::can_purge_result purge_res { };
+        std::optional<bool> expired;
+>>>>>>> f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
 
         if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
             // max purgeable timestamp.
+<<<<<<< HEAD
             purgeable = satisfy_grace_period(deletion_time);
             if (purgeable) {
                 std::tie(purgeable, timestamp_source) = can_gc(t, is_shadowable);
+||||||| parent of f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
+            purge_res.can_purge = satisfy_grace_period(deletion_time);
+            if (purge_res.can_purge) {
+                purge_res = can_gc(t, is_shadowable);
+=======
+            expired = purge_res.can_purge = satisfy_grace_period(deletion_time);
+            if (purge_res.can_purge) {
+                purge_res = can_gc(t, is_shadowable);
+>>>>>>> f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
             }
         } else {
+<<<<<<< HEAD
             std::tie(purgeable, timestamp_source) = can_gc(t, is_shadowable);
             if (purgeable) {
                 purgeable = satisfy_grace_period(deletion_time);
+||||||| parent of f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
+            purge_res = can_gc(t, is_shadowable);
+            if (purge_res.can_purge) {
+                purge_res.can_purge = satisfy_grace_period(deletion_time);
+=======
+            purge_res = can_gc(t, is_shadowable);
+            if (purge_res.can_purge) {
+                expired = purge_res.can_purge = satisfy_grace_period(deletion_time);
+>>>>>>> f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
             }
         }
 
         if constexpr (sstable_compaction()) {
+<<<<<<< HEAD
             if (!_tombstone_stats || !t) {
                 return purgeable;
+||||||| parent of f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
+            if (!_tombstone_stats || !t) {
+                return purge_res.can_purge;
+=======
+            // Tombstone GC stats only account for expired tombstones (those eligible for GC).
+            if (!_tombstone_stats || !t || !expired.value_or(satisfy_grace_period(deletion_time))) {
+                return purge_res.can_purge;
+>>>>>>> f33f324f77 (mutation_compactor: Fix tombstone GC metrics to account for only expired)
             }
 
             ++_tombstone_stats->attempts;
