@@ -1369,7 +1369,11 @@ class ScyllaCluster:
                                    f"the test must drop all keyspaces it creates.")
         for server in itertools.chain(self.running.values(), self.stopped.values()):
             server.write_log_marker(f"------ Ending test {name} ------\n")
-            if not server.log_file.closed:
+            # Only close log files when the cluster is dirty (will be destroyed).
+            # If the cluster is clean and will be reused, keep the log file open
+            # so that write_log_marker() and take_log_savepoint() work in the
+            # next test's before_test().
+            if self.is_dirty and not server.log_file.closed:
                 server.log_file.close()
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
