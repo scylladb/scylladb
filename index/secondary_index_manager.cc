@@ -94,7 +94,10 @@ void secondary_index_manager::reload() {
         auto index_name = it->first;
         if (!table_indices.contains(index_name)) {
             it = _indices.erase(it);
-            _metrics.erase(index_name);
+            if (auto mi = _metrics.find(index_name); mi != _metrics.end()) {
+                mi->second->deregister();
+                _metrics.erase(mi);
+            }  
         } else {
             ++it;
         }
@@ -234,6 +237,10 @@ stats::stats(const sstring& ks_name, const sstring& index_name) {
                     })
                             .aggregate({seastar::metrics::shard_label})
                             .set_skip_when_empty()});
+}
+
+void stats::deregister() {
+    metrics.clear();
 }
 
 void stats::add_latency(std::chrono::steady_clock::duration d) {
