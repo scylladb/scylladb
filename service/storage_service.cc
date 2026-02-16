@@ -3757,30 +3757,6 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
     });
 }
 
-future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint_ip,
-        locator::host_id endpoint_hid, gms::permit_id pid) {
-    slogger.info("Removing tokens {} for {}", tokens, endpoint_ip);
-    // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-    co_await remove_endpoint(endpoint_ip, pid);
-    auto tmlock = std::make_optional(co_await get_token_metadata_lock());
-    auto tmptr = co_await get_mutable_token_metadata_ptr();
-    tmptr->remove_endpoint(endpoint_hid);
-    tmptr->remove_bootstrap_tokens(tokens);
-
-    co_await update_topology_change_info(tmptr, ::format("excise {}", endpoint_ip));
-    co_await replicate_to_all_cores(std::move(tmptr));
-    tmlock.reset();
-
-    co_await notify_released(endpoint_hid);
-    co_await notify_left(endpoint_ip, endpoint_hid);
-}
-
-future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint_ip,
-        locator::host_id endpoint_hid, int64_t expire_time, gms::permit_id pid) {
-    add_expire_time_if_found(endpoint_hid, expire_time);
-    return excise(tokens, endpoint_ip, endpoint_hid, pid);
-}
-
 future<> storage_service::leave_ring() {
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {

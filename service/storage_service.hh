@@ -603,10 +603,6 @@ private:
     sharded<db::view::view_building_worker>& _view_building_worker;
     bool _isolated = false;
 private:
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
-            gms::permit_id);
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
-            long expire_time, gms::permit_id);
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
     future<> remove_endpoint(inet_address endpoint, gms::permit_id pid);
