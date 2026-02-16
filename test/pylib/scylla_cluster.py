@@ -216,9 +216,13 @@ async def with_file_lock(lock_path: pathlib.Path) -> AsyncIterator[None]:
 
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
     async def run_process(cmd, **kwargs):
-        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
-        await proc.communicate()
-        assert proc.returncode == 0
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stderr=asyncio.subprocess.PIPE, **kwargs)
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Command {cmd} failed with exit code {proc.returncode}: {stderr.decode(errors='replace').strip()}"
+            )
 
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "scylla-debug" if is_debug else "scylla"
@@ -245,7 +249,7 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
             if not unpacked_marker.exists():
                 if not downloaded_marker.exists():
                     archive_path.unlink(missing_ok=True)
-                    await run_process(["curl", "--retry", "10", "--fail", "--silent", "--show-error", "--output", archive_path, url])
+                    await run_process(["curl", "--retry", "40", "--retry-max-time", "60", "--fail", "--silent", "--show-error", "--retry-all-errors", "--output", archive_path, url])
                     downloaded_marker.touch()
                 shutil.rmtree(unpack_dir, ignore_errors=True)
                 unpack_dir.mkdir(exist_ok=True, parents=True)
