@@ -58,10 +58,13 @@ using service_reply_format_error = vector_search::vector_store_client::service_r
 using uri = vector_search::uri;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
 
-static thread_local auto random_engine = std::default_random_engine(std::random_device{}());
-
+static thread_local std::default_random_engine& get_random_engine() {
+    static thread_local std::default_random_engine engine{std::random_device{}()};
+    return engine;
+}
 auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     auto port = port_number{};
     auto [ptr, ec] = std::from_chars(&*port_txt.begin(), &*port_txt.end(), port);
