@@ -119,7 +119,7 @@ class ResourceGather(ABC):
         pass
 
     def put_process_to_cgroup(self) -> None:
-        os.setsid()
+        pass
 
     def get_test_metrics(self) -> Metric:
         pass
@@ -197,7 +197,6 @@ class ResourceGatherOn(ResourceGather):
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
     def put_process_to_cgroup(self) -> None:
-        super().put_process_to_cgroup()
         try:
             pid = os.getpid()
             with open(self.cgroup_path / 'cgroup.procs', "a") as cgroup:
