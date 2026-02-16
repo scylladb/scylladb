@@ -308,7 +308,7 @@ struct vector_store_client::impl {
         }
 
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit, filter);
+        auto content = write_ann_json(vs_vector, limit, filter);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
