@@ -35,6 +35,7 @@ struct segment_manager_config {
     seastar::scheduling_group compaction_sg;
     seastar::scheduling_group separator_sg;
     uint32_t separator_delay_limit_ms;
+    size_t max_separator_memory = 1 * 1024 * 1024;
 };
 
 class segment_manager_impl;

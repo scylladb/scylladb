@@ -491,13 +491,13 @@ private:
 
 struct separator {
     struct buffer {
-        write_buffer buf;
+        write_buffer* buf;
         utils::chunked_vector<future<>> pending_updates;
         group_id gid;
         debt_counter::units debt_units;
 
-        buffer(size_t segment_size, group_id gid, debt_counter& counter)
-            : buf(segment_size, false)
+        buffer(write_buffer* wb, group_id gid, debt_counter& counter)
+            : buf(wb)
             , gid(gid)
             , debt_units(counter.consume(0))
         {}
@@ -510,7 +510,7 @@ struct separator {
 
         future<log_location> write(log_record_writer writer) {
             debt_units += writer.size();
-            return buf.write(std::move(writer));
+            return buf->write(std::move(writer));
         }
     };
     absl::flat_hash_map<group_id, std::deque<buffer>> _group_buffers;
@@ -841,6 +841,8 @@ class segment_manager_impl {
     sep_ptr _active_separator;
     size_t _separator_flush_threshold;
     debt_counter _separator_debt;
+    std::vector<write_buffer> _separator_buffer_pool;
+    std::vector<write_buffer*> _available_separator_buffers;
 
 public:
     static constexpr size_t block_alignment = segment_manager::block_alignment;
@@ -989,7 +991,7 @@ static size_t calculate_separator_flush_threshold(const segment_manager_config& 
     threshold = std::min(threshold, cfg.disk_size / cfg.segment_size / 20);
 
     // don't hold too much segments because we need to keep them all in memory
-    threshold = std::min(threshold, 512 * 1024 * 1024 / cfg.segment_size);
+    threshold = std::min(threshold, cfg.max_separator_memory / cfg.segment_size / 3);
 
     threshold = std::max<size_t>(threshold, 1);
 
@@ -1004,7 +1006,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
     , _compaction_mgr(*this, index, compaction_manager::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
-            .compaction_sg = config.compaction_sg
+            .compaction_sg = config.compaction_sg,
+            .separator_sg = config.separator_sg
         })
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
@@ -1015,6 +1018,15 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
     {
 
     _free_segments.reserve(_max_segments);
+
+    // pre-allocate write buffers for separator
+    size_t separator_buffer_count = _cfg.max_separator_memory / _cfg.segment_size;
+    _available_separator_buffers.reserve(separator_buffer_count);
+    _separator_buffer_pool.reserve(separator_buffer_count);
+    for (size_t i = 0; i < separator_buffer_count; ++i) {
+        _separator_buffer_pool.emplace_back(config.segment_size, false);
+        _available_separator_buffers.push_back(&_separator_buffer_pool.back());
+    }
 
     namespace sm = seastar::metrics;
 
@@ -1271,7 +1283,8 @@ future<> segment_manager_impl::switch_active_segment() {
     std::optional<sep_ptr> new_sep;
     if (!_active_separator
             || _active_separator->switch_requested()
-            || _active_separator->segment_count() >= _separator_flush_threshold) {
+            || _active_separator->segment_count() >= _separator_flush_threshold
+            || _available_separator_buffers.size() < _active_separator->group_count() * 2) {
         new_sep = make_lw_shared<separator>(_separator_flush_threshold);
     }
 
@@ -1791,14 +1804,20 @@ separator::buffer& compaction_manager::get_separator_buffer(separator& sep, cons
     }
 
     auto& group_bufs = it->second;
-    if (group_bufs.empty() || !group_bufs.back().buf.can_fit(writer)) {
-        group_bufs.emplace_back(_sm.get_segment_size(), gid, _sm._separator_debt);
+    if (group_bufs.empty() || !group_bufs.back().buf->can_fit(writer)) {
+        // TODO really ensure we have enough buffers
+        if (_sm._available_separator_buffers.empty()) {
+            throw std::runtime_error("No available separator buffers");
+        }
+        write_buffer* wb = _sm._available_separator_buffers.back();
+        _sm._available_separator_buffers.pop_back();
+        group_bufs.emplace_back(std::move(wb), gid, _sm._separator_debt);
         sep._buffer_count++;
     }
 
     auto& buf = group_bufs.back();
-    if (!buf.buf.can_fit(writer)) {
-        throw std::runtime_error(fmt::format("Record size {} exceeds compaction buffer size {}", writer.size(), buf.buf.get_max_write_size()));
+    if (!buf.buf->can_fit(writer)) {
+        throw std::runtime_error(fmt::format("Record size {} exceeds compaction buffer size {}", writer.size(), buf.buf->get_max_write_size()));
     }
 
     return buf;
@@ -1853,12 +1872,16 @@ future<> compaction_manager::flush_separator(separator& sep) {
     for (auto&& [gid, bufs] : sep._group_buffers) {
         logstor_logger.trace("Flushing separator buffers for group {} with {} buffers from {} segments", gid, bufs.size(), sep._segments.size());
         while (!bufs.empty()) {
-            if (auto& buf = bufs.front(); buf.buf.has_data()) {
-                co_await _sm.write_full_segment(buf.buf, buf.gid, write_source::separator);
+            if (auto& buf = bufs.front(); buf.buf->has_data()) {
+                co_await _sm.write_full_segment(*buf.buf, buf.gid, write_source::separator);
                 co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
                 _stats.separator_buffer_flushed++;
             }
+            auto wb = std::move(bufs.front().buf);
             bufs.pop_front();
+
+            wb->reset();
+            _sm._available_separator_buffers.push_back(std::move(wb));
         }
     }
 
@@ -1877,7 +1900,7 @@ future<> compaction_manager::abort_separator(separator& sep) {
     for (auto&& [gid, bufs] : sep._group_buffers) {
         while (!bufs.empty()) {
             auto& buf = bufs.front();
-            buf.buf.abort_writes(std::make_exception_ptr(abort_requested_exception()));
+            buf.buf->abort_writes(std::make_exception_ptr(abort_requested_exception()));
             for (auto&& f : buf.pending_updates) {
                 try {
                     co_await std::move(f);

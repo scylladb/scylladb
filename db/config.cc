@@ -846,6 +846,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Total size in megabytes allocated for each key-value storage file on disk.")
     , kv_storage_separator_delay_limit_ms(this, "kv_storage_separator_delay_limit_ms", value_status::Used, 100,
         "Maximum delay in milliseconds for key-value storage separator debt control.")
+    , kv_storage_separator_max_memory_in_mb(this, "kv_storage_separator_max_memory_in_mb", value_status::Used, 256,
+        "Maximum memory in megabytes for key-value storage separator memory buffers.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
