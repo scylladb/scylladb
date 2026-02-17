@@ -2471,6 +2471,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } else {
                 guard = std::move(*guard_opt);
             }
+
+            if (co_await maybe_retry_failed_rf_change_tablet_rebuilds(std::move(guard))) {
+                co_return true;
+            }
             co_return false;
         }
 
@@ -3655,6 +3659,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Returns the guard if no work done. Otherwise, transitions the state machine into tablet resize finalization path.
     future<std::optional<group0_guard>> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
 
+    // Returns true if the state machine was transitioned into tablet migration path.
+    future<bool> maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard);
+
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
@@ -3817,6 +3824,68 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_res
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
     co_return std::nullopt;
+}
+
+future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard) {
+    rtlogger.debug("Retrying failed rebuilds");
+
+    auto tmptr = get_token_metadata_ptr();
+    utils::chunked_vector<canonical_mutation> updates;
+    for (auto& ks_name : _db.get_tablets_keyspaces()) {
+        auto& ks = _db.find_keyspace(ks_name);
+        auto& strategy = ks.get_replication_strategy();
+        auto tables_with_mvs = ks.metadata()->tables();
+        auto views = ks.metadata()->views();
+        tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+        for (const auto& table_or_mv : tables_with_mvs) {
+            if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
+                continue;
+            }
+
+            auto& tablet_map = tmptr->tablets().get_tablet_map(table_or_mv->id());
+            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently());
+
+            replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
+            co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                auto& replicas = tablet_map.get_tablet_info(tablet_id).replicas;
+                auto it = std::find_if(tablet_info.replicas.begin(), tablet_info.replicas.end(), [&](const auto& replica) {
+                    return std::find(replicas.begin(), replicas.end(), replica) == replicas.end();
+                });
+                if (it == tablet_info.replicas.end()) {
+                    co_return;
+                }
+                auto new_replicas = replicas;
+                new_replicas.push_back(*it);
+                auto last_token = new_tablet_map.get_last_token(tablet_id);
+                updates.emplace_back(co_await make_canonical_mutation_gently(
+                        replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
+                                .set_new_replicas(last_token, new_replicas)
+                                .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
+                                .build()
+                ));
+            });
+        }
+
+        if (!updates.empty()) {
+            break;
+        }
+    }
+
+    if (updates.empty()) {
+        rtlogger.debug("No failed RF change rebuilds to retry");
+        co_return false;
+    }
+
+    updates.emplace_back(
+        topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topo_sm._topology.version + 1)
+            .build());
+
+    sstring reason = "Retry failed tablet rebuilds";
+    co_await update_topology_state(std::move(guard), std::move(updates), reason);
+    co_return true;
 }
 
 future<> topology_coordinator::refresh_tablet_load_stats() {
