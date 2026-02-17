@@ -4375,6 +4375,21 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
             }
         }
 
+        for (auto& [node_id, _] : _topology_state_machine._topology.normal_nodes) {
+            bool is_excluded = node_id == id
+                    || ignored_ids.contains(node_id)
+                    || _topology_state_machine._topology.excluded_tablet_nodes.contains(node_id);
+            if (!is_excluded && !_gossiper.is_alive(locator::host_id(node_id.uuid()))) {
+                const std::string message = ::format(
+                        "removenode: Rejected removenode operation for node {} because node {} is down and not ignored; "
+                        "if the node is down, restart it before retrying removenode; "
+                        "if the node is unrecoverable, retry removenode with the node added to the ignore list",
+                        id, node_id);
+                rtlogger.warn("{}", message);
+                throw std::runtime_error(message);
+            }
+        }
+
         // insert node that should be removed to ignore list so that other topology operations
         // can ignore it
         ignored_ids.insert(id);
@@ -7736,6 +7751,22 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
                 if (_gossiper.is_alive(locator::host_id(ignored_id.uuid()))) {
                     result.result = join_node_request_result::rejected{
                         .reason = fmt::format("Cannot replace node {} because ignored node {} is alive", *params.replaced_id, ignored_id),
+                    };
+                    co_return result;
+                }
+            }
+
+            for (auto& [node_id, _] : _topology_state_machine._topology.normal_nodes) {
+                bool is_excluded = node_id == *params.replaced_id
+                        || ignored_nodes.contains(node_id)
+                        || _topology_state_machine._topology.excluded_tablet_nodes.contains(node_id);
+                if (!is_excluded && !_gossiper.is_alive(locator::host_id(node_id.uuid()))) {
+                    result.result = join_node_request_result::rejected{
+                        .reason = fmt::format(
+                            "Cannot replace node {} because node {} is down and not ignored; "
+                            "if the node is down, restart it before retrying replacement; "
+                            "if the node is unrecoverable, retry replacement with the node added to the ignore list",
+                            *params.replaced_id, node_id),
                     };
                     co_return result;
                 }
