@@ -1985,13 +1985,13 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
             }
             continue;
         } catch (shutdown_marker&) {
-            _reserve_segments.abort(std::current_exception());
             break;
         } catch (...) {
             clogger.warn("Exception in segment reservation: {}", std::current_exception());
         }
         co_await sleep(100ms);
     }
+    _reserve_segments.abort(std::make_exception_ptr(shutdown_marker()));
 }
 
 future<std::vector<db::commitlog::descriptor>>
