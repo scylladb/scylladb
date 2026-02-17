@@ -239,7 +239,9 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_s
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-async def do_test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt = False, do_abort = False):
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
+async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt, do_abort):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -350,17 +352,6 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     print('Check that backup files are still there')  # regression test for #20938
     post_objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
     assert objects == post_objects
-
-@pytest.mark.asyncio
-async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, False, False)
-
-@pytest.mark.asyncio
-async def test_abort_simple_backup_and_restore(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, False, True)
-
 
 
 async def do_abort_restore(manager: ManagerClient, object_storage):
@@ -484,12 +475,6 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
 
-
-@pytest.mark.asyncio
-
-async def test_simple_backup_and_restore_with_encryption(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, True, False)
 
 # Helper class to parametrize the test below
 class topo:
