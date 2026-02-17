@@ -20,7 +20,7 @@ static const function_name SIMILARITY_COSINE_FUNCTION_NAME = function_name::nati
 static const function_name SIMILARITY_EUCLIDEAN_FUNCTION_NAME = function_name::native_function("similarity_euclidean");
 static const function_name SIMILARITY_DOT_PRODUCT_FUNCTION_NAME = function_name::native_function("similarity_dot_product");
 
-using similarity_function_t = float (*)(std::span<const float>, std::span<const float>);
+using similarity_function_t = float (*)(std::span<const double>, std::span<const double>);
 extern thread_local const std::unordered_map<function_name, similarity_function_t> SIMILARITY_FUNCTIONS;
 
 std::vector<data_type> retrieve_vector_arg_types(const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args);
@@ -36,10 +36,11 @@ public:
 
 namespace detail {
 
-// Extract float vector directly from serialized bytes, bypassing data_value overhead.
+// Extract double vector directly from serialized bytes, bypassing data_value overhead.
+// Supports both vector<float, N> and vector<double, N> element types.
 // This is an internal API exposed for testing purposes.
-// Vector<float, N> wire format: N floats as big-endian uint32_t values, 4 bytes each.
-std::vector<float> extract_float_vector(const bytes_opt& param, size_t dimension);
+// Wire format: N elements as big-endian values (4 bytes per float, 8 bytes per double).
+std::vector<double> extract_double_vector(const bytes_opt& param, size_t dimension, data_type element_type);
 
 } // namespace detail
 

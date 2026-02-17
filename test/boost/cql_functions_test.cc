@@ -423,31 +423,34 @@ SEASTAR_TEST_CASE(test_aggregate_functions_vector_type) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_extract_float_vector) {
+template <typename T>
+void test_extract_double_vector_from() {
     // Compare standard deserialization path vs optimized extraction path
-    auto serialize = [](size_t dim, const std::vector<float>& values) {
-        auto vector_type = vector_type_impl::get_instance(float_type, dim);
+    data_type element_type = std::is_same_v<T, float> ? float_type : double_type;
+    auto serialize = [element_type](const std::vector<T>& values) {
+        auto vector_type = vector_type_impl::get_instance(element_type, values.size());
         std::vector<data_value> data_vals;
         data_vals.reserve(values.size());
-        for (float f : values) {
-            data_vals.push_back(data_value(f));
+        
+        for (T d : values) {
+            data_vals.push_back(data_value(d));
         }
         return vector_type->decompose(make_list_value(vector_type, data_vals));
     };
 
-    auto deserialize_standard = [](size_t dim, const bytes_opt& serialized) {
-        auto vector_type = vector_type_impl::get_instance(float_type, dim);
+    auto deserialize_standard = [element_type](size_t dim, const bytes_opt& serialized) {
+        auto vector_type = vector_type_impl::get_instance(element_type, dim);
         data_value v = vector_type->deserialize(*serialized);
         const auto& elements = value_cast<std::vector<data_value>>(v);
-        std::vector<float> result;
+        std::vector<double> result;
         result.reserve(elements.size());
         for (const auto& elem : elements) {
-            result.push_back(value_cast<float>(elem));
+            result.push_back(static_cast<double>(value_cast<T>(elem)));
         }
         return result;
     };
 
-    auto compare_vectors = [](const std::vector<float>& a, const std::vector<float>& b) {
+    auto compare_vectors = [](const std::vector<double>& a, const std::vector<double>& b) {
         BOOST_REQUIRE_EQUAL(a.size(), b.size());
         for (size_t i = 0; i < a.size(); ++i) {
             if (std::isnan(a[i]) && std::isnan(b[i])) {
@@ -458,32 +461,32 @@ SEASTAR_THREAD_TEST_CASE(test_extract_float_vector) {
     };
 
     // Prepare test cases
-    std::vector<std::vector<float>> test_vectors = {
+    std::vector<std::vector<T>> test_vectors = {
         // Small vectors with explicit values
-        {1.0f, 2.5f},
-        {-1.5f, 0.0f, 3.14159f},
+        {1.0, 2.5},
+        {-1.5, 0.0, 3.14159},
         // Special floating-point values
         {
-            std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity(),
-            0.0f,
-            -0.0f,
-            std::numeric_limits<float>::min(),
-            std::numeric_limits<float>::max()
+            std::numeric_limits<T>::infinity(),
+            -std::numeric_limits<T>::infinity(),
+            0.0,
+            -0.0,
+            std::numeric_limits<T>::min(),
+            std::numeric_limits<T>::max()
         },
         // NaN values (require special comparison)
         {
-            std::numeric_limits<float>::quiet_NaN(),
-            1.0f,
-            std::numeric_limits<float>::signaling_NaN()
+            std::numeric_limits<T>::quiet_NaN(),
+            1.0,
+            std::numeric_limits<T>::signaling_NaN()
         }
     };
 
     // Add common embedding dimensions with pattern-generated data
     for (size_t dim : {128, 384, 768, 1024, 1536}) {
-        std::vector<float> vec(dim);
+        std::vector<T> vec(dim);
         for (size_t i = 0; i < dim; ++i) {
-            vec[i] = static_cast<float>(i % 100) * 0.01f;
+            vec[i] = static_cast<T>(i % 100) * 0.01;
         }
         test_vectors.push_back(std::move(vec));
     }
@@ -491,28 +494,39 @@ SEASTAR_THREAD_TEST_CASE(test_extract_float_vector) {
     // Run tests for all test vectors
     for (const auto& vec : test_vectors) {
         size_t dim = vec.size();
-        auto serialized = serialize(dim, vec);
+        auto serialized = serialize(vec);
         auto standard = deserialize_standard(dim, serialized);
-        compare_vectors(standard, cql3::functions::detail::extract_float_vector(serialized, dim));
+        compare_vectors(standard, cql3::functions::detail::extract_double_vector(serialized, dim, element_type));
     }
 
     // Null parameter should throw
     BOOST_REQUIRE_EXCEPTION(
-        cql3::functions::detail::extract_float_vector(std::nullopt, 3),
+        cql3::functions::detail::extract_double_vector(std::nullopt, 3, element_type),
         exceptions::invalid_request_exception,
-        seastar::testing::exception_predicate::message_contains("Cannot extract float vector from null parameter")
+        seastar::testing::exception_predicate::message_contains("Cannot extract double vector from null parameter")
     );
 
     // Size mismatch should throw
     for (auto [actual_dim, expected_dim] : {std::pair{2, 3}, {4, 3}}) {
-        std::vector<float> vec(actual_dim, 1.0f);
-        auto serialized = serialize(actual_dim, vec);
+        std::vector<T> vec(actual_dim, 1.0);
+        auto serialized = serialize(vec);
         BOOST_REQUIRE_EXCEPTION(
-            cql3::functions::detail::extract_float_vector(serialized, expected_dim),
+            cql3::functions::detail::extract_double_vector(serialized, expected_dim, element_type),
+            exceptions::invalid_request_exception,
+            seastar::testing::exception_predicate::message_contains("Invalid vector size")
+        );
+        BOOST_REQUIRE_EXCEPTION(
+            cql3::functions::detail::extract_double_vector(serialized, actual_dim, 
+                !std::is_same_v<T, float> ? float_type : double_type),
             exceptions::invalid_request_exception,
             seastar::testing::exception_predicate::message_contains("Invalid vector size")
         );
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_extract_double_vector) {
+    test_extract_double_vector_from<float>();
+    test_extract_double_vector_from<double>();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -12,32 +12,39 @@
 #include "exceptions/exceptions.hh"
 #include <span>
 #include <bit>
+#include "utils/on_internal_error.hh"
 
 namespace cql3 {
 namespace functions {
 
 namespace detail {
 
-std::vector<float> extract_float_vector(const bytes_opt& param, size_t dimension) {
+std::vector<double> extract_double_vector(const bytes_opt& param, size_t dimension, data_type element_type) {
     if (!param) {
-        throw exceptions::invalid_request_exception("Cannot extract float vector from null parameter");
+        throw exceptions::invalid_request_exception("Cannot extract double vector from null parameter");
     }
 
-    const size_t expected_size = dimension * sizeof(float);
+    const size_t expected_size = dimension * (*element_type == *float_type ? sizeof(float) : sizeof(double));
     if (param->size() != expected_size) {
         throw exceptions::invalid_request_exception(
-            fmt::format("Invalid vector size: expected {} bytes for {} floats, got {} bytes",
+            fmt::format("Invalid vector size: expected {} bytes for {} elements, got {} bytes",
                        expected_size, dimension, param->size()));
     }
 
-    std::vector<float> result;
+    std::vector<double> result;
     result.reserve(dimension);
 
     bytes_view view(*param);
-    for (size_t i = 0; i < dimension; ++i) {
-        // read_simple handles network byte order (big-endian) conversion
-        uint32_t raw = read_simple<uint32_t>(view);
-        result.push_back(std::bit_cast<float>(raw));
+    if (*element_type == *float_type) {
+        for (size_t i = 0; i < dimension; ++i) {
+            result.push_back(static_cast<double>(std::bit_cast<float>(read_simple<uint32_t>(view))));
+        }
+    } else if (*element_type == *double_type) {
+         for (size_t i = 0; i < dimension; ++i) {
+            result.push_back(std::bit_cast<double>(read_simple<uint64_t>(view)));
+        }
+    } else {
+        utils::on_internal_error(fmt::format("Unexpected element type in similarity function: {}", element_type->as_cql3_type().to_string()));
     }
 
     return result;
@@ -54,7 +61,7 @@ namespace {
 
 // You should only use this function if you need to preserve the original vectors and cannot normalize
 // them in advance.
-float compute_cosine_similarity(std::span<const float> v1, std::span<const float> v2) {
+float compute_cosine_similarity(std::span<const double> v1, std::span<const double> v2) {
     double dot_product = 0.0;
     double squared_norm_a = 0.0;
     double squared_norm_b = 0.0;
@@ -78,7 +85,7 @@ float compute_cosine_similarity(std::span<const float> v1, std::span<const float
     return (1 + (dot_product / (std::sqrt(squared_norm_a * squared_norm_b)))) / 2;
 }
 
-float compute_euclidean_similarity(std::span<const float> v1, std::span<const float> v2) {
+float compute_euclidean_similarity(std::span<const double> v1, std::span<const double> v2) {
     double sum = 0.0;
 
     for (size_t i = 0; i < v1.size(); ++i) {
@@ -97,7 +104,7 @@ float compute_euclidean_similarity(std::span<const float> v1, std::span<const fl
 
 // Assumes that both vectors are L2-normalized.
 // This similarity is intended as an optimized way to perform cosine similarity calculation.
-float compute_dot_product_similarity(std::span<const float> v1, std::span<const float> v2) {
+float compute_dot_product_similarity(std::span<const double> v1, std::span<const double> v2) {
     double dot_product = 0.0;
 
     for (size_t i = 0; i < v1.size(); ++i) {
@@ -122,7 +129,9 @@ thread_local const std::unordered_map<function_name, similarity_function_t> SIMI
 
 std::vector<data_type> retrieve_vector_arg_types(const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args) {
     if (provided_args.size() != 2) {
-        throw exceptions::invalid_request_exception(fmt::format("Invalid number of arguments for function {}(vector<float, n>, vector<float, n>)", name));
+        throw exceptions::invalid_request_exception(fmt::format(
+            "Invalid number of arguments for function {}(vector<float|double, n>, vector<float|double, n>)",
+            name));
     }
 
     auto [first_result, first_dim_opt] = provided_args[0]->test_assignment_any_size_float_vector();
@@ -132,9 +141,9 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
         auto type = arg->assignment_testable_type_opt();
         const auto& source_context = arg->assignment_testable_source_context();
         if (type) {
-            return fmt::format("Function {} requires a float vector argument, but found {} of type {}", name, source_context, type.value()->cql3_type_name());
+            return fmt::format("Function {} requires a float or double vector argument, but found \"{}\" of type {}", name, source_context, type.value()->cql3_type_name());
         } else {
-            return fmt::format("Function {} requires a float vector argument, but found {}", name, source_context);
+            return fmt::format("Function {} requires a float or double vector argument, but found \"{}\"", name, source_context);
         }
     };
 
@@ -146,19 +155,32 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
     }
 
     if (!first_dim_opt && !second_dim_opt) {
-        throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of argument {} for function {}(vector<float, n>, vector<float, n>)",
-                provided_args[0]->assignment_testable_source_context(), name));
+        throw exceptions::invalid_request_exception(fmt::format(
+            "Cannot infer type of argument {} for function {}(vector<float|double, n>, vector<float|double, n>)",
+            provided_args[0]->assignment_testable_source_context(), name));
     }
     if (first_dim_opt && second_dim_opt) {
         if (*first_dim_opt != *second_dim_opt) {
             throw exceptions::invalid_request_exception(fmt::format(
-                    "All arguments must have the same vector dimensions, but found vector<float, {}> and vector<float, {}>", *first_dim_opt, *second_dim_opt));
+                    "All arguments must have the same vector dimensions, but found vectors of {} and {} elements", *first_dim_opt, *second_dim_opt));
         }
     }
 
     size_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
-    auto type = vector_type_impl::get_instance(float_type, dimension);
-    return {type, type};
+
+    // Get vector type for each argument, defaulting to double for literals
+    auto get_vector_type = [dimension](const shared_ptr<assignment_testable>& arg) -> data_type {
+        auto type_opt = arg->assignment_testable_type_opt();
+        if (type_opt) {
+            auto vec_type = dynamic_pointer_cast<const vector_type_impl>(type_opt.value());
+            if (vec_type) {
+                return vector_type_impl::get_instance(vec_type->get_elements_type(), dimension);
+            }
+        }
+        return vector_type_impl::get_instance(double_type, dimension);
+    };
+
+    return {get_vector_type(provided_args[0]), get_vector_type(provided_args[1])};
 }
 
 bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) {
@@ -171,10 +193,13 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
     // Extract dimension from the vector type
     const auto& type = static_cast<const vector_type_impl&>(*arg_types()[0]);
     size_t dimension = type.get_dimension();
+    data_type elements_type1 = type.get_elements_type();
 
-    // Optimized path: extract floats directly from bytes, bypassing data_value overhead
-    std::vector<float> v1 = detail::extract_float_vector(parameters[0], dimension);
-    std::vector<float> v2 = detail::extract_float_vector(parameters[1], dimension);
+    std::vector<double> v1 = detail::extract_double_vector(parameters[0], dimension, elements_type1);
+
+    const auto& type2 = static_cast<const vector_type_impl&>(*arg_types()[1]);
+    data_type elements_type2 = type2.get_elements_type();
+    std::vector<double> v2 = detail::extract_double_vector(parameters[1], dimension, elements_type2);
 
     float result = SIMILARITY_FUNCTIONS.at(_name)(v1, v2);
     return float_type->decompose(result);
