@@ -25,7 +25,7 @@ def table1(cql, test_keyspace):
 # optional and if provided, can be less than the nanosecond). The following
 # tests verify that these different initialization options actually work.
 # Reproduces issue #7987
-@pytest.mark.xfail(reason="issue #7987")
+@pytest.mark.xfail(reason="Unprepared statement fails to set time column from an integer #7987")
 def test_type_time_from_int_unprepared(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, 123)")

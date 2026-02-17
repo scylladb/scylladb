@@ -271,7 +271,7 @@ def test_range_deletion(cql, test_keyspace, scylla_only):
 # Reproduces #8627:
 # Test that trying to insert a value for an indexed column that exceeds 64KiB fails,
 # because this value is too large to be written as a key in the underlying index
-@pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #8627")
 def test_too_large_indexed_value(cql, test_keyspace):
     schema = 'p int, c int, v text, primary key (p,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -286,7 +286,7 @@ def test_too_large_indexed_value(cql, test_keyspace):
 # to 64 KB. When a collection is indexed, the insertion of oversized elements
 # should fail cleanly at the time of write.
 # Reproduces #8627
-@pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #8627")
 def test_too_large_indexed_collection_value(cql, test_keyspace):
     schema = 'p int, c int, m map<text,text>, primary key (p,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -303,7 +303,7 @@ def test_too_large_indexed_collection_value(cql, test_keyspace):
 # to a table with pre-existing data. The background index-building process
 # cannot return an error to the user, but we do expect it to skip the
 # problematic row and continue to complete the rest of the index build.
-@pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #8627")
 def test_too_large_indexed_value_build(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
         # No index yet - a "big" value in v is perfectly fine:
@@ -378,7 +378,7 @@ def test_instant_table_recreation(cql, test_keyspace):
 # a full-index scan (the amount of output is proportional to the read).
 # Additionally, with unnecessary parentheses the query also works, and isn't
 # handled like a multi-column restriction (reproduces #13250).
-@pytest.mark.xfail(reason="issue #13250")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #13250")
 def test_index_scan_multicolumn_syntax(cql, test_keyspace):
     schema = 'p int, c1 int, c2 int, primary key (p, c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -507,7 +507,7 @@ def test_index_in_restriction(cql, test_keyspace, cassandra_bug):
 # Reproduces #10649 - when use_index=True the test failed because LIMIT
 # returned fewer than the requested number of rows.
 @pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #10649")), False])
 def test_filter_and_limit(cql, test_keyspace, use_index, driver_bug_1):
     with new_test_table(cql, test_keyspace, 'pk int primary key, x int, y int') as table:
         if use_index:
@@ -543,7 +543,7 @@ def test_filter_and_limit(cql, test_keyspace, use_index, driver_bug_1):
 # Reproduces #10649 - when use_index=True the test failed because LIMIT
 # returned fewer than the requested number of rows.
 @pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #10649")), False])
 def test_filter_and_limit_clustering(cql, test_keyspace, use_index):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY(pk, ck)') as table:
         if use_index:
@@ -575,7 +575,7 @@ def test_filter_and_limit_clustering(cql, test_keyspace, use_index):
 # who discovered #10649, and involves slightly different code paths in
 # Scylla (the index-driver query needs to read individual rows, not
 # entire partitions, from the base table).
-@pytest.mark.xfail(reason="#10649")
+@pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #10649")
 def test_filter_and_limit_2(cql, test_keyspace):
     schema = 'pk int, ck1 int, ck2 int, x int, PRIMARY KEY (pk, ck1, ck2)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -603,7 +603,7 @@ def test_filter_and_limit_2(cql, test_keyspace):
 # conjunction filtering. A user tried this variant in issue #12766.
 # This is a scylla_only test because local index is a Scylla-only feature.
 @pytest.mark.parametrize("use_local_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #10649")), False])
 def test_filter_and_limit_local_index(cql, test_keyspace, use_local_index, driver_bug_1, scylla_only):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p, c)') as table:
         if use_local_index:
@@ -1287,7 +1287,7 @@ def test_index_paging_pk_only(cql, test_keyspace):
 # one component), the restriction can match the entire partition, but paging
 # still needs to page through it - and not return the entire partition as one
 # page! Reproduces #7432.
-@pytest.mark.xfail(reason="issue #7432")
+@pytest.mark.xfail(reason="Secondary index: large rows + paging cause incomplete results #7432")
 def test_index_paging_match_partition(cql, test_keyspace):
     schema = 'p1 int, p2 int, c int, primary key (p1,p2,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -1320,7 +1320,7 @@ def test_index_paging_match_partition(cql, test_keyspace):
 # Currently, paging of queries that uses secondary indexes on static columns
 # is unable to page through partitions of the base table and must return them
 # in whole. Related to #7432.
-@pytest.mark.xfail(reason="issue #7432")
+@pytest.mark.xfail(reason="Secondary index: large rows + paging cause incomplete results #7432")
 def test_index_paging_static_column(cql, test_keyspace):
     schema = 'p int, c int, s int static, PRIMARY KEY(p, c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -1350,7 +1350,7 @@ def test_index_paging_static_column(cql, test_keyspace):
 # returns all the results in one page instead of stopping. So the following
 # test passes with use_group_by = False but failed with use_group_by = True.
 @pytest.mark.parametrize("use_group_by", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#7432")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Secondary index: large rows + paging cause incomplete results #7432")), False])
 def test_index_paging_group_by(cql, test_keyspace, use_group_by):
     schema = 'p int, c1 int, c2 int, primary key (p,c1,c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -1722,7 +1722,7 @@ def test_index_non_eq_relation(cql, test_keyspace):
 # but failed with an index (use_index=True) - it seems the PER PARTITION LIMIT
 # request was just ignored.
 @pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#12762")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #12762")), False])
 def test_index_filtering_scan_and_per_partition_limit(cql, test_keyspace, use_index):
     with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
         if use_index:
@@ -1746,7 +1746,7 @@ def test_index_filtering_scan_and_per_partition_limit(cql, test_keyspace, use_in
 # the second result, and so on, and not skip to the next partition until
 # we have one post-filtered result.
 @pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#12762")), False])
+        pytest.param(True, marks=pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #12762")), False])
 def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_index):
     with new_test_table(cql, test_keyspace, "p int, c int, v int, z int, PRIMARY KEY (p, c)") as table:
         if use_index:
@@ -1767,7 +1767,7 @@ def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_i
 # the ALLOW FILTERING request right after the CREATE INDEX causes an
 # exception in SecondaryIndexManagement and a failed read. This is despite
 # CASSANDRA-8505 claiming that this issue was already fixed in 2015.
-@pytest.mark.xfail(reason="issue #7963")
+@pytest.mark.xfail(reason="Secondary index shouldn't be used before fully built #7963")
 def test_unbuilt_index_not_used(cql, test_keyspace, cassandra_bug):
     # The bigger "count" is the slower the test and the higher the chance
     # of reproducing the bug #7963. With dev build on my laptop, count=100
@@ -1817,7 +1817,7 @@ def wait_for_index(cql, keyspace, index_name, timeout_sec=60):
 # pages through the results, and between two pages adds a secondary-index
 # that could be used - or not - for continuing the request, but certainly
 # shouldn't break the request. Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
+@pytest.mark.xfail(reason="Adding a secondary index can break an ongoing paged read using another index #18992")
 def test_paging_and_create_index(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1853,7 +1853,7 @@ def test_paging_and_create_index(cql, test_keyspace):
 # This test is the same as the previous one, but in this test the request
 # filters on both v1 and v2 is already using an index for column v2, and
 # now between the pages we add an index for v1. Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
+@pytest.mark.xfail(reason="Adding a secondary index can break an ongoing paged read using another index #18992")
 def test_paging_and_create_index2(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1897,7 +1897,7 @@ def test_paging_and_create_index2(cql, test_keyspace):
 # will do the same without ALLOW FILTERING in the query - and we'll see the
 # query can't be resumed after the index is dropped.
 # Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
+@pytest.mark.xfail(reason="Adding a secondary index can break an ongoing paged read using another index #18992")
 def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -2062,7 +2062,7 @@ def test_index_in_API(cql, test_keyspace):
 # from the index view (where the LIMIT is correctly applied). A mismatch is
 # always interpreted as more pages being available, which in this case is incorrect.
 # See `generate_view_paging_state_from_base_query_results()` for more details.
-@pytest.mark.xfail(reason="issue #22158")
+@pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #22158")
 def test_limit_partition(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
@@ -2084,7 +2084,7 @@ def test_limit_partition(cql, test_keyspace):
 # Same as test_limit_partition above, except that it uses partition slices
 # instead of whole partitions. This is achieved by indexing the first clustering
 # key column.
-@pytest.mark.xfail(reason="issue #22158")
+@pytest.mark.xfail(reason="Secondary index query may exceed the LIMIT #22158")
 def test_limit_partition_slice(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
@@ -2116,7 +2116,7 @@ def test_limit_partition_slice(cql, test_keyspace):
 # assumes that the last partition of the previous page was fully read, so it
 # completely ignores it when preparing the second page. This logic is
 # implemented in `find_index_partition_ranges()`.
-@pytest.mark.xfail(reason="issue #25839")
+@pytest.mark.xfail(reason="Secondary index: large rows + paging cause incomplete results #25839")
 def test_short_read(cql, test_keyspace):
     page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
@@ -2137,7 +2137,7 @@ def test_short_read(cql, test_keyspace):
 # Another reproducer for issue #25839, this time asking for a count() as
 # a user tried in #28026 and noticing that adding an additional column
 # to the selection causes the count to become smaller.
-@pytest.mark.xfail(reason="issue #25839")
+@pytest.mark.xfail(reason="Secondary index: large rows + paging cause incomplete results #25839")
 def test_short_count(cql, test_keyspace):
     # Newer Scylla have configurable query_page_size_in_bytes so we can set
     # it low to have a faster test. Older Scylla and Cassandra have hard-coded

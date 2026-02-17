@@ -115,7 +115,7 @@ def test_group_by_clustering_prefix_with_limit(cql, table1):
 
 # Same as the above test, but also add paging, and check that the LIMIT
 # is handled correctly (limits the total number of returned results)
-@pytest.mark.xfail(reason="issue #5362")
+@pytest.mark.xfail(reason="LIMIT is not doing it right when using GROUP BY #5362")
 def test_group_by_clustering_prefix_with_limit_and_paging(cql, table1):
     results = list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1'))
     assert len(results) == 4
@@ -232,7 +232,7 @@ def test_group_by_non_aggregated_mutation_attribute_of_column(cql, table1):
 
 # This test is from cassandra_tests/validation/operations/select_group_by_test.py::testGroupByWithPaging()
 # Reproduces #21267
-@pytest.mark.xfail(reason="issue #21267")
+@pytest.mark.xfail(reason="Group By + Order By + Limit produces incorrect results #21267")
 def test_group_by_static_column(cql, test_keyspace):
 
     with new_test_table(cql, test_keyspace, "a int, b int, c int, s int static, d int, primary key (a, b, c)") as table:

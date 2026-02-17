@@ -1050,7 +1050,7 @@ def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new
 # different serialization (the map's elements are ordered differently).
 # Since the value is nevertheless the same, here too we expect not to see
 # a change event in the stream. Reproduces issue #27375.
-@pytest.mark.xfail(reason="issue #27375")
+@pytest.mark.xfail(reason="Alternator streams may generate event even if item did not really change #27375")
 def test_streams_updateitem_equal_but_not_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []

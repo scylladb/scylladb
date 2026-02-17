@@ -397,8 +397,8 @@ def do_test_filter_UDT_restriction(cql, test_keyspace, frozen):
 # in Cassandra the behavior is the former - and this is what this test
 # expects. In Scylla it's currently the latter, causing this test to fail.
 @pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#12102")),
-        pytest.param(False, marks=pytest.mark.xfail(reason="#12102"))])
+        pytest.param(True, marks=pytest.mark.xfail(reason="With filtering, page size counts unfiltered rows. Should be filtered rows? #12102")),
+        pytest.param(False, marks=pytest.mark.xfail(reason="With filtering, page size counts unfiltered rows. Should be filtered rows? #12102"))])
 def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
     with new_test_table(cql, test_keyspace, 'pk int primary key, x int, y int') as table:
         if use_index:

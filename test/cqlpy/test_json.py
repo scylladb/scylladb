@@ -215,7 +215,7 @@ def test_fromjson_bigint_nonoverflow(cql, table1):
 # standard suggests it may be fine to botch it up, so it might be acceptable
 # to fail this test.
 # Reproduces #10100 and #10137.
-@pytest.mark.xfail(reason="issue #10137")
+@pytest.mark.xfail(reason="INSERT JSON of bigint (64-bit) in scientific notation is not accurate above 2^53 #10137")
 def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
@@ -244,12 +244,12 @@ def test_fromjson_int_empty_string_prepared(cql, table1, cassandra_bug):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
-@pytest.mark.xfail(reason="issue #7944")
+@pytest.mark.xfail(reason="fromJson() should not accept the empty string \"\" as a number #7944")
 def test_fromjson_varint_empty_string_unprepared(cql, table1):
     p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, vi) VALUES ({p}, fromJson('\"\"'))")
-@pytest.mark.xfail(reason="issue #7944")
+@pytest.mark.xfail(reason="fromJson() should not accept the empty string \"\" as a number #7944")
 def test_fromjson_varint_empty_string_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
@@ -386,7 +386,7 @@ def test_fromjson_map_key_timestamp(cql, table1):
 # that a normal value is allowed. For example, it cannot be given as an
 # element of a list.
 # Reproduces #7954.
-@pytest.mark.xfail(reason="issue #7954")
+@pytest.mark.xfail(reason="fromJson() fails to set null tuple elements #7954")
 def test_fromjson_null_constant(cql, table1):
     p = unique_key_int()
     # Check that a "null" JSON constant can be used to unset a column
@@ -493,7 +493,7 @@ def test_fromjson_timestamp_submilli(cql, table1, cassandra_bug):
 # We need to skip this test because in debug mode memory allocation is not
 # bounded, and this test can hang or crash instead of failing immediately.
 # We also have a smaller xfailing test below, test_tojson_decimal_high_mantissa2.
-@pytest.mark.skip(reason="issue #8002")
+@pytest.mark.skip(reason="toJson() of decimal type doesn't use exponents so can produce huge output #8002")
 def test_tojson_decimal_high_mantissa(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
@@ -505,7 +505,7 @@ def test_tojson_decimal_high_mantissa(cql, table1):
 # that a much smaller exponent, 1e1000 works (this is not surprising) but
 # results in 1000 digits of output. This hints that 1e1000000000 will not
 # work at all, without testing it directly as above.
-@pytest.mark.xfail(reason="issue #8002")
+@pytest.mark.xfail(reason="toJson() of decimal type doesn't use exponents so can produce huge output #8002")
 def test_tojson_decimal_high_mantissa2(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
@@ -543,7 +543,7 @@ def test_select_json_function_call(cql, table1):
 # This is issue #8087.
 # This issue is also reproduced by the much more comprehensive test
 # cassandra_tests/validation/entities/json_test.py::testInsertJsonSyntaxWithNonNativeMapKeys
-@pytest.mark.xfail(reason="issue #8087")
+@pytest.mark.xfail(reason="SELECT JSON incorrectly quotes strings inside map keys #8087")
 def test_select_json_string_in_nonstring_map_key(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, tupmap) VALUES ({p}, ?)")

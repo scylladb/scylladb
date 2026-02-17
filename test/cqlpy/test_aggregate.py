@@ -179,7 +179,7 @@ def test_aggregation_inf_nan(cql, table1):
 # scenarios tested in this test - averaging 1 and 2 or 1.1 and 1.2 -
 # don't do something that any reasonable user might expect, and will need
 # to be fixed.
-@pytest.mark.xfail(reason="issue #13601")
+@pytest.mark.xfail(reason="Average of \"decimal\" values rounds the average if all inputs are integers #13601")
 def test_avg_decimal(cql, table1, cassandra_bug):
     p = unique_key_int()
     cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1.0)")

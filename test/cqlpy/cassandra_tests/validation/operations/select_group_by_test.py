@@ -10,7 +10,7 @@
 
 from ...porting import *
 
-@pytest.mark.xfail(reason="Issue #2060, #13109")
+@pytest.mark.xfail(reason="Allow mixing token and partition key restrictions #2060, Incorrect sort order when combining IN, GROUP BY and ORDER BY #13109")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
 
@@ -605,7 +605,7 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(1, 1, 2, 2, 2),
                    row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #13109")
+@pytest.mark.xfail(reason="Incorrect sort order when combining IN, GROUP BY and ORDER BY #13109")
 def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
@@ -1570,7 +1570,7 @@ def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
                           row(1, 1, 2, 2, 2),
                           row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #21267")
+@pytest.mark.xfail(reason="Group By + Order By + Limit produces incorrect results #21267")
 def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------

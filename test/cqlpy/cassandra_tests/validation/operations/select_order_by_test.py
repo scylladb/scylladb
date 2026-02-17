@@ -204,7 +204,7 @@ def testInvalidOrderBy(cql, test_keyspace):
 # Check that order-by works with IN (CASSANDRA-4327)
 # migrated from cql_tests.py:TestCQL.order_by_with_in_test()
 # Reproduces issue #9435
-@pytest.mark.xfail(reason="Issue #9435")
+@pytest.mark.xfail(reason="SELECT with IN and ORDER BY orders rows per partition instead of for the entire response #9435")
 def testOrderByForInClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(my_id varchar, col1 int, value varchar, PRIMARY KEY (my_id, col1))") as table:
 
@@ -320,7 +320,7 @@ def testOrderByForInClause(cql, test_keyspace):
             assert_invalid_message(cql, table, "LIMIT must be strictly positive",
                                  "SELECT v as c2 FROM %s where pk1 = ? AND pk2 IN (?, ?) ORDER BY c1 DESC , c2 DESC LIMIT 0; ", 1, 1, 2)
 
-@pytest.mark.skip(reason="Issue #22061")
+@pytest.mark.skip(reason="selection of a UDT field with ORDER BY fails with 'marshaling error: read_simple_bytes - not enough bytes' #22061")
 def testOrderByForInClauseWithCollectionElementSelection(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c frozen<set<int>>, v int, PRIMARY KEY (pk, c))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) VALUES (0, {1, 2}, 0)")

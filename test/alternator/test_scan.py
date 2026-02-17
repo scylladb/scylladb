@@ -501,7 +501,7 @@ def test_scan_exclusivestartkey_missing_sortkey(filled_test_table):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key (here a partition key and sort key)
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_scan_exclusivestartkey_spurious_column(filled_test_table):
     test_table, items = filled_test_table
     p = random_string()
