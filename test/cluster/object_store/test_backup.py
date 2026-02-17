@@ -10,7 +10,6 @@ import pytest
 import time
 import random
 
-from test.cqlpy.util import local_process_id
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
@@ -819,21 +818,7 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
-
-    pid = local_process_id(cql)
-    if not pid:
-        pytest.skip("Can't find local Scylla process")
-    # Now that we know the process id, use /proc to find the executable.
-    try:
-        scylla_path = os.readlink(f'/proc/{pid}/exe')
-    except:
-        pytest.skip("Can't find local Scylla executable")
-    # Confirm that this executable is a real tool-providing Scylla by trying
-    # to run it with the "--list-tools" option
-    try:
-        subprocess.check_output([scylla_path, '--list-tools'])
-    except:
-        pytest.skip("Local server isn't Scylla")
+    scylla_path = await manager.server_get_exe(server.server_id)
 
     async with new_test_keyspace(manager,
                                  "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:

@@ -90,59 +90,6 @@ def get_keys_from_sst(sst_file, scylla_path):
         logging.error(f"An unexpected error occurred: {e}")
     return []
 
-def local_process_id(cql):
-    ip = socket.gethostbyname(cql.cluster.contact_points[0])
-    port = cql.cluster.port
-    ip2hex = lambda ip: ''.join([f'{int(x):02X}' for x in reversed(ip.split('.'))])
-    port2hex = lambda port: f'{int(port):04X}'
-    addr1 = ip2hex(ip) + ':' + port2hex(port)
-    addr2 = ip2hex('0.0.0.0') + ':' + port2hex(port)
-    LISTEN = '0A'
-    with open('/proc/net/tcp', 'r') as f:
-        for line in f:
-            cols = line.split()
-            if cols[3] == LISTEN and (cols[1] == addr1 or cols[1] == addr2):
-                inode = cols[9]
-                break
-        else:
-            # Didn't find a process listening on the given address
-            return None
-    target = f'socket:[{inode}]'
-    for proc in os.listdir('/proc'):
-        if not proc.isnumeric():
-            continue
-        dir = f'/proc/{proc}/fd/'
-        try:
-            for fd in os.listdir(dir):
-                if os.readlink(dir + fd) == target:
-                    # Found the process!
-                    return proc
-        except:
-            # Ignore errors. We can't check processes we don't own.
-            pass
-    return None
-
-def get_scylla_path(cql):
-    max_retries = 5
-    for attempt in range(1, max_retries + 1):
-        pid = local_process_id(cql)
-        if not pid:
-            logger.warning(f"Attempt {attempt}/{max_retries}: Could not get local process ID for CQL. Retrying...")
-            time.sleep(1)
-            continue
-
-        path = None
-        try:
-            path = os.readlink(f'/proc/{pid}/exe')
-            subprocess.check_output([path, '--list-tools'], stderr=subprocess.PIPE)
-            return path
-        except:
-            logger.warning(f"Attempt {attempt}/{max_retries}: Failed to determine or verify Scylla path. Retrying...")
-            time.sleep(1)
-            continue
-
-    assert False, f"Failed to find and verify Scylla executable path after {max_retries} attempts."
-
 def get_metrics(server, metric_name):
     num = 0
     metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
@@ -425,7 +372,7 @@ async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
         await tm.drain_module_tasks(server.ip_addr, module_name)
 
     # Verify repaired and unrepaired keys
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -465,7 +412,7 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     if do_merge:
         await trigger_tablet_merge(manager, servers, logs)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     await asyncio.sleep(random.randint(1, 5))
 
@@ -508,7 +455,7 @@ async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(ma
 
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -536,7 +483,7 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 2
     await inject_error_off(manager, "repair_tablet_no_update_sstables_repair_at", servers)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     s1_mark = await logs[0].mark()
     await trigger_tablet_merge(manager, servers, logs)
@@ -577,7 +524,7 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
         logging.info(f"Start repair for token={t}");
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", t, incremental_mode='incremental') # sstables_repaired_at 3
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     # Trigger merge
     await trigger_tablet_merge(manager, servers, logs)
@@ -606,7 +553,7 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(server.server_id)
 
     # Trigger merge and error in merge
     s1_mark = await logs[0].mark()
