@@ -70,7 +70,7 @@ bcp() { buildah copy "$container" "$@"; }
 run() { buildah run "$container" "$@"; }
 bconfig() { buildah config "$@" "$container"; }
 
-container="$(buildah from docker.io/redhat/ubi9-minimal:latest)"
+container="$(buildah from --pull=always docker.io/redhat/ubi9-minimal:latest)"
 
 packages=(
     "build/dist/$config/redhat/RPMS/$arch/$product-$version-$release.$arch.rpm"
