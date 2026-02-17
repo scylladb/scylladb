@@ -157,7 +157,10 @@ fedora_packages=(
     podman
     buildah
 
-    https://github.com/scylladb/cassandra-stress/releases/download/v3.18.1/cassandra-stress-java21-3.18.1-1.noarch.rpm
+    # for cassandra-stress
+    java-openjdk-headless
+    snappy
+
     elfutils
     jq
 
@@ -386,6 +389,10 @@ elif [ "$ID" = "fedora" ]; then
         exit 1
     fi
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
+
+    # Fedora 45 tightened key checks, and cassandra-stress is not signed yet.
+    dnf install --no-gpgchecks -y https://github.com/scylladb/cassandra-stress/releases/download/v3.18.1/cassandra-stress-java21-3.18.1-1.noarch.rpm
+
     PIP_DEFAULT_ARGS="--only-binary=:all: -v"
     pip_constrained_packages=""
     for package in "${!pip_packages[@]}"
