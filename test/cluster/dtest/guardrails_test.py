@@ -173,3 +173,44 @@ class TestWriteConsistencyLevelGuardrails(Tester):
         stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (3, 3)", consistency_level=ConsistencyLevel.ANY)
         session.execute(stmt)
         self.assert_metric_increased(node, self.WARNED_METRIC, ConsistencyLevel.ANY, before_warned)
+
+    def test_write_cl_default_warned(self):
+        """
+        Test that by default ANY, ONE, and LOCAL_ONE increment the warned metric for writes,
+        while all other consistency levels do not.
+        """
+        cluster = self.cluster
+        cluster.populate([1, 1, 1]).start(wait_for_binary_proto=True)
+
+        node = cluster.nodelist()[0]
+        session = self.patient_cql_connection(node)
+
+        create_ks(session, "ks", 1)
+        session.execute("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+        warned_cls = [ConsistencyLevel.ANY, ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]
+        non_warned_cls = [ConsistencyLevel.TWO, ConsistencyLevel.THREE, ConsistencyLevel.QUORUM,
+                          ConsistencyLevel.ALL, ConsistencyLevel.LOCAL_QUORUM, ConsistencyLevel.EACH_QUORUM]
+        non_warned_serial_cls = [ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL]
+
+        for cl in warned_cls:
+            before = self.get_metric(node, self.WARNED_METRIC, cl)
+            stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (1, 1)", consistency_level=cl)
+            session.execute(stmt)
+            self.assert_metric_increased(node, self.WARNED_METRIC, cl, before)
+
+        for cl in non_warned_cls:
+            before = self.get_metric(node, self.WARNED_METRIC, cl)
+            stmt = SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (2, 2)", consistency_level=cl)
+            session.execute(stmt)
+            self.assert_metric_unchanged(node, self.WARNED_METRIC, cl, before)
+
+        for serial_cl in non_warned_serial_cls:
+            before = self.get_metric(node, self.WARNED_METRIC, ConsistencyLevel.QUORUM)
+            stmt = SimpleStatement(
+                "INSERT INTO ks.t (pk, v) VALUES (3, 3) IF NOT EXISTS",
+                consistency_level=ConsistencyLevel.QUORUM,
+                serial_consistency_level=serial_cl
+            )
+            session.execute(stmt)
+            self.assert_metric_unchanged(node, self.WARNED_METRIC, ConsistencyLevel.QUORUM, before)
