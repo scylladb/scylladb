@@ -278,7 +278,15 @@ public:
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) override
     {
-        auto prepared = local_qp().get_prepared(id);
+        auto qs = make_query_state();
+        bool needs_authorization = false;
+        // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+        // look for the prepared statement and then authorize it.
+        auto prepared = local_qp().get_prepared(qs->get_client_state().user(), id);
+        if (!prepared) {
+            needs_authorization = true;
+            prepared = local_qp().get_prepared(id);
+        }
         if (!prepared) {
             throw not_prepared_exception(id);
         }
@@ -287,9 +295,8 @@ public:
         SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
         qo->prepare(prepared->bound_names);
 
-        auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), true)
+        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), needs_authorization)
             .then([qs, qo = std::move(qo)] (auto msg) {
                 return cql_transport::messages::propagate_exception_as_future(std::move(msg));
             });
