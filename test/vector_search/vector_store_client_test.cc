@@ -1037,7 +1037,16 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
                 std::filesystem::copy_file(
                         std::string(certs.ca_cert_file()), std::string(broken_cert.get_path().string()), std::filesystem::copy_options::overwrite_existing);
 
-                // Wait for the client to reload the CA cert and succeed
+                // Wait for the truststore to reload the updated cert on all shards before attempting ANN requests.
+                // This avoids a race where an ANN request initiates a TLS handshake using the old (broken) credentials
+                // while the reload is still in progress, which can cause a long hang due to TLS handshake timeout.
+                co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
+                    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                        co_return vector_store_client_tester::truststore_reload_count(vs) >= 1;
+                    }));
+                });
+
+                // Wait for the client to succeed with the reloaded CA cert
                 co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
                     auto schema = env.local_db().find_schema("ks", "idx");
                     auto as = abort_source_timeout();
