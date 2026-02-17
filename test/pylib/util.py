@@ -57,13 +57,18 @@ async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
         deadline: float,
         period: float = 1,
-        before_retry: Optional[Callable[[], Any]] = None) -> T:
+        before_retry: Optional[Callable[[], Any]] = None,
+        backoff_factor: float = 1,
+        max_period: float = None) -> T:
     while True:
         assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
         if res is not None:
             return res
         await asyncio.sleep(period)
+        period *= backoff_factor
+        if max_period is not None:
+            period = min(period, max_period)
         if before_retry:
             before_retry()
 
