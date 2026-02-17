@@ -85,6 +85,12 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
                                 ignore_dead_nodes = ignore_dead, wait_dead=False)
     await manager.server_add(replace_cfg=replace_cfg, expected_error=f"ignored node {s3_id} is alive")
 
+    ignore_dead = [s1_id]
+    logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}, expecting error")
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True,
+                                ignore_dead_nodes = ignore_dead, wait_dead=False)
+    await manager.server_add(replace_cfg=replace_cfg, expected_error=f"node {s2_id} is down and not ignored")
+
     ignore_dead: list[IPAddress | HostID] = [s1_id, servers[2].ip_addr]
     logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}")
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True,
@@ -128,6 +134,11 @@ async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
     logger.info(f"Removing {servers[0]} initiated by {servers[4]}, ignore_dead_nodes = {ignore_dead}, expecting error")
     await manager.remove_node(servers[4].server_id, servers[0].server_id, ignore_dead,
                               f"ignored node {s3_id} is alive", False)
+
+    ignore_dead = [s1_id]
+    logger.info(f"Removing {servers[0]} initiated by {servers[4]}, ignore_dead_nodes = {ignore_dead}, expecting error")
+    await manager.remove_node(servers[4].server_id, servers[0].server_id, ignore_dead,
+                              f"node {s2_id} is down and not ignored")
 
     ignore_dead: list[IPAddress] | list[HostID] = [s1_id, s2_id]
     logger.info(f"Removing {servers[0]} initiated by {servers[3]}, ignore_dead_nodes = {ignore_dead}")
