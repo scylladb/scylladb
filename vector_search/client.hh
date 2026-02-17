@@ -41,7 +41,7 @@ public:
     using request_error = std::variant<aborted_error, service_unavailable_error>;
     using request_result = std::expected<response, request_error>;
 
-    explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms,
+    explicit client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
             ::shared_ptr<seastar::tls::certificate_credentials> credentials);
 
     seastar::future<request_result> request(
@@ -71,7 +71,7 @@ private:
     seastar::future<> _checking_status_future = seastar::make_ready_future();
     seastar::abort_source _as;
     logging::logger& _logger;
-    utils::updateable_value<uint32_t> _request_timeout;
+    utils::updateable_value<uint32_t> _unreachable_node_detection_time_in_ms;
 };
 
 } // namespace vector_search

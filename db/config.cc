@@ -1202,6 +1202,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "A comma-separated list of primary vector store node URIs. These nodes are preferred for vector search operations.")
     , vector_store_secondary_uri(this, "vector_store_secondary_uri", liveness::LiveUpdate, value_status::Used, "",
         "A comma-separated list of secondary vector store node URIs. These nodes are used as a fallback when all primary nodes are unavailable, and are typically located in a different availability zone for high availability.")
+    , vector_store_unreachable_node_detection_time_in_ms(this, "vector_store_unreachable_node_detection_time_in_ms", liveness::LiveUpdate, value_status::Used, 5000,
+        "Time in milliseconds for detecting an unreachable vector store node. This value is applied to the TCP connect timeout, keepalive parameters, and TCP_USER_TIMEOUT. "
+        "When any of these mechanisms detects that a node is unreachable within this window, the client fails over to the next available vector store node. Minimum value is 5000.")
     , vector_store_encryption_options(this, "vector_store_encryption_options", value_status::Used, {},
         "Options for encrypted connections to the vector store. These options are used for HTTPS URIs in `vector_store_primary_uri` and `vector_store_secondary_uri`. The available options are:\n"
         "* truststore: (Default: <not set, use system truststore>) Location of the truststore containing the trusted certificate for authenticating remote servers.")

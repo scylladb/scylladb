@@ -242,7 +242,7 @@ struct vector_store_client::impl {
     clients _secondary_clients;
 
     impl(utils::config_file::named_value<sstring> primary_uris, utils::config_file::named_value<sstring> secondary_uris,
-            utils::config_file::named_value<uint32_t> read_request_timeout_in_ms,
+            utils::config_file::named_value<uint32_t> unreachable_node_detection_time_in_ms,
             utils::config_file::named_value<utils::config_file::string_map> encryption_options, invoke_on_others_func invoke_on_others)
         : _primary_uri_observer(primary_uris.observe([this](seastar::sstring uris_csv) {
             handle_uris_changed(std::move(uris_csv), _primary_uris, _primary_clients);
@@ -269,14 +269,14 @@ struct vector_store_client::impl {
                   [this]() {
                       _dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms, _truststore)
+                  unreachable_node_detection_time_in_ms, _truststore)
 
         , _secondary_clients(
                   vslogger,
                   [this]() {
                       _dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms, _truststore) {
+                  unreachable_node_detection_time_in_ms, _truststore) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return _dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -351,7 +351,7 @@ struct vector_store_client::impl {
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.read_request_timeout_in_ms,
+    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.vector_store_unreachable_node_detection_time_in_ms,
               cfg.vector_store_encryption_options, [this](auto func) {
                   return container().invoke_on_others([func = std::move(func)](auto& self) {
                       return func(*self._impl);
@@ -376,8 +376,8 @@ auto vector_store_client::is_disabled() const -> bool {
     return _impl->is_disabled();
 }
 
-auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
-        -> future<std::expected<primary_keys, ann_error>> {
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
+        abort_source& as) -> future<std::expected<primary_keys, ann_error>> {
     return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as);
 }
 
