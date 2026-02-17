@@ -160,7 +160,6 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         log = await manager.server_open_log(recovery_leader.server_id)
         mark = await log.mark()
 
-        logging.info(f'Starting replacement of {dead_servers}')
         async def replace_server(i, being_replaced):
             replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
                                         ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
@@ -168,10 +167,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
             return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
                                             property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'},
                                             seeds=[recovery_leader.ip_addr])
-        replace_tasks = [asyncio.create_task(replace_server(i, srv)) for i, srv in enumerate(dead_servers)]
-
-        logging.info(f'Waiting for join requests to be placed')
-        for _ in dead_servers:
+        replace_tasks = []
+        for i, srv in enumerate(dead_servers):
+            logging.info(f'Starting replacement of {srv}')
+            replace_tasks.append(asyncio.create_task(replace_server(i, srv)))
             mark, _ = await log.wait_for("placed join request for", from_mark=mark)
 
         await manager.api.message_injection(recovery_leader.ip_addr, inj)
