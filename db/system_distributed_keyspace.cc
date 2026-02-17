@@ -169,6 +169,36 @@ schema_ptr service_levels() {
     return schema;
 }
 
+schema_ptr snapshot_sstables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // Keyspace where the snapshot was taken
+                .with_column("keyspace", utf8_type, column_kind::partition_key)
+                // Table within the keyspace
+                .with_column("table", utf8_type, column_kind::partition_key)
+                // Datacenter where this SSTable is located
+                .with_column("datacenter", utf8_type, column_kind::partition_key)
+                // Rack where this SSTable is located
+                .with_column("rack", utf8_type, column_kind::partition_key)
+                // Unique identifier for the SSTable (UUID)
+                .with_column("id", uuid_type, column_kind::clustering_key)
+                // First token in the token range covered by this SSTable
+                .with_column("first_token", long_type, column_kind::clustering_key)
+                // Last token in the token range covered by this SSTable
+                .with_column("last_token", long_type)
+                // TOC filename of the SSTable
+                .with_column("toc_name", utf8_type)
+                // Prefix path in object storage where the SSTable was backed up
+                .with_column("prefix", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -186,6 +216,7 @@ static std::vector<schema_ptr> ensured_tables() {
         cdc_desc(),
         cdc_timestamps(),
         service_levels(),
+        snapshot_sstables(),
     };
 }
 
@@ -203,7 +234,7 @@ static void check_exists(std::string_view ks_name, std::string_view cf_name, con
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels()};
+    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels(), snapshot_sstables()};
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_everywhere_tables() {
@@ -836,6 +867,32 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
+}
+
+future<> system_distributed_keyspace::insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, utils::UUID id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, uint64_t ttl_seconds) {
+    return _qp.execute_internal(
+            format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, id, first_token, last_token, toc_name, prefix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}", NAME, SNAPSHOT_SSTABLES, ttl_seconds),
+            db::consistency_level::EACH_QUORUM,
+            internal_distributed_query_state(),
+            { std::move(snapshot_name), std::move(ks), std::move(table), std::move(dc), std::move(rack), id,
+              dht::token::to_int64(first_token), dht::token::to_int64(last_token), std::move(toc_name), std::move(prefix) },
+            cql3::query_processor::cache_internal::no).discard_result();
+}
+
+future<utils::chunked_vector<sstable_info>>
+system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack) const {
+    utils::chunked_vector<sstable_info> sstables;
+    auto cql = co_await _qp.execute_internal(
+        format("SELECT toc_name, prefix, id, first_token, last_token FROM {}.{} WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?;", NAME, SNAPSHOT_SSTABLES),
+        db::consistency_level::LOCAL_QUORUM,
+        { snapshot_name, ks, table, dc, rack },
+        cql3::query_processor::cache_internal::no);
+
+    for (auto& row : *cql) {
+        sstables.emplace_back(row.get_as<utils::UUID>("id"), dht::token::from_int64(row.get_as<int64_t>("first_token")), dht::token::from_int64(row.get_as<int64_t>("last_token")), row.get_as<sstring>("toc_name"), row.get_as<sstring>("prefix"));
+    }
+
+    co_return sstables;
 }
 
 }

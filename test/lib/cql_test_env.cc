@@ -411,6 +411,10 @@ public:
         return _sys_ks;
     }
 
+    virtual sharded<db::system_distributed_keyspace>& get_system_distributed_keyspace() override {
+        return _sys_dist_ks;
+    }
+
     virtual sharded<service::tablet_allocator>& get_tablet_allocator() override {
         return _tablet_allocator;
     }
