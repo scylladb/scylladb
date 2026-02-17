@@ -53,6 +53,9 @@ async def test_autoretrain_dict(manager: ManagerClient):
     n_blobs = 1024
     uncompressed_size = blob_size * n_blobs * rf
 
+    # Start with compressor without a dictionary
+    cfg = { "sstable_compression_user_table_options": "ZstdCompressor" }
+
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(2, cmdline=[
         '--logger-log-level=storage_service=debug',
@@ -61,7 +64,7 @@ async def test_autoretrain_dict(manager: ManagerClient):
         '--sstable-compression-dictionaries-retrain-period-in-seconds=1',
         '--sstable-compression-dictionaries-autotrainer-tick-period-in-seconds=1',
         f'--sstable-compression-dictionaries-min-training-dataset-bytes={int(uncompressed_size/2)}',
-    ], auto_rack_dc="dc1")
+    ], auto_rack_dc="dc1", config=cfg)
 
     logger.info("Creating table")
     cql = manager.get_cql()
@@ -76,9 +79,9 @@ async def test_autoretrain_dict(manager: ManagerClient):
     await asyncio.gather(*[manager.api.disable_autocompaction(s.ip_addr, ks_name, cf_name) for s in servers])
 
     async def repopulate():
-        blob = random.randbytes(blob_size);
+        blob = random.randbytes(blob_size)
         insert = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?);")
-        insert.consistency_level = ConsistencyLevel.ALL;
+        insert.consistency_level = ConsistencyLevel.ALL
         for pks in itertools.batched(range(n_blobs), n=100):
             await asyncio.gather(*[
                 cql.run_async(insert, [k, blob])
