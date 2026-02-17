@@ -2466,8 +2466,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
 
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
-            if (co_await maybe_start_tablet_migration(std::move(guard))) {
+            if (auto guard_opt = co_await maybe_start_tablet_migration(std::move(guard)); !guard_opt) {
                 co_return true;
+            } else {
+                guard = std::move(*guard_opt);
             }
             co_return false;
         }
@@ -3647,11 +3649,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
     future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
-    // Returns true if the state machine was transitioned into tablet migration path.
-    future<bool> maybe_start_tablet_migration(group0_guard);
+    // Returns the guard if no work done. Otherwise, transitions the state machine into tablet migration path.
+    future<std::optional<group0_guard>> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet resize finalization path.
-    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
+    // Returns the guard if no work done. Otherwise, transitions the state machine into tablet resize finalization path.
+    future<std::optional<group0_guard>> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
 
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
@@ -3763,14 +3765,14 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     co_return std::move(guard);
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
+future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
     rtlogger.debug("Evaluating tablet balance");
 
     auto tm = get_token_metadata_ptr();
     auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
-        co_return false;
+        co_return std::move(guard);
     }
 
     utils::chunked_vector<canonical_mutation> updates;
@@ -3790,15 +3792,15 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
-    co_return true;
+    co_return std::nullopt;
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
+future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
     if (plan.finalize_resize.empty()) {
-        co_return false;
+        co_return std::move(guard);
     }
     if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
-        co_return false;
+        co_return std::move(guard);
     }
 
     auto resize_finalization_transition_state = [this] {
@@ -3814,7 +3816,7 @@ future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
-    co_return true;
+    co_return std::nullopt;
 }
 
 future<> topology_coordinator::refresh_tablet_load_stats() {
