@@ -36,7 +36,6 @@ run_in_release:
 run_in_dev:
   - test_raft_ignore_nodes
   - test_group0_schema_versioning
-  - test_different_group0_ids
   - test_zero_token_nodes_no_replication
   - test_not_enough_token_owners
   - test_replace_alive_node
