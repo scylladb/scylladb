@@ -3,13 +3,17 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from time import time
 
-from test.cluster.tasks.task_manager_types import TaskID, TaskStats, TaskStatus
+from test.cluster.tasks.task_manager_types import TaskID, TaskStats, TaskStatus, State
 from test.pylib.internal_types import IPAddress
 from test.pylib.rest_client import ScyllaRESTAPIClient
 
 import asyncio
 from typing import Optional
+
+from test.pylib.util import wait_for
+
 
 class TaskManagerClient():
     """Async Task Manager client"""
@@ -35,6 +39,27 @@ class TaskManagerClient():
                                                     host=node_ip)
         assert(type(stats_list) == list)
         return [TaskStats(**stats_dict) for stats_dict in stats_list]
+
+    async def wait_task_appears(self, node_ip: IPAddress, module_name: str,
+                                task_type: Optional[str] = None,
+                                entity: Optional[str] = None,
+                                deadline: Optional[float] = None) -> TaskStats:
+        """
+        Waits for a task to appear in "running" state based on the specified task filter.
+        A task matches the filter if all of its fields mach the specified attributes.
+        Throws an exception if no such task appears before the deadline.
+
+        :return: stats of the first task matching the filter.
+        """
+        async def get_tasks():
+            tasks = await self.list_tasks(node_ip, module_name)
+            for stats in tasks:
+                if stats.state == State.running and \
+                        (task_type is None or stats.type == task_type) and \
+                        (entity is None or stats.entity == entity):
+                    return stats
+            return None
+        return await wait_for(get_tasks, deadline or (time() + 60), period=0.1, backoff_factor=1.2, max_period=1)
 
     async def get_task_status(self, node_ip: IPAddress, task_id: TaskID) -> TaskStatus:
         """Get status of one task."""
