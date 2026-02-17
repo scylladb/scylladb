@@ -350,6 +350,7 @@ public:
 };
 
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
+    tests::adjust_rlimit();
     if (!cfg.storage.is_local_type()) {
         auto db_cfg = make_shared<db::config>();
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});

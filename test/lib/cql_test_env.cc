@@ -15,6 +15,7 @@
 #include "db/view/view_building_worker.hh"
 #include "replica/database_fwd.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 #include "cdc/generation_service.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
@@ -82,7 +83,6 @@
 #include "utils/disk_space_monitor.hh"
 
 #include <sys/time.h>
-#include <sys/resource.h>
 
 using namespace std::chrono_literals;
 
@@ -222,26 +222,10 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
-    static void adjust_rlimit() {
-        // Tests should use 1024 file descriptors, but don't punish them
-        // with weird behavior if they do.
-        //
-        // Since this more of a courtesy, don't make the situation worse if
-        // getrlimit/setrlimit fail for some reason.
-        struct rlimit lim;
-        int r = getrlimit(RLIMIT_NOFILE, &lim);
-        if (r == -1) {
-            return;
-        }
-        if (lim.rlim_cur < lim.rlim_max) {
-            lim.rlim_cur = lim.rlim_max;
-            setrlimit(RLIMIT_NOFILE, &lim);
-        }
-    }
 public:
     single_node_cql_env()
     {
-        adjust_rlimit();
+        tests::adjust_rlimit();
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
