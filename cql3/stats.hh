@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/statements/statement_type.hh"
+#include "db/consistency_level_type.hh"
 
 #include <cstdint>
 
@@ -87,6 +88,9 @@ struct cql_stats {
 
     uint64_t replication_strategy_warn_list_violations = 0;
     uint64_t replication_strategy_fail_list_violations = 0;
+    uint64_t writes_per_consistency_level[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
+    uint64_t write_consistency_levels_disallowed_violations[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
+    uint64_t write_consistency_levels_warned_violations[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
 
 private:
     uint64_t _unpaged_select_queries[(size_t)ks_selector::SIZE] = {0ul};
