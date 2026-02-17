@@ -91,7 +91,7 @@ def testCompactCollections(cql, test_keyspace):
 
 # Check for a table with counters,
 # migrated from cql_tests.py:TestCQL.counters_test()
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
+@pytest.mark.skip(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(userid int, url text, total counter, PRIMARY KEY (userid, url)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "UPDATE %s SET total = total + 1 WHERE userid = 1 AND url = 'http://foo.com'")
@@ -760,7 +760,7 @@ def testFunctionsWithCompactStorage(cql, test_keyspace):
                    row(3, 2, 5, 2, 9.5, 18.5, 9.25))
 
 # BatchTest
-@pytest.mark.xfail(reason="issue #12471")
+@pytest.mark.skip(reason="issue #12471")
 def testBatchRangeDelete(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering int, value int, primary key (partitionKey, clustering)) WITH COMPACT STORAGE") as table:
         value = 0
@@ -2140,7 +2140,7 @@ def testSelectDistinct(cql, test_keyspace):
 
 REQUIRES_ALLOW_FILTERING_MESSAGE = "Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -2278,7 +2278,7 @@ def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testFilteringOnCompactTablesWithoutIndicesAndWithLists(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -2426,7 +2426,7 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithLists(cql, test_keyspace):
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              unset())
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testFilteringOnCompactTablesWithoutIndicesAndWithSets(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<set<int>>, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -2609,7 +2609,7 @@ def executeFilteringOnly(cql, table, statement):
     assert_invalid(cql, table, statement)
     return execute_without_paging(cql, table, statement + " ALLOW FILTERING")
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testAllowFilteringOnPartitionKeyWithCounters(cql, test_keyspace):
     for compactStorageClause in ["", " WITH COMPACT STORAGE"]:
         with create_table(cql, test_keyspace, "(a int, b int, c int, cnt counter, PRIMARY KEY ((a, b), c)) " + compactStorageClause) as table:
@@ -2643,7 +2643,7 @@ def testAllowFilteringOnPartitionKeyWithCounters(cql, test_keyspace):
                            row(21, 22, 23, 24),
                            row(21, 22, 26, 27))
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithLists(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -2791,7 +2791,7 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithLists(cq
                              unset())
 
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithMaps(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<map<int, int>>, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -2953,7 +2953,7 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithMaps(cql
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY ? ALLOW FILTERING",
                              unset())
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithSets(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<set<int>>, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
@@ -3103,7 +3103,7 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithSets(cql
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndices(cql, test_keyspace):
     # Test COMPACT table with clustering columns
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY ((a, b), c)) WITH COMPACT STORAGE") as table:
@@ -3422,7 +3422,7 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithMaps(cql, test_keyspace):
                              "SELECT * FROM %s WHERE c CONTAINS KEY ? ALLOW FILTERING",
                              unset())
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testFilteringOnCompactTable(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b, c)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 11, 12, 13, 14)
@@ -3510,7 +3510,7 @@ def testFilteringOnCompactTable(cql, test_keyspace):
             assert_rows(executeFilteringOnly(cql, table, "SELECT * FROM %s WHERE b > 12 AND c < 25 AND d CONTAINS 2"),
                        row(21, 22, 23, [2, 4]))
 
-@pytest.mark.xfail(reason="issue #12526")
+@pytest.mark.skip(reason="issue #12526")
 def testFilteringWithCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, cnt counter, PRIMARY KEY (a, b, c)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "UPDATE %s SET cnt = cnt + ? WHERE a = ? AND b = ? AND c = ?", 14, 11, 12, 13)
@@ -3591,7 +3591,7 @@ def testClusteringOrderWithSlice(cql, test_keyspace):
 
 EMPTY_BYTE_BUFFER = b""
 
-@pytest.mark.parametrize("options", ["", pytest.param(" WITH COMPACT STORAGE", marks=pytest.mark.xfail(reason="issue #12526, #12749"))])
+@pytest.mark.parametrize("options", ["", pytest.param(" WITH COMPACT STORAGE", marks=pytest.mark.skip(reason="issue #12526, #12749"))])
 def testEmptyRestrictionValue(cql, test_keyspace, options):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, PRIMARY KEY ((pk), c))" + options) as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)",
@@ -3712,7 +3712,7 @@ def testEmptyRestrictionValue(cql, test_keyspace, options):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk = textAsBlob('foo123') AND v = textAsBlob('') ALLOW FILTERING;"),
                        row(b"foo123", b"3", EMPTY_BYTE_BUFFER))
 
-@pytest.mark.xfail(reason="issue #12749")
+@pytest.mark.skip(reason="issue #12749")
 def testEmptyRestrictionValueWithMultipleClusteringColumns(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c1 blob, c2 blob, v blob, PRIMARY KEY (pk, c1, c2)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (pk, c1, c2, v) VALUES (?, ?, ?, ?)", b"foo123", b"1", b"1", b"1")
@@ -3790,7 +3790,7 @@ def testEmptyRestrictionValueWithMultipleClusteringColumns(cql, test_keyspace):
 
             assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE pk = textAsBlob('foo123') AND (c1, c2) < (textAsBlob(''), textAsBlob('1'));"))
 
-@pytest.mark.xfail(reason="issue #12749")
+@pytest.mark.skip(reason="issue #12749")
 @pytest.mark.parametrize("options", [" WITH COMPACT STORAGE", " WITH COMPACT STORAGE AND CLUSTERING ORDER BY (c DESC)"])
 def testEmptyRestrictionValueWithOrderBy(cql, test_keyspace, options):
     orderingClause = "" if "ORDER" in options else "ORDER BY c DESC"
@@ -3824,7 +3824,7 @@ def testEmptyRestrictionValueWithOrderBy(cql, test_keyspace, options):
                              EMPTY_BYTE_BUFFER,
                              b"4")
 
-@pytest.mark.xfail(reason="issue #12749")
+@pytest.mark.skip(reason="issue #12749")
 @pytest.mark.parametrize("options", [" WITH COMPACT STORAGE", " WITH COMPACT STORAGE AND CLUSTERING ORDER BY (c1 DESC, c2 DESC)"])
 def testEmptyRestrictionValueWithMultipleClusteringColumnsAndOrderBy(cql, test_keyspace, options):
     orderingClause = "" if "ORDER" in options else "ORDER BY c1 DESC, c2 DESC"
@@ -4215,7 +4215,7 @@ def testDeleteWithCompactStaticFormat(cql, test_keyspace):
 
 # Test for CASSANDRA-13917
 # Reproduces #12815
-@pytest.mark.xfail(reason="issue #12815")
+@pytest.mark.skip(reason="issue #12815")
 def testDeleteWithCompactNonStaticFormat(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
