@@ -25,6 +25,10 @@ async def wait_for_leader(manager: ManagerClient, s: ServerInfo, group_id: str):
         return None if uuid.UUID(result).int == 0 else result
     return await wait_for(get_leader_host_id, time.time() + 60)
 
+async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
+    table_id = await manager.get_table_id(ks, table)
+    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
+    return str(rows[0].raft_group_id)
 
 @pytest.mark.asyncio
 async def test_basic_write_read(manager: ManagerClient):
@@ -55,9 +59,7 @@ async def test_basic_write_read(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         logger.info("Select raft group id for the tablet")
-        table_id = await manager.get_table_id(ks, 'test')
-        rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
-        group_id = str(rows[0].raft_group_id)
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
 
         logger.info(f"Get current leader for the group {group_id}")
         leader_host_id = await wait_for_leader(manager, servers[0], group_id)
