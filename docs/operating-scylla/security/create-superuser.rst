@@ -68,7 +68,12 @@ To create a superuser using an existing superuser account, you should:
 
 .. code-block:: shell
 
-   cqlsh -u existing_superuser -p existing_superuser_password
+   cqlsh -u <existing_superuser>
+   Password: 
+
+.. note::
+
+   Enter the value of `<existing_superuser_password>` password when prompted. The input is not displayed.
 
 2. Create a new superuser.
 

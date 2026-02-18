@@ -43,12 +43,17 @@ Replace ``<maintenance_socket_path>`` with the socket path configured in ``scyll
 
 .. code-block:: cql
 
-   ALTER ROLE username WITH PASSWORD 'new_password';
+   ALTER ROLE username WITH PASSWORD '<new_password>';
 
 3. Verify that you can log in to your node using ``cqlsh`` command with the new password.
 
 .. code-block:: shell
 
-   cqlsh -u username -p new_password
+   cqlsh -u username
+   Password: 
+
+.. note::
+
+   Enter the value of `<new_password>` password when prompted. The input is not displayed.
 
 .. include:: /troubleshooting/_common/ts-return.rst

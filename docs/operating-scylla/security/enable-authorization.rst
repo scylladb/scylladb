@@ -71,7 +71,12 @@ Validate you have the credentials for the superuser for your system for yourself
 
 .. code-block:: none
 
-   cqlsh -u dba -p 39fksah!
+   cqlsh -u dba
+   Password: 
+
+.. note::
+
+   Enter the password when prompted. The input is not displayed.
 
 2. Configure the appropriate access privileges for clients using :ref:`GRANT PERMISSION <grant-permission-statement>` statements.  For additional examples, consult the :doc:`RBAC example </operating-scylla/security/rbac-usecase>`.
 
