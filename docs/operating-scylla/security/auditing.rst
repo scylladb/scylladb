@@ -215,8 +215,8 @@ Handling Audit Failures
 
 In some cases, auditing may not be possible, for example, when:
 
-* A table is used as the audit’s backend, and the audit partition where the audit row is saved is not available because the node that holds this partition is down.
-* Syslog is used as the audit’s backend, and the Syslog sink (a regular unix socket) is unresponsive/unavailable.
+* A table is used as the audit’s backend, and the partitions where the audit rows are saved are unavailable because the nodes holding those partitions are down or unreachable due to network issues.
+* Syslog is used as the audit’s backend, and the Syslog sink (a regular Unix socket) is unresponsive or unavailable.
 
 If the audit fails and audit messages are not stored in the configured audit’s backend, you can still review the audit log in the regular ScyllaDB logs.
 
