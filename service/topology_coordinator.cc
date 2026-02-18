@@ -1063,6 +1063,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                                 co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
                                     auto last_token = new_tablet_map.get_last_token(tablet_id);
+                                    auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                                    auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                                    auto new_replicas = locator::substract_sets(tablet_info.replicas, old_tablet_info.replicas);
+                                    if (abandoning_replicas.size() + new_replicas.size() > 1) {
+                                        throw std::runtime_error(fmt::format("Invalid state of a tablet {} of a table {}.{}. Expected replication factor: {}, but the tablet has replicas only on {}. "
+                                            "Try again later. Ensure that the missing replica can be added, the process will be triggered automatically.", tablet_id, ks_name, table_or_mv->cf_name(),
+                                            ks.get_replication_strategy().get_replication_factor(*tmptr), old_tablet_info.replicas));
+                                    }
+
                                     updates.emplace_back(co_await make_canonical_mutation_gently(
                                             replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
                                                     .set_new_replicas(last_token, tablet_info.replicas)
@@ -1072,8 +1081,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                     ));
 
                                     // Calculate abandoning replica and abort view building tasks on them
-                                    auto old_tablet_info = old_tablets.get_tablet_info(last_token);
-                                    auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
                                     if (!abandoning_replicas.empty()) {
                                         if (abandoning_replicas.size() != 1) {
                                             on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
