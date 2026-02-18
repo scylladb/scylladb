@@ -886,6 +886,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
+
+                        replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
+                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                            auto last_token = new_tablet_map.get_last_token(tablet_id);
+                            auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                            auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                            auto new_replicas = locator::substract_sets(tablet_info.replicas, old_tablet_info.replicas);
+                            if (abandoning_replicas.size() + new_replicas.size() > 1) {
+                                throw std::runtime_error(fmt::format("Invalid state of a tablet {} of a table {}.{}. Expected replication factor: {}, but the tablet has replicas only on {}. "
+                                    "Try again later or use the \"Fixing invalid replica state with RF change\" procedure to fix the problem.", tablet_id, ks_name, table_or_mv->cf_name(),
+                                    ks.get_replication_strategy().get_replication_factor(*tmptr), old_tablet_info.replicas));
+                            }
+
+                            updates.emplace_back(co_await make_canonical_mutation_gently(
+                                    replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
+                                            .set_new_replicas(last_token, tablet_info.replicas)
+                                            .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.features()))
+                                            .build()
+                            ));
+                            co_await coroutine::maybe_yield();
+                        });
                     } catch (const std::exception& e) {
                         error = e.what();
                         rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
@@ -893,19 +915,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         updates.clear(); // remove all tablets mutations ...
                         break;           // ... and only create mutations deleting the global req
                     }
-
-                    replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
-                    co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
-                        auto last_token = new_tablet_map.get_last_token(tablet_id);
-                        updates.emplace_back(co_await make_canonical_mutation_gently(
-                                replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
-                                        .set_new_replicas(last_token, tablet_info.replicas)
-                                        .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-                                        .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.features()))
-                                        .build()
-                        ));
-                        co_await coroutine::maybe_yield();
-                    });
                 }
             } else {
                 error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
