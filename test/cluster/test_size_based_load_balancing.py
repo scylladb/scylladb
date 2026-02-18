@@ -5,6 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient
 from test.cluster.conftest import skip_mode
+from test.pylib.rest_client import read_barrier
 from test.cluster.util import new_test_keyspace
 from collections import defaultdict
 import pytest
@@ -16,7 +17,6 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 
 @pytest.mark.asyncio
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_balance_empty_tablets(manager: ManagerClient):
 
     # This test checks that size-based load balancing migrates empty tablets of a newly created
@@ -25,7 +25,7 @@ async def test_balance_empty_tablets(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
 
-    cfg = { 'error_injections_at_startup': ['short_tablet_stats_refresh_interval'] }
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
 
     cfg_small = cfg | { 'data_file_capacity': 50 * GB }
     cfg_large = cfg | { 'data_file_capacity': 100 * GB }
@@ -55,6 +55,9 @@ async def test_balance_empty_tablets(manager: ManagerClient):
         await s0_log.wait_for('Refreshed table load stats for all DC', from_mark=s0_mark)
 
         await manager.api.quiesce_topology(servers[0].ip_addr)
+
+        # Ensure all nodes see the same data in system.tablets
+        await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
 
         replicas_per_node = defaultdict(int)
         tablets_per_shard = {}
