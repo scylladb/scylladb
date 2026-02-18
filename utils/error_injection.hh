@@ -41,6 +41,11 @@ extern logging::logger errinj_logger;
 
 using error_injection_parameters = std::unordered_map<sstring, sstring>;
 
+// Callback type for error injection events
+// Called when an injection point is triggered
+// Parameters: injection_name, injection_type ("sleep", "exception", "handler", "lambda")
+using error_injection_event_callback = std::function<void(std::string_view, std::string_view)>;
+
 // Wraps the argument to breakpoint injection (see the relevant inject() overload
 // in class error_injection below). Parameters:
 // timeout - the timeout after which the pause is aborted
@@ -328,6 +333,21 @@ private:
     // Map enabled-injection-name -> is-one-shot
     std::unordered_map<std::string_view, injection_data> _enabled;
 
+    // Event callbacks to notify when injections are triggered
+    std::vector<error_injection_event_callback> _event_callbacks;
+
+    // Notify all registered event callbacks
+    void notify_event(std::string_view injection_name, std::string_view injection_type) {
+        for (const auto& callback : _event_callbacks) {
+            try {
+                callback(injection_name, injection_type);
+            } catch (...) {
+                errinj_logger.warn("Error injection event callback failed for \"{}\": {}",
+                    injection_name, std::current_exception());
+            }
+        }
+    }
+
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
         if (it == _enabled.end()) {
@@ -397,6 +417,17 @@ public:
                 | std::ranges::to<std::vector<sstring>>();
     }
 
+    // \brief Register an event callback to be notified when injections are triggered
+    // \param callback function to call when injection is triggered
+    void register_event_callback(error_injection_event_callback callback) {
+        _event_callbacks.push_back(std::move(callback));
+    }
+
+    // \brief Clear all registered event callbacks
+    void clear_event_callbacks() {
+        _event_callbacks.clear();
+    }
+
     // \brief Inject a lambda call
     // \param f lambda to be run
     [[gnu::always_inline]]
@@ -404,7 +435,8 @@ public:
         if (!enter(name)) {
             return;
         }
-        errinj_logger.debug("Triggering injection \"{}\"", name);
+        errinj_logger.info("Triggering injection \"{}\"", name);
+        notify_event(name, "lambda");
         f();
     }
 
@@ -414,7 +446,8 @@ public:
         if (!enter(name)) {
             return make_ready_future<>();
         }
-        errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
+        errinj_logger.info("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
+        notify_event(name, "sleep");
         return seastar::sleep(duration);
     }
 
@@ -424,7 +457,8 @@ public:
         if (!enter(name)) {
             return make_ready_future<>();
         }
-        errinj_logger.debug("Triggering abortable sleep injection \"{}\" ({}ms)", name, duration.count());
+        errinj_logger.info("Triggering abortable sleep injection \"{}\" ({}ms)", name, duration.count());
+        notify_event(name, "sleep");
         return seastar::sleep_abortable(duration, as);
     }    
 
@@ -438,7 +472,8 @@ public:
 
         // Time left until deadline
         auto duration = deadline - Clock::now();
-        errinj_logger.debug("Triggering sleep injection \"{}\" ({})", name, duration);
+        errinj_logger.info("Triggering sleep injection \"{}\" ({})", name, duration);
+        notify_event(name, "sleep");
         return seastar::sleep<Clock>(duration);
     }
 
@@ -453,7 +488,8 @@ public:
             return make_ready_future<>();
         }
 
-        errinj_logger.debug("Triggering exception injection \"{}\"", name);
+        errinj_logger.info("Triggering exception injection \"{}\"", name);
+        notify_event(name, "exception");
         return make_exception_future<>(exception_factory());
     }
 
@@ -473,7 +509,8 @@ public:
             co_return;
         }
 
-        errinj_logger.debug("Triggering injection \"{}\" with injection handler", name);
+        errinj_logger.info("Triggering injection \"{}\" with injection handler", name);
+        notify_event(name, "handler");
         injection_handler handler(data->shared_data, share_messages);
         data->handlers.push_back(handler);
 
@@ -577,6 +614,22 @@ public:
         // in which case we may want to extend the API.
         auto& errinj = _local;
         return errinj.enabled_injections();
+    }
+
+    // \brief Register an event callback on all shards
+    static future<> register_event_callback_on_all(error_injection_event_callback callback) {
+        return smp::invoke_on_all([callback = std::move(callback)] {
+            auto& errinj = _local;
+            errinj.register_event_callback(callback);
+        });
+    }
+
+    // \brief Clear all event callbacks on all shards
+    static future<> clear_event_callbacks_on_all() {
+        return smp::invoke_on_all([] {
+            auto& errinj = _local;
+            errinj.clear_event_callbacks();
+        });
     }
 
     static error_injection& get_local() {
@@ -705,6 +758,22 @@ public:
 
     [[gnu::always_inline]]
     static std::vector<sstring> enabled_injections_on_all() { return {}; }
+
+    [[gnu::always_inline]]
+    void register_event_callback(error_injection_event_callback callback) {}
+
+    [[gnu::always_inline]]
+    void clear_event_callbacks() {}
+
+    [[gnu::always_inline]]
+    static future<> register_event_callback_on_all(error_injection_event_callback callback) {
+        return make_ready_future<>();
+    }
+
+    [[gnu::always_inline]]
+    static future<> clear_event_callbacks_on_all() {
+        return make_ready_future<>();
+    }
 
     static error_injection& get_local() {
         return _local;
