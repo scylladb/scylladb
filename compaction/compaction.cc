@@ -1350,6 +1350,17 @@ private:
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
+
+        // Release exhausted garbage collected sstables
+        exhausted = std::partition(_used_garbage_collected_sstables.begin(), _used_garbage_collected_sstables.end(), not_exhausted);
+        if (exhausted != _used_garbage_collected_sstables.end()) {
+            auto exhausted_gc_ssts = std::vector<sstables::shared_sstable>(exhausted, _used_garbage_collected_sstables.end());
+            log_debug("Releasing {} exhausted GC sstable(s) earlier: [{}]",
+                exhausted_gc_ssts.size(),
+                fmt::join(exhausted_gc_ssts | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            _replacer(get_compaction_completion_desc(std::move(exhausted_gc_ssts), {}));
+            _used_garbage_collected_sstables.erase(exhausted, _used_garbage_collected_sstables.end());
+        }
     }
 
     void replace_remaining_exhausted_sstables() {
