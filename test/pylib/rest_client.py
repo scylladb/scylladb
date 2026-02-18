@@ -7,6 +7,8 @@
 """
 from __future__ import annotations                           # Type hints as strings
 
+import asyncio
+import json
 import logging
 import os.path
 from urllib.parse import quote
@@ -16,7 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
 import pytest
-from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
+from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout, ClientSession
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import IPAddress, HostID
@@ -711,3 +713,143 @@ def get_host_api_address(host: Host) -> IPAddress:
         In particular, in case the RPC address has been modified.
     """
     return host.listen_address if host.listen_address else host.address
+
+
+class InjectionEventStream:
+    """Client for Server-Sent Events stream of error injection events.
+    
+    This allows tests to wait for injection points to be hit without log parsing.
+    Each event contains: injection name, type (sleep/handler/exception/lambda), and shard ID.
+    """
+    
+    def __init__(self, node_ip: IPAddress, port: int = 10000):
+        self.node_ip = node_ip
+        self.port = port
+        self.session: Optional[ClientSession] = None
+        self._events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._reader_task: Optional[asyncio.Task] = None
+        self._connected = asyncio.Event()
+        
+    async def __aenter__(self):
+        """Connect to SSE stream"""
+        await self.connect()
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Disconnect from SSE stream"""
+        await self.disconnect()
+        return False
+        
+    async def connect(self):
+        """Establish SSE connection and start reading events"""
+        if self.session is not None:
+            return  # Already connected
+            
+        self.session = ClientSession()
+        url = f"http://{self.node_ip}:{self.port}/v2/error_injection/events"
+        
+        # Start background task to read SSE events
+        self._reader_task = asyncio.create_task(self._read_events(url))
+        
+        # Wait for connection to be established
+        await asyncio.wait_for(self._connected.wait(), timeout=10.0)
+        logger.info(f"Connected to injection event stream at {url}")
+        
+    async def disconnect(self):
+        """Close SSE connection"""
+        if self._reader_task:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+            self._reader_task = None
+            
+        if self.session:
+            await self.session.close()
+            self.session = None
+            
+    async def _read_events(self, url: str):
+        """Background task to read SSE events"""
+        try:
+            async with self.session.get(url, timeout=ClientTimeout(total=None)) as resp:
+                if resp.status != 200:
+                    logger.error(f"Failed to connect to SSE stream: {resp.status}")
+                    return
+                    
+                # Signal connection established
+                self._connected.set()
+                
+                # Read SSE events line by line
+                async for line in resp.content:
+                    line = line.decode('utf-8').strip()
+                    
+                    # SSE format: "data: <json>"
+                    if line.startswith('data: '):
+                        json_str = line[6:]  # Remove "data: " prefix
+                        try:
+                            event = json.loads(json_str)
+                            await self._events.put(event)
+                            logger.debug(f"Received injection event: {event}")
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse SSE event: {json_str}, error: {e}")
+                    elif line.startswith(':'):
+                        # SSE comment (connection keepalive)
+                        pass
+                        
+        except asyncio.CancelledError:
+            logger.debug("SSE reader task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error reading SSE stream: {e}", exc_info=True)
+            
+    async def wait_for_injection(self, injection_name: str, timeout: float = 30.0) -> dict[str, Any]:
+        """Wait for a specific injection to be triggered.
+        
+        Args:
+            injection_name: Name of the injection to wait for
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Event dictionary with keys: injection, type, shard
+            
+        Raises:
+            asyncio.TimeoutError: If injection not triggered within timeout
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError(
+                    f"Injection '{injection_name}' not triggered within {timeout}s"
+                )
+                
+            try:
+                event = await asyncio.wait_for(self._events.get(), timeout=remaining)
+                if event.get('injection') == injection_name:
+                    return event
+                # Not the injection we're waiting for, continue
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"Injection '{injection_name}' not triggered within {timeout}s"
+                )
+
+
+@asynccontextmanager
+async def injection_event_stream(node_ip: IPAddress, port: int = 10000) -> AsyncIterator[InjectionEventStream]:
+    """Context manager for error injection event stream.
+    
+    Usage:
+        async with injection_event_stream(node_ip) as stream:
+            await api.enable_injection(node_ip, "my_injection", one_shot=True)
+            # Start operation that will trigger injection
+            event = await stream.wait_for_injection("my_injection", timeout=30)
+            logger.info(f"Injection triggered on shard {event['shard']}")
+    """
+    stream = InjectionEventStream(node_ip, port)
+    try:
+        await stream.connect()
+        yield stream
+    finally:
+        await stream.disconnect()
