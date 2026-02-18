@@ -11,6 +11,8 @@
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "replica/database.hh"
+#include "service/migration_manager.hh"
+#include "db/system_keyspace.hh"
 
 namespace service::strong_consistency {
 
@@ -18,14 +20,20 @@ class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
     replica::database& _db;
+    [[maybe_unused]] service::migration_manager& _mm;
+    [[maybe_unused]] db::system_keyspace& _sys_ks;
 
 public:
     state_machine(locator::global_tablet_id tablet,
         raft::group_id gid,
-        replica::database& db)
+        replica::database& db,
+        service::migration_manager& mm,
+        db::system_keyspace& sys_ks)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
+        , _mm(mm)
+        , _sys_ks(sys_ks)
     {
     }
 
@@ -69,9 +77,11 @@ public:
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
-    replica::database& db)
+    replica::database& db,
+    service::migration_manager& mm,
+    db::system_keyspace& sys_ks)
 {
-    return std::make_unique<state_machine>(tablet, gid, db);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks);
 }
 
 };
