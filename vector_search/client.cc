@@ -21,12 +21,17 @@
 #include <chrono>
 #include <fmt/format.h>
 #include <netinet/tcp.h>
+#include <seastar/net/inet_address.hh>
 
 using namespace seastar;
 using namespace std::chrono_literals;
 
 namespace vector_search {
 namespace {
+
+bool is_ip_address(const sstring& host) {
+    return net::inet_address::parse_numerical(host).has_value();
+}
 
 class client_connection_factory : public http::experimental::connection_factory {
     client::endpoint_type _endpoint;
@@ -55,7 +60,11 @@ private:
     future<connected_socket> connect() {
         auto addr = socket_address(_endpoint.ip, _endpoint.port);
         if (_creds) {
-            auto socket = co_await tls::connect(_creds, addr, tls::tls_options{.server_name = _endpoint.host});
+            tls::tls_options opts;
+            if (!is_ip_address(_endpoint.host)) {
+                opts.server_name = _endpoint.host;
+            }
+            auto socket = co_await tls::connect(_creds, addr, std::move(opts));
             // tls::connect() only performs the TCP handshake — the TLS handshake is deferred until the first I/O operation.
             // Force the TLS handshake to happen here so that the connection timeout applies to it.
             co_await tls::check_session_is_resumed(socket);

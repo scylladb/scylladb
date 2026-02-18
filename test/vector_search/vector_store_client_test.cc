@@ -1098,7 +1098,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error) {
+SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error) {
     auto broken_cert = co_await seastar::make_tmp_file();
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
@@ -1111,6 +1111,33 @@ SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+                co_await remove(broken_cert);
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error_host_is_ip) {
+    auto broken_cert = co_await seastar::make_tmp_file();
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", server->host(), server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", broken_cert.get_path().string()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{server->host(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
