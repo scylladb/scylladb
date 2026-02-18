@@ -536,13 +536,15 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {
-    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) {
+    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto view = req->get_path_param("view");
-        return vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()).then([] (std::unordered_map<sstring, sstring> status) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()), [] (const auto& i) {
+            storage_service_json::mapper res;
+            res.key = i.first;
+            res.value = i.second;
+            return res;
+        }));
     });
 
     cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
@@ -580,6 +582,16 @@ static future<json::json_return_type> describe_ring_as_json_for_table(const shar
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring_for_table(keyspace, table), token_range_endpoints_to_json));
 }
 
+namespace {
+template <typename Key, typename Value>
+storage_service_json::mapper map_to_json(const std::pair<Key, Value>& i) {
+    storage_service_json::mapper val;
+    val.key = fmt::to_string(i.first);
+    val.value = fmt::to_string(i.second);
+    return val;
+}
+}
+
 static
 future<json::json_return_type>
 rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
@@ -597,12 +609,7 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
             throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
         }
 
-        co_return json::json_return_type(stream_range_as_array(token_endpoints, [](const auto& i) {
-            storage_service_json::mapper val;
-            val.key = fmt::to_string(i.first);
-            val.value = fmt::to_string(i.second);
-            return val;
-        }));
+        co_return json::json_return_type(stream_range_as_array(token_endpoints, &map_to_json<dht::token, gms::inet_address>));
 }
 
 static
@@ -1316,10 +1323,7 @@ rest_get_ownership(http_context& ctx, sharded<service::storage_service>& ss, std
             throw httpd::bad_param_exception("storage_service/ownership cannot be used when a keyspace uses tablets");
         }
 
-        return ss.local().get_ownership().then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().get_ownership(), &map_to_json<gms::inet_address, float>));
 }
 
 static
@@ -1336,10 +1340,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
             }
         }
 
-        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().effective_ownership(keyspace_name, table_name), &map_to_json<gms::inet_address, float>));
 }
 
 static
