@@ -13,11 +13,21 @@
 #include "utils/rjson.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/queue.hh>
+#include <seastar/core/when_all.hh>
+#include <seastar/core/sharded.hh>
 
 namespace api {
 using namespace seastar::httpd;
 
 namespace hf = httpd::error_injection_json;
+
+// Structure to hold error injection event data
+struct injection_event {
+    sstring injection_name;
+    sstring injection_type;
+    unsigned shard_id;
+};
 
 void set_error_injection(http_context& ctx, routes& r) {
 
@@ -100,6 +110,78 @@ void set_error_injection(http_context& ctx, routes& r) {
         return errinj.receive_message_on_all(injection).then([] {
             return make_ready_future<json::json_return_type>(json::json_void());
         });
+    });
+
+    // Server-Sent Events endpoint for injection events
+    // This allows clients to subscribe to real-time injection events instead of log parsing
+    r.add(operation_type::GET, url("/v2/error_injection/events"), [](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        // Create a shared foreign_ptr to a queue that will receive events from all shards
+        // Using a queue on the current shard to collect events
+        using event_queue_t = seastar::queue<injection_event>;
+        auto event_queue = make_lw_shared<event_queue_t>();
+        auto queue_ptr = make_foreign(event_queue);
+        
+        // Register callback on all shards to send events to our queue
+        auto& errinj = utils::get_local_injector();
+        
+        // Capture the current shard ID for event delivery
+        auto target_shard = this_shard_id();
+        
+        // Setup event callback that forwards events to the queue on the target shard
+        auto callback = [queue_ptr = std::move(queue_ptr), target_shard] (std::string_view name, std::string_view type) mutable {
+            injection_event evt{
+                .injection_name = sstring(name),
+                .injection_type = sstring(type),
+                .shard_id = this_shard_id()
+            };
+            
+            // Send event to the target shard's queue
+            (void)smp::submit_to(target_shard, [queue_ptr = queue_ptr.copy(), evt = std::move(evt)] () mutable {
+                return queue_ptr->push_eventually(std::move(evt));
+            });
+        };
+        
+        // Register the callback on all shards
+        co_await errinj.register_event_callback_on_all(callback);
+        
+        // Return a streaming function that sends SSE events
+        noncopyable_function<future<>(output_stream<char>&&)> stream_func = 
+            [event_queue](output_stream<char>&& os) -> future<> {
+            
+            auto s = std::move(os);
+            std::exception_ptr ex;
+            
+            try {
+                // Send initial SSE comment to establish connection
+                co_await s.write(": connected\n\n");
+                co_await s.flush();
+                
+                // Stream events as they arrive from any shard
+                while (true) {
+                    auto evt = co_await event_queue->pop_eventually();
+                    
+                    // Format as SSE event
+                    // data: {"injection":"name","type":"handler","shard":0}
+                    auto json_data = format("{{\"injection\":\"{}\",\"type\":\"{}\",\"shard\":{}}}",
+                        evt.injection_name, evt.injection_type, evt.shard_id);
+                    
+                    co_await s.write(format("data: {}\n\n", json_data));
+                    co_await s.flush();
+                }
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            
+            // Cleanup: clear callbacks on all shards
+            co_await utils::get_local_injector().clear_event_callbacks_on_all();
+            
+            co_await s.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        };
+        
+        co_return json::json_return_type(std::move(stream_func));
     });
 }
 
