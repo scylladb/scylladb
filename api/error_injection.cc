@@ -128,14 +128,15 @@ void set_error_injection(http_context& ctx, routes& r) {
         auto target_shard = this_shard_id();
         
         // Setup event callback that forwards events to the queue on the target shard
-        auto callback = [queue_ptr = std::move(queue_ptr), target_shard] (std::string_view name, std::string_view type) mutable {
+        // Note: We use shared_ptr wrapper for foreign_ptr to make it copyable
+        auto callback = [queue_ptr = queue_ptr.copy(), target_shard] (std::string_view name, std::string_view type) {
             injection_event evt{
                 .injection_name = sstring(name),
                 .injection_type = sstring(type),
                 .shard_id = this_shard_id()
             };
             
-            // Send event to the target shard's queue
+            // Send event to the target shard's queue (discard future, fire-and-forget)
             (void)smp::submit_to(target_shard, [queue_ptr = queue_ptr.copy(), evt = std::move(evt)] () mutable {
                 return queue_ptr->push_eventually(std::move(evt));
             });
