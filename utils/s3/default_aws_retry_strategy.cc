@@ -39,7 +39,7 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
         co_return false;
     }
     auto err = aws_error::from_exception_ptr(error);
-    bool should_retry = err.is_retryable() == retryable::yes;
+    bool should_retry = err.is_retryable() == utils::http::retryable::yes;
     if (should_retry) {
         rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
         co_await sleep_before_retry(attempted_retries);

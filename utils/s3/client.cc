@@ -338,13 +338,13 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(db_clock::now()),
                          request.get_header("x-amz-date"));
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
                 _credentials = {};
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(
@@ -359,7 +359,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             // We need to be able to simulate a retry in s3 tests
             if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
                 throw aws::aws_exception(
-                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", utils::http::retryable::no});
             }
             co_return co_await handler(rep, std::move(_in));
         } catch (...) {
@@ -1289,7 +1289,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
                             utils::get_local_injector().inject("kill_s3_inflight_req", [] {
                                 // Inject non-retryable error to emulate source failure
-                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", aws::retryable::no));
+                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", utils::http::retryable::no));
                             });
 
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);

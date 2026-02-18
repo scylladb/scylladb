@@ -26,6 +26,7 @@
 #include <seastar/core/align.hh>
 
 #include <functional>
+#include <optional>
 #include <system_error>
 #include <type_traits>
 
@@ -210,4 +211,76 @@ inline std::exception_ptr make_nested_exception_ptr(Ex&& ex, std::exception_ptr 
         }
     }
 #endif
+}
+
+namespace exception::internal {
+template <typename F>
+struct lambda_arg;
+
+template <typename R, typename C, typename Arg>
+struct lambda_arg<R (C::*)(Arg) const> {
+    using type = Arg;
+};
+
+template <typename F>
+using lambda_arg_t = std::remove_cvref_t<typename lambda_arg<decltype(&F::operator())>::type>;
+} // namespace exception::internal
+
+// dispatch_exception: unwraps nested exceptions (if any) and applies handlers
+// The dispatcher gets as input the exception_ptr to process, a default handler
+// to call if no other handler matches, and a variadic list of TypedHandlers.
+// All handlers (including the default one) must return the same type R.
+
+template <typename R, typename DefaultHandler, typename... Handlers>
+    requires std::is_same_v<R, std::invoke_result_t<DefaultHandler, std::exception_ptr, std::string&&>> &&
+             (std::is_same_v<R, std::invoke_result_t<Handlers, const exception::internal::lambda_arg_t<Handlers>&>> && ...)
+R dispatch_exception(std::exception_ptr eptr, DefaultHandler&& default_handler, Handlers&&... handlers) {
+    std::string original_message;
+
+    while (eptr) {
+        try {
+            std::rethrow_exception(eptr);
+
+        } catch (const std::exception& e) {
+            if (original_message.empty()) {
+                original_message = e.what();
+            }
+
+            std::optional<R> result;
+
+            (
+                [&] {
+                    using F = std::decay_t<Handlers>;
+                    using Arg = exception::internal::lambda_arg_t<F>;
+
+                    if constexpr (std::is_base_of_v<std::exception, Arg>) {
+                        if (!result) {
+                            if (auto* casted = dynamic_cast<const Arg*>(&e)) {
+                                result = handlers(*casted);
+                            }
+                        }
+                    }
+                }(),
+                ...);
+
+
+            if (result) {
+                return *result;
+            }
+
+            // Try to unwrap nested exception
+            try {
+                std::rethrow_if_nested(e);
+            } catch (...) {
+                eptr = std::current_exception();
+                continue;
+            }
+
+            return default_handler(eptr, std::move(original_message));
+        } catch (...) {
+            return default_handler(eptr, std::move(original_message));
+        }
+    }
+
+    return default_handler(eptr, std::move(original_message));
 }
