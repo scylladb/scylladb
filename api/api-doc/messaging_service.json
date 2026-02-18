@@ -243,7 +243,7 @@
                  "GOSSIP_DIGEST_SYN",
                  "GOSSIP_DIGEST_ACK2",
                  "GOSSIP_SHUTDOWN",
-                 "DEFINITIONS_UPDATE",
+                 "UNUSED__DEFINITIONS_UPDATE",
                  "TRUNCATE",
                  "UNUSED__REPLICATION_FINISHED",
                  "MIGRATION_REQUEST",

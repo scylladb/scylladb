@@ -1465,6 +1465,26 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sys_ks.local().build_bootstrap_info().get();
 
+            if (sys_ks.local().bootstrap_complete()) {
+                // Check as early as possible if the cluster is fully upgraded to use Raft, since if it's not, then this node cannot be started with the current version.
+                if (sys_ks.local().load_group0_upgrade_state().get() != "use_post_raft_procedures") {
+                    throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
+                        " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
+                }
+
+                if (sys_ks.local().load_topology_upgrade_state().get() != "done") {
+                    throw std::runtime_error(
+                        "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
+                        "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
+                }
+
+                if (sys_ks.local().get_auth_version().get() != db::auth_version_t::v2) {
+                    throw std::runtime_error(
+                        "Cannot start - cluster is not yet upgraded to use auth v2 and this version does not support legacy auth. "
+                        "If you are trying to upgrade the node then first upgrade the cluster to use auth v2.");
+                }
+            }
+
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
@@ -1603,6 +1623,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             auto group0_id = sys_ks.local().get_raft_group0_id().get();
 
+            checkpoint(stop_signal, "starting topology state machine");
+            sharded<service::topology_state_machine> tsm;
+            tsm.start().get();
+            auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
+                tsm.stop().get();
+            });
+            auto notify_topology = [&tsm] (auto) {
+                tsm.local().event.broadcast();
+            };
+            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
+            auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
+
             // Fail on a gossiper seeds lookup error only if the node is not bootstrapped.
             const bool fail_on_lookup_error = !sys_ks.local().bootstrap_complete();
 
@@ -1617,7 +1649,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.ring_delay_ms = cfg->ring_delay_ms();
                 gcfg.shadow_round_ms = cfg->shadow_round_ms();
                 gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
-                gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
                 gcfg.group0_id = group0_id;
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
@@ -1627,7 +1658,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map), std::ref(tsm)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
@@ -1677,7 +1708,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
+                    gossiper.local(), feature_service.local(), group0_client, dbcfg.gossip_scheduling_group};
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
@@ -1729,18 +1760,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-
-            checkpoint(stop_signal, "starting topology state machine");
-            sharded<service::topology_state_machine> tsm;
-            tsm.start().get();
-            auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
-                tsm.stop().get();
-            });
-            auto notify_topology = [&tsm] (auto) {
-                tsm.local().event.broadcast();
-            };
-            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
-            auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
             auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
                 auto dict = co_await sys_ks.local().query_dict(name);
@@ -1893,8 +1912,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_raft(ctx).get();
             });
 
-            group0_client.init().get();
-
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
             db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
@@ -2026,23 +2043,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting CDC Generation Management service");
-            /* This service uses the system distributed keyspace.
-             * It will only do that *after* the node has joined the token ring, and the token ring joining
-             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
-             * Hence the service will start using sys_dist_ks only after it was initialized.
-             *
-             * However, there is a problem with the service shutdown order: sys_dist_ks is stopped
-             * *before* CDC generation service is stopped (`storage_service::drain_on_shutdown` below),
-             * so CDC generation service takes sharded<db::sys_dist_ks> and must check local_is_initialized()
-             * every time it accesses it (because it may have been stopped already), then take local_shared()
-             * which will prevent sys_dist_ks from being destroyed while the service operates on it.
-             */
             cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
-            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
-                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
+            cdc_generation_service.start(std::move(cdc_config), std::ref(sys_ks), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
             });
@@ -2215,7 +2218,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Setup group0 early in case the node is bootstrapped already and the group exists.
             // Need to do it before allowing incoming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
-            // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             // The call to setup_group0_if_exists() above guarantees that, if group0 is
@@ -2344,10 +2346,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
             }).get();
 
-            sl_controller.local().maybe_start_legacy_update_from_distributed_data([cfg] () {
-                return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
-            }, ss.local(), group0_client);
-
             // Initialize virtual table in system_distributed keyspace after joining the cluster, so
             // that the keyspace is ready
             view_builder.invoke_on_all([] (db::view::view_builder& vb) {
@@ -2452,11 +2450,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
             });
-
-            if (!ss.local().raft_topology_change_enabled()) {
-                startlog.info("Waiting for gossip to settle before accepting client requests...");
-                gossiper.local().wait_for_gossip_to_settle().get();
-            }
 
             checkpoint(stop_signal, "allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();

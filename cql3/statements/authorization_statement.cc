@@ -14,7 +14,6 @@
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "db/cql_type_parser.hh"
-#include "auth/common.hh"
 
 uint32_t cql3::statements::authorization_statement::get_bound_terms() const {
     return 0;
@@ -74,7 +73,7 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
 
 bool cql3::statements::authorization_altering_statement::needs_guard(
                 query_processor& qp, service::query_state&) const {
-    return !auth::legacy_mode(qp);
+    return true;
 };
 
 audit::statement_category cql3::statements::authorization_statement::category() const {

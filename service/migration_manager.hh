@@ -56,10 +56,8 @@ class migration_manager : public seastar::async_sharded_service<migration_manage
 private:
     migration_notifier& _notifier;
 
-    std::unordered_map<locator::host_id, serialized_action> _schema_pulls;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::named_gate _background_tasks;
-    static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;
     service::storage_proxy& _storage_proxy;
@@ -71,21 +69,6 @@ private:
     serialized_action _group0_barrier;
     serialized_action _schema_push;
     table_schema_version _schema_version_to_publish;
-
-    // If `false`, schema is synchronized only through Raft.
-    // Here are the conditions when we should enable/disable schema pulls:
-    // - If a node is bootstrapping in non-Raft mode, schema pulls must remain
-    //   enabled.
-    // - If a node is bootstrapping in Raft mode, it should never perform a
-    //   schema pull.
-    // - If a bootstrapped node is restarting in non-Raft mode but with Raft
-    //   feature enabled (which means we should start upgrading to use Raft),
-    //   or restarting in the middle of Raft upgrade procedure, schema pulls must
-    //   remain enabled until the Raft upgrade procedure finishes.
-    //   This is also the case of restarting after RECOVERY.
-    // - If a bootstrapped node is restarting in Raft mode, it should never
-    //   perform a schema pull.
-    bool _enable_schema_pulls{true};
 
     friend class group0_state_machine; // needed for access to _messaging
     size_t _concurrent_ddl_retries;
@@ -103,21 +86,10 @@ public:
     const abort_source& get_abort_source() const noexcept { return _as; }
     serialized_action& get_group0_barrier() noexcept { return _group0_barrier; }
     const serialized_action& get_group0_barrier() const noexcept { return _group0_barrier; }
-    bool use_raft() const noexcept { return !_enable_schema_pulls; }
-
-    // Disable schema pulls when Raft group 0 is fully responsible for managing schema.
-    future<> disable_schema_pulls();
-
-    future<> submit_migration_task(locator::host_id endpoint, bool can_ignore_down_node = true);
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes);
 
-    // Fetches schema from remote node and applies it locally.
-    // Differs from submit_migration_task() in that all errors are propagated.
-    // Coalesces requests.
-    future<> merge_schema_from(locator::host_id);
-    future<> do_merge_schema_from(locator::host_id);
     future<> reload_schema();
 
     // Merge mutations received from src.
@@ -125,9 +97,6 @@ public:
     future<> merge_schema_from(locator::host_id src, const utils::chunked_vector<canonical_mutation>& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
-
-    bool should_pull_schema_from(const locator::host_id& endpoint);
-    bool has_compatible_schema_tables_version(const locator::host_id& endpoint);
 
     // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
@@ -149,8 +118,7 @@ public:
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     // Parameters:
-    //   timeout -- Optional. Applies only if raft is used (group0_guard.with_raft returns true).
-    //              If set, this timeout is used for the group0.add_entry operation.
+    //   timeout -- Optional. If set, this timeout is used for the group0.add_entry operation.
     //              If the timeout is reached and there is no Raft quorum, an exception is thrown.
     //              The exception will include information about the current set of alive and
     //              unavailable voters, which 
@@ -177,22 +145,13 @@ private:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
-    future<> push_schema_mutation(locator::host_id endpoint, const utils::chunked_vector<mutation>& schema);
-
     future<> passive_announce();
-
-    void schedule_schema_pull(locator::host_id endpoint, const gms::endpoint_state& state);
-
-    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, locator::host_id endpoint);
 
     template<typename mutation_type = schema_change>
     future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
-    future<> announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard);
 
 public:
     void register_feature_listeners();
-
-    future<> maybe_sync(const schema_ptr& s, locator::host_id endpoint);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().

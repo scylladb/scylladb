@@ -90,12 +90,6 @@ public:
     virtual future<> ensure_superuser_is_created() const override;
 
 private:
-    bool legacy_metadata_exists() const;
-
-    future<> migrate_legacy_metadata() const;
-
-    future<> legacy_create_default_if_missing();
-
     future<> maybe_create_default_password();
     future<> maybe_create_default_password_with_retries();
 

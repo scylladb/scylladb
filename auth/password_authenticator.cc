@@ -27,7 +27,6 @@
 #include "utils/log.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
-#include "replica/database.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 
@@ -82,67 +81,6 @@ sstring password_authenticator::update_row_query() const {
             meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
-}
-
-static const sstring legacy_table_name{"credentials"};
-
-bool password_authenticator::legacy_metadata_exists() const {
-    return _qp.db().has_schema(meta::legacy::AUTH_KS, legacy_table_name);
-}
-
-future<> password_authenticator::migrate_legacy_metadata() const {
-    plogger.info("Starting migration of legacy authentication metadata.");
-    static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
-
-    return _qp.execute_internal(
-            query,
-            db::consistency_level::QUORUM,
-            internal_distributed_query_state(),
-            cql3::query_processor::cache_internal::no).then([this](::shared_ptr<cql3::untyped_result_set> results) {
-        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
-            auto username = row.get_as<sstring>("username");
-            auto salted_hash = row.get_as<sstring>(SALTED_HASH);
-            static const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
-                    meta::legacy::AUTH_KS,
-                    meta::roles_table::name,
-                    SALTED_HASH,
-                    meta::roles_table::role_col_name);
-            return _qp.execute_internal(
-                    query,
-                    consistency_for_user(username),
-                    internal_distributed_query_state(),
-                    {std::move(salted_hash), username},
-                    cql3::query_processor::cache_internal::no).discard_result();
-        }).finally([results] {});
-    }).then([] {
-       plogger.info("Finished migrating legacy authentication metadata.");
-    }).handle_exception([](std::exception_ptr ep) {
-        plogger.error("Encountered an error during migration!");
-        std::rethrow_exception(ep);
-    });
-}
-
-future<> password_authenticator::legacy_create_default_if_missing() {
-    const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
-    if (exists) {
-        co_return;
-    }
-    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
-    if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
-    }
-    const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
-            meta::legacy::AUTH_KS,
-            meta::roles_table::name,
-            SALTED_HASH,
-            meta::roles_table::role_col_name);
-    co_await _qp.execute_internal(
-            query,
-            db::consistency_level::QUORUM,
-            internal_distributed_query_state(),
-            {salted_pwd, _superuser},
-            cql3::query_processor::cache_internal::no);
-    plogger.info("Created default superuser authentication record.");
 }
 
 future<> password_authenticator::maybe_create_default_password() {
@@ -216,58 +154,14 @@ future<> password_authenticator::start() {
 
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
-                if (legacy_mode(_qp)) {
-                    if (!_superuser_created_promise.available()) {
-                        // Counterintuitively, we mark promise as ready before any startup work
-                        // because wait_for_schema_agreement() below will block indefinitely
-                        // without cluster majority. In that case, blocking node startup
-                        // would lead to a cluster deadlock.
-                        _superuser_created_promise.set_value();
-                    }
-                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
-
-                    if (legacy::any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
-                        if (legacy_metadata_exists()) {
-                            plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
-                        }
-
-                        return;
-                    }
-
-                    if (legacy_metadata_exists()) {
-                        migrate_legacy_metadata().get();
-                        return;
-                    }
-                    legacy_create_default_if_missing().get();
-                }
                 utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
-                if (!legacy_mode(_qp)) {
-                    maybe_create_default_password_with_retries().get();
-                    if (!_superuser_created_promise.available()) {
-                        _superuser_created_promise.set_value();
-                    }
+                maybe_create_default_password_with_retries().get();
+                if (!_superuser_created_promise.available()) {
+                    _superuser_created_promise.set_value();
                 }
             });
         });
 
-        if (legacy_mode(_qp)) {
-            static const sstring create_roles_query = fmt::format(
-                    "CREATE TABLE {}.{} ("
-                    "  {} text PRIMARY KEY,"
-                    "  can_login boolean,"
-                    "  is_superuser boolean,"
-                    "  member_of set<text>,"
-                    "  salted_hash text"
-                    ")",
-                    meta::legacy::AUTH_KS,
-                    meta::roles_table::name,
-                    meta::roles_table::role_col_name);
-            return create_legacy_metadata_table_if_missing(
-                    meta::roles_table::name,
-                    _qp,
-                    create_roles_query,
-                    _migration_manager);
-        }
         return make_ready_future<>();
     });
  }
@@ -315,20 +209,12 @@ future<authenticated_user> password_authenticator::authenticate(
     const sstring password = credentials.at(PASSWORD_KEY);
 
     try {
-        std::optional<sstring> salted_hash;
-        if (legacy_mode(_qp)) {
-            salted_hash = co_await get_password_hash(username);
-            if (!salted_hash) {
-                throw exceptions::authentication_exception("Username and/or password are incorrect");
-            }
-        } else {
-            auto role = _cache.get(username);
-            if (!role || role->salted_hash.empty()) {
-                throw exceptions::authentication_exception("Username and/or password are incorrect");
-            }
-            salted_hash = role->salted_hash;
+        auto role = _cache.get(username);
+        if (!role || role->salted_hash.empty()) {
+            throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
-        const bool password_match = co_await passwords::check(password, *salted_hash);
+        const auto& salted_hash = role->salted_hash;
+        const bool password_match = co_await passwords::check(password, salted_hash);
         if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
@@ -367,16 +253,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     }
 
     const auto query = update_row_query();
-    if (legacy_mode(_qp)) {
-        co_await _qp.execute_internal(
-                query,
-                consistency_for_user(role_name),
-                internal_distributed_query_state(),
-                {std::move(*maybe_hash), sstring(role_name)},
-                cql3::query_processor::cache_internal::no).discard_result();
-    } else {
-        co_await collect_mutations(_qp, mc, query, {std::move(*maybe_hash), sstring(role_name)});
-    }
+    co_await collect_mutations(_qp, mc, query, {std::move(*maybe_hash), sstring(role_name)});
 }
 
 future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
@@ -391,17 +268,8 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
             meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
-    if (legacy_mode(_qp)) {
-        co_await _qp.execute_internal(
-                query,
-                consistency_for_user(role_name),
-                internal_distributed_query_state(),
-                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)},
-                cql3::query_processor::cache_internal::no).discard_result();
-    } else {
-        co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)});
-    }
+    co_await collect_mutations(_qp, mc, query,
+            {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)});
 }
 
 future<> password_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
@@ -410,15 +278,7 @@ future<> password_authenticator::drop(std::string_view name, ::service::group0_b
             get_auth_ks_name(_qp),
             meta::roles_table::name,
             meta::roles_table::role_col_name);
-    if (legacy_mode(_qp)) {
-        co_await _qp.execute_internal(
-                query, consistency_for_user(name),
-                internal_distributed_query_state(),
-                {sstring(name)},
-                cql3::query_processor::cache_internal::no).discard_result();
-    } else {
-        co_await collect_mutations(_qp, mc, query, {sstring(name)});
-    }
+    co_await collect_mutations(_qp, mc, query, {sstring(name)});
 }
 
 future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {

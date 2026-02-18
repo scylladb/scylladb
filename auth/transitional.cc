@@ -170,8 +170,8 @@ class transitional_authorizer : public authorizer {
     std::unique_ptr<authorizer> _authorizer;
 
 public:
-    transitional_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
-            : transitional_authorizer(std::make_unique<default_authorizer>(qp, g0, mm)) {
+    transitional_authorizer(cql3::query_processor& qp)
+            : transitional_authorizer(std::make_unique<default_authorizer>(qp)) {
     }
     transitional_authorizer(std::unique_ptr<authorizer> a)
             : _authorizer(std::move(a)) {
@@ -246,6 +246,4 @@ static const class_registrator<
 static const class_registrator<
         auth::authorizer,
         auth::transitional_authorizer,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&> transitional_authorizer_reg(auth::PACKAGE_NAME + "TransitionalAuthorizer");
+        cql3::query_processor&> transitional_authorizer_reg(auth::PACKAGE_NAME + "TransitionalAuthorizer");

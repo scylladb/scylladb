@@ -104,7 +104,6 @@ public:
     locator::host_id host_id;
     gms::inet_address broadcast_address = gms::inet_address("localhost");
     bool ms_listen = false;
-    bool run_with_raft_recovery = false;
     bool clean_data_dir_before_test = true;
 
     std::optional<db_clock::duration> batchlog_replay_timeout;

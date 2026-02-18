@@ -20,6 +20,7 @@
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
@@ -66,6 +67,7 @@ int main(int ac, char ** av) {
             sharded<gms::gossip_address_map> gossip_address_map;
             sharded<netw::messaging_service> messaging;
             sharded<auth::service> auth_service;
+            sharded<service::topology_state_machine> topo_sm;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
@@ -103,7 +105,7 @@ int main(int ac, char ** av) {
                 gcfg.seeds.emplace(std::move(s));
             }
             sharded<gms::gossiper> gossiper;
-            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(messaging), std::move(gcfg), std::ref(gossip_address_map)).get();
+            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(messaging), std::move(gcfg), std::ref(gossip_address_map), std::ref(topo_sm)).get();
 
             auto& server = messaging.local();
             auto port = server.port();

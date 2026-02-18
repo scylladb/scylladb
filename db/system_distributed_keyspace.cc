@@ -189,19 +189,6 @@ static std::vector<schema_ptr> ensured_tables() {
     };
 }
 
-// Precondition: `ks_name` is either "system_distributed" or "system_distributed_everywhere".
-static void check_exists(std::string_view ks_name, std::string_view cf_name, const replica::database& db) {
-    if (!db.has_schema(ks_name, cf_name)) {
-        // Throw `std::runtime_error` instead of calling `on_internal_error` due to some dtests which
-        // 'upgrade' Scylla from Cassandra work directories (which is an unsupported upgrade path)
-        // on which this check does not pass. We don't want the node to crash in these dtests,
-        // but throw an error instead. In production clusters we don't crash on `on_internal_error` anyway.
-        auto err = fmt::format("expected {}.{} to exist but it doesn't", ks_name, cf_name);
-        dlogger.error("{}", err);
-        throw std::runtime_error{std::move(err)};
-    }
-}
-
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
     return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels()};
 }
@@ -415,87 +402,6 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
  */
 static db::consistency_level quorum_if_many(size_t num_token_owners) {
     return num_token_owners > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-}
-
-static list_type_impl::native_type prepare_cdc_generation_description(const cdc::topology_description& description) {
-    list_type_impl::native_type ret;
-    for (auto& e: description.entries()) {
-        list_type_impl::native_type streams;
-        for (auto& s: e.streams) {
-            streams.push_back(data_value(s.to_bytes()));
-        }
-
-        ret.push_back(make_tuple_value(cdc_token_range_description_type,
-                { data_value(dht::token::to_int64(e.token_range_end))
-                , make_list_value(cdc_streams_list_type, std::move(streams))
-                , data_value(int8_t(e.sharding_ignore_msb))
-                }));
-    }
-    return ret;
-}
-
-static std::vector<cdc::stream_id> get_streams_from_list_value(const data_value& v) {
-    std::vector<cdc::stream_id> ret;
-    auto& list_val = value_cast<list_type_impl::native_type>(v);
-    for (auto& s_val: list_val) {
-        ret.push_back(value_cast<bytes>(s_val));
-    }
-    return ret;
-}
-
-static cdc::token_range_description get_token_range_description_from_value(const data_value& v) {
-    auto& tup = value_cast<tuple_type_impl::native_type>(v);
-    if (tup.size() != 3) {
-        on_internal_error(cdc_log, "get_token_range_description_from_value: stream tuple type size != 3");
-    }
-
-    auto token = dht::token::from_int64(value_cast<int64_t>(tup[0]));
-    auto streams = get_streams_from_list_value(tup[1]);
-    auto sharding_ignore_msb = uint8_t(value_cast<int8_t>(tup[2]));
-
-    return {std::move(token), std::move(streams), sharding_ignore_msb};
-}
-
-future<>
-system_distributed_keyspace::insert_cdc_topology_description(
-        cdc::generation_id_v1 gen_id,
-        const cdc::topology_description& description,
-        context ctx) {
-    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
-            format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
-            quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
-            { gen_id.ts, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
-            cql3::query_processor::cache_internal::no).discard_result();
-}
-
-future<std::optional<cdc::topology_description>>
-system_distributed_keyspace::read_cdc_topology_description(
-        cdc::generation_id_v1 gen_id,
-        context ctx) {
-    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
-            format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
-            quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
-            { gen_id.ts },
-            cql3::query_processor::cache_internal::no
-    ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
-        if (cql_result->empty() || !cql_result->one().has("description")) {
-            return {};
-        }
-
-        utils::chunked_vector<cdc::token_range_description> entries;
-
-        auto entries_val = value_cast<list_type_impl::native_type>(
-                cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
-        for (const auto& e_val: entries_val) {
-            entries.push_back(get_token_range_description_from_value(e_val));
-        }
-
-        return { std::move(entries) };
-    });
 }
 
 future<>
@@ -751,23 +657,6 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
             cql3::query_processor::cache_internal::no);
 
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
-}
-
-future<std::vector<db_clock::time_point>>
-system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
-    std::vector<db_clock::time_point> res;
-    co_await _qp.query_internal(
-            // This is a long and expensive scan (mostly due to #8061).
-            // Give it a bit more time than usual.
-            format("SELECT time FROM {}.{} USING TIMEOUT 60s", NAME, CDC_DESC_V1),
-            quorum_if_many(ctx.num_token_owners),
-            {},
-            1000,
-            [&] (const cql3::untyped_result_set_row& r) {
-        res.push_back(r.get_as<db_clock::time_point>("time"));
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    });
-    co_return res;
 }
 
 bool system_distributed_keyspace::workload_prioritization_tables_exists() {

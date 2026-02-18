@@ -584,9 +584,6 @@ public:
     */
     future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
-    future<bool> cdc_is_rewritten();
-    future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
-
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f);
     future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
@@ -611,6 +608,8 @@ public:
     future<service::topology> load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts);
 
     future<std::optional<service::topology_features>> load_topology_features_state();
+
+    future<sstring> load_topology_upgrade_state();
 
     // Read CDC generation data with the given UUID as key.
     // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).

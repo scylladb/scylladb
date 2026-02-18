@@ -88,7 +88,6 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
-    co_await utils::get_local_injector().inject("paxos_prepare_timeout", timeout);
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -180,7 +179,6 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
 future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_accept_proposal_wait", utils::wait_for_message(std::chrono::minutes(2)));
-    co_await utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout);
     utils::latency_counter lc;
     lc.start();
 
@@ -235,8 +233,6 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
         }
     });
 
-    co_await utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
-
     replica::table& cf = sp.get_db().local().find_column_family(schema);
     db_clock::time_point t = cf.get_truncation_time();
     auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
@@ -274,7 +270,6 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
 
     // We don't need to lock the partition key if there is no gap between loading paxos
     // state and saving it, and here we're just blindly updating.
-    co_await utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout);
     co_return co_await paxos_store.save_paxos_decision(*schema, decision, timeout);
 }
 
@@ -367,14 +362,6 @@ schema_ptr paxos_store::try_get_paxos_state_schema(const schema& s) const {
     return state_table_id ? tables.get_table(state_table_id).schema() : nullptr;
 }
 
-void paxos_store::check_raft_is_enabled(const schema& s) const {
-    if (!_mm.use_raft()) {
-        throw std::runtime_error(format("Cannot create paxos state table for {}.{} "
-            "because raft-based schema management is not enabled.",
-            s.ks_name(), s.cf_name()));
-    }
-}
-
 future<> paxos_store::create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout) {
     auto retries = _mm.get_concurrent_ddl_retries();
     while (true) {
@@ -413,7 +400,6 @@ future<> paxos_store::ensure_initialized(const schema& s, db::timeout_clock::tim
     if (try_get_paxos_state_schema(s)) {
         return make_ready_future<>();
     }
-    check_raft_is_enabled(s);
     paxos_state::logger.info("Creating paxos state table for \"{}.{}\", timeout {} millis", 
         s.ks_name(), s.cf_name(), duration_cast<std::chrono::milliseconds>(timeout - lowres_clock::now()).count());
     return container().invoke_on(0, &paxos_store::create_paxos_state_table, std::ref(s), timeout);
@@ -501,7 +487,6 @@ future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::time
         co_return state_schema;
     }
 
-    check_raft_is_enabled(s);
     paxos_state::logger.debug("get_paxos_state_schema for {}.{}({}), paxos state table doesn't exist, "
         "running group0.read_barrier", s.ks_name(), s.cf_name(), s.id());
     abort_on_expiry aoe(timeout);

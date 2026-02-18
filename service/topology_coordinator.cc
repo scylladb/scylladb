@@ -2111,11 +2111,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     future<> handle_tablet_resize_finalization(group0_guard g) {
-        co_await utils::get_local_injector().inject("handle_tablet_resize_finalization_wait", [] (auto& handler) -> future<> {
-            rtlogger.info("handle_tablet_resize_finalization: waiting");
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
-        });
-
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
@@ -2712,7 +2707,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
                 break;
             case topology::transition_state::tablet_draining:
-                co_await utils::get_local_injector().inject("suspend_decommission", utils::wait_for_message(1min));
                 try {
                     co_await handle_tablet_migration(std::move(guard), true);
                 } catch (term_changed_error&) {
@@ -3656,10 +3650,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
-    // Precondition: the state machine upgrade state is not at upgrade_state::done.
-    future<> do_upgrade_step(group0_guard);
-    future<> build_coordinator_state(group0_guard);
-
     future<> await_event() {
         _as.check();
         co_await _topo_sm.event.when();
@@ -3711,7 +3701,6 @@ public:
     }
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
-    future<bool> maybe_run_upgrade();
     future<> run();
     future<> stop();
 
@@ -3952,147 +3941,6 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
     }
 }
 
-future<> topology_coordinator::do_upgrade_step(group0_guard guard) {
-    switch (_topo_sm._topology.upgrade_state) {
-    case topology::upgrade_state_type::not_upgraded:
-        on_internal_error(rtlogger, std::make_exception_ptr(std::runtime_error(
-                "topology_coordinator was started even though upgrade to raft topology was not requested yet")));
-
-    case topology::upgrade_state_type::build_coordinator_state:
-        utils::get_local_injector().inject("topology_coordinator_fail_to_build_state_during_upgrade", [] {
-            throw std::runtime_error("failed to build topology coordinator state due to error injection");
-        });
-        co_await build_coordinator_state(std::move(guard));
-        co_return;
-
-    case topology::upgrade_state_type::done:
-        on_internal_error(rtlogger, std::make_exception_ptr(std::runtime_error(
-                "topology_coordinator::do_upgrade_step called after upgrade was completed")));
-    }
-}
-
-future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
-    // Wait until all nodes reach use_post_raft_procedures
-    rtlogger.info("waiting for all nodes to finish upgrade to raft schema");
-    release_guard(std::move(guard));
-    co_await _group0.wait_for_all_nodes_to_finish_upgrade(_as);
-
-    auto tmptr = get_token_metadata_ptr();
-
-    auto sl_version = co_await _sys_ks.get_service_levels_version();
-    if (!sl_version || *sl_version < 2) {
-        rtlogger.info("migrating service levels data");
-        co_await qos::service_level_controller::migrate_to_v2(tmptr->get_normal_token_owners().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
-    }
-
-    auto auth_version = co_await _sys_ks.get_auth_version();
-    if (auth_version < db::system_keyspace::auth_version_t::v2) {
-        rtlogger.info("migrating system_auth keyspace data");
-        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
-                [this] (abort_source&) { return start_operation();}, _as);
-    }
-
-    rtlogger.info("building initial raft topology state and CDC generation");
-    guard = co_await start_operation();
-
-    auto get_application_state = [&] (locator::host_id host_id, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
-        const auto it = epmap.find(app_state);
-        if (it == epmap.end()) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}: application state {} is missing in gossip",
-                    host_id, app_state));
-        }
-        // it's versioned_value::value(), not std::optional::value() - it does not throw
-        return it->second.value();
-    };
-
-    // Create a new CDC generation
-    auto get_sharding_info_for_host_id = [&] (locator::host_id host_id) -> std::pair<size_t, uint8_t> {
-        const auto eptr = _gossiper.get_endpoint_state_ptr(host_id);
-        if (!eptr) {
-            throw std::runtime_error(format("no gossiper endpoint state for node {}", host_id));
-        }
-        const auto& epmap = eptr->get_application_state_map();
-        const auto shard_count = std::stoi(get_application_state(host_id, epmap, gms::application_state::SHARD_COUNT));
-        const auto ignore_msb = std::stoi(get_application_state(host_id, epmap, gms::application_state::IGNORE_MSB_BITS));
-        return std::make_pair<size_t, uint8_t>(shard_count, ignore_msb);
-    };
-    auto [cdc_gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), std::nullopt, get_sharding_info_for_host_id);
-    guard = std::move(guard_);
-
-    topology_mutation_builder builder(guard.write_timestamp());
-
-    std::set<sstring> enabled_features;
-
-    // Build per-node state
-    for (const auto& node: tmptr->get_topology().get_nodes()) {
-        if (!node.get().is_member()) {
-            continue;
-        }
-
-        const auto& host_id = node.get().host_id();
-        const auto eptr = _gossiper.get_endpoint_state_ptr(host_id);
-        if (!eptr) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {} as gossip contains no data for it", host_id));
-        }
-
-        const auto& epmap = eptr->get_application_state_map();
-
-        const auto datacenter = get_application_state(host_id, epmap, gms::application_state::DC);
-        const auto rack = get_application_state(host_id, epmap, gms::application_state::RACK);
-        const auto tokens_v = tmptr->get_tokens(host_id);
-        const std::unordered_set<dht::token> tokens(tokens_v.begin(), tokens_v.end());
-        const auto release_version = get_application_state(host_id, epmap, gms::application_state::RELEASE_VERSION);
-        const auto num_tokens = tokens.size();
-        const auto shard_count = get_application_state(host_id, epmap, gms::application_state::SHARD_COUNT);
-        const auto ignore_msb = get_application_state(host_id, epmap, gms::application_state::IGNORE_MSB_BITS);
-        const auto supported_features_s = get_application_state(host_id, epmap, gms::application_state::SUPPORTED_FEATURES);
-        const auto supported_features = gms::feature_service::to_feature_set(supported_features_s);
-
-        if (enabled_features.empty()) {
-            enabled_features = supported_features;
-        } else {
-            std::erase_if(enabled_features, [&] (const sstring& f) { return !supported_features.contains(f); });
-        }
-
-        builder.with_node(raft::server_id(host_id.uuid()))
-                .set("datacenter", datacenter)
-                .set("rack", rack)
-                .set("tokens", tokens)
-                .set("node_state", node_state::normal)
-                .set("release_version", release_version)
-                .set("num_tokens", (uint32_t)num_tokens)
-                .set("tokens_string", "")
-                .set("shard_count", (uint32_t)std::stoi(shard_count))
-                .set("ignore_msb", (uint32_t)std::stoi(ignore_msb))
-                .set("cleanup_status", cleanup_status::clean)
-                .set("request_id", utils::UUID())
-                .set("supported_features", supported_features);
-
-        rtlogger.debug("node {} will contain the following parameters: "
-                "datacenter={}, rack={}, tokens={}, shard_count={}, ignore_msb={}, supported_features={}",
-                host_id, datacenter, rack, tokens, shard_count, ignore_msb, supported_features);
-    }
-
-    // Build the static columns
-    const bool add_ts_delay = true; // This is not the first generation, so add delay
-    auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, _ring_delay);
-
-    const cdc::generation_id_v2 cdc_gen_id {
-        .ts = cdc_gen_ts,
-        .id = cdc_gen_uuid,
-    };
-
-    builder.set_version(topology::initial_version)
-            .set_fence_version(topology::initial_version)
-            .add_new_committed_cdc_generation(cdc_gen_id)
-            .add_enabled_features(std::move(enabled_features));
-
-    // Commit
-    builder.set_upgrade_state(topology::upgrade_state_type::done);
-    auto reason = "upgrade: build the initial state";
-    co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
-}
-
 future<> topology_coordinator::fence_previous_coordinator() {
     // Write empty change to make sure that a guard taken by any previous coordinator cannot
     // be used to do a successful write any more. Otherwise the following can theoretically happen
@@ -4211,39 +4059,6 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         return true;
     }
     return false;
-}
-
-future<bool> topology_coordinator::maybe_run_upgrade() {
-    if (_topo_sm._topology.upgrade_state == topology::upgrade_state_type::done) {
-        // Upgrade was already done, nothing to do
-        co_return true;
-    }
-
-    rtlogger.info("topology coordinator fiber is upgrading the cluster to raft topology mode");
-
-    auto abort = _as.subscribe([this] () noexcept {
-        _topo_sm.event.broadcast();
-    });
-
-    while (!_as.abort_requested() && _topo_sm._topology.upgrade_state != topology::upgrade_state_type::done) {
-        bool sleep = false;
-        try {
-            auto guard = co_await start_operation();
-            co_await do_upgrade_step(std::move(guard));
-        } catch (...) {
-            sleep = handle_topology_coordinator_error(std::current_exception());
-        }
-        if (sleep) {
-            try {
-                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
-            } catch (...) {
-                rtlogger.debug("sleep failed: {}", std::current_exception());
-            }
-        }
-        co_await coroutine::maybe_yield();
-    }
-
-    co_return !_as.abort_requested();
 }
 
 future<> topology_coordinator::run() {
@@ -4390,12 +4205,9 @@ future<> run_topology_coordinator(
     lifecycle_notifier.register_subscriber(&coordinator);
     try {
         rtlogger.info("start topology coordinator fiber");
-        const bool upgrade_done = co_await coordinator.maybe_run_upgrade();
-        if (upgrade_done) {
-            co_await with_scheduling_group(group0.get_scheduling_group(), [&] {
-                return coordinator.run();
-            });
-        }
+        co_await with_scheduling_group(group0.get_scheduling_group(), [&] {
+            return coordinator.run();
+        });
     } catch (...) {
         ex = std::current_exception();
     }

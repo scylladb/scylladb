@@ -869,12 +869,16 @@ private:
                 seeds.emplace("127.0.0.1");
             }
 
+            _topology_state_machine.start().get();
+            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
+                _topology_state_machine.stop().get();
+            });
+
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
-            gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map), std::ref(_topology_state_machine)).get();
             auto stop_ms_fd_gossiper = defer_verbose_shutdown("gossiper", [this] {
                 _gossiper.stop().get();
             });
@@ -916,11 +920,6 @@ private:
                 _tablet_allocator.stop().get();
             });
 
-            _topology_state_machine.start().get();
-            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
-                _topology_state_machine.stop().get();
-            });
-
             _view_building_state_machine.start().get();
             auto stop_view_building_state_machine = defer_verbose_shutdown("view building state machine", [this] {
                 _view_building_state_machine.stop().get();
@@ -928,7 +927,7 @@ private:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
-                    _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
+                    _gossiper.local(), _feature_service.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
@@ -1035,12 +1034,6 @@ private:
                 return raft_gr.start();
             }).get();
 
-            if (cfg_in.run_with_raft_recovery) {
-                _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
-            }
-
-            group0_client.init().get();
-
             auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });
@@ -1069,7 +1062,6 @@ private:
             }).get();
 
             cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             /*
              * Currently used when choosing the timestamp of the first CDC stream generation:
              * normally we choose a timestamp in the future so other nodes have a chance to learn about it
@@ -1077,7 +1069,7 @@ private:
              * and would only slow down tests (by having them wait).
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
-            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db)).get();
+            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_sys_ks), std::ref(_db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC generation service", [this] {
                 _cdc_generation_service.stop().get();
             });

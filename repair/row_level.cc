@@ -1798,9 +1798,7 @@ public:
         try {
             // Trigger read barrier to ensure that session_id is visible.
             auto& mm = repair.get_migration_manager();
-            if (mm.use_raft()) {
-                co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
-            }
+            co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {

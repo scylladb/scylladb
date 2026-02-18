@@ -44,107 +44,16 @@ static logging::logger alogger("default_authorizer");
 static const class_registrator<
         authorizer,
         default_authorizer,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
+        cql3::query_processor&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
-default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
-        : _qp(qp)
-        , _migration_manager(mm) {
+default_authorizer::default_authorizer(cql3::query_processor& qp)
+        : _qp(qp) {
 }
 
 default_authorizer::~default_authorizer() {
 }
 
-static const sstring legacy_table_name{"permissions"};
-
-bool default_authorizer::legacy_metadata_exists() const {
-    return _qp.db().has_schema(meta::legacy::AUTH_KS, legacy_table_name);
-}
-
-future<bool> default_authorizer::legacy_any_granted() const {
-    static const sstring query = seastar::format("SELECT * FROM {}.{} LIMIT 1", meta::legacy::AUTH_KS, PERMISSIONS_CF);
-
-    return _qp.execute_internal(
-            query,
-            db::consistency_level::LOCAL_ONE,
-            {},
-            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
-        return !results->empty();
-    });
-}
-
-future<> default_authorizer::migrate_legacy_metadata() {
-    alogger.info("Starting migration of legacy permissions metadata.");
-    static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
-
-    return _qp.execute_internal(
-            query,
-            db::consistency_level::LOCAL_ONE,
-            cql3::query_processor::cache_internal::no).then([this](::shared_ptr<cql3::untyped_result_set> results) {
-        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
-            return do_with(
-                    row.get_as<sstring>("username"),
-                    parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
-                    ::service::group0_batch::unused(),
-                    [this, &row](const auto& username, const auto& r, auto& mc) {
-                const permission_set perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                return grant(username, perms, r, mc);
-            });
-        }).finally([results] {});
-    }).then([] {
-        alogger.info("Finished migrating legacy permissions metadata.");
-    }).handle_exception([](std::exception_ptr ep) {
-        alogger.error("Encountered an error during migration!");
-        std::rethrow_exception(ep);
-    });
-}
-
-future<> default_authorizer::start_legacy() {
-    static const sstring create_table = fmt::format(
-            "CREATE TABLE {}.{} ("
-            "{} text,"
-            "{} text,"
-            "{} set<text>,"
-            "PRIMARY KEY({}, {})"
-            ") WITH gc_grace_seconds={}",
-            meta::legacy::AUTH_KS,
-            PERMISSIONS_CF,
-            ROLE_NAME,
-            RESOURCE_NAME,
-            PERMISSIONS_NAME,
-            ROLE_NAME,
-            RESOURCE_NAME,
-            90 * 24 * 60 * 60); // 3 months.
-
-    return once_among_shards([this] {
-        return create_legacy_metadata_table_if_missing(
-                PERMISSIONS_CF,
-                _qp,
-                create_table,
-                _migration_manager).then([this] {
-            _finished = do_after_system_ready(_as, [this] {
-                return async([this] {
-                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
-
-                    if (legacy_metadata_exists()) {
-                        if (!legacy_any_granted().get()) {
-                            migrate_legacy_metadata().get();
-                            return;
-                        }
-
-                        alogger.warn("Ignoring legacy permissions metadata since role permissions exist.");
-                    }
-                });
-            });
-        });
-    });
-}
-
 future<> default_authorizer::start() {
-    if (legacy_mode(_qp)) {
-        return start_legacy();
-    }
     return make_ready_future<>();
 }
 
@@ -192,14 +101,6 @@ default_authorizer::modify(
             op,
             ROLE_NAME,
             RESOURCE_NAME);
-    if (legacy_mode(_qp)) {
-        co_return co_await _qp.execute_internal(
-                query,
-                db::consistency_level::ONE,
-                internal_distributed_query_state(),
-                {permissions::to_strings(set), sstring(role_name), resource.name()},
-                cql3::query_processor::cache_internal::no).discard_result();
-    }
     co_await collect_mutations(_qp, mc, query,
             {permissions::to_strings(set), sstring(role_name), resource.name()});
 }
@@ -246,71 +147,13 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
                 get_auth_ks_name(_qp),
                 PERMISSIONS_CF,
                 ROLE_NAME);
-        if (legacy_mode(_qp)) {
-            co_await _qp.execute_internal(
-                    query,
-                    db::consistency_level::ONE,
-                    internal_distributed_query_state(),
-                    {sstring(role_name)},
-                    cql3::query_processor::cache_internal::no).discard_result();
-        } else {
-            co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
-        }
+        co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
     } catch (const exceptions::request_execution_exception& e) {
         alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
     }
 }
 
-future<> default_authorizer::revoke_all_legacy(const resource& resource) {
-    static const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
-            ROLE_NAME,
-            get_auth_ks_name(_qp),
-            PERMISSIONS_CF,
-            RESOURCE_NAME);
-
-    return _qp.execute_internal(
-            query,
-            db::consistency_level::LOCAL_ONE,
-            {resource.name()},
-            cql3::query_processor::cache_internal::no).then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
-        try {
-            auto res = f.get();
-            return parallel_for_each(
-                    res->begin(),
-                    res->end(),
-                    [this, res, resource](const cql3::untyped_result_set::row& r) {
-                static const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
-                        get_auth_ks_name(_qp),
-                        PERMISSIONS_CF,
-                        ROLE_NAME,
-                        RESOURCE_NAME);
-
-                return _qp.execute_internal(
-                        query,
-                        db::consistency_level::LOCAL_ONE,
-                        {r.get_as<sstring>(ROLE_NAME), resource.name()},
-                        cql3::query_processor::cache_internal::no).discard_result().handle_exception(
-                                [resource](auto ep) {
-                    try {
-                        std::rethrow_exception(ep);
-                    } catch (const exceptions::request_execution_exception& e) {
-                        alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
-                    }
-
-                });
-            });
-        } catch (const exceptions::request_execution_exception& e) {
-            alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
-            return make_ready_future();
-        }
-    });
-}
-
 future<> default_authorizer::revoke_all(const resource& resource, ::service::group0_batch& mc) {
-    if (legacy_mode(_qp)) {
-        co_return co_await revoke_all_legacy(resource);
-    }
-
     if (resource.kind() == resource_kind::data &&
             data_resource_view(resource).is_keyspace()) {
         revoke_all_keyspace_resources(resource, mc);

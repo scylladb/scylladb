@@ -92,22 +92,11 @@ public:
     future<> finish_view_build(sstring ks_name, sstring view_name) const;
     future<> remove_view(sstring ks_name, sstring view_name) const;
 
-    // Precondition: "system_distributed.cdc_generation_descriptions" exists and it was created by Scylla.
-    // In practice this means that the table was created by a previous version from which the cluster was upgraded;
-    // the precondition says that this function should not be called in clusters that were freshly created in a new version.
-    future<> insert_cdc_topology_description(cdc::generation_id_v1, const cdc::topology_description&, context);
-    // Precondition: same as above.
-    future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id_v1, context);
-
     future<> insert_cdc_generation(utils::UUID, const cdc::topology_description&, context);
     future<std::optional<cdc::topology_description>> read_cdc_generation(utils::UUID);
 
     future<> create_cdc_desc(db_clock::time_point, const cdc::topology_description&, context);
     future<bool> cdc_desc_exists(db_clock::time_point, context);
-
-    /* Get all generation timestamps appearing in the "cdc_streams_descriptions" table
-     * (the old CDC stream description table). */
-    future<std::vector<db_clock::time_point>> get_cdc_desc_v1_timestamps(context);
 
     future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(db_clock::time_point not_older_than, context);
 

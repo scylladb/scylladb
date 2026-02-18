@@ -1775,7 +1775,7 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
 future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_keyspace::load_endpoint_state() {
     co_await peers_table_read_fixup();
 
-    const auto msg = co_await execute_cql(format("SELECT peer, host_id, tokens, data_center, rack from system.{}", PEERS));
+    const auto msg = co_await execute_cql(format("SELECT peer, host_id, data_center, rack from system.{}", PEERS));
 
     std::unordered_map<locator::host_id, gms::loaded_endpoint_state> ret;
     for (const auto& row : *msg) {
@@ -1786,9 +1786,6 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
             on_internal_error_noexcept(slogger, format("load_endpoint_state: node {} has no host_id in system.{}", ep, PEERS));
         }
         auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
-        if (row.has("tokens")) {
-            st.tokens = decode_tokens(deserialize_set_column(*peers(), row, "tokens"));
-        }
         if (row.has("data_center") && row.has("rack")) {
             st.opt_dc_rack.emplace(locator::endpoint_dc_rack {
                 row.get_as<sstring>("data_center"),
@@ -2127,29 +2124,6 @@ future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id
 
     auto id = row.get_as<utils::UUID>("uuid");
     co_return cdc::generation_id_v2{ts, id};
-}
-
-static const sstring CDC_REWRITTEN_KEY = "rewritten";
-
-future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1> gen_id) {
-    if (gen_id) {
-        return execute_cql(
-                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", CDC_LOCAL),
-                CDC_REWRITTEN_KEY, gen_id->ts).discard_result();
-    } else {
-        // Insert just the row marker.
-        return execute_cql(
-                format("INSERT INTO system.{} (key) VALUES (?)", CDC_LOCAL),
-                CDC_REWRITTEN_KEY).discard_result();
-    }
-}
-
-future<bool> system_keyspace::cdc_is_rewritten() {
-    // We don't care about the actual timestamp; it's additional information for debugging purposes.
-    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", CDC_LOCAL), CDC_REWRITTEN_KEY)
-            .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        return !msg->empty();
-    });
 }
 
 future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
@@ -3387,12 +3361,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.tablet_balancing_enabled = true;
         }
 
-        if (some_row.has("upgrade_state")) {
-            ret.upgrade_state = service::upgrade_state_from_string(some_row.get_as<sstring>("upgrade_state"));
-        } else {
-            ret.upgrade_state = service::topology::upgrade_state_type::not_upgraded;
-        }
-
         if (some_row.has("ignore_nodes")) {
             ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
         }
@@ -3412,6 +3380,16 @@ future<std::optional<service::topology_features>> system_keyspace::load_topology
     SCYLLA_ASSERT(rs);
 
     co_return decode_topology_features_state(std::move(rs));
+}
+
+future<sstring> system_keyspace::load_topology_upgrade_state() {
+    auto rs = co_await execute_cql(
+        format("SELECT upgrade_state FROM system.{} WHERE key = '{}' LIMIT 1", TOPOLOGY, TOPOLOGY));
+    SCYLLA_ASSERT(rs);
+    if (rs->empty()) {
+        co_return "not_upgraded";
+    }
+    co_return rs->one().get_as<sstring>("upgrade_state");
 }
 
 std::optional<service::topology_features> system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {

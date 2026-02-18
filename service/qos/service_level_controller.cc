@@ -457,14 +457,6 @@ future<std::optional<service::group0_guard>> service_level_controller::migrate_t
     co_return std::move(guard); // return guard untouched
 }
 
-void service_level_controller::stop_legacy_update_from_distributed_data() {
-    SCYLLA_ASSERT(this_shard_id() == global_controller);
-
-    if (_global_controller_db->dist_data_update_aborter.abort_requested()) {
-        return;
-    }
-    _global_controller_db->dist_data_update_aborter.request_abort();
-}
 
 future<std::optional<service_level_options>> service_level_controller::auth_integration::find_effective_service_level(const sstring& role_name) {
     const auto _ = _stop_gate.hold();
@@ -686,65 +678,6 @@ future<> service_level_controller::notify_effective_service_levels_cache_reloade
     co_await _subscribers.for_each([] (qos_configuration_change_subscriber* subscriber) -> future<> {
         return subscriber->on_effective_service_levels_cache_reloaded();
     });
-}
-
-void service_level_controller::maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client) {
-    if (this_shard_id() != global_controller) {
-        throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));
-    }
-    if (storage_service.get_topology_upgrade_state() == service::topology::upgrade_state_type::done && !group0_client.in_recovery()) {
-        // Falling into this branch means service levels were migrated to raft and legacy update loop is not needed.
-        return;
-    }
-
-    if (_global_controller_db->distributed_data_update.available()) {
-        sl_logger.info("start_legacy_update_from_distributed_data: starting configuration polling loop");
-        _logged_intervals = 0;
-        _global_controller_db->distributed_data_update = repeat([this, interval_f = std::move(interval_f), &storage_service] {
-            return sleep_abortable<steady_clock_type>(interval_f(),
-                    _global_controller_db->dist_data_update_aborter).then_wrapped([this, &storage_service] (future<>&& f) {
-                try {
-                    f.get();
-                    
-                    if (storage_service.get_topology_upgrade_state() == service::topology::upgrade_state_type::done) {
-                        stop_legacy_update_from_distributed_data();
-                        sl_logger.info("update_from_distributed_data: Update loop has been shutdown. Now service levels cache will be updated immediately while applying raft group0 log.");
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-
-                    return update_service_levels_cache().then_wrapped([this] (future<>&& f){
-                        try {
-                            f.get();
-                            _last_successful_config_update = seastar::lowres_clock::now();
-                            _logged_intervals = 0;
-                        } catch (...) {
-                            using namespace std::literals::chrono_literals;
-                            constexpr auto age_resolution = 90s;
-                            constexpr unsigned error_threshold = 10; // Change the logging level to error after 10 age_resolution intervals.
-                            unsigned configuration_age = (seastar::lowres_clock::now() - _last_successful_config_update) / age_resolution;
-                            if (configuration_age > _logged_intervals) {
-                                log_level ll = configuration_age >= error_threshold ? log_level::error : log_level::warn;
-                                sl_logger.log(ll, "start_legacy_update_from_distributed_data: failed to update configuration for more than  {} seconds : {}",
-                                        (age_resolution*configuration_age).count(), std::current_exception());
-                                _logged_intervals++;
-                            }
-                        }
-                        return stop_iteration::no;
-                    });
-                } catch (const sleep_aborted& e) {
-                    sl_logger.info("start_legacy_update_from_distributed_data: configuration polling loop aborted");
-                    return make_ready_future<seastar::bool_class<seastar::stop_iteration_tag>>(stop_iteration::yes);
-                }
-            });
-        }).then_wrapped([] (future<>&& f) {
-            try {
-                f.get();
-            } catch (...) {
-                sl_logger.error("start_legacy_update_from_distributed_data: polling loop stopped unexpectedly by: {}",
-                        std::current_exception());
-            }
-        });
-    }
 }
 
 future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, service::group0_batch& mc) {
