@@ -429,7 +429,7 @@ future<> utils::gcp::storage::client::object_data_sink::acquire_session() {
     }
     auto path = fmt::format("/upload/storage/v1/b/{}/o?uploadType=resumable&name={}"
         , _bucket
-        , _object_name
+        , seastar::http::internal::url_encode(_object_name)
     );
 
     auto reply = co_await _impl->send_with_retry(path
@@ -689,7 +689,11 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
             }
 
             // Ensure we read from the same generation as we queried in read_info. Note: mock server ignores this.
-            auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media", _bucket, _object_name, _generation);
+            auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media"
+                , _bucket
+                , seastar::http::internal::url_encode(_object_name)
+                , _generation
+            );
             auto range = fmt::format("bytes={}-{}", _position, _position+to_read-1); // inclusive range
 
             co_await _impl->send_with_retry(path
@@ -799,7 +803,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
 future<> utils::gcp::storage::client::object_data_source::read_info() {
     gcp_storage.debug("Read info {}:{}", _bucket, _object_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}", _bucket, _object_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}", _bucket, seastar::http::internal::url_encode(_object_name));
 
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_ONLY
@@ -916,6 +920,12 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
 future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager) {
+    utils::chunked_vector<utils::gcp::storage::object_info> result;
+
+    if (pager.done) {
+        co_return result;
+    }
+
     std::string bucket(bucket_in);
 
     gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
@@ -934,8 +944,6 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
         path += fmt::format("{}pageToken={}", psep, pager.token);
         psep = "&&";
     }
-
-    utils::chunked_vector<utils::gcp::storage::object_info> result;
 
     co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_ONLY
@@ -965,6 +973,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
             }
 
             pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
+            pager.done = pager.token.empty();
 
             for (auto& item : items->GetArray()) {
                 object_info info = create_info(item);
@@ -989,7 +998,7 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, 
 
     gcp_storage.debug("Delete object {}:{}", bucket, object_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, object_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, seastar::http::internal::url_encode(object_name));
 
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_WRITE
@@ -1026,7 +1035,11 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, 
 
     gcp_storage.debug("Move object {}:{} -> {}", bucket, object_name, new_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}", bucket, object_name, new_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}"
+        , bucket
+        , seastar::http::internal::url_encode(object_name)
+        , seastar::http::internal::url_encode(new_name)
+    );
     auto res = co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_WRITE
         , ""s
@@ -1052,7 +1065,12 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, 
 future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in) {
     std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}", bucket, object_name, new_bucket, to_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}"
+        , bucket
+        , seastar::http::internal::url_encode(object_name)
+        , new_bucket
+        , seastar::http::internal::url_encode(to_name)
+    );
     std::string body;
 
     for (;;) {
@@ -1105,7 +1123,7 @@ future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_obje
 
     std::string bucket(bucket_in), object_name(dest_object_name);
 
-    auto path = fmt::format("/storage/v1/b/{}/o/{}/compose", bucket, object_name);
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/compose", bucket, seastar::http::internal::url_encode(object_name));
     auto body = rjson::print(compose);
 
     auto res = co_await _impl->send_with_retry(path
