@@ -682,6 +682,25 @@ static void prepopulate(const raw_cql_test_config& cfg) {
     }
 }
 
+static void wait_for_cql(const raw_cql_test_config& cfg) {
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        try {
+            auto cs = connect(socket_address{net::inet_address{cfg.remote_host}, cfg.port}).get();
+            auto conn = make_connection(std::move(cs), cfg);
+            conn->startup().get();
+            conn->stop().get();
+            return;
+        } catch (...) {
+            // not ready yet
+        }
+        sleep(std::chrono::milliseconds(100)).get();
+        if (attempt >= 100 && attempt % 10 == 0) {
+            std::cout << format("Retrying connect to cql port (attempt {})", attempt+1) << std::endl;
+        }
+    }
+    throw std::runtime_error("Timed out waiting for cql port to become ready");
+}
+
 static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>* as) {
     fmt::print("Running test with config: {}\n", cfg);
     auto cleanup = defer([] {
@@ -694,6 +713,7 @@ static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>*
             });
         }).get();
     });
+    wait_for_cql(cfg);
     if (cfg.workload != "connect") {
         prepopulate(cfg);
     }
