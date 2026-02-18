@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 SUITE_CONFIG_FILENAME = "suite.yaml"
 TEST_CONFIG_FILENAME = "test_config.yaml"
+PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -528,6 +529,7 @@ async def prepare_environment(tempdir_base: pathlib.Path, modes: list[str], gath
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
     prepare_dir(tempdir_base, "*.log", save_log_on_success)
+    prepare_dir(tempdir_base/ PYTEST_TESTS_LOGS_FOLDER, "*.log", save_log_on_success)
     for directory in ['report', 'ldap_instances']:
         full_path_directory = tempdir_base / directory
         prepare_dir(full_path_directory, '*', save_log_on_success)
