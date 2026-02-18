@@ -64,11 +64,11 @@ static const sstring superuser_col_name("super");
 static logging::logger log("auth_service");
 
 class auth_migration_listener final : public ::service::migration_listener {
-    authorizer& _authorizer;
+    service& _service;
     cql3::query_processor& _qp;
 
 public:
-    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
+    explicit auth_migration_listener(service& s, cql3::query_processor& qp) : _service(s),  _qp(qp) {
     }
 
 private:
@@ -92,14 +92,14 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
+        (void)do_with(auth::make_data_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
 
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
@@ -111,9 +111,8 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_data_resource(ks_name, cf_name), mc);
+        (void)do_with(auth::make_data_resource(ks_name, cf_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
@@ -126,9 +125,8 @@ private:
             return;
         }
         // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, function_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name, function_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
@@ -138,9 +136,8 @@ private:
             // in non legacy path revoke is part of schema change statement execution
             return;
         }
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, aggregate_name), mc);
+        (void)do_with(auth::make_functions_resource(ks_name, aggregate_name), ::service::group0_batch::unused(), [this] (auto& r, auto& mc) mutable {
+            return _service.revoke_all(r, mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
@@ -157,7 +154,6 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 }
 
 service::service(
-        utils::loading_cache_config c,
         cache& cache,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
@@ -166,25 +162,17 @@ service::service(
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r,
         maintenance_socket_enabled used_by_maintenance_socket)
-            : _loading_cache_config(std::move(c))
-            , _permissions_cache(nullptr)
-            , _cache(cache)
+            : _cache(cache)
             , _qp(qp)
             , _group0_client(g0)
             , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
-            , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
-            , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
-            , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
+            , _migration_listener(std::make_unique<auth_migration_listener>(*this, qp))
             , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 service::service(
-        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
@@ -193,7 +181,6 @@ service::service(
         maintenance_socket_enabled used_by_maintenance_socket,
         cache& cache)
             : service(
-                      std::move(c),
                       cache,
                       qp,
                       g0,
@@ -257,7 +244,14 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         co_await _role_manager->ensure_superuser_is_created();
     }
     co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
-    _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
+    if (!_used_by_maintenance_socket) {
+        // Maintenance socket mode can't cache permissions because it has
+        // different authorizer. We can't mix cached permissions, they could be
+        // different in normal mode.
+        _cache.set_permission_loader(std::bind(
+                &service::get_uncached_permissions,
+                this, std::placeholders::_1, std::placeholders::_2));
+    }
     co_await once_among_shards([this] {
         _mnotifier.register_listener(_migration_listener.get());
         return make_ready_future<>();
@@ -269,9 +263,7 @@ future<> service::stop() {
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
     return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
-        if (_permissions_cache) {
-            return _permissions_cache->stop();
-        }
+        _cache.set_permission_loader(nullptr);
         return make_ready_future<>();
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
@@ -283,21 +275,8 @@ future<> service::ensure_superuser_is_created() {
     co_await _authenticator->ensure_superuser_is_created();
 }
 
-void service::update_cache_config() {
-    auto db = _qp.db();
-
-    utils::loading_cache_config perm_cache_config;
-    perm_cache_config.max_size = db.get_config().permissions_cache_max_entries();
-    perm_cache_config.expiry = std::chrono::milliseconds(db.get_config().permissions_validity_in_ms());
-    perm_cache_config.refresh = std::chrono::milliseconds(db.get_config().permissions_update_interval_in_ms());
-
-    if (!_permissions_cache->update_config(std::move(perm_cache_config))) {
-        log.error("Failed to apply permissions cache changes. Please read the documentation of these parameters");
-    }
-}
 
 void service::reset_authorization_cache() {
-    _permissions_cache->reset();
     _qp.reset_cache();
 }
 
@@ -322,7 +301,10 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
 }
 
 future<permission_set> service::get_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
-    return _permissions_cache->get(maybe_role, r);
+    if (legacy_mode(_qp) || _used_by_maintenance_socket) {
+        return get_uncached_permissions(maybe_role, r);
+    }
+    return _cache.get_permissions(maybe_role, r);
 }
 
 future<bool> service::has_superuser(std::string_view role_name, const role_set& roles) const {
@@ -445,6 +427,11 @@ future<bool> service::exists(const resource& r) const {
     }
 
     return make_ready_future<bool>(false);
+}
+
+future<> service::revoke_all(const resource& r, ::service::group0_batch& mc) const {
+    co_await _authorizer->revoke_all(r, mc);
+    co_await _cache.prune(r);
 }
 
 future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_passwords) {
@@ -801,7 +788,7 @@ future<> revoke_permissions(
 }
 
 future<> revoke_all(const service& ser, const resource& r, ::service::group0_batch& mc) {
-    return ser.underlying_authorizer().revoke_all(r, mc);
+    return ser.revoke_all(r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(

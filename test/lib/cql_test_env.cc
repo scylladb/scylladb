@@ -1131,11 +1131,6 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(_token_metadata.local().get());
 
-            utils::loading_cache_config perm_cache_config;
-            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
-            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
             const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
@@ -1145,7 +1140,7 @@ private:
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
+            _auth_service.start(std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
 
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());

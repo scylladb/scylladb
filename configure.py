@@ -1276,7 +1276,6 @@ scylla_core = (['message/messaging_service.cc',
                 'auth/passwords.cc',
                 'auth/password_authenticator.cc',
                 'auth/permission.cc',
-                'auth/permissions_cache.cc',
                 'auth/service.cc',
                 'auth/standard_role_manager.cc',
                 'auth/ldap_role_manager.cc',
@@ -1646,6 +1645,7 @@ for t in sorted(perf_tests):
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
+    'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
     'test/boost/batchlog_manager_test.cc',
     'test/boost/cache_algorithm_test.cc',
