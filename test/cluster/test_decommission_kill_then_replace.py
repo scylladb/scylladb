@@ -13,7 +13,6 @@ import pytest
 
 from test.cluster.util import (
     get_topology_coordinator,
-    find_server_by_host_id,
     wait_for_token_ring_and_group0_consistency,
 )
 from test.pylib.manager_client import ManagerClient
@@ -36,7 +35,7 @@ async def test_decommission_kill_then_replace(manager: ManagerClient) -> None:
 
     # Identify the topology coordinator and enable the pause injection there
     coord_host_id = await get_topology_coordinator(manager)
-    coord_srv = await find_server_by_host_id(manager, servers, coord_host_id)
+    coord_srv = await manager.find_server_by_host_id(servers, coord_host_id)
     inj = 'topology_coordinator_pause_before_processing_backlog'
     await manager.api.enable_injection(coord_srv.ip_addr, inj, one_shot=True)
 

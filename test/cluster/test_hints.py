@@ -19,7 +19,7 @@ from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
+from test.cluster.util import get_topology_coordinator, new_test_keyspace
 
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,7 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
 
         async with asyncio.TaskGroup() as tg:
             coord = await get_topology_coordinator(manager)
-            coord_srv = await find_server_by_host_id(manager, [server1, server2, server3], coord)
+            coord_srv = await manager.find_server_by_host_id([server1, server2, server3], coord)
 
             # Make sure topology coordinator will pause right after streaming
             logger.info("Enabling injection on the topology coordinator that will tell it to pause streaming")

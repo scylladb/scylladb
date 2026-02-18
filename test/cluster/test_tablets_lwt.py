@@ -390,7 +390,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
             replaced_id=servers[0].server_id,
             reuse_ip_addr=False,
             use_host_id=True,
-            wait_replaced_dead=True
+            wait_dead=True
         )
         servers += [await manager.server_add(replace_cfg=replace_cfg,
                                              cmdline=cmdline,

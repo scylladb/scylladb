@@ -615,7 +615,7 @@ async def remove_node(manager: ManagerClient,
     await manager.remove_node(
         initiator_id=coordinator.server_id,
         server_id=target.server_id,
-        wait_removed_dead=False,
+        wait_dead=False,
         timeout=TOPOLOGY_TIMEOUT,
     )
 

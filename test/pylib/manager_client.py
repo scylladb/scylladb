@@ -19,7 +19,7 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
+from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
 from cassandra.cluster import Session as CassandraSession, \
@@ -310,6 +310,15 @@ class ManagerClient:
             result[await self.get_host_id(s.server_id)] = s
         return result
 
+    async def find_server_by_host_id(self, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
+        for s in servers:
+            try:
+                if await self.get_host_id(s.server_id) == host_id:
+                    return s
+            except Exception:
+                logger.warning(f"Failed to get host ID of server {s} while looking for a server with host ID {host_id}")
+        raise Exception(f"Host ID {host_id} not found in {servers}")
+
     async def starting_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of servers currently
            starting. Can be useful for killing (with server_stop()) a server
@@ -481,6 +490,23 @@ class ManagerClient:
         """Get the total size of all sstable files for the given table"""
         return await self.client.get_json(f"/cluster/server/{server_id}/sstables_disk_usage", params={"keyspace": keyspace, "table": table})
 
+    async def _get_ignored_ip_addresses(self, ignore_dead: List[IPAddress | HostID]) -> List[IPAddress]:
+        """
+        Get IP addresses of nodes ignored in the replace and removenode operations.
+
+        FIXME: Simplify the code once we disallow specifying ignored nodes through IP addresses in Scylla.
+        """
+        servers = await self.all_servers()
+        ignored_ips = []
+        for ignored in ignore_dead:
+            # IPAddress and HostID are both NewType over str, so isinstance() cannot distinguish them at runtime.
+            if '.' in ignored:
+                ignored_ips.append(ignored)
+            else:
+                ignored_server = await self.find_server_by_host_id(servers, ignored)
+                ignored_ips.append(ignored_server.ip_addr)
+        return ignored_ips
+
     def _create_server_add_data(self,
                                 replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
@@ -544,14 +570,15 @@ class ManagerClient:
                 expected_server_up_state,
             )
 
-            # If we replace, we should wait until other nodes see the node being
-            # replaced as dead because the replace operation can be rejected if
-            # the node being replaced is considered alive. However, we sometimes
-            # do not want to wait, for example, when we test that replace fails
-            # as expected. Therefore, we make waiting optional and default.
-            if replace_cfg and replace_cfg.wait_replaced_dead:
+            # We should wait until all running nodes see the node being replaced
+            # and all ignored nodes as dead. Replace could be rejected otherwise.
+            # We make this waiting default and optional to allow testing expected
+            # replace failures.
+            if replace_cfg and replace_cfg.wait_dead:
                 replaced_ip = await self.get_host_ip(replace_cfg.replaced_id)
-                await self.others_not_see_server(replaced_ip)
+                ignored_ips = await self._get_ignored_ip_addresses(replace_cfg.ignore_dead_nodes)
+                dead_ips = [replaced_ip] + ignored_ips
+                await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=timeout)
@@ -622,7 +649,7 @@ class ManagerClient:
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
                           expected_error: str | None = None,
-                          wait_removed_dead: bool = True,
+                          wait_dead: bool = True,
                           timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         if expected_error is not None:
@@ -630,14 +657,15 @@ class ManagerClient:
 
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
 
-        # If we remove a node, we should wait until other nodes see it as dead
-        # because the removenode operation can be rejected if the node being
-        # removed is considered alive. However, we sometimes do not want to
-        # wait, for example, when we test that removenode fails as expected.
-        # Therefore, we make waiting optional and default.
-        if wait_removed_dead:
+        # We should wait until all running nodes see the node being removed
+        # and all ignored nodes as dead. Removenode could be rejected
+        # otherwise. We make this waiting default and optional to allow testing
+        # expected removenode failures.
+        if wait_dead:
             removed_ip = await self.get_host_ip(server_id)
-            await self.others_not_see_server(removed_ip)
+            ignored_ips = await self._get_ignored_ip_addresses(ignore_dead)
+            dead_ips = [removed_ip] + ignored_ips
+            await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
         data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
@@ -803,7 +831,7 @@ class ManagerClient:
     async def servers_see_each_other(self, servers: List[ServerInfo], interval: float = 45.):
         """Wait till all servers see all other servers in the list"""
         others = [self.server_sees_others(srv.server_id, len(servers) - 1, interval) for srv in servers]
-        await asyncio.gather(*others)
+        await gather_safely(*others)
 
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                            interval: float = 45.):
@@ -817,8 +845,7 @@ class ManagerClient:
     async def others_not_see_server(self, server_ip: IPAddress, interval: float = 45.):
         """Wait till a server is seen as dead by all other running servers in the cluster"""
         others_ips = [srv.ip_addr for srv in await self.running_servers() if srv.ip_addr != server_ip]
-        await asyncio.gather(*(self.server_not_sees_other_server(ip, server_ip, interval)
-                               for ip in others_ips))
+        await gather_safely(*(self.server_not_sees_other_server(ip, server_ip, interval) for ip in others_ips))
 
     async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
         logger.debug("ManagerClient getting log filename for %s", server_id)

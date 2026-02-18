@@ -92,13 +92,6 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
     return await manager.api.get_raft_leader(host_address)
 
 
-async def find_server_by_host_id(manager: ManagerClient, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
-    for s in servers:
-        if await manager.get_host_id(s.server_id) == host_id:
-            return s
-    raise Exception(f"Host ID {host_id} not found in {servers}")
-
-
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
     """Ensure that the normal token owners and group 0 members match
        according to each currently running server.

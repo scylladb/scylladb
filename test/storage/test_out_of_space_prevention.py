@@ -15,7 +15,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from typing import Callable
 
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace, new_test_table
+from test.cluster.util import get_topology_coordinator, new_test_keyspace, new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count
 from test.pylib.util import Host
@@ -301,7 +301,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
                         mark, _ = await log.wait_for("repair - Drained", from_mark=mark)
 
                     coord = await get_topology_coordinator(manager)
-                    coord_serv = await find_server_by_host_id(manager, servers, coord)
+                    coord_serv = await manager.find_server_by_host_id(servers, coord)
                     coord_log = await manager.server_open_log(coord_serv.server_id)
                     coord_mark = await coord_log.mark()
 
@@ -434,7 +434,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     logger.info("Trigger split in table and restart the node")
                     coord = await get_topology_coordinator(manager)
                     logger.info(f"Topology coordinator is {coord}")
-                    coord_serv = await find_server_by_host_id(manager, servers, coord)
+                    coord_serv = await manager.find_server_by_host_id(servers, coord)
                     coord_log = await manager.server_open_log(coord_serv.server_id)
 
                     await cql.run_async(f"ALTER TABLE {cf} WITH tablets = {{'min_tablet_count': 2}};")
@@ -476,7 +476,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 coord = await get_topology_coordinator(manager)
-                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_serv = await manager.find_server_by_host_id(servers, coord)
                 coord_log = await manager.server_open_log(coord_serv.server_id)
 
                 async def run_split():

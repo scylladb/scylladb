@@ -22,7 +22,7 @@ async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
     # Both errors contain the expected string below.
     for srv in servers:
         replace_cfg = ReplaceConfig(replaced_id = srv.server_id, reuse_ip_addr = False,
-                                    use_host_id = False, wait_replaced_dead = False)
+                                    use_host_id = False, wait_dead = False)
         await manager.server_add(replace_cfg=replace_cfg,
                                  property_file=srv.property_file(),
                                  expected_error="the topology coordinator rejected request to join the cluster")
