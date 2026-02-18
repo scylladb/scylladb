@@ -36,7 +36,6 @@ constexpr std::string_view password_authenticator_name("org.apache.cassandra.aut
 
 // name of the hash column.
 static constexpr std::string_view SALTED_HASH = "salted_hash";
-static constexpr std::string_view DEFAULT_USER_NAME = meta::DEFAULT_SUPERUSER_NAME;
 static const sstring DEFAULT_USER_PASSWORD = sstring(meta::DEFAULT_SUPERUSER_NAME);
 
 static logging::logger plogger("password_authenticator");
@@ -47,7 +46,7 @@ static std::string_view get_config_value(std::string_view value, std::string_vie
     return value.empty() ? def : value;
 }
 std::string password_authenticator::default_superuser(const db::config& cfg) {
-    return std::string(get_config_value(cfg.auth_superuser_name(), DEFAULT_USER_NAME));
+    return std::string(get_config_value(cfg.auth_superuser_name(), meta::DEFAULT_SUPERUSER_NAME));
 }
 
 password_authenticator::~password_authenticator() {
@@ -270,7 +269,7 @@ future<> password_authenticator::stop() {
 db::consistency_level password_authenticator::consistency_for_user(std::string_view role_name) {
     // TODO: this is plain dung. Why treat hardcoded default special, but for example a user-created
     // super user uses plain LOCAL_ONE?
-    if (role_name == DEFAULT_USER_NAME) {
+    if (role_name == meta::DEFAULT_SUPERUSER_NAME) {
         return db::consistency_level::QUORUM;
     }
     return db::consistency_level::LOCAL_ONE;
