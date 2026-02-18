@@ -92,6 +92,13 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
     return await manager.api.get_raft_leader(host_address)
 
 
+async def get_topology_version(cql: Session, host: Host) -> int:
+    rows = await cql.run_async(
+        "select version from system.topology where key = 'topology'",
+        host=host)
+    return rows[0].version
+
+
 async def find_server_by_host_id(manager: ManagerClient, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
     for s in servers:
         if await manager.get_host_id(s.server_id) == host_id:

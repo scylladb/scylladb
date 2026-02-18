@@ -410,7 +410,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return service::topology::parse_replaced_node(req_param);
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, raft_topology_cmd cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
@@ -426,7 +426,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     };
 
-    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
+    future<node_to_work_on> exec_direct_command(node_to_work_on&& node, raft_topology_cmd cmd) {
         auto id = node.id;
         release_node(std::move(node));
         const auto cmd_index = ++_last_cmd_index;
@@ -436,7 +436,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    future<> exec_global_command_helper(auto nodes, raft_topology_cmd cmd) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
@@ -453,7 +453,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     };
 
     future<group0_guard> exec_global_command(
-            group0_guard guard, const raft_topology_cmd& cmd,
+            group0_guard guard, raft_topology_cmd cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
@@ -1208,13 +1208,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr) {
+    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr, bool drain_all_nodes = false) {
         auto version = _topo_sm._topology.version;
         bool drain_failed = false;
         try {
             guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
         } catch (...) {
             rtlogger.warn("drain rpc failed, proceed to fence old writes: {}", std::current_exception());
+            if (drain_all_nodes) {
+                throw;
+            }
             drain_failed = true;
         }
         if (drain_failed) {
@@ -1240,7 +1243,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.ignored_nodes);
+
+        // Let x be the current topology version, post-conditions of this barrier:
+        // * there are no coordinators with versions < x and no such coordinators
+        //   are possible in the future
+        // * no replicas are currently executing requests with versions < x - 1
+        //   and no new such requests are possible in the future
+        //     Why? The barrier_and_drain handler runs group0.read_barrier() first,
+        //     which guarantees that the new version and the previous fence_version are
+        //     published on all shards before we drain them. After that we drain all
+        //     requests with versions < x ==> no current and future requests are possible
+        //     with versions < x - 1 since the fence for x - 1 is set. Future stale
+        //     requests with version x - 1 are sill possible until the next
+        //     global barrier.
+        // * a quorum of replicas doesn't allow new requests with versions < x,
+        //   but there could be arbitrary number of already running read or mutation
+        //   requests with version x - 1 on those replicas
+        // * some replicas could still be accepting new requests with versions == x - 1
+
+        bool* const fenced = nullptr;
+        const auto drain_all_nodes = true;        
+        return global_token_metadata_barrier(std::move(guard), 
+            _topo_sm._topology.ignored_nodes,
+            fenced,
+            drain_all_nodes);
     }
 
     // Represents a two-state state machine which changes monotonically
