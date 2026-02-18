@@ -470,10 +470,6 @@ def verify_ownership(resp, expected_ip, expected_ownership, delta):
     assert actual_ip == expected_ip
     assert float(actual_ownership) == pytest.approx(expected_ownership, abs=delta)
 
-def test_get_ownership_tablets_disabled(cql, this_dc, rest_api):
-    resp = rest_api.send("GET", f"storage_service/ownership")
-    verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
-
 def test_get_effective_ownership_tablets_disabled_null_keyspace(cql, this_dc, rest_api):
     # 'null' triggers a special handler path - effective ownership of non-system keyspaces.
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:

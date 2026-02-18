@@ -13,6 +13,7 @@ import time
 from test import pylib
 from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import HTTPError
 from test.pylib.random_tables import RandomTables
 from test.pylib.scylla_cluster import gather_safely
 from test.cluster.util import check_token_ring_and_group0_consistency,            \
@@ -142,16 +143,33 @@ async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables)
 @pytest.mark.asyncio
 async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ManagerClient):
     servers = await manager.running_servers()
-    assert len(servers) >= 3
+    # Note: Add a second node in rack3 to ensure that when we remove a node
+    # from that rack, we do not remove the whole rack. The removal of a rack
+    # may not be possible if there are tablet-enabled system keyspaces that use
+    # that rack and would become RF-rack-invalid.
+    await manager.servers_add(1, property_file=servers[2].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 4
 
     await manager.server_stop_gracefully(servers[2].server_id)
 
-    try:
-        await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id),
-                manager.remove_node(servers[1].server_id, servers[2].server_id)])
-    except Exception as e: 
-        logger.info(f"exception raised due to concurrent remove node requests: {e}")
-    else:
+    removenode0_task, removenode1_task = await asyncio.gather(
+        manager.remove_node(servers[0].server_id, servers[2].server_id),
+        manager.remove_node(servers[1].server_id, servers[2].server_id),
+        return_exceptions=True
+    )
+    succeeded_tasks = 0
+    for task in (removenode0_task, removenode1_task):
+        if (isinstance(task, HTTPError)
+                and task.code == 500
+                and task.message.find("Removenode failed. Concurrent request for removal already in progress") != -1):
+            logger.info(f"exception raised due to concurrent remove node requests: {task}")
+        elif isinstance(task, Exception):
+            logger.error(f"unexpected exception raised during remove node: {task}")
+            raise task
+        else:
+            succeeded_tasks += 1
+    if succeeded_tasks == 2:
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
 
 @pytest.mark.asyncio
@@ -162,7 +180,11 @@ async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: Manag
 
     """
     servers = await manager.running_servers()
-    await manager.servers_add(2, property_file=servers[0].property_file())
+    # Note: Add a second node in rack2 and rack3 to ensure that when we remove
+    # nodes from these racks, we do not remove the whole racks. The removal of
+    # racks may not be possible if there are tablet-enabled system keyspaces
+    # that use these racks and would become RF-rack-invalid.
+    await manager.servers_add(2, property_file=[servers[1].property_file(), servers[2].property_file()])
     servers = await manager.running_servers()
     assert len(servers) >= 5
 
@@ -182,7 +204,11 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
 
     """
     servers = await manager.running_servers()
-    await manager.servers_add(2, property_file=servers[0].property_file())
+    # Note: Add a second node in rack2 and rack3 to ensure that when we remove
+    # nodes from these racks, we do not remove the whole racks. The removal of
+    # racks may not be possible if there are tablet-enabled system keyspaces
+    # that use these racks and would become RF-rack-invalid.
+    await manager.servers_add(2, property_file=[servers[1].property_file(), servers[2].property_file()])
     servers = await manager.running_servers()
     assert len(servers) >= 5
 

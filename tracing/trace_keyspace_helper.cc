@@ -213,7 +213,19 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
 future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migration_manager& mm) {
     _qp_anchor = &qp;
     _mm_anchor = &mm;
-    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+
+    std::optional<unsigned int> initial_tablets;
+    std::optional<db::tablet_options> per_table_tablet_options;
+    auto rf = std::to_string(RF_GOAL_PER_DC);
+
+    if (qp.db().features().tablets) {
+        initial_tablets.emplace(0);
+        auto& options = per_table_tablet_options.emplace();
+        options.min_per_shard_tablet_count = 1;
+        rf = "1"; // start with RF=1 if tablets are enabled, let topology coordinator automatically adjust it
+    }
+
+    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.NetworkTopologyStrategy", rf, _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx }, initial_tablets, per_table_tablet_options);
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
