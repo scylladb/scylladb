@@ -13,7 +13,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for_first_completed
 from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace, wait_for_cql_and_get_hosts, create_new_test_keyspace, reconnect_driver
+from test.topology.util import new_test_keyspace, wait_for_cql_and_get_hosts, create_new_test_keyspace, reconnect_driver, \
+    get_topology_coordinator, find_server_by_host_id
 from test.topology_custom.test_tablets2 import safe_rolling_restart
 from contextlib import nullcontext as does_not_raise
 import time
@@ -292,6 +293,56 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
         # check that we can remove all replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0}}")
 
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    async def alter_keyspace(new_rf):
+        await cql.run_async(f"alter keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', {new_rf}}};")
+
+    injection = "rebuild_repair_stage_fail"
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": False, "error_injections_at_startup": [injection]}
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--smp=2',
+    ]
+
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
+    await cql.run_async("create table ks1.t (pk int primary key);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk) VALUES ({pk});") for pk in range(16)])
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log = await manager.server_open_log(coord_serv.server_id)
+    mark = await log.mark()
+
+    await alter_keyspace("'dc1': 2")
+
+    await log.wait_for('updating topology state: Retry failed tablet rebuilds', from_mark=mark)
+
+    failed = False
+    try:
+        await alter_keyspace("'dc1': 3")
+    except Exception:
+        failed = True
+    assert failed
+
+    [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
+
+    log1 = await manager.server_open_log(coord_serv.server_id)
+    mark1 = await log1.mark()
+
+    await log1.wait_for('No failed RF change rebuilds to retry', from_mark=mark1)
+
+    await manager.api.quiesce_topology(coord_serv.ip_addr)
+
+    await alter_keyspace("'dc1': 3")
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
