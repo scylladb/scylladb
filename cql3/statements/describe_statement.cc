@@ -23,6 +23,7 @@
 #include "index/vector_index.hh"
 #include "schema/schema.hh"
 #include "service/client_state.hh"
+#include "service/paxos/paxos_state.hh"
 #include "types/types.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_statement.hh"
@@ -330,6 +331,19 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
                 *table_desc.create_statement);
 
         table_desc.create_statement = std::move(os).to_managed_string();
+    } else if (service::paxos::paxos_store::try_get_base_table(name)) {
+        // Paxos state table is internally managed by Scylla and it shouldn't be exposed to the user.
+        // The table is allowed to be described as a comment to ease administrative work but it's hidden from all listings.
+        fragmented_ostringstream os{};
+
+        fmt::format_to(os.to_iter(),
+                "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                "   A paxos state table is created automatically when enabling LWT on a base table.\n"
+                "\n{}\n"
+                "*/",
+                *table_desc.create_statement);
+
+        table_desc.create_statement = std::move(os).to_managed_string();
     }
     result.push_back(std::move(table_desc));
 
@@ -364,7 +378,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
 future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto& replica_db = db.real_database();
     auto tables = ks->tables() | std::views::filter([&replica_db] (const schema_ptr& s) {
-        return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name());
+        return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name()) && !service::paxos::paxos_store::try_get_base_table(s->cf_name());
     }) | std::ranges::to<std::vector<schema_ptr>>();
     std::ranges::sort(tables, std::ranges::less(), std::mem_fn(&schema::cf_name));
 
