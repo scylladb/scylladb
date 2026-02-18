@@ -687,6 +687,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_PULL_SNAPSHOT:
     case messaging_verb::NOTIFY_BANNED:
     case messaging_verb::DIRECT_FD_PING:
+    case messaging_verb::RAFT_READ_BARRIER:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.

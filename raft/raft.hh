@@ -644,6 +644,10 @@ public:
         const std::vector<config_member>& add,
         const std::vector<server_id>& del) = 0;
 
+    // Forward a read barrier request to another node.
+    // Blocks until the barrier finishes.
+    virtual future<> send_read_barrier(server_id id) = 0;
+
     // When a configuration is changed this function is called with the
     // info about the changes. It is also called when a new server
     // starts and its configuration is loaded from raft storage.

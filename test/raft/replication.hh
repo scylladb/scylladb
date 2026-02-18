@@ -773,6 +773,10 @@ public:
         return _net[id]->_client->execute_modify_config(_id, add, del, nullptr);
     }
 
+    future<> send_read_barrier(raft::server_id id) override {
+        co_return;
+    }
+
     void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
         _known_peers.merge(add);
         _servers_added += add.size();

@@ -805,6 +805,10 @@ public:
         });
     }
 
+    virtual future<> send_read_barrier(raft::server_id dst) override {
+        co_return;
+    }
+
     future<> ping(raft::server_id dst, abort_source& as) {
         co_await with_gate([&] () -> future<> {
             auto id = new_reply_id();
