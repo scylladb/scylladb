@@ -160,10 +160,12 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        auto id = raft::snapshot_id::create_random_id();
-        SCYLLA_ASSERT(_snapshots.emplace(id, _val).second);
-        tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
-        co_return id;
+        return with_gate(_gate, [this] () -> future<raft::snapshot_id> {
+            auto id = raft::snapshot_id::create_random_id();
+            SCYLLA_ASSERT(_snapshots.emplace(id, _val).second);
+            tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
+            co_return id;
+        });
     }
 
     void drop_snapshot(raft::snapshot_id id) override {
@@ -171,11 +173,13 @@ public:
     }
 
     future<> load_snapshot(raft::snapshot_id id) override {
-        auto it = _snapshots.find(id);
-        SCYLLA_ASSERT(it != _snapshots.end()); // dunno if the snapshot can actually be missing
-        tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
-        _val = it->second;
-        co_return;
+        return with_gate(_gate, [this, id] () -> future<> {
+            auto it = _snapshots.find(id);
+            SCYLLA_ASSERT(it != _snapshots.end()); // dunno if the snapshot can actually be missing
+            tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
+            _val = it->second;
+            co_return;
+        });
     }
 
     future<> abort() override {
