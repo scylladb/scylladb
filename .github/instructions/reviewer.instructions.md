@@ -614,6 +614,56 @@ This would avoid an extra allocation and copy.
 
 ---
 
+## Review Output Format
+
+**IMPORTANT: Keep reviews concise and actionable**
+
+### Summary (Required)
+Provide a **single sentence** summarizing the most critical issue(s), **only if confident**:
+- ✅ "P0: This PR blocks the reactor with `.get()` calls in 3 locations - must use `co_await` instead"
+- ✅ "P1: Missing error handling for null pointer in `process_node()` - add `find_node()` check"
+- ✅ "No critical issues found. Minor: Consider pre-allocating vector in hot path (line 42)"
+
+**If uncertain or no major issues:** Skip the summary, go directly to specific comments.
+
+### Detailed Comments (As Needed)
+- Focus on P0/P1 issues
+- Be specific with file/line references
+- Provide concrete fix suggestions
+- Avoid long explanations of "why" unless critical for correctness
+
+### What to Avoid
+❌ **Long introductions** explaining what you're about to review  
+❌ **Restating the obvious** ("This PR adds feature X...")  
+❌ **Walls of text** - people will skip them  
+❌ **Explaining your methodology** - just provide findings  
+❌ **Academic-style reviews** - this is engineering, not a thesis defense
+
+### Example Good Review
+```
+P0: Blocks reactor at service.cc:123 - replace `future.get()` with `co_await future`
+
+P1: Missing null check at topology.cc:45 - use `find_node()` instead of `get_node()`
+
+nit: Line 67 - missing space after comma
+```
+
+### Example Bad Review (Too Verbose)
+```
+## Comprehensive Analysis
+
+I have performed a thorough examination of this pull request, analyzing 
+the changes across multiple dimensions including correctness, performance, 
+and maintainability. Let me walk you through my findings...
+
+### Background
+This PR introduces functionality that...
+
+[3 more paragraphs of context that nobody will read]
+```
+
+---
+
 ## Reviewer Tone Guidelines
 
 ### DO: Be Specific and Educational
