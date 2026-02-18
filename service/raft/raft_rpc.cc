@@ -148,6 +148,11 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
     return two_way_rpc(sloc::current(), id, std::move(l));
 }
 
+future<> raft_rpc::send_read_barrier(raft::server_id id) {
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_barrier(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l));
+}
+
 future<> raft_rpc::abort() {
     return _shutdown_gate.close();
 }

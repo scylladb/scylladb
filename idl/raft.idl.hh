@@ -112,6 +112,7 @@ verb [[with_client_info, with_timeout, one_way]] raft_read_quorum_reply (raft::g
 verb [[with_client_info, with_timeout]] raft_execute_read_barrier_on_leader (raft::group_id, raft::server_id from_id, raft::server_id dst_id) -> raft::read_barrier_reply;
 verb [[with_client_info, with_timeout]] raft_add_entry (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd [[ref]]) -> raft::add_entry_reply;
 verb [[with_client_info, with_timeout]] raft_modify_config (raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::config_member> add [[ref]], std::vector<raft::server_id> del [[ref]]) -> raft::add_entry_reply;
+verb [[with_client_info, with_timeout]] raft_read_barrier (raft::group_id, raft::server_id from_id, raft::server_id dst_id);
 
 } // namespace raft
 
@@ -130,5 +131,6 @@ struct direct_fd_ping_reply {
 };
 
 verb [[with_client_info, with_timeout, cancellable]] direct_fd_ping (raft::server_id dst_id) -> service::direct_fd_ping_reply;
+
 
 } // namespace service
