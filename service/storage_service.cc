@@ -7323,11 +7323,11 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
     const locator::host_id this_host = _db.local().get_token_metadata().get_my_id();
 
-    uint64_t sum_tablet_sizes = 0;
+    std::vector<uint64_t> tablet_sizes_per_shard(smp::count);
 
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
-    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &sum_tablet_sizes] (replica::database& db) -> future<locator::load_stats> {
+    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &tablet_sizes_per_shard] (replica::database& db) -> future<locator::load_stats> {
         locator::load_stats load_stats{};
         auto& tables_metadata = db.get_tables_metadata();
 
@@ -7365,7 +7365,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
             locator::combined_load_stats combined_ls { table->table_load_stats(tablet_filter) };
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
-            sum_tablet_sizes += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+            tablet_sizes_per_shard[this_shard_id()] += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
 
             co_await coroutine::maybe_yield();
         }
@@ -7384,6 +7384,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     if (config_capacity != 0) {
         tls.effective_capacity = config_capacity;
     } else {
+        const uint64_t sum_tablet_sizes = std::reduce(tablet_sizes_per_shard.begin(), tablet_sizes_per_shard.end());
         tls.effective_capacity = si.available + sum_tablet_sizes;
     }
 
