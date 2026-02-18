@@ -6,6 +6,14 @@ applyTo: "**/*.{cc,hh}"
 
 **Important:** Always match the style and conventions of existing code in the file and directory.
 
+## External C++ Resources
+
+Follow standard C++ best practices from:
+- **[ISO C++ FAQ](https://isocpp.org/faq)** - Language features, idioms, and common questions
+- **[C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)** - Modern C++ best practices
+
+**Note:** ScyllaDB has specific requirements (Seastar async patterns, performance constraints) that may supersede general guidelines. ScyllaDB-specific conventions documented here take precedence.
+
 ## Memory Management
 - Prefer stack allocation whenever possible
 - Use `std::unique_ptr` by default for dynamic allocations

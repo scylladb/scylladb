@@ -16,6 +16,21 @@ This document captures common review patterns, feedback themes, and critical che
 - 169 high-activity PRs (30+ comments) analyzed in depth
 - 25+ distinct review patterns identified
 
+## External C++ Resources
+
+This review skill is supplemented by standard C++ best practices:
+
+- **[ISO C++ FAQ](https://isocpp.org/faq)** - Comprehensive C++ guidance on language features, best practices, and common pitfalls
+- **[C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)** - Modern C++ best practices covering resource management, interfaces, functions, classes, and more
+
+When reviewing C++ code, consider these resources alongside ScyllaDB-specific patterns documented here. The Core Guidelines are particularly relevant for:
+- Resource management (RAII, smart pointers, lifetimes)
+- Function design (parameter passing, error handling)
+- Class design (constructors, operators, interfaces)
+- Concurrency (though ScyllaDB uses Seastar patterns instead of std::thread)
+
+**Note:** ScyllaDB has specific conventions (e.g., Seastar async patterns, `seastar::lw_shared_ptr`) that may differ from general C++ guidelines. ScyllaDB-specific patterns take precedence.
+
 ## Review Priority Levels
 
 - **P0 (CRITICAL):** Must be fixed - can cause crashes, data loss, or severe performance issues
