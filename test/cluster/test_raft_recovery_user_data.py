@@ -72,6 +72,15 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
     dead_hosts = await wait_for_cql_and_get_hosts(cql, dead_servers, time.time() + 60)
 
+    # When table audit is enabled, Scylla creates the "audit" keyspace with
+    # NetworkTopologyStrategy. During remove_node, streaming fails for the audit keyspace
+    # with "zero replica after the removal" when all nodes from dc2 are removed.
+    # By setting RF=3 only in dc1, we ensure the audit data stays on the surviving nodes.
+    # Only alter if the audit keyspace exists (it might not exist if audit is disabled).
+    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+    if result:
+        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
+
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
 

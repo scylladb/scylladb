@@ -56,5 +56,8 @@ async def test_table_desc_read_barrier(manager: ManagerClient) -> None:
             await read_barrier(manager.api, servers[0].ip_addr)
 
             # verify that there is no schema difference after the read barrier
-            desc_schema = [await cql.run_async("DESC SCHEMA", host=h) for h in hosts]
+            # Sort results by (keyspace_name, type, name) to ensure consistent ordering
+            # since DESC SCHEMA may return results in different order on different nodes
+            desc_schema = [sorted(await cql.run_async("DESC SCHEMA", host=h),
+                                  key=lambda r: (r.keyspace_name, r.type, r.name)) for h in hosts]
             assert desc_schema[0] == desc_schema[1]

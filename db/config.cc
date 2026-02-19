@@ -1535,13 +1535,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
 
-    , audit(this, "audit", value_status::Used, "none",
+    , audit(this, "audit", value_status::Used, "table",
         "Controls the audit feature:\n"
         "\n"
         "\tnone   : No auditing enabled.\n"
         "\tsyslog : Audit messages sent to Syslog.\n"
         "\ttable  : Audit messages written to column family named audit.audit_log.\n")
-    , audit_categories(this, "audit_categories", liveness::LiveUpdate, value_status::Used, "DCL,DDL,AUTH", "Comma separated list of operation categories that should be audited.")
+    , audit_categories(this, "audit_categories", liveness::LiveUpdate, value_status::Used, "DCL,AUTH,ADMIN", "Comma separated list of operation categories that should be audited.")
     , audit_tables(this, "audit_tables", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of table names (<keyspace>.<table>) that will be audited.")
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")

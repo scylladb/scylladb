@@ -73,6 +73,17 @@ Procedure
 
       cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
 
+   .. note::
+
+      If table audit is enabled, the ``audit`` keyspace is automatically created with ``NetworkTopologyStrategy``.
+      You must also alter the ``audit`` keyspace to remove replicas from the decommissioned data-center. For example:
+
+      .. code-block:: shell
+
+         cqlsh> ALTER KEYSPACE audit WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
+
+      Failure to do so will result in decommission errors such as "zero replica after the removal".
+
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
    Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
 
