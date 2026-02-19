@@ -727,7 +727,7 @@ void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) 
         // FIXME use write_unaligned after it's merged.
         write_unaligned<T>(p, val);
     } else if (out.size_bytes() >= sizeof(T)) {
-        write_fragmented(out, std::string_view(reinterpret_cast<const char*>(&val), sizeof(T)));
+        write_fragmented(out, single_fragmented_view(bytes_view(reinterpret_cast<const bytes::value_type*>(&val), sizeof(T))));
     } else {
         on_internal_error(tlogger, format("write_simple: attempted write of size {} to buffer of size {}", sizeof(T), out.size_bytes()));
     }
