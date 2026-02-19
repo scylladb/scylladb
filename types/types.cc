@@ -266,8 +266,11 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-int64_t timestamp_from_string(std::string_view s) {
+int64_t timestamp_from_string(std::string_view sv) {
     try {
+        // std::string_view is not guaranteed to be null-terminated, but std::stroll() below expects this.
+        // Copy into a std::string to ensure null-termination.
+        auto s = std::string(sv);
         std::string str;
         str.resize(s.size());
         std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -276,8 +279,8 @@ int64_t timestamp_from_string(std::string_view s) {
         }
 
         char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
+        auto v = std::strtoll(s.data(), &end, 10);
+        if (end == s.data() + s.size()) {
             return v;
         }
 
@@ -317,9 +320,9 @@ int64_t timestamp_from_string(std::string_view s) {
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
     } catch (const marshal_exception& me) {
         throw marshal_exception(
-            seastar::format("unable to parse date '{}': {}", s, me.what()));
+            seastar::format("unable to parse date '{}': {}", sv, me.what()));
     } catch (...) {
-        throw marshal_exception(seastar::format("unable to parse date '{}': {}", s, std::current_exception()));
+        throw marshal_exception(seastar::format("unable to parse date '{}': {}", sv, std::current_exception()));
     }
 }
 
