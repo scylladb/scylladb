@@ -20,6 +20,7 @@
 #include "tasks/task_manager.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
+#include <seastar/core/condition-variable.hh>
 
 using namespace seastar;
 
@@ -122,6 +123,9 @@ public:
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 
     future<> disable_all_operations();
+
+    // Must be called on shard 0
+    void schedule_expiration(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag);
 private:
     config _config;
     sharded<replica::database>& _db;
@@ -130,6 +134,16 @@ private:
     seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
     sstables::storage_manager& _storage_manager;
+    condition_variable _expiration_cond;
+
+    struct expiration_info {
+        gc_clock::time_point expires_at;
+        sstring ks_name;
+        sstring table_name;
+        sstring tag;
+    };
+    std::vector<expiration_info> _expiration_queue;
+    future<> _delete_expired_snapshots = make_ready_future<>();
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
@@ -155,6 +169,8 @@ private:
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
     future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    future<> delete_expired_snapshots();
 };
 
 }

@@ -14,6 +14,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/bitops.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/file.hh>
 
 #undef SEASTAR_TESTING_MAIN
@@ -781,6 +782,14 @@ SEASTAR_THREAD_TEST_CASE(test_auto_snapshot_ttl) {
     std::string table_name = "test";
     size_t num_keys = 100;
     do_with_some_data_in_thread({table_name}, [&] (cql_test_env& e) {
+        sharded<db::snapshot_ctl> sc;
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        auto stop_sc = deferred_stop(sc);
+        e.local_db().plug_snapshot_ctl(sc.local());
+        auto unplug_sc = deferred_action([&] () noexcept {
+            e.local_db().unplug_snapshot_ctl();
+        });
+
         auto min_time = gc_clock::now();
         take_snapshot(e, ks_name, table_name).get();
 
@@ -814,6 +823,16 @@ SEASTAR_THREAD_TEST_CASE(test_auto_snapshot_ttl) {
 
         const auto& topology = e.local_db().get_token_metadata().get_topology();
         validate_manifest(topology, snapshot_dir, in_snapshot_dir, min_time, tablets_enabled, ttl).get();
+
+        // Wait for snapshot garbage collection after expiry, polling for directory removal
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds((ttl + 10) * 1s);
+        sleep(ttl * 1s).get();
+        while (file_exists(snapshot_dir.native()).get()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                BOOST_FAIL(fmt::format("Snapshot directory {} still exists after waiting for TTL expiry", snapshot_dir));
+            }
+            sleep(100ms).get();
+        }
     }, create_mvs, db_cfg_ptr, num_keys).get();
 }
 
