@@ -111,14 +111,14 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         }
         const auto [ts, term] = get<raft_server::timestamp_with_term>(disposition);
 
+        utils::chunked_vector<mutation> muts {mutation_gen(ts)};
+        logger.debug("mutate(): add_entry({}), term {}", muts, term);
         const raft_command command {
-            .mutation{mutation_gen(ts)}
+            .mutations{muts.begin(), muts.end()}
         };
         raft::command raft_cmd;
         ser::serialize(raft_cmd, command);
 
-        logger.debug("mutate(): add_entry({}), term {}",
-            command.mutation.pretty_printer(schema), term);
         try {
             co_await op.raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
