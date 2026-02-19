@@ -113,7 +113,7 @@ class api_handler : public handler_base {
     static constexpr const char* REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle,
-                const db::config& config) : _response_compressor(config), _f_handle(
+                const db::config& config) : _config(config), _response_compressor(config), _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
@@ -159,13 +159,26 @@ public:
             std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         handle_CORS(*req, *rep, false);
         return _f_handle(std::move(req), std::move(rep)).then(
-                [](std::unique_ptr<reply> rep) {
+                [config = &_config](std::unique_ptr<reply> rep) {
+                    // Apply header customizations based on config
+                    if (config->alternator_response_skip_header__server()) {
+                        rep->_headers.erase("Server");
+                    } else if (!config->alternator_response_custom_header__server().empty()) {
+                        rep->_headers["Server"] = config->alternator_response_custom_header__server();
+                    }
+                    if (config->alternator_response_skip_header__date()) {
+                        rep->_headers.erase("Date");
+                    }
+                    if (config->alternator_response_skip_header__content_type()) {
+                        rep->_headers.erase("Content-Type");
+                    }
                     rep->done();
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 });
     }
 
 protected:
+    const db::config& _config;
     void generate_error_reply(reply& rep, const api_error& err) {
         rjson::value results = rjson::empty_object();
         if (!err._extra_fields.IsNull() && err._extra_fields.IsObject()) {
