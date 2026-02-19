@@ -2752,6 +2752,9 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
+    bool incremental_backups_enabled() const noexcept override {
+        return _t.incremental_backups_enabled();
+    }
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }

@@ -54,6 +54,7 @@ public:
     virtual bool memtable_has_key(const dht::decorated_key& key) const = 0;
     virtual future<> on_compaction_completion(compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
+    virtual bool incremental_backups_enabled() const noexcept = 0;
     virtual bool tombstone_gc_enabled() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;

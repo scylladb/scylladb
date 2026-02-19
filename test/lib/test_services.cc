@@ -117,6 +117,9 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
     }
+    bool incremental_backups_enabled() const noexcept override {
+        return table().incremental_backups_enabled();
+    }
     bool tombstone_gc_enabled() const noexcept override {
         return table().tombstone_gc_enabled();
     }
