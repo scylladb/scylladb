@@ -6,11 +6,7 @@
 import asyncio
 import pytest
 from test.pylib.manager_client import ManagerClient
-<<<<<<< HEAD
-from test.pylib.util import wait_for_view
-=======
 from test.pylib.util import wait_for_view, gather_safely_and_ignore_specific_exceptions
->>>>>>> c8c7cab809 (test:cluster:mv: use new util function to wait and ignore abort exceptions for shutdown sequence)
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
