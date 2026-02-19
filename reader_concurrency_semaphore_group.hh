@@ -61,7 +61,7 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            double shared_pool_fraction = 0.0,
+            double shared_pool_fraction,
             std::optional<sstring> name_prefix = std::nullopt)
             : _total_memory(memory)
             , _total_weight(0)
