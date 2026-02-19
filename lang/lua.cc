@@ -8,6 +8,7 @@
 
 #include <boost/date_time/gregorian/greg_date.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <random>
 #include "lua.hh"
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
@@ -26,6 +27,14 @@
 #    define LUA_504_PLUS(x...) x
 #else
 #    define LUA_504_PLUS(x...)
+#endif
+
+// Lua 5.5 added a seed parameter to lua_newstate
+
+#if LUA_VERSION_NUM >= 505
+#    define LUA_505_PLUS(x...) x
+#else
+#    define LUA_505_PLUS(x...)
 #endif
 
 using namespace seastar;
@@ -126,7 +135,11 @@ static void debug_hook(lua_State* l, lua_Debug* ar) {
 
 static lua_slice_state new_lua(const lua::runtime_config& cfg) {
     auto a_state = std::make_unique<alloc_state>(cfg.max_bytes, cfg.max_contiguous);
-    std::unique_ptr<lua_State, lua_closer> l{lua_newstate(lua_alloc, a_state.get())};
+#if LUA_VERSION_NUM >= 505
+    static thread_local std::default_random_engine rng{std::random_device{}()};
+    auto seed = rng();
+#endif
+    std::unique_ptr<lua_State, lua_closer> l{lua_newstate(lua_alloc, a_state.get() LUA_505_PLUS(, seed))};
     if (!l) {
         throw std::runtime_error("could not create lua state");
     }
