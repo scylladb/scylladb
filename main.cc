@@ -126,6 +126,7 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
+#include "tablet_aware_loader.hh"
 
 
 namespace fs = std::filesystem;
@@ -737,6 +738,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
+    sharded<tablet_aware_loader> ta_loader;
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::mapreduce_service> mapreduce_service;
     sharded<gms::gossiper> gossiper;
@@ -781,7 +783,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client] {
+                &repair, &sst_loader, &ta_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -2171,6 +2173,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_sstables_loader(ctx).get();
             });
 
+            checkpoint(stop_signal, "starting tablets aware sstable loader");
+            ta_loader.start(std::ref(ss), std::ref(sstm), std::ref(sys_dist_ks), std::ref(db), std::ref(task_manager)).get();
+            auto stop_ta_loader = defer_verbose_shutdown("tablets aware sstable loader", [&ta_loader] { ta_loader.stop().get(); });
+            api::set_server_tablet_aware_loader(ctx, ta_loader).get();
+            auto stop_tal_api = defer_verbose_shutdown("tablets aware sstable loader API", [&ctx] { api::unset_server_tablet_aware_loader(ctx).get(); });
             /*
              * FIXME. In bb07678346 commit the API toggle for autocompaction was
              * (partially) delayed until system prepared to join the ring. Probably

@@ -15,6 +15,8 @@
 #include "tasks/task_manager.hh"
 #include "seastarx.hh"
 
+
+class tablet_aware_loader;
 using request = http::request;
 using reply = http::reply;
 
@@ -104,6 +106,8 @@ future<> set_server_client_routes(http_context& ctx, sharded<service::client_rou
 future<> unset_server_client_routes(http_context& ctx);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
 future<> unset_server_sstables_loader(http_context& ctx);
+future<> set_server_tablet_aware_loader(http_context& ctx, sharded<tablet_aware_loader>& sst_loader);
+future<> unset_server_tablet_aware_loader(http_context& ctx);
 future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g);
 future<> unset_server_view_builder(http_context& ctx);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am);
