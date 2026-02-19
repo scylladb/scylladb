@@ -35,6 +35,10 @@ class system_keyspace;
 
 }
 
+namespace gms {
+class gossiper;
+}
+
 namespace locator {
 class shared_token_metadata;
 }
@@ -85,6 +89,7 @@ public:
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
+    [[maybe_unused]] gms::gossiper& _gossiper;
     db::system_keyspace& _sys_ks;
     locator::shared_token_metadata& _token_metadata;
 
@@ -125,7 +130,8 @@ class raft_group0_client {
     void validate_change(const Command& change);
 
 public:
-    raft_group0_client(service::raft_group_registry&, db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
+    raft_group0_client(service::raft_group_registry&, gms::gossiper&,
+                       db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
 
     // Call after `system_keyspace` is initialized.
     future<> init();
