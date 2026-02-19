@@ -629,7 +629,8 @@ future<> group0_batch::materialize_mutations() {
     }
 }
 
-future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as,
+        std::optional<::service::raft_timeout> timeout, barrier barrier) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
         co_return;
     }
@@ -651,6 +652,10 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
         utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
         _muts.clear();
         co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    }
+
+    if (barrier == barrier::global) {
+        co_await group0_client.broadcast_group0_read_barrier();
     }
 }
 
