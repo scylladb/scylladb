@@ -70,6 +70,7 @@ private:
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
             , _is_internal(cs->_is_internal)
+            , _bypass_auth_checks(cs->_bypass_auth_checks)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
@@ -112,6 +113,11 @@ private:
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
+
+    // bypass_auth_checks is used to skip authorization checks.
+    // This is used by the maintenance socket to allow privileged access without
+    // going through normal auth, while still treating queries as external.
+    bool _bypass_auth_checks;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     static thread_local api::timestamp_type _last_timestamp_micros;
@@ -186,8 +192,10 @@ public:
                  auth::service& auth_service,
                  qos::service_level_controller* sl_controller,
                  timeout_config timeout_config,
-                 const socket_address& remote_address = socket_address())
+                 const socket_address& remote_address = socket_address(),
+                 bool bypass_auth_checks = false)
             : _is_internal(false)
+            , _bypass_auth_checks(bypass_auth_checks)
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
@@ -224,6 +232,7 @@ public:
     client_state(internal_tag, const timeout_config& config)
             : _keyspace("system")
             , _is_internal(true)
+            , _bypass_auth_checks(true)
             , _default_timeout_config(config)
             , _timeout_config(config)
     {}
@@ -232,6 +241,7 @@ public:
         : _user(auth::authenticated_user(username))
         , _auth_state(auth_state::READY)
         , _is_internal(true)
+        , _bypass_auth_checks(true)
         , _auth_service(&auth_service)
         , _sl_controller(&sl_controller)
     {}
