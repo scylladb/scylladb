@@ -35,6 +35,12 @@ Apart from *planned backup* procedure described above, and as a safeguard from *
 
 The default setting for the ``auto_snapshot`` flag in ``/etc/scylla/scylla.yaml`` file is ``true``. It is **not** recommended to set it to ``false``, unless there is a good backup and recovery strategy in place.
 
+The automatically created snapshots remain on local storage until they are backed-up using the ``move_files`` option or they are explicitly deleted.
+Otherwise, stale snapshots might cause a node to run out of storage space by holding up to the SSTables in the snapshot after they are deleted from the table (by compaction, tablet-migration, TRUNCATE, DROP TABLE, and so on).
+The ``auto_snapshot_ttl`` configuration option can be used to automatically delete stale snapshots.
+
+The default setting for the ``auto_snapshot_ttl`` option in ``/etc/scylla/scylla.yaml`` file is ``864000`` seconds (10 days). It is recommended to set it to a reasonable time allowing backup of the auto-snapshot, yet have a safety net that will automatically clean up stale snapshots to reclaim their disk space.
+
 Snapshot Creation
 -----------------
 
