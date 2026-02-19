@@ -12,9 +12,10 @@
 #include <optional>
 #include "reader_concurrency_semaphore.hh"
 
-// The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory,
-// the memory is dynamically divided between them according to a relative slice of shares each semaphore
-// is given.
+// The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory.
+// The total memory is divided based on the shared_pool_fraction parameter:
+// - Dedicated portion (1 - shared_pool_fraction): divided between scheduling groups according to their relative weight/shares
+// - Shared portion (shared_pool_fraction): a pool accessible by all scheduling groups when their dedicated memory is exhausted
 // All of the mutating operations on the group are asynchronic and serialized. The semaphores are created
 // and managed by the group.
 
@@ -23,6 +24,7 @@ class reader_concurrency_semaphore_group {
     size_t _total_weight;
     size_t _max_concurrent_reads;
     size_t _max_queue_length;
+    double _shared_pool_fraction;
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
@@ -38,14 +40,16 @@ class reader_concurrency_semaphore_group {
                 utils::updateable_value<uint32_t> serialize_limit_multiplier,
                 utils::updateable_value<uint32_t> kill_limit_multiplier,
                 utils::updateable_value<uint32_t> cpu_concurrency,
-                utils::updateable_value<float> preemptive_abort_factor)
+                utils::updateable_value<float> preemptive_abort_factor,
+                reader_concurrency_semaphore_shared_pool& shared_pool)
                 : weight(shares)
                 , memory_share(0)
                 , sem(utils::updateable_value(count), 0, name, max_queue_length, std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier),
-                      std::move(cpu_concurrency), std::move(preemptive_abort_factor), reader_concurrency_semaphore::register_metrics::yes) {}
+                      std::move(cpu_concurrency), std::move(preemptive_abort_factor), reader_concurrency_semaphore::register_metrics::yes, shared_pool) {}
     };
 
     std::unordered_map<scheduling_group, weighted_reader_concurrency_semaphore> _semaphores;
+    reader_concurrency_semaphore_shared_pool _shared_pool;
     seastar::semaphore _operations_serializer;
     std::optional<sstring> _name_prefix;
 
@@ -57,15 +61,18 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
+            double shared_pool_fraction = 0.0,
             std::optional<sstring> name_prefix = std::nullopt)
             : _total_memory(memory)
             , _total_weight(0)
             , _max_concurrent_reads(max_concurrent_reads)
             ,  _max_queue_length(max_queue_length)
+            , _shared_pool_fraction(shared_pool_fraction)
             , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
             , _kill_limit_multiplier(std::move(kill_limit_multiplier))
             , _cpu_concurrency(std::move(cpu_concurrency))
             , _preemptive_abort_factor(std::move(preemptive_abort_factor))
+            , _shared_pool(0)
             , _operations_serializer(1)
             , _name_prefix(std::move(name_prefix)) { }
 
