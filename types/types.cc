@@ -279,9 +279,9 @@ int64_t timestamp_from_string(std::string_view s) {
             return db_clock::now().time_since_epoch().count();
         }
 
-        char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
+        int64_t v;
+        auto result = std::from_chars(s.begin(), s.end(), v, 10);
+        if (result.ec == std::errc() && result.ptr == s.end()) {
             return v;
         }
 
@@ -354,10 +354,9 @@ static uint32_t serialize(std::string_view input, int64_t days) {
     return static_cast<uint32_t>(days);
 }
 uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
-    char* end;
-    errno = 0;
-    auto v = std::strtoll(s.begin(), &end, 10);
-    if(end != s.end()) {
+    int64_t v;
+    auto result = std::from_chars(s.begin(), s.end(), v, 10);
+    if (result.ec == std::errc() && result.ptr != s.end()) {
         static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
         boost::match_results<std::string_view::const_iterator> dsm;
         if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
@@ -366,8 +365,8 @@ uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
         auto t = get_simple_date_time(dsm);
         return serialize(s, date::local_days(t).time_since_epoch().count());
     }
-    if (errno == ERANGE) {
-        throw marshal_exception(format("Unable to make unsigned int (for date) from {}", v));
+    if (result.ec != std::errc()) {
+        throw marshal_exception(format("Unable to make unsigned int (for date) from {}", s));
     }
     if (v < std::numeric_limits<uint32_t>::min() || v > std::numeric_limits<uint32_t>::max()) {
         throw marshal_exception(format("Unable to make unsigned int (for date) from {}", v));
