@@ -107,9 +107,12 @@ class sstables_manager {
 public:
     struct config {
         size_t available_memory;
+        uint64_t total_disk_capacity = 0;
+        utils::updateable_value<double> sstable_summary_memory_fraction = utils::updateable_value<double>(0.05);
+        double sstable_summary_ratio = 0.0005;
+        bool sstable_summary_ratio_is_set = false;
         bool enable_sstable_key_validation = false;
         bool enable_data_integrity_check = false;
-        double sstable_summary_ratio = 0.0005;
         size_t column_index_size = 64 << 10;
         utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
@@ -206,6 +209,10 @@ public:
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
+    // Computes the effective summary-to-data ratio.
+    // If sstable_summary_ratio was explicitly set, returns that.
+    // Otherwise, derives it from sstable_summary_memory_fraction and the disk:memory ratio.
+    double effective_summary_ratio() const noexcept;
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }

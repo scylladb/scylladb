@@ -1109,6 +1109,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
             utils::directories::verify_owner_and_mode_of_data_dir(data_dir_set).get();
 
+            // Compute total data disk capacity for summary ratio derivation.
+            // Prefer the explicit data_file_capacity override; fall back to filesystem capacity.
+            uint64_t total_data_disk_capacity = cfg->data_file_capacity();
+            if (!total_data_disk_capacity) {
+                for (const auto& path : data_dir_set.get_paths()) {
+                    total_data_disk_capacity += engine().file_system_space(path.native()).get().capacity;
+                }
+            }
+
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
@@ -1154,6 +1163,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
             dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
             dbcfg.available_memory = memory::stats().total_memory();
+            dbcfg.total_data_disk_capacity = total_data_disk_capacity;
 
             // Make sure to initialize the scheduling group keys at a point where we are sure
             // that nobody will be creating scheduling groups (e.g. service levels controller can do that).

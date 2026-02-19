@@ -12,6 +12,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "db/config.hh"
+#include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 
 BOOST_AUTO_TEST_SUITE(cache_algorithm_test)
 
@@ -97,7 +99,8 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         //
         // The sanity check here is that the maximum total size of the touched index pages is much greater than RAM.
         // (Maximum is reached when each hot row lands on a different index page.)
-        const uint64_t data_summary_ratio = static_cast<uint64_t>(1 / e.local_db().get_config().sstable_summary_ratio());
+        const uint64_t data_summary_ratio = sstables::summary_byte_cost(
+                e.local_db().get_user_sstables_manager().effective_summary_ratio());
         BOOST_REQUIRE_GT(hot_subset_size * pk_size * data_summary_ratio, 2 * seastar::memory::stats().total_memory());
 
         auto get_misses = [&e] { return e.local_db().row_cache_tracker().get_stats().partition_misses; };

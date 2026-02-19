@@ -399,6 +399,7 @@ public:
     named_value<bool> abort_on_lsa_bad_alloc;
     named_value<unsigned> murmur3_partitioner_ignore_msb_bits;
     named_value<double> unspooled_dirty_soft_limit;
+    named_value<double> sstable_summary_memory_fraction;
     named_value<double> sstable_summary_ratio;
     named_value<double> components_memory_reclaim_threshold;
     named_value<size_t> large_memory_allocation_warning_threshold;
