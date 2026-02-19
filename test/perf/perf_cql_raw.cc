@@ -68,8 +68,6 @@ struct raw_cql_test_config {
     bool create_non_superuser = false;
     unsigned tables = 1;
     std::string json_result_file;
-
-    sharded<abort_source>* as = nullptr;
 };
 
 } // namespace perf
@@ -588,7 +586,7 @@ static void wait_for_compactions(const raw_cql_test_config& cfg) {
 // outside of the timed body passed to time_parallel (avoids depressing the first TPS sample).
 static thread_local std::vector<std::unique_ptr<raw_cql_connection>> tl_conns;
 
-static future<> prepare_thread_connections(const raw_cql_test_config cfg) {
+static future<> prepare_thread_connections(const raw_cql_test_config& cfg) {
     SCYLLA_ASSERT(tl_conns.empty());
     tl_conns.reserve(cfg.connections_per_shard);
     for (unsigned i = 0; i < cfg.connections_per_shard; ++i) {
@@ -684,7 +682,26 @@ static void prepopulate(const raw_cql_test_config& cfg) {
     }
 }
 
-static void workload_main(raw_cql_test_config cfg) {
+static void wait_for_cql(const raw_cql_test_config& cfg) {
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        try {
+            auto cs = connect(socket_address{net::inet_address{cfg.remote_host}, cfg.port}).get();
+            auto conn = make_connection(std::move(cs), cfg);
+            conn->startup().get();
+            conn->stop().get();
+            return;
+        } catch (...) {
+            // not ready yet
+        }
+        sleep(std::chrono::milliseconds(100)).get();
+        if (attempt >= 100 && attempt % 10 == 0) {
+            std::cout << format("Retrying connect to cql port (attempt {})", attempt+1) << std::endl;
+        }
+    }
+    throw std::runtime_error("Timed out waiting for cql port to become ready");
+}
+
+static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>* as) {
     fmt::print("Running test with config: {}\n", cfg);
     auto cleanup = defer([] {
         // Cleanup thread-local connections to avoid destruction issues at exit
@@ -696,6 +713,7 @@ static void workload_main(raw_cql_test_config cfg) {
             });
         }).get();
     });
+    wait_for_cql(cfg);
     if (cfg.workload != "connect") {
         prepopulate(cfg);
     }
@@ -708,16 +726,17 @@ static void workload_main(raw_cql_test_config cfg) {
     if (!cfg.connection_per_request && cfg.workload != "connect") {
         // Warm up: establish all per-thread connections before measurement.
         try {
-            smp::invoke_on_all([cfg] {
-                return prepare_thread_connections(cfg);
+            auto shared_cfg = make_lw_shared<raw_cql_test_config>(cfg);
+            smp::invoke_on_all([shared_cfg] {
+                return prepare_thread_connections(*shared_cfg);
             }).get();
         } catch (...) {
             std::cerr << "Connection preparation failed: " << std::current_exception() << std::endl;
             throw;
         }
     }
-    auto results = time_parallel([cfg] () -> future<> {
-        cfg.as->local().check();
+    auto results = time_parallel([cfg, as] () -> future<> {
+        as->local().check();
         if (cfg.connection_per_request || cfg.workload == "connect") {
             co_await run_one_with_new_connection(cfg);
         } else {
@@ -749,32 +768,6 @@ static void workload_main(raw_cql_test_config cfg) {
     }
 }
 
-static future<> run_standalone(raw_cql_test_config c) {
-    auto as = make_shared<sharded<abort_source>>();
-    co_await as->start();
-    c.as = as.get();
-
-    auto stop_handler = [as] {
-        (void)as->invoke_on_all(&abort_source::request_abort);
-    };
-
-    seastar::handle_signal(SIGINT, stop_handler);
-    seastar::handle_signal(SIGTERM, stop_handler);
-
-    std::exception_ptr ex;
-    try {
-        co_await seastar::async([c = std::move(c)] {
-            workload_main(c);
-        });
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await as->stop();
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
-}
-
 // Returns a function which launches a performance workload that
 // talks to the embedded server over the native CQL protocol using
 // handcrafted CQL binary frames (no driver). Similar to perf_alternator
@@ -782,8 +775,8 @@ static future<> run_standalone(raw_cql_test_config c) {
 // exercises the full networking + protocol parsing path.
 //
 // Example usage:
-// ./build/dev/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
-std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<void(lw_shared_ptr<db::config>)>* after_init_func) {
+// ./build/release/scylla perf-cql-raw --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --workload read 2> /dev/null
+std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config>, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         raw_cql_test_config c;
         bpo::options_description opts_desc;
@@ -844,32 +837,20 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
             // if remote-host provided (non-empty) we run standalone
             c.port = 9042; // TODO: make configurable
             app_template app;
-            return app.run(ac, av, [c = std::move(c)] () mutable -> future<> {
-                return run_standalone(std::move(c));
+            return app.run(ac, av, [c = std::move(c)] () -> future<> {
+                return run_standalone([c = std::move(c)] (sharded<abort_source>* as) {
+                    workload_main(c, as);
+                });
             });
-        } else {
-            // in-process mode
-            c.remote_host = "127.0.0.1";
         }
 
-        // Unconditionally append --api-address=127.0.0.1 so the main server binds API locally.
-        static std::string api_arg = "--api-address=127.0.0.1";
-        {
-            // Build a new argv with the extra argument (simple leak acceptable for process lifetime)
-            char** new_av = new char*[ac + 2];
-            for (int i = 0; i < ac; ++i) { new_av[i] = av[i]; }
-            new_av[ac] = const_cast<char*>(api_arg.c_str());
-            new_av[ac + 1] = nullptr;
-            av = new_av;
-            ++ac;
-        }
-
-        *after_init_func = [c](lw_shared_ptr<db::config> cfg) mutable {
+        *after_init_func = [c](lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->native_transport_port();
+            c.remote_host = cfg->api_address();
             // run workload in background-ish
-            (void)seastar::async([c]() {
+            return seastar::async([c, &as]() {
                 try {
-                    workload_main(c);
+                    workload_main(c, &as);
                 } catch (...) {
                     std::cerr << "Perf test failed: " << std::current_exception() << std::endl;
                     raise(SIGKILL); // abnormal shutdown to signal test failure

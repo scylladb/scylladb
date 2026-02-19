@@ -12,8 +12,10 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/signal.hh>
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
@@ -324,6 +326,8 @@ public:
 std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
 
 void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type);
+
+future<> run_standalone(std::function<void(sharded<abort_source>*)> fun);
 
 } // namespace perf
 
