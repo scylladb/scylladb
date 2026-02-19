@@ -33,7 +33,6 @@ RUN git clone --depth=1 --branch="${GCC_VERSION}" git://gcc.gnu.org/git/gcc.git 
         --enable-languages=c,c++ \
         --disable-multilib \
         --disable-bootstrap \
-        --disable-libsanitizer \
         --enable-libstdcxx-threads \
         --with-system-zlib && \
     make -j$(nproc) && \
