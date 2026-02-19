@@ -66,17 +66,29 @@ isolation policy for a specific table can be overridden by tagging the table
     and will likely be removed in the future.
 
 ## Accessing system tables from Scylla
- * Scylla exposes lots of useful information via its internal system tables,
-   which can be found in system keyspaces: 'system', 'system\_auth', etc.
-   In order to access to these tables via alternator interface,
-   Scan and Query requests can use a special table name:
-   .scylla.alternator.KEYSPACE\_NAME.TABLE\_NAME
-   which will return results fetched from corresponding Scylla table.
-   This interface can be used only to fetch data from system tables.
-   Attempts to read regular tables via the virtual interface will result
-   in an error.
-   Example: in order to query the contents of Scylla's system.large_rows,
-   pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
+Scylla exposes lots of useful information via its internal system tables,
+which can be found in system keyspaces: 'system', 'system\_auth', etc.
+In order to access to these tables via alternator interface,
+Scan and Query requests can use a special table name:
+`.scylla.alternator.KEYSPACE_NAME.TABLE_NAME`
+which will return results fetched from corresponding Scylla table.
+
+This interface can be used only to fetch data from system tables.
+Attempts to read regular tables via the virtual interface will result
+in an error.
+
+Example: in order to query the contents of Scylla's `system.large_rows`,
+pass `TableName='.scylla.alternator.system.large_rows'` to a Query/Scan
+request.
+
+Note that currently only `Scan` and `Query` on system tables is supported -
+`GetItem` is not (so use `Query` even to read a single item).
+
+If the `alternator_allow_system_table_write` configuration option is set to
+true (by default, it is false), system tables can also be written to. This
+can be useful for, for example, modifying configuration options. Even when
+writing system tables is enabled, the role sending the command must be a
+superuser or the write will be denied.
 
 ## Service discovery
 As explained in [Scylla Alternator for DynamoDB users](compatibility.md),

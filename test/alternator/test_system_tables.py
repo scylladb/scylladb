@@ -10,6 +10,11 @@ import requests
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
+<<<<<<< HEAD
+=======
+from .util import full_scan, scylla_config_read, scylla_config_write, scylla_config_temporary
+
+>>>>>>> 70aa81990b (Merge 'Alternator - add the ability to write, not just read, system tables' from Nadav Har'El)
 internal_prefix = '.scylla.alternator.'
 
 # Test that fetching key columns from system tables works
@@ -59,3 +64,61 @@ def test_block_creating_tables_with_reserved_prefix(scylla_only, dynamodb):
                     AttributeDefinitions=[{'AttributeName':'p', 'AttributeType': 'S'}]
             )
 
+# Test writing to a system table, such as the configuration.
+# Since writing to a system table is only optionally allowed in Scylla,
+# we mark this test skipped if we discover that it's not enabled (our
+# test/alternator/run and test.py do enable it).
+# This feature was requested in issue #12348.
+def test_write_to_config(scylla_only, dynamodb):
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    parameter = 'query_tombstone_page_limit'
+    # We use query() here instead of the simpler get_item(), because
+    # commit 44a1daf only added support for system tables in Query and
+    # Scan, not in GetItem...
+    old_val = config_table.query(
+        KeyConditionExpression='#key=:val',
+        ExpressionAttributeNames={'#key': 'name'},
+        ExpressionAttributeValues={':val': parameter}
+        )['Items'][0]['value']
+    new_val = old_val + "1"
+    try:
+        config_table.update_item(
+            Key={'name': parameter},
+            UpdateExpression='SET #val = :val',
+            ExpressionAttributeNames={'#val': 'value'},
+            ExpressionAttributeValues={':val': new_val}
+        )
+    except Exception as e:
+        print(str(e))
+        print('alternator_allow_system_table_write' in str(e))
+        if 'alternator_allow_system_table_write' in str(e):
+            pytest.skip('need alternator_allow_system_table_write=true')
+        else:
+            raise
+    try:
+        # Confirm the modification took place
+        cur_val = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': parameter}
+            )['Items'][0]['value']
+        assert cur_val == new_val
+    finally:
+        # Restore the original config
+        config_table.update_item(
+            Key={'name': parameter},
+            UpdateExpression='SET #val = :val',
+            ExpressionAttributeNames={'#val': 'value'},
+            ExpressionAttributeValues={':val': old_val}
+        )
+
+# Same test as above, just using the scylla_config_temporary() utility
+# function (also validating its correctness)
+def test_scylla_config_temporary(scylla_only, dynamodb):
+    tbl = '.scylla.alternator.system.config'
+    parameter = 'query_tombstone_page_limit'
+    old_val = scylla_config_read(dynamodb, parameter)
+    new_val = old_val + "1"
+    with scylla_config_temporary(dynamodb, parameter, new_val):
+        assert scylla_config_read(dynamodb, parameter) == new_val
+    assert scylla_config_read(dynamodb, parameter) == old_val
