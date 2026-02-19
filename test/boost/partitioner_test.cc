@@ -120,7 +120,7 @@ SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto dk = partitioner.decorate_key(*s, key);
 
     // Expected value was taken from Origin
-    BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
+    BOOST_REQUIRE_EQUAL(dk.token(), token_from_long(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
