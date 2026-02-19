@@ -719,15 +719,6 @@ void write_collection_value(bytes_ostream& out, atomic_cell_value_view val) {
     }
 }
 
-void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
-    while (val.size() > 0) {
-        size_t current_n = std::min(val.size(), out.current_fragment().size());
-        memcpy(out.current_fragment().data(), val.data(), current_n);
-        val.remove_prefix(current_n);
-        out.remove_prefix(current_n);
-    }
-}
-
 template<std::integral T>
 void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) {
     val = net::hton(val);
@@ -737,7 +728,7 @@ void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) 
         // FIXME use write_unaligned after it's merged.
         write_unaligned<T>(p, val);
     } else if (out.size_bytes() >= sizeof(T)) {
-        write_fragmented(out, std::string_view(reinterpret_cast<const char*>(&val), sizeof(T)));
+        write_fragmented(out, single_fragmented_view(bytes_view(reinterpret_cast<const bytes::value_type*>(&val), sizeof(T))));
     } else {
         on_internal_error(tlogger, format("write_simple: attempted write of size {} to buffer of size {}", sizeof(T), out.size_bytes()));
     }
