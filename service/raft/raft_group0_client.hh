@@ -239,6 +239,14 @@ using mutations_generator = coroutine::experimental::generator<mutation>;
 class group0_batch {
 public:
     using generator_func = std::function<mutations_generator(api::timestamp_type t)>;
+
+    // Controls whether group0_batch::commit() broadcasts a read barrier
+    // to all live nodes after the raft entry is committed and applied locally.
+    enum class barrier {
+        local,   // Return immediately after local apply
+        global   // Broadcast read_barrier to all live nodes (best-effort)
+    };
+
 private:
     utils::chunked_vector<mutation> _muts;
     std::vector<generator_func> _generators;
@@ -277,7 +285,9 @@ public:
     void add_generator(generator_func f, std::string_view description = "");
 
     // Commits the data, nop if there was no guard provided.
-    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
+    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as,
+                    std::optional<::service::raft_timeout> timeout,
+                    barrier barrier = barrier::local) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
     future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> extract() &&;
 
