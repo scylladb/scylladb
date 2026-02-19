@@ -887,8 +887,8 @@ class load_balancer {
     //
     // We allow at least two sessions per shard so that there is less chance for idling until load balancer
     // makes the next decision after streaming is finished.
-    const size_t max_write_streaming_load = 2;
-    const size_t max_read_streaming_load = 4;
+    size_t max_write_streaming_load;
+    size_t max_read_streaming_load;
 
     replica::database& _db;
     token_metadata_ptr _tm;
@@ -1024,6 +1024,8 @@ public:
             lblogger.info("Size based load balancing cluster feature disabled; forcing capacity based balancing");
             _force_capacity_based_balancing = true;
         }
+        max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
+        max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
     }
 
     bool ongoing_rack_list_colocation() const {
@@ -2168,7 +2170,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_read_load;
-            if (load + info.stream_weight > max_read_streaming_load) {
+            if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
             }
@@ -2178,7 +2180,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_write_load;
-            if (load + info.stream_weight > max_write_streaming_load) {
+            if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
             }
