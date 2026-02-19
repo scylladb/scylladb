@@ -23,7 +23,6 @@
 #include <exception>
 #include <fmt/ranges.h>
 #include <regex>
-#include <random>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -59,8 +58,6 @@ using uri = vector_search::uri;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
-
-static thread_local auto random_engine = std::default_random_engine(std::random_device{}());
 
 auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     auto port = port_number{};
