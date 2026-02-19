@@ -136,6 +136,10 @@ output_stream<char> tests::proc::process_fixture::cin() {
     return _impl->_process.cin();
 }
 
+pid_t tests::proc::process_fixture::pid() const {
+    return _impl->_process.pid();
+}
+
 namespace fs = std::filesystem;
 
 fs::path tests::proc::find_file_in_path(std::string_view name, 

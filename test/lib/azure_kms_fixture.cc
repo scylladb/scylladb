@@ -29,19 +29,32 @@ using namespace std::string_view_literals;
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_azure_server(const tmpdir& tmp, const std::string& host) {
     auto pyexec = tests::proc::find_file_in_path("python");
+    auto unshare = tests::proc::find_file_in_path("unshare");
+    auto sh = tests::proc::find_file_in_path("sh");
+
+    if (unshare.empty()) {
+        throw std::runtime_error("Could not find unshare command");
+    }
+    if (sh.empty()) {
+        throw std::runtime_error("Could not find sh command");
+    }
 
     promise<std::pair<std::string, int>> authority_promise;
     auto fut = authority_promise.get_future();
 
-    BOOST_TEST_MESSAGE("Starting dedicated Azure Vault mock server");
+    BOOST_TEST_MESSAGE("Starting dedicated Azure Vault mock server in network namespace");
 
-    auto python = co_await tests::proc::process_fixture::create(pyexec,
-        { // args
-            pyexec.string(),
-            "test/pylib/start_azure_vault_mock.py",
-            "--log-level", "INFO",
-            "--host", host,
-            "--port", "0", // random port
+    // Build command to bring up loopback and then start Python server
+    std::string cmd = fmt::format("ip link set lo up && exec {} test/pylib/start_azure_vault_mock.py --log-level INFO --host {} --port 0",
+        pyexec.string(), host);
+
+    auto python = co_await tests::proc::process_fixture::create(unshare,
+        { // args - wrap with unshare -n and bring up lo
+            unshare.string(),
+            "-n",       // Create new network namespace
+            sh.string(),// Run shell
+            "-c",       // Execute command
+            cmd         // Command: bring up lo, then run Python server
         },
         // env
         {},
@@ -68,27 +81,10 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_azure_server(cons
         // arbitrary timeout of 20s for the server to make some output. Very generous.
         auto [host, port] = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(fut));
 
-        // wait for port.
-        auto sleep_interval = 100ms;
-        auto timeout = 5s;
-        auto end_time = seastar::lowres_clock::now() + timeout;
-        bool connected = false;
-        while (seastar::lowres_clock::now() < end_time) {
-            BOOST_TEST_MESSAGE(fmt::format("Connecting to {}:{}", host, port));
-            try {
-                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await seastar::connect(socket_address(net::inet_address(host), uint16_t(port)));
-                BOOST_TEST_MESSAGE("Dedicated Azure Vault mock server up and available");
-                connected = true;
-                break;
-            } catch (...) {
-            }
-            co_await seastar::sleep(sleep_interval);
-        }
-
-        if (!connected) {
-            throw std::runtime_error(fmt::format("Timed out connecting to Azure Vault mock server at {}:{}", host, port));
-        }
+        // Server is running in an isolated namespace, so we can't connect to it from here.
+        // We rely on the "Starting Azure Vault mock server" message in the stderr handler above.
+        // The actual connectivity test will happen when the test code enters the namespace.
+        BOOST_TEST_MESSAGE(fmt::format("Server startup message received for {}:{}, assuming it's ready", host, port));
 
         co_return std::make_tuple(std::move(python), port);
 
@@ -109,6 +105,7 @@ class azure_kms_fixture::impl
 public:
     azure_mode mode;
     std::optional<tp::process_fixture> local_azure;
+    std::optional<int> _netns_fd;  // Network namespace FD for mock server
     tmpdir tmp;
 
     impl(azure_mode);
@@ -136,6 +133,15 @@ seastar::future<> azure_kms_fixture::impl::setup() {
     if ((key_name.empty() || mode == azure_mode::local) && mode != azure_mode::real) {
         auto host = getenv_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1");
         auto [proc, port] = co_await start_fake_azure_server(tmp, host);
+
+        // Get the network namespace FD from the spawned process
+        auto netns_path = fmt::format("/proc/{}/ns/net", proc.pid());
+        BOOST_TEST_MESSAGE(fmt::format("Opening server process' network namespace file {}", netns_path));
+        _netns_fd = ::open(netns_path.c_str(), O_RDONLY);
+        if (*_netns_fd < 0) {
+            BOOST_FAIL(fmt::format("Failed to open server process' network namespace file {}: {}", netns_path, std::strerror(errno)));
+        }
+
         local_azure.emplace(std::move(proc));
         key_name = fmt::format("http://{}:{}/mock-key", host, port);
         authority_host = imds_endpoint = fmt::format("http://{}:{}", host, port);
@@ -166,6 +172,10 @@ seastar::future<> azure_kms_fixture::impl::setup() {
 }
 
 seastar::future<> azure_kms_fixture::impl::teardown() {
+    if (_netns_fd) {
+        ::close(*_netns_fd);
+        _netns_fd.reset();
+    }
     if (local_azure) {
         local_azure->terminate();
         co_await local_azure->wait();
@@ -182,6 +192,10 @@ azure_kms_fixture::~azure_kms_fixture() = default;
 
 const azure_test_env& azure_kms_fixture::test_env() const {
     return *_impl;
+}
+
+int azure_kms_fixture::netns_fd() const {
+    return _impl->_netns_fd.value_or(-1);
 }
 
 seastar::future<> azure_kms_fixture::setup() {
@@ -215,9 +229,36 @@ seastar::future<> local_azure_kms_wrapper::setup() {
 
     azure_test_env& tmp = *this;
     tmp = f->test_env();
+
+    // Enter network namespace if using mock server
+    auto ns_fd = f->netns_fd();
+    if (ns_fd >= 0) {
+        // Save current namespace
+        _orig_netns_fd = ::open("/proc/self/ns/net", O_RDONLY);
+        if (_orig_netns_fd < 0) {
+            throw std::runtime_error("Failed to save current network namespace");
+        }
+
+        // Enter mock server's namespace
+        if (::setns(ns_fd, CLONE_NEWNET) < 0) {
+            ::close(_orig_netns_fd);
+            _orig_netns_fd = -1;
+            throw std::runtime_error("Failed to enter network namespace");
+        }
+
+        BOOST_TEST_MESSAGE(fmt::format("Entered network namespace (FD {})", ns_fd));
+    }
 }
 
 seastar::future<> local_azure_kms_wrapper::teardown() {
+    // Restore original namespace if we changed it
+    if (_orig_netns_fd >= 0) {
+        ::setns(_orig_netns_fd, CLONE_NEWNET);
+        ::close(_orig_netns_fd);
+        _orig_netns_fd = -1;
+        BOOST_TEST_MESSAGE("Restored original network namespace");
+    }
+
     if (_local) {
         co_await _local->teardown();
         _local = {};

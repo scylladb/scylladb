@@ -28,33 +28,33 @@ using namespace std::chrono_literals;
 using namespace std::string_view_literals;
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const tmpdir& tmp, const fs::path& seed) {
-    std::vector<std::string> params(1);
+    fs::path exec;
+    bool use_container = false;
+    fs::path container_exec;
 
-    size_t port_index = 0;
-
-    auto exec = tp::find_file_in_path("local-kms");
-    if (exec.empty()) {
-        exec = tp::find_file_in_path("docker");
-        if (exec.empty()) {
-            exec = tp::find_file_in_path("podman");
+    auto local_kms = tp::find_file_in_path("local-kms");
+    if (local_kms.empty()) {
+        container_exec = tp::find_file_in_path("docker");
+        if (container_exec.empty()) {
+            container_exec = tp::find_file_in_path("podman");
         }
-        if (exec.empty()) {
+        if (container_exec.empty()) {
             throw std::runtime_error("Could not find local-kms, docker or podman.");
         }
-
-        // publish port ephemeral, allows parallel instances
-        params = {
-            "",
-            "run", "--rm", 
-            "-v", seed.string() + ":/init/seed.yaml",
-            "-p", "--", // set below
-            "-e", "--", // set below
-            "docker.io/nsmithuk/local-kms:3"
-        };
-        port_index = 6;
+        use_container = true;
     }
 
-    params[0] = exec.string();
+    auto unshare = tp::find_file_in_path("unshare");
+    if (unshare.empty()) {
+        throw std::runtime_error("Could not find unshare command");
+    }
+
+    auto sh = tp::find_file_in_path("sh");
+    if (sh.empty()) {
+        throw std::runtime_error("Could not find sh command");
+    }
+
+    exec = unshare;
 
     struct in_use{};
     constexpr auto max_retries = 8;
@@ -75,19 +75,28 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const 
 
         auto port_string = std::to_string(port);
 
-        if (port_index != 0) {
-            params[port_index] = port_string + ":" + port_string;
-            params[port_index + 2] = "PORT=" + port_string;
-        }
-
-        BOOST_TEST_MESSAGE(fmt::format("Will run {}", params));
-
+        // Build the command to run inside the namespace
+        std::string cmd;
         std::vector<std::string> env;
 
-        if (port_index == 0) { // running actual exec
+        if (use_container) {
+            cmd = fmt::format("ip link set lo up && exec {} run --rm -v {}:/init/seed.yaml -p {}:{} -e PORT={} docker.io/nsmithuk/local-kms:3",
+                container_exec.string(), seed.string(), port_string, port_string, port_string);
+        } else {
+            cmd = fmt::format("ip link set lo up && exec {}", local_kms.string());
             env.emplace_back("PORT=" + port_string);
             env.emplace_back("KMS_SEED_PATH=" + seed.string());
         }
+
+        std::vector<std::string> params = {
+            unshare.string(),  // argv[0]
+            "-n",              // Create new network namespace
+            sh.string(),       // Run shell
+            "-c",              // Execute command
+            cmd                // Command: bring up lo, then run server
+        };
+
+        BOOST_TEST_MESSAGE(fmt::format("Will run: unshare -n sh -c '{}'", cmd));
 
         promise<> ready_promise;
         auto ready_fut = ready_promise.get_future();
@@ -137,28 +146,10 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const 
             p = std::current_exception();
         }
 
-        auto backoff = 0ms;
-        while (!p) {
-            if (backoff > 0ms) {
-                co_await seastar::sleep(backoff);
-            }
-            try {
-                BOOST_TEST_MESSAGE("Attempting to connect to local-kms");
-                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await with_timeout(std::chrono::steady_clock::now() + 20s, seastar::connect(socket_address(net::inet_address("127.0.0.1"), port)));
-                BOOST_TEST_MESSAGE("local-kms up and available"); // debug print. Why not.
-            } catch (std::system_error&) {
-                retry = true;
-                if (retries < max_retries) {
-                    backoff = 100ms;
-                    continue;
-                }
-                p = std::current_exception();
-            } catch (...) {
-                p = std::current_exception();
-            }
-            break;
-        }
+        // Server is running in an isolated namespace, so we can't connect to it from here.
+        // We rely on the "Local KMS started on" message in the stderr handler above.
+        // The actual connectivity test will happen when the test code enters the namespace.
+        BOOST_TEST_MESSAGE("Server startup message received, assuming it's ready");
 
         if (p != nullptr) {
             BOOST_TEST_MESSAGE(fmt::format("Got exception starting local-kms server: {}", p));
@@ -177,6 +168,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const 
 class aws_kms_fixture::impl {
 public:
     std::optional<tp::process_fixture> local_kms;
+    std::optional<int> _netns_fd;  // Network namespace FD for mock server
 
     std::string endpoint;
     std::string kms_key_alias;
@@ -219,6 +211,15 @@ Aliases:
         );
 
         auto [proc, port] = co_await start_fake_kms_server(tmp, seed);
+
+        // Get the network namespace FD from the spawned process
+        auto netns_path = fmt::format("/proc/{}/ns/net", proc.pid());
+        BOOST_TEST_MESSAGE(fmt::format("Opening server process' network namespace file {}", netns_path));
+        _netns_fd = ::open(netns_path.c_str(), O_RDONLY);
+        if (*_netns_fd < 0) {
+            BOOST_FAIL(fmt::format("Failed to open server process' network namespace file {}: {}", netns_path, std::strerror(errno)));
+        }
+
         local_kms.emplace(std::move(proc));
         kms_key_alias = "alias/testing";
         endpoint = "http://127.0.0.1:" + std::to_string(port);
@@ -227,6 +228,10 @@ Aliases:
 }
 
 seastar::future<> aws_kms_fixture::impl::teardown() {
+    if (_netns_fd) {
+        ::close(*_netns_fd);
+        _netns_fd.reset();
+    }
     if (local_kms) {
         local_kms->terminate();
         co_await local_kms->wait();
@@ -252,6 +257,10 @@ const std::string& aws_kms_fixture::kms_aws_region() const {
 }
 const std::string& aws_kms_fixture::kms_aws_profile() const {
     return _impl->kms_aws_profile;
+}
+
+int aws_kms_fixture::netns_fd() const {
+    return _impl->_netns_fd.value_or(-1);
 }
 
 seastar::future<> aws_kms_fixture::setup() {
@@ -283,9 +292,36 @@ seastar::future<> local_aws_kms_wrapper::setup() {
     kms_key_alias = f->kms_key_alias();
     kms_aws_region = f->kms_aws_region();
     kms_aws_profile = f->kms_aws_profile();
+
+    // Enter network namespace if using mock server
+    auto ns_fd = f->netns_fd();
+    if (ns_fd >= 0) {
+        // Save current namespace
+        _orig_netns_fd = ::open("/proc/self/ns/net", O_RDONLY);
+        if (_orig_netns_fd < 0) {
+            throw std::runtime_error("Failed to save current network namespace");
+        }
+
+        // Enter mock server's namespace
+        if (::setns(ns_fd, CLONE_NEWNET) < 0) {
+            ::close(_orig_netns_fd);
+            _orig_netns_fd = -1;
+            throw std::runtime_error("Failed to enter network namespace");
+        }
+
+        BOOST_TEST_MESSAGE(fmt::format("Entered network namespace (FD {})", ns_fd));
+    }
 }
 
 seastar::future<> local_aws_kms_wrapper::teardown() {
+    // Restore original namespace if we changed it
+    if (_orig_netns_fd >= 0) {
+        ::setns(_orig_netns_fd, CLONE_NEWNET);
+        ::close(_orig_netns_fd);
+        _orig_netns_fd = -1;
+        BOOST_TEST_MESSAGE("Restored original network namespace");
+    }
+
     if (_local) {
         co_await _local->teardown();
         _local = {};
