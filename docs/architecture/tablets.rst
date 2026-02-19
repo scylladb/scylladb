@@ -214,3 +214,20 @@ Resharding in keyspaces with tablets enabled has the following limitations:
   allocated to the old shards on restart and are subject to background
   load-balancing to additional shards after restart completes and the node 
   starts serving CQL.
+
+.. _keyspace-rf-rack-valid-to-enforce-rack-list:
+
+Replacing ``rf_rack_valid_keyspaces`` with ``enforce_rack_list``
+------------------------------------------------------------------
+
+The ``rf_rack_valid_keyspaces`` option ensures that all keyspaces with tablets enabled are
+:term:`RF-rack-valid <RF-rack-valid keyspace>`.
+
+Requiring every tablet keyspace to use the rack list replication factor exclusively is enough to guarantee the keyspace is
+:term:`RF-rack-valid <RF-rack-valid keyspace>`. It reduces restrictions and provides stronger guarantees compared
+to ``rf_rack_valid_keyspaces`` option.
+
+To enforce rack list in tablet keyspaces, use ``enforce_rack_list`` option. It can be set only if all tablet keyspaces use
+rack list. To ensure that, follow a procedure of :ref:`conversion to rack list replication factor <conversion-to-rack-list-rf>`.
+After that restart all nodes in the cluster, with ``enforce_rack_list`` enabled and ``rf_rack_valid_keyspaces`` disabled. Make
+sure to avoid setting or updating replication factor (with CREATE KEYSPACE or ALTER KEYSPACE) while nodes are being restarted.
