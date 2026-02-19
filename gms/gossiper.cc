@@ -998,6 +998,24 @@ future<> gossiper::send_echo(locator::host_id host_id, std::chrono::milliseconds
     return ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, host_id, netw::messaging_service::clock_type::now() + timeout_ms, _abort_source, generation_number, notify_up);
 }
 
+future<> gossiper::failure_detector_loop_sleep(std::chrono::seconds duration) {
+    bool sleep_expired = false;
+    bool abort_requested = false;
+    timer<> sleep_timer([&] {
+        sleep_expired = true;
+        _failure_detector_loop_cv.signal();
+    });
+    auto as_sub = _abort_source.subscribe([&] () noexcept {
+        abort_requested = true;
+        sleep_timer.cancel();
+        _failure_detector_loop_cv.signal();
+    });
+    sleep_timer.arm(duration);
+    while (is_enabled() && !sleep_expired && !abort_requested) {
+        co_await _failure_detector_loop_cv.when();
+    }
+}
+
 future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
@@ -1036,7 +1054,7 @@ future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, gene
                     host_id, node, _live_endpoints, _live_endpoints_version, live_endpoints_version);
             co_return;
         } else  {
-            co_await sleep_abortable(echo_interval, _abort_source).handle_exception_type([] (const abort_requested_exception&) {});
+            co_await failure_detector_loop_sleep(echo_interval);
         }
     }
     co_return;
@@ -1052,7 +1070,7 @@ future<> gossiper::failure_detector_loop() {
         try {
             if (_live_endpoints.empty()) {
                 logger.debug("failure_detector_loop: Wait until live_nodes={} is not empty", _live_endpoints);
-                co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+                co_await failure_detector_loop_sleep(std::chrono::seconds(1));
                 continue;
             }
             auto nodes = _live_endpoints | std::ranges::to<std::vector>();
@@ -2380,6 +2398,7 @@ future<> gossiper::do_stop_gossiping() {
     // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = false;
+        g._failure_detector_loop_cv.broadcast();
     });
     _scheduled_gossip_task.cancel();
     // Take the semaphore makes sure existing gossip loop is finished
