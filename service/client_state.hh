@@ -393,6 +393,10 @@ public:
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error
 
+    /// Returns true if the user has superuser privileges.
+    /// Internal clients are always considered superusers.
+    future<bool> has_superuser() const;
+
 #if 0
     public void ensureIsSuper(String message) throws UnauthorizedException
     {

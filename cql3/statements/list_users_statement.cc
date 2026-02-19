@@ -74,7 +74,7 @@ cql3::statements::list_users_statement::execute(query_processor& qp, service::qu
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([&cs, &as, make_results = std::move(make_results)](bool has_superuser) mutable {
+    return cs.has_superuser().then([&cs, &as, make_results = std::move(make_results)](bool has_superuser) mutable {
         if (has_superuser) {
             return as.underlying_role_manager().query_all().then([&as, make_results = std::move(make_results)](std::unordered_set<sstring> roles) mutable {
                 return make_results(as, std::move(roles));
