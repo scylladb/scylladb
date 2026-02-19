@@ -266,8 +266,11 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-int64_t timestamp_from_string(std::string_view s) {
+int64_t timestamp_from_string(std::string_view sv) {
     try {
+        // std::string_view is not guaranteed to be null-terminated, but std::stroll() below expects this.
+        // Copy into a std::string to ensure null-termination.
+        auto s = std::string(sv);
         std::string str;
         str.resize(s.size());
         std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -276,8 +279,8 @@ int64_t timestamp_from_string(std::string_view s) {
         }
 
         char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
+        auto v = std::strtoll(s.data(), &end, 10);
+        if (end == s.data() + s.size()) {
             return v;
         }
 
@@ -317,9 +320,9 @@ int64_t timestamp_from_string(std::string_view s) {
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
     } catch (const marshal_exception& me) {
         throw marshal_exception(
-            seastar::format("unable to parse date '{}': {}", s, me.what()));
+            seastar::format("unable to parse date '{}': {}", sv, me.what()));
     } catch (...) {
-        throw marshal_exception(seastar::format("unable to parse date '{}': {}", s, std::current_exception()));
+        throw marshal_exception(seastar::format("unable to parse date '{}': {}", sv, std::current_exception()));
     }
 }
 
@@ -349,14 +352,15 @@ static uint32_t serialize(std::string_view input, int64_t days) {
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
 }
-uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
+uint32_t simple_date_type_impl::from_string_view(std::string_view sv) {
     char* end;
     errno = 0;
-    auto v = std::strtoll(s.begin(), &end, 10);
-    if(end != s.end()) {
+    std::string s(sv.begin(), sv.end());
+    auto v = std::strtoll(s.data(), &end, 10);
+    if(end != s.data() + s.size()) {
         static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
         boost::match_results<std::string_view::const_iterator> dsm;
-        if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
+        if (!boost::regex_match(sv.begin(), sv.end(), dsm, date_re)) {
         throw marshal_exception(seastar::format("Unable to coerce '{}' to a formatted date (long)", s));
         }
         auto t = get_simple_date_time(dsm);
