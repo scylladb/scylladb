@@ -342,6 +342,13 @@ raft::server& raft_group_registry::group0() {
     return get_server(*_group0_id);
 }
 
+raft_rpc& raft_group_registry::group0_rpc() {
+    if (!_group0_id) {
+        on_internal_error(rslog, "group0_rpc(): _group0_id not present");
+    }
+    return get_rpc(*_group0_id);
+}
+
 raft_server_with_timeouts raft_group_registry::group0_with_timeouts() {
     if (!_group0_id) {
         on_internal_error(rslog, "group0(): _group0_id not present");

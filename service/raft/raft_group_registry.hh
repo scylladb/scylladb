@@ -173,6 +173,7 @@ public:
     // Return an instance of group 0. Valid only on shard 0,
     // after boot/upgrade is complete
     raft::server& group0();
+    raft_rpc& group0_rpc();
 
     // Return an instance of group 0 server with timeouts support. Valid only on shard 0,
     // after boot/upgrade is complete

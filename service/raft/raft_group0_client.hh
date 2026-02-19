@@ -89,7 +89,7 @@ public:
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
-    [[maybe_unused]] gms::gossiper& _gossiper;
+    gms::gossiper& _gossiper;
     db::system_keyspace& _sys_ks;
     locator::shared_token_metadata& _token_metadata;
 
@@ -217,6 +217,11 @@ public:
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
     static utils::UUID generate_group0_state_id(utils::UUID prev_state_id);
     future<utils::UUID> get_last_group0_state_id();
+
+    // Sends an RPC to all live nodes asking each to perform
+    // a raft read_barrier on group 0, ensuring they have applied all committed
+    // entries. Failures are best-effort: logged but not propagated.
+    future<> broadcast_group0_read_barrier();
 };
 
 using mutations_generator = coroutine::experimental::generator<mutation>;
