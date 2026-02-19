@@ -623,7 +623,7 @@ Repair session 1
 Repair session 1 finished
 """
 
-def test_repair_keyspace(nodetool):
+def test_repair_keyspace_failure(nodetool):
     check_nodetool_fails_with(
         nodetool,
         ("repair", "ks"),
