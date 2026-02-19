@@ -1265,7 +1265,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
             utils::updateable_value(serialize_multiplier),
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
-            utils::updateable_value(preemptive_abort_factor));
+            utils::updateable_value(preemptive_abort_factor),
+            0);
 
     auto stop_sem = deferred_stop(sem_group);
 
@@ -1698,6 +1699,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
     db_cfg.enable_commitlog(false);
     db_cfg.reader_concurrency_semaphore_serialize_limit_multiplier.set(2, utils::config_file::config_source::CommandLine);
     db_cfg.reader_concurrency_semaphore_kill_limit_multiplier.set(4, utils::config_file::config_source::CommandLine);
+    db_cfg.reader_concurrency_semaphore_shared_pool_percent.set(0); // Disable shared pool
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
         auto tbl = create_memory_limit_table(env, 54);
