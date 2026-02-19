@@ -234,8 +234,8 @@ struct vector_store_client::impl {
     utils::observer<sstring> _secondary_uri_observer;
     std::vector<uri> _primary_uris;
     std::vector<uri> _secondary_uris;
-    dns dns;
-    uint64_t dns_refreshes = 0;
+    dns _dns;
+    uint64_t _dns_refreshes = 0;
     seastar::metrics::metric_groups _metrics;
     truststore _truststore;
     clients _primary_clients;
@@ -252,12 +252,12 @@ struct vector_store_client::impl {
         }))
         , _primary_uris(parse_uris(primary_uris()))
         , _secondary_uris(parse_uris(secondary_uris()))
-        , dns(
+        , _dns(
                   vslogger, get_hosts(_primary_uris, _secondary_uris),
                   [this](auto const& addrs) -> future<> {
                       co_await handle_addresses_changed(addrs);
                   },
-                  dns_refreshes)
+                  _dns_refreshes)
         , _truststore(vslogger, encryption_options,
                   [invoke_on_others = std::move(invoke_on_others)](auto func) {
                       return invoke_on_others([func = std::move(func)](auto& self) {
@@ -267,25 +267,25 @@ struct vector_store_client::impl {
         , _primary_clients(
                   vslogger,
                   [this]() {
-                      dns.trigger_refresh();
+                      _dns.trigger_refresh();
                   },
                   read_request_timeout_in_ms, _truststore)
 
         , _secondary_clients(
                   vslogger,
                   [this]() {
-                      dns.trigger_refresh();
+                      _dns.trigger_refresh();
                   },
                   read_request_timeout_in_ms, _truststore) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
-            return dns_refreshes;
+            return _dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
     }
 
     void handle_uris_changed(seastar::sstring uris_csv, std::vector<uri>& uris, clients& clients) {
         clients.clear();
         uris = parse_uris_no_throw(uris_csv);
-        dns.hosts(get_hosts(_primary_uris, _secondary_uris));
+        _dns.hosts(get_hosts(_primary_uris, _secondary_uris));
     }
 
     future<> handle_addresses_changed(const dns::host_address_map& addrs) {
@@ -363,13 +363,13 @@ vector_store_client::vector_store_client(config const& cfg)
 vector_store_client::~vector_store_client() = default;
 
 void vector_store_client::start_background_tasks() {
-    _impl->dns.start_background_tasks();
+    _impl->_dns.start_background_tasks();
 }
 
 auto vector_store_client::stop() -> future<> {
     co_await _impl->_primary_clients.stop();
     co_await _impl->_secondary_clients.stop();
-    co_await _impl->dns.stop();
+    co_await _impl->_dns.stop();
     co_await _impl->_truststore.stop();
 }
 
@@ -383,7 +383,7 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
-    vsc._impl->dns.refresh_interval(interval);
+    vsc._impl->_dns.refresh_interval(interval);
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
@@ -392,11 +392,11 @@ void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
-    vsc._impl->dns.resolver(std::move(resolver));
+    vsc._impl->_dns.resolver(std::move(resolver));
 }
 
 void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) {
-    vsc._impl->dns.trigger_refresh();
+    vsc._impl->_dns.trigger_refresh();
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::vector<inet_address>> {
