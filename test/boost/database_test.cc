@@ -1240,6 +1240,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
     auto sched_groups = get_scheduling_groups().get();
 
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.compaction_scheduling_group, system_semaphore);
+    scheduling_group_and_expected_semaphore.emplace_back(sched_groups.maintenance_compaction_scheduling_group, streaming_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.memory_compaction_scheduling_group, system_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.streaming_scheduling_group, streaming_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.statement_scheduling_group, user_semaphore);
@@ -1291,6 +1292,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
     auto sched_groups = get_scheduling_groups().get();
 
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.compaction_scheduling_group, system_max_result_size);
+    scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.maintenance_compaction_scheduling_group, system_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.memory_compaction_scheduling_group, system_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.streaming_scheduling_group, maintenance_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.statement_scheduling_group, user_max_result_size);
