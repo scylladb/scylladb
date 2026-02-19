@@ -372,7 +372,16 @@ commitlog_total_space_in_mb: -1
 # or dropping of column families. The STRONGLY advised default of true 
 # should be used to provide data safety. If you set this flag to false, you will
 # lose data on truncation or drop.
+#
+# `auto_snapshot_ttl` specifies the time-to-live (TTL) for automatic snapshots in seconds.
+# A value of 0 means snapshots are kept indefinitely.
+# The auto-snapshot will be deleted automatically when it expires.
+# It is a good practice to set `auto_snapshot_ttl` to a reasonable time allowing backup
+# of the auto-snapshot, but to have a safety net that will automatically clean up stale snapshots
+# to reclaim their disk space.
+#
 # auto_snapshot: true
+# auto_snapshot_ttl: 86400
 
 # When executing a scan, within or across a partition, we need to keep the
 # tombstones seen in memory so we can return them to the coordinator, which

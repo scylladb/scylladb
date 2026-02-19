@@ -921,6 +921,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , auto_snapshot(this, "auto_snapshot", value_status::Used, true,
         "Enable or disable whether a snapshot is taken of the data before keyspace truncation or dropping of tables. To prevent data loss, using the default setting is strongly advised. If you set to false, you will lose data on truncation or drop.")
+    , auto_snapshot_ttl(this, "auto_snapshot_ttl", value_status::Used, 0,
+        "The time-to-live (TTL) for automatic snapshots in seconds. A value of 0 means snapshots are kept indefinitely.")
     /**
     * @Group Key caches and global row properties
     * @GroupDescription When creating or modifying tables, you enable or disable the key cache (partition key cache) or row cache for that table by setting the caching parameter. Other row and key cache tuning and configuration options are set at the global (node) level. Cassandra uses these settings to automatically distribute memory for each table on the node based on the overall workload and specific table usage. You can also configure the save periods for these caches globally.
