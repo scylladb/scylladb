@@ -16,7 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include "utils/log.hh"
 #include <chrono>
-#include <map>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 #include <seastar/net/inet_address.hh>

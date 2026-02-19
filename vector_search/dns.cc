@@ -40,6 +40,15 @@ auto wait_for_timeout(lowres_clock::duration timeout, abort_source& as) -> futur
     co_return true;
 }
 
+auto to_address_type(const std::vector<net::hostent::address_entry>& entries) -> dns::address_type {
+    dns::address_type addrs;
+    addrs.reserve(entries.size());
+    for (auto& e : entries) {
+        addrs.push_back(e.addr);
+    }
+    return addrs;
+}
+
 } // namespace
 
 dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter)
@@ -55,8 +64,8 @@ dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_
             _logger.warn("Failed to resolve vector store service address: {}", err);
             co_await coroutine::return_exception_ptr(std::move(err));
         }
-        auto addr = co_await std::move(f);
-        co_return addr.addr_list;
+        auto entry = co_await std::move(f);
+        co_return to_address_type(entry.addr_entries);
     })
     , _hosts(std::move(hosts))
     , _listener(std::move(listener))
