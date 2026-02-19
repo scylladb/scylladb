@@ -12,16 +12,21 @@
 // if they did the behaviour would be undefined.
 future<> reader_concurrency_semaphore_group::adjust() {
     return with_semaphore(_operations_serializer, 1, [this] () {
+
+        const ssize_t shared_memory = (_total_memory * _shared_pool_percent) / 100;
+        const ssize_t dedicated_memory = _total_memory - shared_memory;
+        _shared_pool.set_total_memory(shared_memory);
+
         ssize_t distributed_memory = 0;
         for (auto& [sg, wsem] : _semaphores) {
-            const ssize_t memory_share = std::floor((double(wsem.weight) / double(_total_weight)) * _total_memory);
+            const ssize_t memory_share = std::floor((double(wsem.weight) / double(_total_weight)) * dedicated_memory);
             wsem.sem.set_resources({_max_concurrent_reads, memory_share});
             distributed_memory += memory_share;
         }
         // Slap the remainder on one of the semaphores.
         // This will be a few bytes, doesn't matter where we add it.
         auto& sem = _semaphores.begin()->second.sem;
-        sem.set_resources(sem.initial_resources() + reader_resources{0, _total_memory - distributed_memory});
+        sem.set_resources(sem.initial_resources() + reader_resources{0, dedicated_memory - distributed_memory});
     });
 }
 
@@ -61,6 +66,7 @@ reader_concurrency_semaphore* reader_concurrency_semaphore_group::get_or_null(sc
         return &(it->second.sem);
     }
 }
+
 reader_concurrency_semaphore& reader_concurrency_semaphore_group::add_or_update(scheduling_group sg, size_t shares) {
     auto result = _semaphores.try_emplace(
             sg,
@@ -71,7 +77,8 @@ reader_concurrency_semaphore& reader_concurrency_semaphore_group::add_or_update(
             _serialize_limit_multiplier,
             _kill_limit_multiplier,
             _cpu_concurrency,
-            _preemptive_abort_factor
+            _preemptive_abort_factor,
+            _shared_pool_percent > 0 ? &_shared_pool : nullptr
         );
     auto&& it = result.first;
     // since we serialize all group changes this change wait will be queues and no further operations
