@@ -23,6 +23,7 @@ using namespace seastar;
 
 class mutation_reader;
 using mutation_reader_opt = optimized_optional<mutation_reader>;
+class shared_memory_pool;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -164,6 +165,8 @@ public:
 private:
     resources _initial_resources;
     resources _resources;
+    shared_memory_pool* _shared_pool = nullptr;
+    ssize_t _borrowed_from_shared = 0;
     utils::observer<int> _count_observer;
 
     struct wait_queue {
@@ -293,7 +296,8 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            register_metrics metrics);
+            register_metrics metrics,
+            shared_memory_pool* shared_pool = nullptr);
 
     reader_concurrency_semaphore(
             int count,
@@ -304,10 +308,11 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            register_metrics metrics)
+            register_metrics metrics,
+            shared_memory_pool* shared_pool = nullptr)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length,
                 std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), std::move(cpu_concurrency),
-                std::move(preemptive_abort_factor), metrics)
+                std::move(preemptive_abort_factor), metrics, shared_pool)
     { }
 
     /// Create a semaphore with practically unlimited count and memory.
@@ -328,9 +333,10 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> cpu_concurrency = utils::updateable_value<uint32_t>(1),
             utils::updateable_value<float> preemptive_abort_factor = utils::updateable_value<float>(0.0f),
-            register_metrics metrics = register_metrics::no)
+            register_metrics metrics = register_metrics::no,
+            shared_memory_pool* shared_pool = nullptr)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
-                std::move(kill_limit_multipler), std::move(cpu_concurrency), std::move(preemptive_abort_factor), metrics)
+                std::move(kill_limit_multipler), std::move(cpu_concurrency), std::move(preemptive_abort_factor), metrics, shared_pool)
     {}
 
     virtual ~reader_concurrency_semaphore();
