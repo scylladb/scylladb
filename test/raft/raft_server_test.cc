@@ -1,4 +1,5 @@
 #include <fmt/std.h>
+#include "raft/raft.hh"
 #include "replication.hh"
 #include "utils/error_injection.hh"
 #include <seastar/util/defer.hh>
@@ -67,4 +68,45 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
     cluster.add_entries(1, 0).get();
     cluster.read(read_value{0, 1}).get();
 #endif
+}
+
+// A simple test verifying the most basic properties of `wait_for_state_change`:
+// * Triggering the passed abort_source will abort the operation.
+//   The future will be resolved.
+// * The future will contain an exception, and its type will be `raft::request_aborted`.
+// Reproduces SCYLLADB-665.
+SEASTAR_THREAD_TEST_CASE(test_aborting_wait_for_state_change) {
+    const size_t command_size = sizeof(size_t);
+    raft_cluster<std::chrono::steady_clock> cluster(
+            test_case {
+                .nodes = 1,
+                .config = std::vector<raft::server::configuration>({
+                    raft::server::configuration {
+                        .snapshot_threshold_log_size = 0,
+                        .snapshot_trailing_size = 0,
+                        .max_log_size = command_size,
+                        .max_command_size = command_size
+                    }
+                })
+            },
+            ::apply_changes,
+            0,
+            0,
+            0, false, tick_delay, rpc_config{});
+    cluster.start_all().get();
+    auto stop = defer([&cluster] { cluster.stop_all().get(); });
+
+    auto& server = cluster.get_server(0);
+    server.wait_for_leader(nullptr).get();
+
+    abort_source as;
+    // Note that this future cannot resolve immediately.
+    // In particular, the leader election we awaited above cannot
+    // influence it since the promises corresponding to
+    // waiting for a leader and state change are resolved
+    // within the same call, one after the other
+    // (cf. server_impl::process_fsm_output).
+    future<> fut_default_ex = server.wait_for_state_change(&as);
+    as.request_abort();
+    BOOST_CHECK_THROW((void) fut_default_ex.get(), raft::request_aborted);
 }
