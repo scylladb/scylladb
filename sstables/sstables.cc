@@ -107,6 +107,17 @@ namespace sstables {
 //
 thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
+// The below flag governs whether the partition_index_cache is enabled.
+//
+// If set to true, partition index entries are cached in a global partition_index_cache.
+// If false, each index_reader creates its own local partition_index_cache that is
+// not shared and not persistent across reads.
+//
+// This is independent from global_cache_index_pages, which controls caching of
+// the index file pages themselves (cached_file).
+//
+thread_local utils::updateable_value<bool> global_partition_index_cache_enabled(true);
+
 logging::logger sstlog("sstable");
 
 [[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename) {
@@ -2531,8 +2542,10 @@ sstable::make_reader(
 ) {
     const auto reversed = slice.is_reversed();
 
-    auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
-    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
+    auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
+    auto index_caching = use_caching(global_cache_index_pages && !bypass_cache);
+    auto partition_index_caching = use_caching(global_partition_index_cache_enabled && !bypass_cache);
+    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular(), partition_index_caching);
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
         return mx::make_reader(
@@ -3704,7 +3717,8 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     reader_permit permit,
     tracing::trace_state_ptr trace_state,
     use_caching caching,
-    bool single_partition_read
+    bool single_partition_read,
+    use_caching use_partition_index_cache
 ) {
     if (!_index_file) {
         if (!_partitions_db_footer) [[unlikely]] {
@@ -3740,7 +3754,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             std::move(trace_state)
         );
     }
-    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read);
+    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read, use_partition_index_cache);
 }
 
 // Returns error code, 0 is success
