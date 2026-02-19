@@ -197,7 +197,7 @@ public:
     }
 
     future<> commit_mutations(::service::group0_batch&& mc) {
-        return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+        return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{}, ::service::group0_batch::barrier::global);
     }
 
 private:
