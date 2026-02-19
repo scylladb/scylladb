@@ -35,9 +35,11 @@
 #include "db/schema_tables.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/concrete_types.hh"
+#include "types/vector.hh"
 #include "db/tags/extension.hh"
 #include "tombstone_gc_extension.hh"
 
+#include <boost/algorithm/string.hpp>
 #include <stdexcept>
 
 namespace cql3 {
@@ -256,6 +258,21 @@ static sstring target_type_name(index_target::target_type type) {
     }
 }
 
+// Cassandra SAI compatibility: detect the StorageAttachedIndex class name
+// used by CassIO/LangChain to create vector and metadata indexes.
+static bool is_sai_class_name(const sstring& class_name) {
+    auto lower = boost::to_lower_copy(class_name);
+    return lower == "org.apache.cassandra.index.sai.storageattachedindex"
+        || lower == "storageattachedindex";
+}
+
+// Returns true if the custom class name refers to a vector-capable index
+// (either ScyllaDB's native vector_index or Cassandra's SAI).
+static bool is_vector_capable_class(const sstring& class_name) {
+    auto lower = boost::to_lower_copy(class_name);
+    return lower == "vector_index" || is_sai_class_name(class_name);
+}
+
 void
 create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
@@ -266,7 +283,7 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _idx_properties->validate();
 
     // FIXME: This is ugly and can be improved.
-    const bool is_vector_index = _idx_properties->custom_class && *_idx_properties->custom_class == "vector_index";
+    const bool is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
     const bool uses_view_properties = _view_properties.properties()->count() > 0
             || _view_properties.use_compact_storage()
             || _view_properties.defined_ordering().size() > 0;
@@ -350,6 +367,47 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(*schema));
+    }
+
+    // Cassandra SAI compatibility: when the custom class is SAI, determine
+    // whether the target is a vector column or a regular column.
+    // - Vector column targets: rewrite to ScyllaDB's native "vector_index".
+    // - Non-vector targets (e.g., ENTRIES on MAP): convert to a native
+    //   secondary index by clearing custom_class, since ScyllaDB already
+    //   supports these natively without a custom index class.
+    if (_idx_properties && _idx_properties->custom_class && is_sai_class_name(*_idx_properties->custom_class)) {
+        bool has_vector_target = false;
+        for (const auto& target : targets) {
+            auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
+            if (ident) {
+                auto cd = schema->get_column_definition((*ident)->name());
+                if (cd && dynamic_cast<const vector_type_impl*>(cd->type.get())) {
+                    has_vector_target = true;
+                    break;
+                }
+            }
+        }
+        if (has_vector_target) {
+            _idx_properties->custom_class = "vector_index";
+        } else {
+            _idx_properties->custom_class = std::nullopt;
+            _idx_properties->is_custom = false;
+            // Run keyspace validation that was skipped earlier (line ~348)
+            // because custom_class was set at that point.
+            try {
+                db::view::validate_view_keyspace(db, keyspace(), tmptr);
+            } catch (const std::exception& e) {
+                throw exceptions::invalid_request_exception(e.what());
+            }
+            if (db.find_keyspace(keyspace()).uses_tablets()) {
+                warnings.emplace_back(
+                    "Creating an index in a keyspace that uses tablets requires "
+                    "the keyspace to remain RF-rack-valid while the index exists. "
+                    "Some operations will be restricted to enforce this: altering the keyspace's replication "
+                    "factor, adding a node in a new rack, and removing or decommissioning a node that would "
+                    "eliminate a rack.");
+            }
+        }
     }
 
     if (_idx_properties && _idx_properties->custom_class) {
