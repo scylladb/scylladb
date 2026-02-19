@@ -3698,7 +3698,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             SCYLLA_ASSERT(!tablet_counts.empty());
             min_tablet_count = *std::ranges::min_element(tablet_counts);
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, opts, s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -3707,6 +3707,15 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         }
 
         co_await writer->sync();
+
+        if (opts.expires_at) {
+            tlogger.info("snapshot {}: scheduled to expire at {}", name, opts.expires_at.value());
+            co_await sharded_db.invoke_on(0, [when = *opts.expires_at, ks_name = s->ks_name(), table_name = s->cf_name(), name] (database& db) {
+                if (auto snap_ctl_ptr = db.get_snapshot_ctl_ptr()) {
+                    snap_ctl_ptr->schedule_garbage_collection(when, ks_name, table_name, name);
+                }
+            });
+        }
     });
 }
 

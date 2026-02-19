@@ -3400,6 +3400,14 @@ void database::unplug_view_update_generator() noexcept {
     _view_update_generator = nullptr;
 }
 
+void database::plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept {
+    _snapshot_ctl = &snapshot_ctl;
+}
+
+void database::unplug_snapshot_ctl() noexcept {
+    _snapshot_ctl = nullptr;
+}
+
 } // namespace replica
 
 mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,

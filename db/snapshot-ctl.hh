@@ -17,6 +17,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
+#include "seastar/core/condition-variable.hh"
 #include "tasks/task_manager.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
@@ -65,6 +66,7 @@ public:
 
     snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
+    void shutdown() noexcept;
     future<> stop();
 
     sharded<replica::database>& db() { return _db; };
@@ -108,6 +110,9 @@ public:
 
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
+
+    // Must be called on shard 0
+    void schedule_garbage_collection(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag);
 private:
     config _config;
     sharded<replica::database>& _db;
@@ -115,6 +120,16 @@ private:
     seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
     sstables::storage_manager& _storage_manager;
+    bool _shutdown = false;
+    condition_variable _gc_cond;
+    struct gc_info {
+        gc_clock::time_point expires_at;
+        sstring ks_name;
+        sstring table_name;
+        sstring tag;
+    };
+    std::vector<gc_info> _gc_queue;
+    future<> _garbage_collector = make_ready_future<>();
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
@@ -133,6 +148,8 @@ private:
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    future<> garbage_collector();
 };
 
 }

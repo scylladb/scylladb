@@ -2112,7 +2112,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 .backup_sched_group = dbcfg.streaming_scheduling_group,
             };
             snapshot_ctl.start(std::ref(db), std::ref(task_manager), std::ref(sstm), snap_cfg).get();
-            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
+            db.local().plug_snapshot_ctl(snapshot_ctl.local());
+            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl, &db] {
+                db.local().unplug_snapshot_ctl();
                 snapshot_ctl.stop().get();
             });
 

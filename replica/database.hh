@@ -1689,6 +1689,8 @@ private:
 
     utils::disk_space_monitor::subscription _out_of_space_subscription;
 
+    db::snapshot_ctl* _snapshot_ctl = nullptr;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     db::commitlog* commitlog_for(const schema_ptr& schema);
@@ -1710,6 +1712,9 @@ public:
 
     void plug_view_update_generator(db::view::view_update_generator& generator) noexcept;
     void unplug_view_update_generator() noexcept;
+
+    void plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept;
+    void unplug_snapshot_ctl() noexcept;
 
 private:
     future<> flush_non_system_column_families();
@@ -2003,6 +2008,10 @@ public:
     static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id id, sstring tag, db::snapshot_options opts);
     static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts);
     static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, db::snapshot_options opts);
+
+    db::snapshot_ctl* get_snapshot_ctl_ptr() {
+        return _snapshot_ctl;
+    }
 
 public:
     bool update_column_family(schema_ptr s);
