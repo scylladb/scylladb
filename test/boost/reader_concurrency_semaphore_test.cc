@@ -2408,6 +2408,42 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) 
     BOOST_REQUIRE_THROW(requested_memory2_fut.get(), named_semaphore_timed_out);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abort_preemptively_aborted_permit) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    const auto serialize_multiplier = 2;
+    // Ensure permits are shed immediately during admission.
+    const auto preemptive_abort_factor = 1.0f;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count,
+            initial_resources.memory, 100, utils::updateable_value<uint32_t>(serialize_multiplier),
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t>(1), utils::updateable_value<float>(preemptive_abort_factor));
+    auto stop_sem = deferred_stop(semaphore);
+
+    // Set a ridiculously long timeout to ensure permit will not be rejected due to timeout
+    auto timeout = db::timeout_clock::now() + 60min;
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, timeout, {}).get();
+
+    auto permit2_units1 = permit2.request_memory(1024).get();
+    auto permit1_units = permit1.request_memory(8 * 1024).get();
+
+    // permit1 is now the blessed one
+
+    auto permit2_units2_fut = permit2.request_memory(1024);
+    BOOST_REQUIRE(!permit2_units2_fut.available());
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 1);
+
+    permit1_units.reset_to_zero();
+
+    const auto futures_failed = eventually_true([&] { return permit2_units2_fut.failed(); });
+    BOOST_CHECK(futures_failed);
+    BOOST_CHECK_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 1);
+
+    simple_schema ss;
+    auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(ss.schema(), permit2));
+    BOOST_REQUIRE_THROW(permit2_units2_fut.get(), named_semaphore_aborted);
+}
+
 /// Test that if no count resources are currently used, a single permit is always admitted regardless of available memory.
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_always_admit_one_permit) {
     simple_schema s;
