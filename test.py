@@ -6,7 +6,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-
+# test
 from __future__ import annotations
 
 import argparse
