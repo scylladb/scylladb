@@ -1617,7 +1617,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.ring_delay_ms = cfg->ring_delay_ms();
                 gcfg.shadow_round_ms = cfg->shadow_round_ms();
                 gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
-                gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
                 gcfg.group0_id = group0_id;
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
@@ -1677,7 +1676,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
+                    gossiper.local(), feature_service.local(), group0_client, dbcfg.gossip_scheduling_group};
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
@@ -2447,11 +2446,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
             });
-
-            if (!ss.local().raft_topology_change_enabled()) {
-                startlog.info("Waiting for gossip to settle before accepting client requests...");
-                gossiper.local().wait_for_gossip_to_settle().get();
-            }
 
             checkpoint(stop_signal, "allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();

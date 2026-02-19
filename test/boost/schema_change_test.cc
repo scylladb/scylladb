@@ -37,12 +37,6 @@
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 
-static cql_test_config run_with_raft_recovery_config() {
-    cql_test_config c;
-    c.run_with_raft_recovery = true;
-    return c;
-}
-
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
@@ -117,119 +111,6 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             BOOST_REQUIRE_EQUAL(*s, *e.local_db().find_keyspace(s->ks_name()).metadata()->cf_meta_data().at(s->cf_name()));
         });
     });
-}
-
-SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-
-            auto table_schema = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .build();
-
-            auto& mm = e.migration_manager().local();
-            auto group0_guard = mm.start_group0_operation().get();
-            auto ts = group0_guard.write_timestamp();
-            mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), table_schema, ts).get(), std::move(group0_guard), "").get();
-
-            auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
-            auto old_node_version = e.db().local().get_version();
-
-            {
-                testlog.info("Applying a no-op tombstone to v1 column definition");
-                auto s = db::schema_tables::columns();
-                auto pkey = partition_key::from_singular(*s, table_schema->ks_name());
-                mutation m(s, pkey);
-                auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
-                m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                mm.announce(utils::chunked_vector<mutation>({m}), mm.start_group0_operation().get(), "").get();
-            }
-
-            auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
-            auto new_node_version = e.db().local().get_version();
-
-            BOOST_REQUIRE_EQUAL(new_table_version, old_table_version);
-
-            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
-            // because the version after the first schema change is not a digest, but taken
-            // to be the version sent in the schema change mutations; in this case,
-            // `prepare_new_column_family_announcement` took `table_schema->version()`
-            //
-            // On the other hand, the second schema change mutations do not contain
-            // the ususal `system_schema.scylla_tables` mutation (which would contain the version);
-            // they are 'incomplete' schema mutations created by the above piece of code,
-            // not by the usual `prepare_..._announcement` functions. This causes
-            // a digest to be calculated when applying the schema change, and the digest
-            // will be different than the first version sent.
-            //
-            // Hence we use `run_with_raft_recovery_config()` in this test.
-            BOOST_REQUIRE_EQUAL(new_node_version, old_node_version);
-        });
-    }, run_with_raft_recovery_config());
-}
-
-SEASTAR_TEST_CASE(test_concurrent_column_addition) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-
-            service::migration_manager& mm = e.migration_manager().local();
-
-            auto s0 = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .build();
-
-            auto s1 = schema_builder("ks", "table")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .with_column("v3", bytes_type)
-                    .build();
-
-            auto s2 = schema_builder("ks", "table", std::make_optional(s1->id()))
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v1", bytes_type)
-                    .with_column("v2", bytes_type)
-                    .build();
-
-            {
-                auto group0_guard = mm.start_group0_operation().get();
-                auto ts = group0_guard.write_timestamp();
-                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s1, ts).get(), std::move(group0_guard), "").get();
-            }
-            auto old_version = e.db().local().find_schema(s1->id())->version();
-
-            // Apply s0 -> s2 change.
-            {
-                auto group0_guard = mm.start_group0_operation().get();
-                auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
-                auto muts = db::schema_tables::make_update_table_mutations(e.get_storage_proxy().local(), keyspace, s0, s2,
-                        group0_guard.write_timestamp());
-                mm.announce(std::move(muts), std::move(group0_guard), "").get();
-            }
-
-            auto new_schema = e.db().local().find_schema(s1->id());
-
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v1")) != nullptr);
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v2")) != nullptr);
-            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v3")) != nullptr);
-
-            BOOST_REQUIRE(new_schema->version() != old_version);
-
-            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
-            // because the version resulting after schema change is not a digest, but taken to be
-            // the version sent in the schema change mutations; in this case, `make_update_table_mutations`
-            // takes `s2->version()`.
-            //
-            // This is fine with group 0 where all schema changes are linearized, so this scenario
-            // of merging concurrent schema changes doesn't happen.
-            //
-            // Hence we use `run_with_raft_recovery_config()` in this test.
-            BOOST_REQUIRE(new_schema->version() != s2->version());
-        });
-    }, run_with_raft_recovery_config());
 }
 
 SEASTAR_TEST_CASE(test_sort_type_in_update) {
@@ -784,12 +665,6 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     }
     cql_test_config cfg_in(db_cfg_ptr);
     cfg_in.disabled_features = std::move(disabled_features);
-    // Copying the data directory makes the node incorrectly think it restarts. Then,
-    // after noticing it is not a part of group 0, the node would start the raft upgrade
-    // procedure if we didn't run it in the raft RECOVERY mode. This procedure would get
-    // stuck because it depends on messaging being enabled even if the node communicates
-    // only with itself and messaging is disabled in boost tests.
-    cfg_in.run_with_raft_recovery = true;
 
     return do_with_cql_env_thread([expected_digests = std::move(expected_digests), extra_schema_changes = std::move(extra_schema_changes)] (cql_test_env& e) {
         if (regenerate) {
@@ -863,14 +738,14 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
-        utils::UUID("bbf064ed-0a98-3c19-8c4a-5c929cabd936"),
-        utils::UUID("0db2a3f8-6779-388f-951d-de6a537789a7"),
-        utils::UUID("21a89984-ffc6-325d-b818-66fc29da51e7"),
-        utils::UUID("e69a05e8-80a6-3e8f-bd34-1b5837374c79"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
+        utils::UUID("c9e7f00a-0d19-366a-ba6c-ebdfe94f1dd1"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
+        utils::UUID("8dfb7c90-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfc66f1-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfd5151-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfe89d1-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
             std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
@@ -879,14 +754,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_without_digest_feature) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
-        utils::UUID("13d418e8-968e-3bd8-801a-6df5e5327d44"),
-        utils::UUID("75808956-93e2-331a-96cc-8dc9cdea79ca"),
-        utils::UUID("7eccb793-c6f4-3e84-ae35-788d03188baf"),
-        utils::UUID("467deb84-d7de-36cb-a1fa-f3672cb66340"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
+        utils::UUID("a9c88159-aa6a-372e-8aca-59401fdcf38b"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
+        utils::UUID("53cb5430-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53cc3e91-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53cd28f1-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53ceaf91-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns",
             std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"}, std::move(expected_digests), [] (cql_test_env& e) {});
@@ -894,14 +769,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns_with
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
-        utils::UUID("6c7bef38-05b7-3bf3-a52c-352333da7214"),
-        utils::UUID("cb23910d-ced8-35e5-99f3-57f362860f3c"),
-        utils::UUID("b0ecf791-0637-34a5-a940-bc217517f1aa"),
-        utils::UUID("47b87dfc-3c18-324b-b280-58300ac5d3ca"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
+        utils::UUID("8c90f476-3872-35f1-9652-ebf895d25499"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
+        utils::UUID("d87be7a0-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87caaf2-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87d9552-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87ef4e2-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
@@ -917,14 +792,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options_without_di
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
-        utils::UUID("265be25f-b268-3f43-a54d-9c6e379a901d"),
-        utils::UUID("c604f5c9-988e-393f-b9d8-2ed55b9a540c"),
-        utils::UUID("45d9f25d-58a1-3f1e-85a1-f09d82c52588"),
-        utils::UUID("7ef45dd2-aab9-38f1-bcc6-ba9c94666e36"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
+        utils::UUID("95ea2227-255d-3dad-9e5b-825d3b8fae56"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
+        utils::UUID("109b6d90-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109c30e2-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109d4251-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109ea1e1-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
@@ -938,14 +813,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options_without_di
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_options_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
-        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
-        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
-        utils::UUID("f4ca70f9-170c-3a69-a274-76e711d2841e"),
-        utils::UUID("cbf9aa1e-2488-3485-8c28-e42bf42a2dcf"),
-        utils::UUID("67c0db2d-8fd6-30f4-beee-f15a80a889fd"),
-        utils::UUID("9c5c996a-6b27-346e-96d4-26d545d4601a"),
-        utils::UUID("3fc03c97-8010-3746-8cea-e8b9ac27fe4e"),
+        utils::UUID("0fa8fa0b-c272-3e7d-965f-e339d118c4de"),
+        utils::UUID("43d02ec5-e69e-39d2-a1a3-9c385e807d17"),
+        utils::UUID("43d02ec5-e69e-39d2-a1a3-9c385e807d17"),
+        utils::UUID("46bd27b0-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46bdeb02-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46befc71-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46c08311-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("efce863c-19d7-3e3a-bf95-fdf76f5775f5"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_keyspace_storage_options",
@@ -959,14 +834,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_optio
 }
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
-        utils::UUID("75550bef-3a95-3901-be80-4540f7d8a311"),
-        utils::UUID("aff80a2a-4a72-35bb-9ac3-f851013610d0"),
-        utils::UUID("030100b2-27aa-32f2-8964-0090a1af75f8"),
-        utils::UUID("16ba4b2d-7c61-393b-ba51-0890e25f4e22"),
-        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
+        utils::UUID("c9e7f00a-0d19-366a-ba6c-ebdfe94f1dd1"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
+        utils::UUID("8dfb7c90-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfc66f1-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfd5151-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("8dfe89d1-01c5-11f1-8db2-0f688d7fda1b"),
+        utils::UUID("f2385053-24c2-3ca9-a772-981be0316a7f"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
             std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS"},
@@ -975,14 +850,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
-        utils::UUID("5a89ff92-9b5c-32eb-ad5a-5def856e3024"),
-        utils::UUID("26808d79-e22a-3d20-88a7-d812301ff342"),
-        utils::UUID("371527f3-2f26-32a6-8b29-bb0ce0735b61"),
-        utils::UUID("02ed06b1-c384-3f83-b116-fe94f5bf647a"),
-        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
+        utils::UUID("a9c88159-aa6a-372e-8aca-59401fdcf38b"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
+        utils::UUID("53cb5430-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53cc3e91-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53cd28f1-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("53ceaf91-01c7-11f1-9bc3-72881aed3f75"),
+        utils::UUID("134bbc8e-bed6-39e0-88a7-7519ccb6bfc8"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns",
             std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS"}, std::move(expected_digests), [] (cql_test_env& e) {});
@@ -990,14 +865,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
-        utils::UUID("9b842fb8-2b89-3f9f-a344-f648cb27a226"),
-        utils::UUID("e596cbc4-60f8-3788-96e6-fdfb105ba39f"),
-        utils::UUID("0f214b9c-81a5-3771-8722-4763ab8fd0ee"),
-        utils::UUID("08624ebc-c0d2-3e7a-bcd7-4fcb442626e4"),
-        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
+        utils::UUID("8c90f476-3872-35f1-9652-ebf895d25499"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
+        utils::UUID("d87be7a0-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87caaf2-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87d9552-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d87ef4e2-01c5-11f1-bc23-679f0beca436"),
+        utils::UUID("d6201692-67ee-321c-a038-24bc56141b54"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
@@ -1013,14 +888,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
-        utils::UUID("fdfdea09-fee9-3fd4-945f-b91a7a2e0e39"),
-        utils::UUID("44e79540-5cc5-3617-88c0-267fe7cc2232"),
-        utils::UUID("e2b673e7-04c0-37cb-b076-77951f2f5452"),
-        utils::UUID("089d5e42-065a-3e19-a608-58a960816c51"),
-        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
+        utils::UUID("95ea2227-255d-3dad-9e5b-825d3b8fae56"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
+        utils::UUID("109b6d90-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109c30e2-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109d4251-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("109ea1e1-01c6-11f1-a0c5-3beaef6855ba"),
+        utils::UUID("ea6ef7b6-7bc1-3c21-b638-54861462ef4c"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
@@ -1034,14 +909,14 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_options) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
-        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
-        utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
-        utils::UUID("1f971ee2-42d1-3564-ae89-0090803d6d58"),
-        utils::UUID("60444aca-708a-387f-b571-e4c0806ab78d"),
-        utils::UUID("11c00de3-d47f-38bd-84f1-0f5e1179a168"),
-        utils::UUID("c495feac-b2a4-3c50-91a5-363630f878d6"),
-        utils::UUID("3fc03c97-8010-3746-8cea-e8b9ac27fe4e"),
+        utils::UUID("0fa8fa0b-c272-3e7d-965f-e339d118c4de"),
+        utils::UUID("43d02ec5-e69e-39d2-a1a3-9c385e807d17"),
+        utils::UUID("43d02ec5-e69e-39d2-a1a3-9c385e807d17"),
+        utils::UUID("46bd27b0-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46bdeb02-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46befc71-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("46c08311-01c6-11f1-9091-5ea6a2cb6845"),
+        utils::UUID("efce863c-19d7-3e3a-bf95-fdf76f5775f5"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_keyspace_storage_options",
