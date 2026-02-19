@@ -641,16 +641,17 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     // when producer expects substantial number or size of mutations it should use generator
     if (_generators.size() == 0) {
         utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+        co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    } else {
+        // raft doesn't support streaming so we need to materialize all mutations in memory
+        co_await materialize_mutations();
+        if (_muts.empty()) {
+            co_return;
+        }
+        utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        _muts.clear();
+        co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
     }
-    // raft doesn't support streaming so we need to materialize all mutations in memory
-    co_await materialize_mutations();
-    if (_muts.empty()) {
-        co_return;
-    }
-    utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-    _muts.clear();
-    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
 }
 
 future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
