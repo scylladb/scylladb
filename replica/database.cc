@@ -2947,7 +2947,12 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-        co_await snapshot_table_on_all_shards(sharded_db, table_shards, name, db::snapshot_options{});
+        auto ttl = sharded_db.local().get_config().auto_snapshot_ttl();
+        db::snapshot_options opts;
+        if (ttl) {
+            opts.expires_at = opts.created_at + ttl * 1s;
+        }
+        co_await snapshot_table_on_all_shards(sharded_db, table_shards, name, opts);
     }
 
     co_await sharded_db.invoke_on_all([&] (database& db) {

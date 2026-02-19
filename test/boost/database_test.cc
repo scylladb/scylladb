@@ -612,7 +612,7 @@ static std::set<sstring> collect_sstables(const std::set<sstring>& all_files, co
 }
 
 // Validate that the manifest.json lists exactly the SSTables present in the snapshot directory
-static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time, bool tablets_enabled) {
+static future<> validate_manifest(const locator::topology& topology, const fs::path& snapshot_dir, const std::set<sstring>& in_snapshot_dir, gc_clock::time_point min_time, bool tablets_enabled, std::optional<int> ttl = std::nullopt) {
     sstring suffix = "-TOC.txt";
     auto sstables_in_snapshot = collect_sstables(in_snapshot_dir, suffix);
     std::set<sstring> sstables_in_manifest;
@@ -669,7 +669,14 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
         BOOST_REQUIRE(created_at_seconds > 0);
         auto& expires_at = manifest_snapshot["expires_at"];
         BOOST_REQUIRE(expires_at.IsNumber());
-        BOOST_REQUIRE_GE(expires_at.GetInt64(), created_at_seconds);
+        auto expires_at_seconds = expires_at.GetInt64();
+        if (ttl) {
+            BOOST_REQUIRE_EQUAL(expires_at_seconds, created_at_seconds + *ttl);
+        } else {
+            BOOST_REQUIRE_GE(expires_at.GetInt64(), created_at_seconds);
+        }
+    } else if (ttl) {
+        BOOST_FAIL("manifest should have expires_at when ttl is set");
     }
 
     BOOST_REQUIRE(manifest_json.HasMember("table"));
@@ -813,6 +820,58 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         auto in_snapshot_dir = collect_files(table_dir(cf) / sstables::snapshots_dir / "test").get();
         BOOST_REQUIRE_EQUAL(in_snapshot_dir, std::set<sstring>({"manifest.json", "schema.cql"}));
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_auto_snapshot_ttl) {
+    bool tablets_enabled = true;
+    bool create_mvs = false;
+    int ttl = 1;
+#ifdef SCYLLA_BUILD_MODE_DEBUG
+    ttl = 3;
+#endif
+
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(tablets_enabled ? db::tablets_mode_t::mode::enabled : db::tablets_mode_t::mode::disabled);
+    db_cfg_ptr->auto_snapshot(true);
+    db_cfg_ptr->auto_snapshot_ttl(ttl);
+    std::string ks_name = "ks";
+    std::string table_name = "test";
+    size_t num_keys = 100;
+    do_with_some_data_in_thread({table_name}, [&] (cql_test_env& e) {
+        auto min_time = gc_clock::now();
+        take_snapshot(e, ks_name, table_name).get();
+
+        auto& cf = e.local_db().find_column_family(ks_name, table_name);
+        auto table_directory = table_dir(cf);
+
+        auto in_table_dir = collect_files(table_directory).get();
+        // snapshot triggered a flush and wrote the data down.
+        BOOST_REQUIRE_GE(in_table_dir.size(), 9);
+
+        testlog.debug("Dropping table {}.{}", ks_name, table_name);
+        replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, true).get();
+
+        fs::path snapshot_dir;
+        auto snapshot_base_dir = table_directory / sstables::snapshots_dir;
+        directory_lister lister(snapshot_base_dir, lister::dir_entry_types::of<directory_entry_type::directory>());
+        while (auto de = lister.get().get()) {
+            if (de->name.starts_with("pre-drop")) {
+                BOOST_REQUIRE(snapshot_dir.empty()); // only one pre-drop snapshot should be present
+                testlog.debug("Found auto-snapshot directory: {}", snapshot_base_dir / de->name);
+                snapshot_dir = snapshot_base_dir / de->name;
+            }
+        }
+
+        auto in_snapshot_dir = collect_files(snapshot_dir).get();
+
+        in_table_dir.insert("manifest.json");
+        in_table_dir.insert("schema.cql");
+        // all files were copied and manifest was generated
+        BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
+
+        const auto& topology = e.local_db().get_token_metadata().get_topology();
+        validate_manifest(topology, snapshot_dir, in_snapshot_dir, min_time, tablets_enabled, ttl).get();
+    }, create_mvs, db_cfg_ptr, num_keys).get();
 }
 
 SEASTAR_TEST_CASE(snapshot_list_okay) {
