@@ -161,29 +161,26 @@ if [ -z "$is_podman" ]; then
        "${group_args[@]}"
        -v /etc/passwd:/etc/passwd:ro
        -v /etc/group:/etc/group:ro
+       -v /var/run/docker.sock:/var/run/docker.sock
        --pids-limit -1
        )
-else
-    # --pids-limit is not supported on podman with cgroupsv1
-    # detection code from
-    #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
-    containers_conf="$(mktemp)"
-    tmpfiles+=("$containers_conf")
-    cat > "$containers_conf" <<EOF
+fi
+
+# --pids-limit is not supported on podman with cgroupsv1
+# detection code from
+#   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
+containers_conf="$(mktemp)"
+tmpfiles+=("$containers_conf")
+cat > "$containers_conf" <<EOF
 [engine]
 static_dir = "$HOME/.local/share/containers/storage/libpod"
 volume_path = "$HOME/.local/share/containers/storage/libpod"
 
-[containers]
-# netns = private, the default, doesn't work in nested containers,
-# and we don't mind using the host network anyway.
-netns = "host"
-
 EOF
 
-    storage_conf="$(mktemp)"
-    tmpfiles+=("$storage_conf")
-    cat > "$storage_conf" <<EOF
+storage_conf="$(mktemp)"
+tmpfiles+=("$storage_conf")
+cat > "$storage_conf" <<EOF
 
 [storage]
 driver = "overlay"
@@ -192,21 +189,22 @@ graphroot = "$HOME/.local/share/containers/storage"
 
 EOF
 
-    if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
-        docker_common_args+=(
-            -v "$HOME/.local/share/containers:$HOME/.local/share/containers"
-            -v "$containers_conf:/etc/containers/containers.conf.d/nested.conf"
-            -v "$storage_conf:/etc/containers/storage.conf"
-            --pids-limit -1
-            --annotation run.oci.keep_original_groups=1
-        )
-    fi
-    # if --pids-limit is not supported, add
-    #    [containers]
-    #    pids_limit = 0
-    #
-    # to /etc/containers/containers.conf
+if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
+    docker_common_args+=(
+        -v "$HOME/.local/share/containers:$HOME/.local/share/containers"
+        -v "$containers_conf:/etc/containers/containers.conf.d/nested.conf"
+        -v "$storage_conf:/etc/containers/storage.conf"
+        --pids-limit -1
+        --annotation run.oci.keep_original_groups=1
+    )
 fi
+
+# if --pids-limit is not supported, add
+#    [containers]
+#    pids_limit = 0
+#
+# to /etc/containers/containers.conf
+
 
 # Forward authentication, to avoid docker hub unauthenticated rate limits.
 for auth_json in "${XDG_RUNTIME_DIR}/containers/auth.json" "${HOME}/.config/containers/auth.json"; do
@@ -243,9 +241,9 @@ fi
 docker_common_args+=(
        --security-opt seccomp=unconfined \
        --security-opt label=disable \
-       --network host \
-       --cap-add SYS_PTRACE \
        --privileged \
+       --network=private \
+       --ipc=host \
        --ulimit nofile=$(ulimit -Sn):$hard_limit \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
