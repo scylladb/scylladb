@@ -1125,15 +1125,14 @@ SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
+SEASTAR_TEST_CASE(vector_store_client_high_availability_is_able_to_probe_all_nodes_regardless_of_cql_timeout) {
     auto server = co_await make_vs_mock_server();
     auto unreachable = co_await make_unreachable_socket();
 
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://unreachable.node:{}", unreachable.port));
     cfg.db_config->vector_store_secondary_uri.set(format("http://server.node:{}", server->port()));
-    cfg.db_config->request_timeout_in_ms.set(5000);                   // connection timeout to the vector store
-    cfg.query_timeout = make_query_timeout(std::chrono::seconds(10)); // CQL SELECT query timeout longer than connection timeout
+    cfg.query_timeout = make_query_timeout(std::chrono::seconds(3)); // set CQL timeout to 3 seconds - smaller that connection timeout to vs node with is 5s.
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "test");
@@ -1161,11 +1160,10 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
 
 SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
     auto server = co_await make_vs_mock_server();
-    server->ann_response_delay(std::chrono::seconds(10));
+    server->ann_response_delay(std::chrono::seconds(5));
 
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
-    cfg.query_timeout = make_query_timeout(std::chrono::seconds(1)); // CQL SELECT query timeout shorter than response delay
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "test");
@@ -1174,7 +1172,9 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
                 vs.start_background_tasks();
                 auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
 
-                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                // Execute an ANN SELECT with a query timeout of 1 second. The server is configured to delay ANN responses by 5 seconds,
+                // so the client is expected to abort the request after 1 second due to the query timeout, resulting in an exception.
+                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5 USING TIMEOUT 1s;"),
                         exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
                             return ex.what() == std::string("Vector Store request was aborted");
                         });
