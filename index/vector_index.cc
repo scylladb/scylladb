@@ -111,7 +111,13 @@ bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
         && r != properties.end() && boost::iequals(r->second, "true");
 }
 
-float vector_index::get_oversampling(const index_options_map& properties) {
+float vector_index::get_oversampling(const index_options_map& properties, std::optional<float> query_value) {
+    if (query_value) {
+        if (*query_value >= 1.0f && *query_value <= 100.0f) {
+            return *query_value;
+        }
+        throw exceptions::invalid_request_exception("Oversampling must be between 1.0 and 100.0");
+    }
     auto it = properties.find("oversampling");
     if (it != properties.end()) {
         return std::stof(it->second);
