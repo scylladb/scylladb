@@ -41,7 +41,7 @@ def table1(cql, test_keyspace):
 # Test each of the units which are supposed to be allowed, separately -
 # y, mo, w, d, h, m, s, ms, us *or* µs, ns:
 # Reproduces issue #8001
-@pytest.mark.xfail(reason="issue #8001")
+@pytest.mark.xfail(reason="Documented unit \"µs\" not supported for assigning a \"duration\" type #8001")
 def test_type_duration_human_readable_input_units(cql, table1):
     # Map of allowed units and their expected meaning.
     units = {

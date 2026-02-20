@@ -39,7 +39,7 @@ def table2(cql, test_keyspace):
 # and then read - so that is the Cassandra-compatible approach - but
 # arguably a more correct and useful behavior would be to fail the write
 # up-front, even before reaching the read.
-@pytest.mark.xfail(reason="issue #11588")
+@pytest.mark.xfail(reason="Timestamp validation happens during read, instead of during write #11588")
 def test_type_timestamp_overflow(cql, table1):
     p = unique_key_int()
     t = 1667215862 * 1000000
@@ -135,7 +135,7 @@ def test_type_timestamp_comparison(cql, table2):
 # Cassandra 4 added the feature of arithmetic between values in general, and
 # timestamps in particular (to which durations can be added). Scylla used to
 # be missing this feature - see #2693, #2694 and their many duplicates.
-@pytest.mark.xfail(reason="issue #2693, #2694")
+@pytest.mark.xfail(reason="issue #2693: Support arithmetic operators, #2694: Support operators on date-times")
 def test_type_timestamp_arithmetic(cql, table2):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table2} (p, c, t) VALUES ({p}, 1, '2011-02-03 04:05:12.345+0000')")

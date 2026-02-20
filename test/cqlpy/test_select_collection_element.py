@@ -147,7 +147,7 @@ def test_set_subscript(cql, test_keyspace):
         assert list(cql.execute(f"SELECT s[20] FROM {table} WHERE p={p}")) == [(20,)]
 
 # scylla only because cassandra doesn't support lua language
-@pytest.mark.xfail(reason="#22075")
+@pytest.mark.xfail(reason="Selecting collection elements with slice syntax and remaining Cassandra compatibility #22075")
 def test_subscript_function_arg(scylla_only, cql, test_keyspace, table1):
     fn = "(k int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return k+1'"
     with new_function(cql, test_keyspace, fn, 'add_one'):

@@ -449,7 +449,7 @@ def test_missing_tag_value(dynamodb, test_table):
 # Reproduces #16908
 @pytest.mark.parametrize("is_ascii", [
         True,
-        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+        pytest.param(False, marks=pytest.mark.xfail(reason="Alternator TagResource should allow (and count) **unicode** characters #16908"))])
 def test_tag_key_length_128_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
     arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
@@ -472,7 +472,7 @@ def test_tag_key_length_129_forbidden(dynamodb, test_table):
 # Reproduces #16908
 @pytest.mark.parametrize("is_ascii", [
         True,
-        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+        pytest.param(False, marks=pytest.mark.xfail(reason="Alternator TagResource should allow (and count) **unicode** characters #16908"))])
 def test_tag_value_length_256_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
     arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']

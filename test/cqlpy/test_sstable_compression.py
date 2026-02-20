@@ -16,7 +16,7 @@ from cassandra.protocol import ConfigurationException, SyntaxException
 # given as a "sstable_compression" attribute, but newer Cassandra switched
 # to "class". Check that we support this new name class.
 # Reproduces #8948.
-@pytest.mark.xfail(reason="#8948")
+@pytest.mark.xfail(reason="Cassandra 3.11.10 uses \"class\" instead of \"sstable_compression\" for compression settings by default #8948")
 def test_compression_class(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { 'class': 'LZ4Compressor' }") as table:
         pass
@@ -37,7 +37,7 @@ def table_lz4(cql, test_keyspace):
 # "sstable_compression" attribute was used to set the compression class,
 # when reading the schema we should see "class".
 # Reproduces #8948.
-@pytest.mark.xfail(reason="#8948")
+@pytest.mark.xfail(reason="Cassandra 3.11.10 uses \"class\" instead of \"sstable_compression\" for compression settings by default #8948")
 def test_read_compression_class(cql, table_lz4):
     [ks, cf] = table_lz4.split('.')
     opts = cql.execute(f"SELECT compression FROM system_schema.tables WHERE keyspace_name='{ks}' AND table_name='{cf}'").one().compression
@@ -48,7 +48,7 @@ def test_read_compression_class(cql, table_lz4):
 # explicitly, some default value is nevertheless used, and its value should
 # be readable from the schema.
 # Reproduces #6442.
-@pytest.mark.xfail(reason="#6442")
+@pytest.mark.xfail(reason="Scylla stores un-expanded compaction class name in system tables #6442")
 def test_read_chunk_length(cql, table_lz4):
     [ks, cf] = table_lz4.split('.')
     opts = cql.execute(f"SELECT compression FROM system_schema.tables WHERE keyspace_name='{ks}' AND table_name='{cf}'").one().compression

@@ -261,7 +261,7 @@ def testCounterCastsInSelectionClause(cql, test_keyspace):
                    row(2, 2, 2, 2, 2.0, 2.0, Decimal("2"), "2", "2"))
 
 # Verifies that the {@code CAST} function can be used in the values of {@code INSERT INTO} statements.
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInInsertIntoValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         # Simple cast
@@ -296,7 +296,7 @@ def testCastsInInsertIntoValues(cql, test_keyspace):
         #assertRows(execute(cql, table, "SELECT v FROM %s"), row(6))
 
 # Verifies that the {@code CAST} function can be used in the values of {@code UPDATE} statements.
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInUpdateValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         # Simple cast
@@ -331,7 +331,7 @@ def testCastsInUpdateValues(cql, test_keyspace):
         #assertRows(execute(cql, table, "SELECT v FROM %s"), row(6))
 
 # Verifies that the {@code CAST} function can be used in the {@code WHERE} clause of {@code UPDATE} statements.
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInUpdateWhereClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         for i in range(1,7):
@@ -369,7 +369,7 @@ def testCastsInUpdateWhereClause(cql, test_keyspace):
         #assertRows(execute(cql, table, "SELECT v FROM %s WHERE k = ?", 6), row(6))
 
 # Verifies that the {@code CAST} function can be used in the {@code WHERE} clause of {@code SELECT} statements.
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInSelectWhereClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key)") as table:
         for i in range(1,7):
@@ -401,7 +401,7 @@ def testCastsInSelectWhereClause(cql, test_keyspace):
         #assertRows(execute(cql, table, String.format("SELECT k FROM %%s WHERE k = CAST(%s(6) AS int)", intToFloat())), row(6))
 
 # Verifies that the {@code CAST} function can be used in the {@code WHERE} clause of {@code DELETE} statements.
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInDeleteWhereClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key)") as table:
         for i in range(1, 7):
@@ -473,7 +473,7 @@ def testCastsInDeleteWhereClause(cql, test_keyspace):
 #    }
 
 # Verifies that the {@code CAST} function can be used in the {@code WHERE} clause of {@code CREATE MATERIALIZED
-@pytest.mark.xfail(reason="issue #14522")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14522")
 def testCastsInCreateViewWhereClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         viewName = test_keyspace + ".mv_with_cast"

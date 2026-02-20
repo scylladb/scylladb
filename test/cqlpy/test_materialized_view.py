@@ -390,7 +390,7 @@ def test_mv_synchronous_updates(cql, test_keyspace, scylla_only):
 # message about a key being too long appears in the log.
 # Note that the same issue also applies to secondary indexes, and this is
 # tested in test_secondary_index.py.
-@pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.xfail(reason="Cleanly reject updates with indexed values where value > 64k #8627")
 def test_oversized_base_regular_view_key(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
         with new_materialized_view(cql, table, select='*', pk='v,p', where='v is not null and p is not null') as mv:
@@ -408,11 +408,11 @@ def test_oversized_base_regular_view_key(cql, test_keyspace, cassandra_bug):
 # copied to the view. The view building cannot return an error to the user,
 # but we do expect it to skip the problematic row and continue to complete
 # the rest of the view build.
-@pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.xfail(reason="Cleanly reject updates with indexed values where value > 64k #8627")
 # This test currently breaks the build (it repeats a failing build step,
 # and never complete) and we cannot quickly recognize this failure, so
 # to avoid a very slow failure, we currently "skip" this test.
-@pytest.mark.skip(reason="issue #8627, fails very slow")
+@pytest.mark.skip(reason="Cleanly reject updates with indexed values where value > 64k #8627, fails very slow")
 def test_oversized_base_regular_view_key_build(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
         # No materialized view yet - a "big" value in v is perfectly fine:
@@ -531,7 +531,7 @@ def test_view_builder_suspend_with_partition_tombstone(cql, test_keyspace, scyll
 # columns.
 # This test reproduces issue issue #11979, that Scylla used to require
 # IS NOT NULL inconsistently.
-@pytest.mark.xfail(reason="issue #11979")
+@pytest.mark.xfail(reason="Make requirement of \"IS NOT NULL\" in materialized view more consistent #11979")
 def test_is_not_null_requirement(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
         # missing "v is not null":
@@ -705,7 +705,7 @@ def test_mv_long_delete(cql, test_keyspace):
 # this column is used in a materialized view, its order in the view inherits
 # the same reversed sort order it had in the base table.
 # Reproduces #12308
-@pytest.mark.xfail(reason="issue #12308")
+@pytest.mark.xfail(reason="In Scylla, MV CLUSTERING ORDER BY defaults to natural order. In Cassandra the base's order is inherited. #12308")
 def test_mv_inherit_clustering_order(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)', 'with clustering order by (c DESC)') as table:
         # note no explicit clustering order on c in the materialized view:
@@ -776,7 +776,7 @@ def test_mv_override_clustering_order_quoted(cql, test_keyspace):
 # The following test verifies that these bad WITH CLUSTERING ORDER BY
 # clauses are indeed rejected.
 # Reproduces #12936.
-@pytest.mark.xfail(reason="issue #12936")
+@pytest.mark.xfail(reason="In MV definition, CLUSTERING ORDER BY should require strict clustering-column order #12936")
 def test_mv_override_clustering_order_bad1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)') as table:
         # Mis-ordered clustering columns: c,x on PRIMARY KEY, but

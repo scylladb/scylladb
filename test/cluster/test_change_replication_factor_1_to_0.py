@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     "use_tablets",
     [
         pytest.param(False, id="vnodes"),
-        pytest.param(True, id="tablets", marks=[pytest.mark.skip(reason="issue #20282"), pytest.mark.nightly]),
+        pytest.param(True, id="tablets", marks=[pytest.mark.skip(reason='issue #20282: (tablets only) All DC nodes got Coredump and error of: "failed to log message: fmt=\\'Requested location for node {} not in topology" on altering keyspace replication-factor of one data-center (out of 2)'), pytest.mark.nightly]),
     ],
 )
 @pytest.mark.asyncio

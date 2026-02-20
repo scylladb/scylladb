@@ -438,7 +438,7 @@ def testDeleteWithOneClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "where clause",
                              "DELETE FROM %s WHERE partitionKey = ? AND clustering = ? AND value = ?", 0, 1, 3)
 
-@pytest.mark.xfail(reason="#4244")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testDeleteWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, clustering_2 int, value int, PRIMARY KEY (partitionKey, clustering_1, clustering_2))") as table:
@@ -666,7 +666,7 @@ def testDeleteWithRangeAndOneClusteringColumn(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "DELETE value FROM %s WHERE partitionKey = ?", 2)
 
-@pytest.mark.xfail(reason="#13250")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #13250")
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testDeleteWithRangeAndTwoClusteringColumns(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, clustering_2 int, value int, primary key (partitionKey, clustering_1, clustering_2))") as table:

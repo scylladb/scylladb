@@ -54,7 +54,7 @@ def testInsertWithUnset(cql, test_keyspace):
 MAX_TTL = 20 * 365 * 24 * 60 * 60
 
 # Reproduces #12243:
-@pytest.mark.xfail(reason="Issue #12243")
+@pytest.mark.xfail(reason="Maybe inconsistent handling of implicit timestamp<->bigint conversion #12243")
 def testInsertWithTtl(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
         # test with unset
@@ -164,7 +164,7 @@ def testInsertWithAStaticColumn(cql, test_keyspace, forceFlush):
                              "INSERT INTO %s (partitionKey, clustering_2, staticValue) VALUES (0, 0, 'A')")
 
 # Reproduces #6447 and #12243:
-@pytest.mark.xfail(reason="Issue #12243")
+@pytest.mark.xfail(reason="Maybe inconsistent handling of implicit timestamp<->bigint conversion #12243")
 def testInsertWithDefaultTtl(cql, test_keyspace):
     secondsPerMinute = 60
     with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b int) WITH default_time_to_live = {10*secondsPerMinute}") as table:
@@ -195,14 +195,14 @@ def testInsertWithDefaultTtl(cql, test_keyspace):
 TOO_BIG = 1024 * 65
 
 # Reproduces #12247:
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def testPKInsertWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(a text, b text, PRIMARY KEY (a, b))") as table:
         assertInvalidThrow(cql, table, InvalidRequest,
                            "INSERT INTO %s (a, b) VALUES (?, 'foo')", 'x'*TOO_BIG)
 
 # Reproduces #12247:
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def testCKInsertWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(a text, b text, PRIMARY KEY (a, b))") as table:
         assertInvalidThrow(cql, table, InvalidRequest,

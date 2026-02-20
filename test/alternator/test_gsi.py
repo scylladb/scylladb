@@ -2133,7 +2133,7 @@ def test_gsi_invalid_key_types(dynamodb):
 # implement this GSI needs to add "p" as an extra clustering key, but it
 # doesn't mean that "p" should be allowed in a KeyConditions or
 # KeyConditionExpression - it shouldn't because it's not a real range key.
-@pytest.mark.xfail(reason="Issue #26103")
+@pytest.mark.xfail(reason="Alternator streams may generate event even if item did not really change #26103")
 def test_faux_range_key_in_keyconditions(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2158,7 +2158,7 @@ def test_faux_range_key_in_keyconditions(test_table_gsi_2):
             KeyConditions={'z': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="Issue #26103")
+@pytest.mark.xfail(reason="Alternator streams may generate event even if item did not really change #26103")
 def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2318,7 +2318,7 @@ def test_gsi_query_exclusivestartkey_missing_column(test_table_gsi_5):
 # When Query'ing on a certain GSI partition key and/or sort key,
 # ExclusiveStartKey must have the same partition/sort key value.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
     # The error that DynamoDB reports if the wrong partition is mentioned
     # in ExclusiveStartKey is "The provided starting key is outside query
@@ -2369,7 +2369,7 @@ def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key columns of the base and the GSI.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
     query_args = {
         'ConsistentRead': False,

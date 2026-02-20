@@ -64,7 +64,7 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
 # up to 14%. So just to be generous let's allow a 25% inaccuracy for this
 # small test. In issue #9083 we noted that Scylla had much larger errors -
 # reporting as much as 10880 (!) partitions when we have just 1000.
-@pytest.mark.xfail(reason="issue #9083")
+@pytest.mark.xfail(reason="Always print all schema parameters (including default values) #9083")
 def test_partitions_estimate_simple_small(cql, test_keyspace):
     N = 1000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)
@@ -76,7 +76,7 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # This is a relatively long test (takes around 2 seconds), and isn't
 # needed to reproduce #9083 (the previous shorter test does it too),
 # so we skip this test.
-@pytest.mark.xfail(reason="issue #9083")
+@pytest.mark.xfail(reason="Always print all schema parameters (including default values) #9083")
 @pytest.mark.skip(reason="slow test, remove skip to try it anyway")
 def test_partitions_estimate_simple_large(cql, test_keyspace):
     N = 10000

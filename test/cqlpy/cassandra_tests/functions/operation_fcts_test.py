@@ -16,7 +16,7 @@ from cassandra.protocol import FunctionFailure
 from cassandra.util import Date
 from datetime import datetime
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testStringConcatenation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b ascii, c text, PRIMARY KEY(a, b, c))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES ('जॉन', 'Doe', 'जॉन Doe')")
@@ -28,7 +28,7 @@ def testStringConcatenation(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT a + ' ' + a, a + ' ' + b, b + ' ' + a, b + ' ' + b FROM %s WHERE a = 'जॉन' AND b = 'Doe' AND c = 'जॉन Doe'"),
             row("जॉन जॉन", "जॉन Doe", "Doe जॉन", "Doe Doe"))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testSingleOperations(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a tinyint, b smallint, c int, d bigint, e float, f double, g varint, h decimal, PRIMARY KEY(a, b, c))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e, f, g, h) VALUES (1, 2, 3, 4, 5.5, 6.5, 7, 8.5)")
@@ -235,7 +235,7 @@ def testSingleOperations(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT a + d, b + d, c + d, d + d, e + d, f + d, g + d, h + d FROM %s WHERE a = 1 AND b = 2"),
                    row(None, None, None, None, None, None, None, None))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testModuloWithDecimals(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(numerator decimal, dec_mod decimal, int_mod int, bigint_mod bigint, PRIMARY KEY(numerator, dec_mod))") as table:
         execute(cql, table, "INSERT INTO %s (numerator, dec_mod, int_mod, bigint_mod) VALUES (123456789112345678921234567893123456, 2, 2, 2)")
@@ -243,7 +243,7 @@ def testModuloWithDecimals(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT numerator % dec_mod, numerator % int_mod, numerator % bigint_mod from %s"),
                    row(Decimal("0"), Decimal("0.0"), Decimal("0.0")))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testSingleOperationsWithLiterals(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c1 tinyint, c2 smallint, v text, PRIMARY KEY(pk, c1, c2))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c1, c2, v) VALUES (2, 2, 2, 'test')")
@@ -483,7 +483,7 @@ def testSingleOperationsWithLiterals(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT a, b, 1 + 1, 2 - 1, 2 * 2, 2 / 1 , 2 % 1, (int) -1 FROM %s WHERE a = 1 AND b = 2"),
                    row(1, 2, 2, 1, 4, 2, 0, -1))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testDivisionWithDecimals(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(numerator decimal, denominator decimal, PRIMARY KEY ((numerator, denominator)))") as table:
         execute(cql, table, "INSERT INTO %s (numerator, denominator) VALUES (8.5, 200000000000000000000000000000000000)")
@@ -493,7 +493,7 @@ def testDivisionWithDecimals(cql, test_keyspace):
                    row(Decimal("0.0000000000000000000000000000000000425")),
                    row(Decimal("3333.33333333333333333333333333333333")))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testWithCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b counter)") as table:
         execute(cql, table, "UPDATE %s SET b = b + 1 WHERE a = 1")
@@ -557,7 +557,7 @@ def testWithCounters(cql, test_keyspace):
 
         assertRows(execute(cql, table, "SELECT -b FROM %s WHERE a = 1"), row(-2))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testPrecedenceAndParentheses(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (2, 5, 25, 4)")
@@ -618,7 +618,7 @@ def testPrecedenceAndParentheses(cql, test_keyspace):
             assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND b = (int) ? / (2 + 2)", 2, 20),
                    row(2, 5, 25, 4))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testWithDivisionByZero(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a tinyint, b smallint, c int, d bigint, e float, f double, g varint, h decimal, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e, f, g, h) VALUES (0, 2, 3, 4, 5.5, 6.5, 7, 8.5)")
@@ -655,7 +655,7 @@ def testWithDivisionByZero(cql, test_keyspace):
                                   OperationExecutionException,
                                   "SELECT h / a FROM %s WHERE a = 0 AND b = 2")
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testWithNanAndInfinity(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b double, c decimal)") as table:
         assertInvalidMessage(cql, table, "Ambiguous '+' operation with args ? and 1: use type hint to disambiguate, example '(int) ?'",
@@ -702,7 +702,7 @@ def testWithNanAndInfinity(cql, test_keyspace):
                                   OperationExecutionException,
                                   "SELECT c + (float) -INFINITY FROM %s")
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testInvalidTypes(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b boolean, c text)") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 1, True, "test")
@@ -718,7 +718,7 @@ def testInvalidTypes(cql, test_keyspace):
         assertInvalidMessage(cql, table, "the '/' operation is not supported between NaN and b", "SELECT NaN / b FROM %s")
         assertInvalidMessage(cql, table, "the '/' operation is not supported between -Infinity and b", "SELECT -Infinity / b FROM %s")
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testOverflow(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b tinyint, c smallint)") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 1, 1, 1)
@@ -727,7 +727,7 @@ def testOverflow(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT a + (int) ?, b + (tinyint) ?, c + (smallint) ? FROM %s", 2147483647, 127, 32767),
                    row(-2147483648, -128, -32768))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testOperationsWithDuration(cql, test_keyspace):
     # Test with timestamp type.
     with create_table(cql, test_keyspace, "(pk int, time timestamp, v int, primary key (pk, time))") as table:
@@ -811,7 +811,7 @@ def testOperationsWithDuration(cql, test_keyspace):
                              FunctionFailure,
                              "SELECT * FROM %s WHERE pk = 1 AND time > ? - 10m", Date("2016-10-04"))
 
-@pytest.mark.xfail(reason="#2693")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #2693")
 def testFunctionException(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c1 int, c2 int, v text, primary key (pk, c1, c2))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c1, c2, v) VALUES (1, 0, 2, 'test')")

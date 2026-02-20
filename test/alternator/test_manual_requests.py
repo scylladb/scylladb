@@ -147,7 +147,7 @@ def test_too_large_request_content_length(dynamodb, test_table, mb):
 # we can use the same limit too. In all useful cases, headers will be
 # much shorter.
 # Reproduces #23438.
-@pytest.mark.xfail(reason="issue #23438")
+@pytest.mark.xfail(reason="Alternator should reject requests with very large headers #23438")
 def test_too_large_request_headers(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
@@ -177,7 +177,7 @@ def test_too_large_request_headers(dynamodb, test_table):
 # can use the same limit too. In all useful cases, the request line will
 # be much shorter (for ordinary API requests, it is even empty).
 # Reproduces #23438.
-@pytest.mark.xfail(reason="issue #23438")
+@pytest.mark.xfail(reason="Alternator should reject requests with very large headers #23438")
 def test_too_large_request_line(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
@@ -594,7 +594,7 @@ def test_keep_alive(dynamodb, test_table, use_keep_alive):
 # We don't want to store the malformed value on disk and only discover the
 # problem when reading the value back. We want the write to fail immediately,
 # and this is what this test checks. Reproduces issue #8070.
-@pytest.mark.xfail(reason="issue #8070")
+@pytest.mark.xfail(reason="Alternator: validate user-provided nested document structure during first write #8070")
 @pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
 def test_write_malformed_value(dynamodb, test_table_s, op):
     p = random_string()

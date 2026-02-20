@@ -19,7 +19,7 @@ def testSparseTable(cql, test_keyspace):
                 execute(cql, table, "INSERT INTO %s (userid, url, day, month, year) VALUES (?, ?, 1, 'jan', 2012)", i, f"http://foo.{tld}")
         assertRowCount(execute(cql, table, "SELECT * FROM %s LIMIT 4"), 4)
 
-@pytest.mark.xfail(reason="issues #15099")
+@pytest.mark.xfail(reason="issues #15099: Incorrect sort order when combining IN, and ORDER BY")
 def testPerPartitionLimit(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b))") as table:
         for i in range(5):
@@ -284,7 +284,7 @@ def testLimitWithDeletedRowsAndStaticColumns(cql, test_keyspace):
                    row(1, -1, 1, 1),
                    row(5, -1, 1, 1))
 
-@pytest.mark.xfail(reason="issue #15099")
+@pytest.mark.xfail(reason="Incorrect sort order when combining IN, and ORDER BY #15099")
 def testFilteringOnClusteringColumnsWithLimitAndStaticColumns(cql, test_keyspace):
     # With only one clustering column
     with create_table(cql, test_keyspace, "(a int, b int, s int static, c int, PRIMARY KEY (a, b))") as table:

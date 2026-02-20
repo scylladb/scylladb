@@ -30,8 +30,8 @@ def testSingleClusteringInvalidQueries(cql, test_keyspace):
 
 # We need to skip this test because issue #13241 causes it to frequently
 # crash Scylla, and not just fail cleanly.
-@pytest.mark.skip(reason="Issue #13241")
-@pytest.mark.xfail(reason="Issue #4244")
+@pytest.mark.skip(reason="Multi-column IN restriction with tuples of different lengths crashes Scylla #13241")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 def testMultiClusteringInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         assertInvalidSyntax(cql, table, "SELECT * FROM %s WHERE a = 0 AND (b, c) > ()")
@@ -115,7 +115,7 @@ def testMultiClusteringInvalidQueries(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Column \"c\" cannot be restricted by two inequalities not starting with the same column",
                              "SELECT * FROM %s WHERE a = ? AND (b, c) > (?, ?) AND (c) < (?)", 0, 0, 0, 0)
 
-@pytest.mark.xfail(reason="Issue #64, #4244")
+@pytest.mark.xfail(reason="Issue #64: CQL Multi column restrictions are allowed only on a clustering key prefix., #4244: Add support for mixing token, multi- and single-column restrictions")
 def testMultiAndSingleColumnRelationMix(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
@@ -191,7 +191,7 @@ def testMultiAndSingleColumnRelationMix(cql, test_keyspace):
                    row(0, 0, 0, 0),
                    row(0, 0, 1, 0))
 
-@pytest.mark.xfail(reason="Issue #64, #4244")
+@pytest.mark.xfail(reason="Issue #64: CQL Multi column restrictions are allowed only on a clustering key prefix., #4244: Add support for mixing token, multi- and single-column restrictions")
 def testSeveralMultiColumnRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
@@ -268,7 +268,7 @@ def testSinglePartitionInvalidQueries(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Multi-column relations can only be applied to clustering columns but was applied to: b",
                              "SELECT * FROM %s WHERE (b) = (?)", 0)
 
-@pytest.mark.xfail(reason="Issue #4244")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 def testSingleClustering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, primary key (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, 0, 0)
@@ -327,7 +327,7 @@ def testNonEqualsRelation(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Unsupported \"!=\" relation: (b) != (0)",
                              "SELECT * FROM %s WHERE a = 0 AND (b) != (0)")
 
-@pytest.mark.xfail(reason="Issue #4244")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 def testMultipleClustering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
@@ -732,7 +732,7 @@ def testMultipleClusteringReversedComponents(cql, test_keyspace):
                    row(0, 1, 1, 0)
         )
 
-@pytest.mark.xfail(reason="Issue #4178, #13250")
+@pytest.mark.xfail(reason="Issue #4178: Not covered corner case for key prefix optimization in filtering, #13250: one-element multi-column restriction should be handled like a single-column restriction")
 def testMultipleClusteringWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "CREATE INDEX ON %s (b)")
@@ -812,7 +812,7 @@ def testMultipleClusteringWithIndex(cql, test_keyspace):
         assertInvalidMessage(cql, table, "unset value",
                              "SELECT * FROM %s WHERE (b, c) >= (?, ?) AND e = ?  ALLOW FILTERING", 1, 1, UNSET_VALUE)
 
-@pytest.mark.xfail(reason="Issue #8627")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #8627")
 def testMultipleClusteringWithIndexAndValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b blob, c int, d int, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "CREATE INDEX ON %s (b)")
@@ -850,7 +850,7 @@ def testMultiColumnRestrictionsWithIndex(cql, test_keyspace):
         assertInvalidMessage(cql, table, errorMsg,
                              "SELECT * FROM %s WHERE a = 0 AND (b,c) > (1,0) AND (d,e) < (2,2) AND v = 0 ALLOW FILTERING")
 
-@pytest.mark.xfail(reason="Issue #4178")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4178")
 def testMultiplePartitionKeyAndMultiClusteringWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, f int, PRIMARY KEY ((a, b), c, d, e))") as table:
         execute(cql, table, "CREATE INDEX ON %s (c)")
@@ -950,7 +950,7 @@ def testINWithDuplicateValue(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE k1 = ? AND (k2) IN ((?), (?))", 1, 1, 1),
                    row(1, 1, 1))
 
-@pytest.mark.xfail(reason="Issue #13250")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #13250")
 def testWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, i int, j int, s text, PRIMARY KEY (k,i,j))") as table:
         execute(cql, table, "CREATE INDEX s_index ON %s (s)")
@@ -1825,7 +1825,7 @@ def testMixedOrderColumnsInReverse(cql, test_keyspace):
 
 # Check select on tuple relations, see CASSANDRA-8613
 # migrated from cql_tests.py:TestCQL.simple_tuple_query_test()
-@pytest.mark.xfail(reason="Issue #64")
+@pytest.mark.xfail(reason="CQL Multi column restrictions are allowed only on a clustering key prefix. #64")
 def testSimpleTupleQuery(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d, e))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (0, 2, 0, 0, 0)")

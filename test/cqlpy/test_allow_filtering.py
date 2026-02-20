@@ -114,7 +114,7 @@ def test_allow_filtering_partition_slice_and_restriction(cql, table1):
 # like 'v=2' doesn't change any of the above, so doesn't require filtering.
 # Reproduces #7964 on Scylla, and also wrong on Cassandra so marked
 # cassandra_bug.
-@pytest.mark.xfail(reason="#7964")
+@pytest.mark.xfail(reason="Further restricting a query already limited to a single row should not require ALLOW FILTERING #7964")
 def test_allow_filtering_single_row(cql, table1, cassandra_bug):
     check_af_optional(cql, table1, 'k=1 AND c=2', lambda row: row.k==1 and row.c==2)
     # Reproduces #7964, as ALLOW FILTERING is considered mandatory, not optional
@@ -465,7 +465,7 @@ def test_allow_filtering_clustering_key_multicolumn_syntax(cql, table1):
 # Moreover, if we have multiple clustering key columns, c1 and c2,
 # (c2)=(10) should be allowed just like c2=10 (and require filtering
 # just like it) - we shouldn't complain that c1 is missing. Reproduces #13250.
-@pytest.mark.xfail(reason="issue #13250")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #13250")
 def test_allow_filtering_compound_clustering_key_multicolumn_syntax(cql, table3):
     check_af_mandatory(cql, table3, 'c1=10', lambda row: row.c1==10)
     check_af_mandatory(cql, table3, '(c1)=(10)', lambda row: row.c1==10)

@@ -34,7 +34,7 @@ def table1(cql, test_keyspace):
 # partition key should fail, with a clean InvalidRequest - not some internal
 # server error or worse.
 # Reproduces #12247
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_65k_pk(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -42,7 +42,7 @@ def test_insert_65k_pk(cql, table1):
         cql.execute(stmt, ['x'*(65*1024), 'hello'])
 
 # Reproduces #12247
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_65k_ck(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -53,7 +53,7 @@ def test_insert_65k_ck(cql, table1):
 # key should fail, with a clean InvalidRequest - not some internal server
 # error or worse.
 # Reproduces #10366.
-@pytest.mark.xfail(reason="Issue #10366")
+@pytest.mark.xfail(reason="Better error reporting for oversized keys during INSERT #10366")
 def test_where_65k_pk(cql, table1):
     stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = ?')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -68,7 +68,7 @@ def test_where_65k_pk(cql, table1):
 # return no match as Cassandra does. In any case, returning some ugly internal
 # error (as happened in Scylla) is a bug.
 # Reproduces #10366.
-@pytest.mark.xfail(reason="Issue #10366")
+@pytest.mark.xfail(reason="Better error reporting for oversized keys during INSERT #10366")
 def test_where_65k_ck(cql, table1):
     stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = ? AND c = ?')
     try:
@@ -87,7 +87,7 @@ def test_where_65k_ck(cql, table1):
 # Scylla shouldn't impose its own smaller size limit - but in issue #16772,
 # it did (the limit was 65533).
 
-@pytest.mark.xfail(reason="Issue #16772")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #16772")
 def test_insert_65535_pk(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     p = random_string(length=65535)
@@ -96,7 +96,7 @@ def test_insert_65535_pk(cql, table1):
     stmt = cql.prepare(f'SELECT p,c FROM {table1} WHERE p=?')
     assert list(cql.execute(stmt, [p])) == [(p, c)]
 
-@pytest.mark.xfail(reason="Issue #16772")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #16772")
 def test_insert_65535_ck(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     p = unique_key_string()  # not particularly long
@@ -111,7 +111,7 @@ def test_insert_65535_ck(cql, table1):
 # first component, and the regular column *name* as the second component.
 # This should work - Scylla shouldn't try to limit the sum of these lengths
 # or something.
-@pytest.mark.xfail(reason="Issue #16772")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #16772")
 def test_insert_65535_ck_with_regular_column(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c, v) VALUES (?,?,?)')
     p = unique_key_string()  # not particularly long
@@ -138,7 +138,7 @@ def table2(cql, test_keyspace):
 # instead of the expected InvalidRequest error, it generates an internal
 # server error (i.e., NoHostAvailable) with the message "'H' format requires
 # 0 <= number <= 65535".
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_65k_pk_compound(cql, table2, cassandra_bug):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     big = 'x'*(65*1024)
@@ -147,7 +147,7 @@ def test_insert_65k_pk_compound(cql, table2, cassandra_bug):
     with pytest.raises(InvalidRequest, match='Key length'):
         cql.execute(stmt, ['dog', big, 'cat', 'mouse'])
 
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_65k_ck_composite(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     big = 'x'*(65*1024)
@@ -182,7 +182,7 @@ def test_insert_total_compound_pk_ok(cql, table2):
     stmt = cql.prepare(f'SELECT * FROM {table2} WHERE p1=? AND p2=?')
     assert list(cql.execute(stmt, [p1, p2])) == [(p1, p2, c1, c2)]
 
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_total_compound_pk_err(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     # A total compound pk of size 65536 is definitely too long
@@ -225,7 +225,7 @@ def test_insert_total_composite_ck_ok(cql, table2):
     stmt = cql.prepare(f'SELECT * FROM {table2} WHERE p1=? AND p2=?')
     assert list(cql.execute(stmt, [p1, p2])) == [(p1, p2, c1, c2)]
 
-@pytest.mark.xfail(reason="Issue #12247")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #12247")
 def test_insert_total_composite_ck_err(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     # A total composite ck of size 65536 is definitely too long
