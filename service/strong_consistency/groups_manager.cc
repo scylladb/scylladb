@@ -9,9 +9,9 @@
 #include "groups_manager.hh"
 
 #include "service/strong_consistency/state_machine.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
 #include "gms/feature_service.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_sys_table_storage.hh"
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -103,10 +103,30 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 {
 }
 
+static void validate_shard_id(global_tablet_id tablet, token_metadata_ptr tm) {
+#ifdef SEASTAR_DEBUG
+    // The shard where we start the server must match the shard where this tablet replica is located
+    const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+
+    for (const auto& r: tablet_info.replicas) {
+        if (r.host == tm->get_my_id()) {
+            if (r.shard != this_shard_id()) {
+                on_internal_error(logger, format("tablet {} is located on shard {}, but trying to start raft server on shard {}",
+                    tablet, r.shard, this_shard_id()));
+            }
+            return;
+        }
+    }
+    on_internal_error(logger, format("tablet {} does not have a replica on this node according to the token metadata", tablet));
+#endif
+}
+
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
+    validate_shard_id(tablet, tm);
     const auto my_id = to_server_id(tm->get_my_id());
 
     auto state_machine = make_state_machine(tablet, group_id, _db);
@@ -114,7 +134,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp, group_id, my_id);
+    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id());
 
     // Store the initial configuration if this is the first time we create this group
     // on this node
@@ -254,7 +274,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
 }
 
 void groups_manager::update(token_metadata_ptr new_tm) {
-    if (this_shard_id() != 0 || !_features.strongly_consistent_tables) {
+    if (!_features.strongly_consistent_tables) {
         return;
     }
 
@@ -291,7 +311,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 }
 
 future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
-    if (this_shard_id() != 0 || !_features.strongly_consistent_tables) {
+    if (!_features.strongly_consistent_tables) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");
     }
 
@@ -306,10 +326,6 @@ future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
 }
 
 future<> groups_manager::start() {
-    if (this_shard_id() != 0) {
-        co_return;
-    }
-
     _started = true;
 
     if (!_features.strongly_consistent_tables) {

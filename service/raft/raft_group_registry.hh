@@ -51,7 +51,7 @@ struct raft_server_for_group {
     std::unique_ptr<raft::server> server;
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
-    raft_sys_table_storage& persistence;
+    raft::persistence& persistence;
     raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
@@ -110,6 +110,7 @@ private:
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
+    std::unordered_map<raft::group_id, unsigned> _group_shards;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
