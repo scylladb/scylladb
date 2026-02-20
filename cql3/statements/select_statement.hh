@@ -159,6 +159,8 @@ public:
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
+    std::optional<db::timeout_clock::duration> get_query_timeout(const service::client_state& state, const query_options& options) const;
+
 protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
@@ -401,6 +403,11 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
+
+    std::optional<lowres_clock::time_point> get_timeout_point_from_query(const service::client_state& state, const query_options& options) const;
+
+    lowres_clock::time_point get_base_query_timeout_point(
+            const service::client_state& state, const query_options& options, std::optional<lowres_clock::time_point> timeout_point_from_query) const;
 };
 
 }

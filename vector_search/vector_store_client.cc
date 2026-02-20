@@ -9,6 +9,7 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "clients.hh"
+#include "seastar/core/abort_on_expiry.hh"
 #include "uri.hh"
 #include "utils.hh"
 #include "truststore.hh"
@@ -243,6 +244,7 @@ struct vector_store_client::impl {
     truststore _truststore;
     clients _primary_clients;
     clients _secondary_clients;
+    utils::config_file::named_value<uint32_t> _read_request_timeout_in_ms;
 
     impl(utils::config_file::named_value<sstring> primary_uris, utils::config_file::named_value<sstring> secondary_uris,
             utils::config_file::named_value<uint32_t> read_request_timeout_in_ms,
@@ -279,7 +281,8 @@ struct vector_store_client::impl {
                   [this]() {
                       dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms, _truststore) {
+                  read_request_timeout_in_ms, _truststore)
+        , _read_request_timeout_in_ms(read_request_timeout_in_ms) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -298,6 +301,13 @@ struct vector_store_client::impl {
 
     auto is_disabled() const -> bool {
         return _primary_uris.empty() && _secondary_uris.empty();
+    }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
+            std::optional<lowres_clock::time_point> timeout_point) -> future<std::expected<primary_keys, ann_error>> {
+        auto tp = timeout_point ? *timeout_point : get_timeout_point();
+        abort_on_expiry<> aborter(tp);
+        co_return co_await ann(keyspace, name, schema, vs_vector, limit, filter, aborter.abort_source());
     }
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
@@ -352,6 +362,12 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    lowres_clock::time_point get_timeout_point() const {
+        std::chrono::milliseconds timeout_ms(_read_request_timeout_in_ms());
+        auto total_timeout_ms = timeout_ms * (_primary_uris.size() + _secondary_uris.size());
+        return seastar::lowres_clock::now() + total_timeout_ms;
+    }
 };
 
 vector_store_client::vector_store_client(config const& cfg)
@@ -380,9 +396,14 @@ auto vector_store_client::is_disabled() const -> bool {
     return _impl->is_disabled();
 }
 
-auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
-        -> future<std::expected<primary_keys, ann_error>> {
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
+        abort_source& as) -> future<std::expected<primary_keys, ann_error>> {
     return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as);
+}
+
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
+        std::optional<lowres_clock::time_point> timeout_point) -> future<std::expected<primary_keys, ann_error>> {
+    return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, timeout_point);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
