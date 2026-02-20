@@ -958,7 +958,7 @@ private:
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
-                std::ref(_db), std::ref(_feature_service)).get();
+                std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();

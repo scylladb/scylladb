@@ -320,6 +320,8 @@ std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const ss
 future<> store_column_mapping(sharded<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl);
 /// Query column mapping for a given version of the table locally.
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+/// Returns the same result as `get_column_mapping()` wrapped in optional and returns nullopt if the mapping doesn't exist.
+future<std::optional<column_mapping>> get_column_mapping_if_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 /// Check that column mapping exists for a given version of the table
 future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 /// Delete matching column mapping entries from the `system.scylla_table_schema_history` table

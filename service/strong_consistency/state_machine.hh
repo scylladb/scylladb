@@ -12,6 +12,14 @@
 #include "mutation/frozen_mutation.hh"
 #include "locator/tablets.hh"
 
+namespace db {
+class system_keyspace;
+}
+
+namespace service {
+class migration_manager;
+}
+
 namespace service::strong_consistency {
 
 struct raft_command {
@@ -19,6 +27,8 @@ struct raft_command {
 };
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
-    replica::database& db);
+    replica::database& db,
+    service::migration_manager& mm,
+    db::system_keyspace& sys_ks);
 
 }
