@@ -72,11 +72,17 @@ public:
     }
 };
 
+namespace tests {
+
+using dump_to_logs = bool_class<struct dump_to_logs_tag>;
+
+} // namespace tests
+
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;
     std::source_location _loc;
 public:
-    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc);
+    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, tests::dump_to_logs dump, std::source_location loc);
     rows_assertions with_size(size_t size);
     rows_assertions with_size(std::function<bool(size_t)> predicate);
     rows_assertions is_empty();
@@ -103,7 +109,10 @@ class result_msg_assertions {
     std::source_location _loc;
 public:
     result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc);
-    rows_assertions is_rows();
+
+    // Pass dump_to_logs::yes, to dump the content of the result to the log.
+    // The results are logged with testlog.debug().
+    rows_assertions is_rows(tests::dump_to_logs dump = tests::dump_to_logs::no);
 };
 
 result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc = std::source_location::current());

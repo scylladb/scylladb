@@ -27,6 +27,12 @@ class query_processor;
 
 } // namespace cql3
 
+namespace gms {
+
+class feature_service;
+
+} // namespace gms
+
 namespace db {
 
 class system_keyspace;
@@ -49,6 +55,11 @@ class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 public:
     using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
 
+    struct stats {
+        uint64_t write_attempts = 0;
+    };
+
+
 private:
     static constexpr std::chrono::seconds replay_interval = std::chrono::seconds(60);
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
@@ -56,14 +67,13 @@ private:
 
     using clock_type = lowres_clock;
 
-    struct stats {
-        uint64_t write_attempts = 0;
-    } _stats;
+    stats _stats;
 
     seastar::metrics::metric_groups _metrics;
 
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
+    gms::feature_service& _fs;
     db_clock::duration _replay_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
@@ -84,12 +94,14 @@ private:
 
     future<> maybe_migrate_v1_to_v2();
 
+    future<all_batches_replayed> replay_all_failed_batches_v1(post_replay_cleanup cleanup);
+    future<all_batches_replayed> replay_all_failed_batches_v2(post_replay_cleanup cleanup);
     future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
     // shard qp (which is what you feed here).
-    batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, batchlog_manager_config config);
+    batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, gms::feature_service& fs, batchlog_manager_config config);
 
     // abort the replay loop and return its future.
     future<> drain();
@@ -102,7 +114,7 @@ public:
         return _last_replay;
     }
 
-    const stats& stats() const {
+    const stats& get_stats() const {
         return _stats;
     }
 private:

@@ -1178,7 +1178,7 @@ private:
             bmcfg.replay_timeout = cfg_in.batchlog_replay_timeout.value_or(2s);
             bmcfg.delay = cfg_in.batchlog_delay;
             bmcfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
-            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
+            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), std::ref(_feature_service), bmcfg).get();
             auto stop_bm = defer_verbose_shutdown("batchlog manager", [this] {
                 _batchlog_manager.stop().get();
             });
