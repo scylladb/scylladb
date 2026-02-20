@@ -44,6 +44,7 @@ run_in_dev:
   - dtest/bypass_cache_test
   - dtest/auth_roles_test
   - dtest/audit_test
+  - audit/test_audit
   - dtest/commitlog_test
   - dtest/cfid_test
   - dtest/rebuild_test
