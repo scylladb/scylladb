@@ -690,6 +690,9 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
                         // will repair also their colocated tables.
                         continue;
                     }
+                    if (tables.empty() && std::string(ex.what()).contains("Can't find a column family")) {
+                        continue;
+                    }
                     log("ERROR: Repair request for keyspace={} table={} failed with {}", keyspace, table, ex);
                     exit_code = EXIT_FAILURE;
                 }
