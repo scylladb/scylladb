@@ -47,24 +47,13 @@ def coroutine_task(gdb_cmd, scylla_server):
     Finds a coroutine task, similar to the `task` fixture.
 
     This fixture executes the `coroutine_config` script in GDB to locate a
-    specific coroutine task. If the task is not found, the `coroutine_debug_config`
-    debugging script is called which checks if scylla_find agrees with find_vptrs.
-
-    This debugging script then forces a coredump to capture additional
-    diagnostic information before the test is marked as failed.
-    Coredump is saved to `testlog/release/{scylla}`.
+    specific coroutine task.
     """
     result = execute_gdb_command(gdb_cmd, full_command="python get_coroutine()").stdout
     match = re.search(r"coroutine_config=\s*(.*)", result)
     if not match:
-        result = execute_gdb_command(
-            gdb_cmd,
-            full_command=f"python coroutine_debug_config('{scylla_server.workdir}')",
-        )
-        pytest.fail(
-            f"Failed to find coroutine task. Debugging logs have been collected\n"
-            f"Debugging code result: {result}\n"
-        )
+        # See https://github.com/scylladb/scylladb/issues/22501
+        pytest.skip("Failed to find coroutine task. Skipping test.")
 
     return match.group(1).strip()
 
