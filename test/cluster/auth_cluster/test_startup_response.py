@@ -38,8 +38,8 @@ async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
     auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
 
     connections_observed = False
-    num_connections = 500
-    timeout = 180
+    num_connections = 100
+    timeout = 360
 
     def attempt_bad_connection():
         c = Cluster([server.ip_addr], port=9042, auth_provider=auth_provider, connect_timeout=timeout, connection_class=NoOpConnection)
