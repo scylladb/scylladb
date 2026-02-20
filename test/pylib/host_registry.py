@@ -9,12 +9,13 @@ import os
 import random
 from pathlib import Path
 from test.pylib.pool import Pool
-from typing import NewType, Awaitable, Optional
+from typing import NewType, Optional
 
 Host = NewType('Host', str)
 
 
 class HostRegistry:
+    _instance = None
     """A Scylla servers needs a unique IP address and working directory
     which we need to manage and share across many running tests. Store
     all shared external resources within this class to make sure
@@ -25,6 +26,11 @@ class HostRegistry:
     X.Y.Z is unique for each test.py invocation, and W is unique
     across all hosts in a single run.
     """
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self) -> None:
 
@@ -46,12 +52,13 @@ class HostRegistry:
         # should try again with another subnet. If the file isn't
         # locked, it remains from some previous invocation and can be
         # locked and reused.
+        worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
+        second_octet = int(worker_id[2:]) + 1
         while True:
             # Avoid 127.0.*.* since CCM (a different test framework)
             # assumes it will be available for it to run Scylla
             # instances. 127.255.255.255 is also illegal.
-            self.subnet = "127.{}.{}".format(random.randrange(1, 254),
-                                             random.randrange(0, 255))
+            self.subnet = "127.{}.{}".format(second_octet,random.randrange(0, 255))
             self.lock_filename: Optional[Path] = Path(os.getenv('TMPDIR', '/tmp')) / ('scylla-' + self.subnet)
             self.lock_file = self.lock_filename.open('w')
             try:
@@ -90,4 +97,3 @@ class HostRegistry:
 
     async def release_host(self, host: Host) -> None:
         return await self.pool.put(host, is_dirty=False)
-
