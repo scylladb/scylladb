@@ -268,25 +268,27 @@ private:
 
     bool can_purge_tombstone(const tombstone& t, is_shadowable is_shadowable, const gc_clock::time_point deletion_time) {
         max_purgeable::can_purge_result purge_res { };
+        std::optional<bool> expired;
 
         if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
             // max purgeable timestamp.
-            purge_res.can_purge = satisfy_grace_period(deletion_time);
+            expired = purge_res.can_purge = satisfy_grace_period(deletion_time);
             if (purge_res.can_purge) {
                 purge_res = can_gc(t, is_shadowable);
             }
         } else {
             purge_res = can_gc(t, is_shadowable);
             if (purge_res.can_purge) {
-                purge_res.can_purge = satisfy_grace_period(deletion_time);
+                expired = purge_res.can_purge = satisfy_grace_period(deletion_time);
             }
         }
 
         if constexpr (sstable_compaction()) {
-            if (!_tombstone_stats || !t) {
+            // Tombstone GC stats only account for expired tombstones (those eligible for GC).
+            if (!_tombstone_stats || !t || !expired.value_or(satisfy_grace_period(deletion_time))) {
                 return purge_res.can_purge;
             }
 
