@@ -367,6 +367,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
     while (!_gate.is_closed()) {
         seastar::gate::holder holder(_gate);
         bool shed = false;
+        size_t waiters_at_block = 0;
         try {
             semaphore_units<named_semaphore_exception_factory> units(_conns_cpu_concurrency_semaphore, 0);
             if (_conns_cpu_concurrency != std::numeric_limits<uint32_t>::max()) {
@@ -375,6 +376,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     units = std::move(*u);
                 } else {
                     _blocked_connections++;
+                    waiters_at_block = _conns_cpu_concurrency_semaphore.waiters();
                     try {
                         units = co_await get_units(_conns_cpu_concurrency_semaphore, 1, std::chrono::minutes(1));
                     } catch (const semaphore_timed_out&) {
@@ -400,7 +402,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
                 _logger.log(log_level::warn, rate_limit,
                         "too many in-flight connection attempts: {}, connection dropped",
-                        _conns_cpu_concurrency_semaphore.waiters());
+                        waiters_at_block);
                 conn->shutdown();
                 continue;
             }
