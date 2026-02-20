@@ -15,8 +15,9 @@ import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
 
-from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Session as CassandraSession, ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
+from cassandra.query import BatchStatement, PreparedStatement               # type: ignore # pylint: disable=no-name-in-module
 from cassandra.util import datetime_from_uuid1           # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
@@ -692,3 +693,25 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+async def batch_cql(cql: CassandraSession, stmt: PreparedStatement, parameters: list[tuple], batch_size: int = 100) -> None:
+    """
+    Execute CQL statements in batches of given size.
+
+    :param cql: Cassandra session to use.
+    :param stmt: Prepared statement to execute.
+    :param parameters: Iterable of parameters for the prepared statement.
+        Should be a list of tuples, each tuple corresponding to the values of the prepared statement.
+    :param batch_size: Number of statements to include in each batch.
+        Depending on the values inserted, large batches may run into "Batch too large" errors.
+    """
+    batch = BatchStatement()
+    for values in parameters:
+        batch.add(stmt, values)
+        if len(batch) >= batch_size:
+            await cql.run_async(batch)
+            batch.clear()
+    if len(batch) > 0:
+        await cql.run_async(batch)
+        batch.clear()
