@@ -8,6 +8,7 @@
  */
 
 #include "batch_statement.hh"
+#include "cql3/stats.hh"
 #include "cql3/util.hh"
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
@@ -259,6 +260,17 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (options.getSerialConsistency() == null)
         throw new InvalidRequestException("Invalid empty serial consistency level");
 #endif
+
+    // Check consistency level guardrails
+    auto cl = options.get_consistency();
+    if (qp.write_consistency_levels_disallowed().contains(cl)) {
+        _stats.write_consistency_levels_disallowed_violations[size_t(cl)]++;
+        throw exceptions::invalid_request_exception(format("Consistency level {} is not allowed for write operations", cl));
+    }
+    if (qp.write_consistency_levels_warned().contains(cl)) {
+        qp.get_cql_stats().write_consistency_levels_warned_violations[size_t(cl)]++;
+    }
+
     for (size_t i = 0; i < _statements.size(); ++i) {
         _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
     }

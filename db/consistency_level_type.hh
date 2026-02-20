@@ -11,6 +11,9 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <unordered_map>
+#include <seastar/core/sstring.hh>
+#include "enum_set.hh"
 
 namespace db {
 
@@ -30,6 +33,25 @@ enum class consistency_level {
     LOCAL_SERIAL,
     LOCAL_ONE, MAX_VALUE = LOCAL_ONE
 };
+
+/// Mapper for consistency_level enum, for use with enum_option<>.
+struct consistency_level_option {
+    static std::unordered_map<seastar::sstring, consistency_level> map();
+};
+
+/// Efficient bitmask-based set of consistency levels.
+using consistency_level_set = enum_set<super_enum<consistency_level,
+    consistency_level::ANY,
+    consistency_level::ONE,
+    consistency_level::TWO,
+    consistency_level::THREE,
+    consistency_level::QUORUM,
+    consistency_level::ALL,
+    consistency_level::LOCAL_QUORUM,
+    consistency_level::EACH_QUORUM,
+    consistency_level::SERIAL,
+    consistency_level::LOCAL_SERIAL,
+    consistency_level::LOCAL_ONE>>;
 
 }
 

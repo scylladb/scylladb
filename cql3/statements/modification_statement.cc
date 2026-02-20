@@ -31,6 +31,7 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/stats.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -267,6 +268,16 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     inc_cql_stats(qs.get_client_state().is_internal());
+
+    // Check consistency level guardrails
+    auto cl = options.get_consistency();
+    if (qp.write_consistency_levels_disallowed().contains(cl)) {
+        qp.get_cql_stats().write_consistency_levels_disallowed_violations[size_t(cl)]++;
+        throw exceptions::invalid_request_exception(format("Consistency level {} is not allowed for write operations", cl));
+    }
+    if (qp.write_consistency_levels_warned().contains(cl)) {
+        qp.get_cql_stats().write_consistency_levels_warned_violations[size_t(cl)]++;
+    }
 
     _restrictions->validate_primary_key(options);
 

@@ -616,6 +616,9 @@ public:
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 
+    named_value<sstring> write_consistency_levels_warned;
+    named_value<sstring> write_consistency_levels_disallowed;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
