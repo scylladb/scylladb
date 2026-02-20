@@ -35,6 +35,10 @@ class system_keyspace;
 
 }
 
+namespace gms {
+class gossiper;
+}
+
 namespace locator {
 class shared_token_metadata;
 }
@@ -85,6 +89,7 @@ public:
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
+    gms::gossiper& _gossiper;
     db::system_keyspace& _sys_ks;
     locator::shared_token_metadata& _token_metadata;
 
@@ -125,7 +130,8 @@ class raft_group0_client {
     void validate_change(const Command& change);
 
 public:
-    raft_group0_client(service::raft_group_registry&, db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
+    raft_group0_client(service::raft_group_registry&, gms::gossiper&,
+                       db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
 
     // Call after `system_keyspace` is initialized.
     future<> init();
@@ -211,6 +217,11 @@ public:
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
     static utils::UUID generate_group0_state_id(utils::UUID prev_state_id);
     future<utils::UUID> get_last_group0_state_id();
+
+    // Sends an RPC to all live nodes asking each to perform
+    // a raft read_barrier on group 0, ensuring they have applied all committed
+    // entries. Failures are best-effort: logged but not propagated.
+    future<> broadcast_group0_read_barrier();
 };
 
 using mutations_generator = coroutine::experimental::generator<mutation>;
@@ -228,6 +239,14 @@ using mutations_generator = coroutine::experimental::generator<mutation>;
 class group0_batch {
 public:
     using generator_func = std::function<mutations_generator(api::timestamp_type t)>;
+
+    // Controls whether group0_batch::commit() broadcasts a read barrier
+    // to all live nodes after the raft entry is committed and applied locally.
+    enum class barrier {
+        local,   // Return immediately after local apply
+        global   // Broadcast read_barrier to all live nodes (best-effort)
+    };
+
 private:
     utils::chunked_vector<mutation> _muts;
     std::vector<generator_func> _generators;
@@ -266,7 +285,9 @@ public:
     void add_generator(generator_func f, std::string_view description = "");
 
     // Commits the data, nop if there was no guard provided.
-    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
+    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as,
+                    std::optional<::service::raft_timeout> timeout,
+                    barrier barrier = barrier::local) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
     future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> extract() &&;
 
