@@ -2512,22 +2512,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sharded<alternator::expiration_service> es;
             std::any stop_expiration_service;
 
-            if (cfg->alternator_port() || cfg->alternator_https_port()) {
-                // Start the expiration service on all shards.
-                // Currently we only run it if Alternator is enabled, because
-                // only Alternator uses it for its TTL feature. But in the
-                // future if we add a CQL interface to it, we may want to
-                // start this outside the Alternator if().
-                checkpoint(stop_signal, "starting the expiration service");
-                es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
+            // Start the expiration service on all shards.
+            // This service is used both by Alternator (for its TTL feature)
+            // and by CQL (for its per-row TTL feature).
+            checkpoint(stop_signal, "starting the expiration service");
+            es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
                          std::ref(proxy), std::ref(gossiper)).get();
-                stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
-                    es.stop().get();
-                });
-                with_scheduling_group(maintenance_scheduling_group, [&es] {
-                    return es.invoke_on_all(&alternator::expiration_service::start);
-                }).get();
-            }
+            stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
+                es.stop().get();
+            });
+            with_scheduling_group(maintenance_scheduling_group, [&es] {
+                return es.invoke_on_all(&alternator::expiration_service::start);
+            }).get();
 
             db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
             notify_set.notify_all(configurable::system_state::started).get();

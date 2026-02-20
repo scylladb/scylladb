@@ -46,6 +46,7 @@
 #include "alternator/executor.hh"
 #include "alternator/controller.hh"
 #include "alternator/serialization.hh"
+#include "alternator/ttl_tag.hh"
 #include "dht/sharder.hh"
 #include "db/config.hh"
 #include "db/tags/utils.hh"
@@ -57,19 +58,10 @@ static logging::logger tlogger("alternator_ttl");
 
 namespace alternator {
 
-// We write the expiration-time attribute enabled on a table in a
-// tag TTL_TAG_KEY.
-// Currently, the *value* of this tag is simply the name of the attribute,
-// and the expiration scanner interprets it as an Alternator attribute name -
-// It can refer to a real column or if that doesn't exist, to a member of
-// the ":attrs" map column. Although this is designed for Alternator, it may
-// be good enough for CQL as well (there, the ":attrs" column won't exist).
-extern const sstring TTL_TAG_KEY;
-
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
     if (!_proxy.features().alternator_ttl) {
-        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
+        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Upgrade all nodes to a version that supports it.");
     }
 
     schema_ptr schema = get_table(_proxy, request);
@@ -640,13 +632,38 @@ static future<> scan_table_ranges(
                 }
             } else {
                 // For a real column to contain an expiration time, it
-                // must be a numeric type.
-                // FIXME: Currently we only support decimal_type (which is
-                // what Alternator uses), but other numeric types can be
-                // supported as well to make this feature more useful in CQL.
-                // Note that kind::decimal is also checked above.
-                big_decimal n = value_cast<big_decimal>(v);
-                expired = is_expired(n, now);
+                // must be a numeric type. We currently support decimal
+                // (used by Alternator TTL) as well as bigint, int and
+                // timestamp (used by CQL per-row TTL).
+                switch (meta[*expiration_column]->type->get_kind()) {
+                    case abstract_type::kind::decimal:
+                        // Used by Alternator TTL for key columns not stored
+                        // in the map. The value is in seconds, fractional
+                        // part is ignored.
+                        expired = is_expired(value_cast<big_decimal>(v), now);
+                        break;
+                    case abstract_type::kind::long_kind:
+                        // Used by CQL per-row TTL. The value is in seconds.
+                        expired = is_expired(gc_clock::time_point(std::chrono::seconds(value_cast<int64_t>(v))), now);
+                        break;
+                    case abstract_type::kind::int32:
+                        // Used by CQL per-row TTL. The value is in seconds.
+                        // Using int type is not recommended because it will
+                        // overflow in 2038, but we support it to allow users
+                        // to use existing int columns for expiration.
+                        expired = is_expired(gc_clock::time_point(std::chrono::seconds(value_cast<int32_t>(v))), now);
+                        break;
+                    case abstract_type::kind::timestamp:
+                        // Used by CQL per-row TTL. The value is in milliseconds
+                        // but we truncate it to gc_clock's precision (whole seconds).
+                        expired = is_expired(gc_clock::time_point(std::chrono::duration_cast<gc_clock::duration>(value_cast<db_clock::time_point>(v).time_since_epoch())), now);
+                        break;
+                    default:
+                        // Should never happen - we verified the column's type
+                        // before starting the scan.
+                        [[unlikely]]
+                        on_internal_error(tlogger, format("expiration scanner value of unsupported type {} in column {}", meta[*expiration_column]->type->cql3_type_name(), scan_ctx.column_name) );
+                }
             }
             if (expired) {
                 expiration_stats.items_deleted++;
@@ -708,16 +725,12 @@ static future<bool> scan_table(
         co_return false;
     }
     // attribute_name may be one of the schema's columns (in Alternator, this
-    // means it's a key column), or an element in Alternator's attrs map
-    // encoded in Alternator's JSON encoding.
-    // FIXME: To make this less Alternators-specific, we should encode in the
-    // single key's value three things:
-    // 1. The name of a column
-    // 2. Optionally if column is a map, a member in the map
-    // 3. The deserializer for the value: CQL or Alternator (JSON).
-    // The deserializer can be guessed: If the given column or map item is
-    // numeric, it can be used directly. If it is a "bytes" type, it needs to
-    // be deserialized using Alternator's deserializer.
+    // means a key column, in CQL it's a regular column), or an element in
+    // Alternator's attrs map encoded in Alternator's JSON encoding (which we
+    // decode). If attribute_name is a real column, in Alternator it will have
+    // the type decimal, counting seconds since the UNIX epoch, while in CQL
+    // it will one of the types bigint or int (counting seconds) or timestamp
+    // (counting milliseconds).
     bytes column_name = to_bytes(*attribute_name);
     const column_definition *cd = s->get_column_definition(column_name);
     std::optional<std::string> member;
@@ -736,11 +749,14 @@ static future<bool> scan_table(
     data_type column_type = cd->type;
     // Verify that the column has the right type: If "member" exists
     // the column must be a map, and if it doesn't, the column must
-    // (currently) be a decimal_type. If the column has the wrong type
-    // nothing can get expired in this table, and it's pointless to
-    // scan it.
+    // be decimal_type (Alternator), bigint, int or timestamp (CQL).
+    // If the column has the wrong type nothing can get expired in
+    // this table, and it's pointless to scan it.
     if ((member && column_type->get_kind() != abstract_type::kind::map) ||
-        (!member && column_type->get_kind() != abstract_type::kind::decimal)) {
+        (!member && column_type->get_kind() != abstract_type::kind::decimal &&
+         column_type->get_kind() != abstract_type::kind::long_kind &&
+         column_type->get_kind() != abstract_type::kind::int32 &&
+         column_type->get_kind() != abstract_type::kind::timestamp)) {
         tlogger.info("table {} TTL column has unsupported type, not scanning", s->cf_name());
         co_return false;
     }
@@ -878,12 +894,10 @@ future<> expiration_service::run() {
 future<> expiration_service::start() {
     // Called by main() on each shard to start the expiration-service
     // thread. Just runs run() in the background and allows stop().
-    if (_db.features().alternator_ttl) {
-        if (!shutting_down()) {
-            _end = run().handle_exception([] (std::exception_ptr ep) {
-                tlogger.error("expiration_service failed: {}", ep);
-            });
-        }
+    if (!shutting_down()) {
+        _end = run().handle_exception([] (std::exception_ptr ep) {
+            tlogger.error("expiration_service failed: {}", ep);
+        });
     }
     return make_ready_future<>();
 }

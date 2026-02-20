@@ -13,6 +13,19 @@ The TTL can be set when defining a Table (CREATE), or when using the INSERT and 
 The expiration works at the individual column level, which provides a lot of flexibility.
 By default, the TTL value is null, which means that the data will not expire.
 
+This document is about CQL's classic per-write TTL feature, where individual
+columns from the same row can expire at separate times if written at
+different times. ScyllaDB also supports an alternative TTL feature,
+`Per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_.
+In *per-row TTL* each row has an expiration time for the entire row,
+defined by the value of the expiration-time column. In per-row TTL, the
+entire row expires together regardless of how its indivial columns were
+written, and the expiration time of an entire row can be modified by modifying
+the expiration-time column. Another benefit of per-row TTL is that it
+generates a CDC event when a row expires - in contrast in per-write TTL
+(the feature described in this document) where expiration events do not
+show up in CDC.
+
 .. note::
 
    The expiration time is always calculated as *now() on the Coordinator + TTL* where,  *now()* is the wall clock during the corresponding write operation.
