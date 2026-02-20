@@ -2549,6 +2549,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().drain_on_shutdown().get();
             });
 
+            // FIXME: This is a temporary solution before we implement proper tablet migration
+            // for strongly consistent tablets and leadership management (when shutting down).
+            //
+            // What's the problem we're solving here?
+            //
+            // We need to cancel all ongoing Raft operations corresponding to strongly consistent
+            // tables before draining storage_service above. One of the things it's going to do
+            // is close connections. If some requests are still pending, it'll wait for them
+            // to complete (cf. storage_service::stop_transport and cql_transport::controller:stop_server).
+            //
+            // To avoid ending up in a deadlock, we schedule removals of strongly consistent Raft
+            // groups here. This way, all requests should finish relatively quickly, and we'll
+            // be able to complete the shutdown.
+            auto schedule_sc_groups_removal = defer([&groups_manager] {
+                groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::schedule_groups_removal).get();
+            });
+
             auth_service.local().ensure_superuser_is_created().get();
             ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
