@@ -37,6 +37,7 @@
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <seastar/net/inet_address.hh>
+#include <type_traits>
 #include <unordered_set>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
@@ -54,6 +55,9 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
+
+static_assert(std::is_nothrow_move_constructible_v<data_value>);
+static_assert(std::is_nothrow_move_assignable_v<data_value>);
 
 static logging::logger tlogger("types");
 
@@ -3699,7 +3703,7 @@ data_value::data_value(const data_value& v) : _value(nullptr), _type(v._type) {
 }
 
 data_value&
-data_value::operator=(data_value&& x) {
+data_value::operator=(data_value&& x) noexcept {
     auto tmp = std::move(x);
     std::swap(tmp._value, this->_value);
     std::swap(tmp._type, this->_type);
