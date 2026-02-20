@@ -13,6 +13,7 @@ from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
 import itertools
+import threading
 import logging
 import os
 import pathlib
@@ -411,6 +412,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+        self.serving_signal = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
 
         workdir = self.vardir / shortname
@@ -728,15 +730,40 @@ class ScyllaServer:
             return
         # Remove existing socket file if present
         self.notify_socket_path.unlink(missing_ok=True)
-        self.notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC)
+        self.notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
         self.notify_socket.bind(str(self.notify_socket_path))
         self._received_serving = False
+        def poll_status(s: socket.socket, f: asyncio.Future, logger: Union[logging.Logger, logging.LoggerAdapter]):
+            # Try to read all available messages from the socket
+            while True:
+                try:
+                    data = s.recv(4096)
+                    # sd_notify message format: "STATUS=serving\n" or "READY=1\nSTATUS=serving\n"
+                    message = data.decode('utf-8', errors='replace')
+                    if 'STATUS=serving' in message:
+                        logger.debug("Received sd_notify 'serving' message")
+                        f.set_result(True)
+                        return
+                    if 'STATUS=entering maintenance mode' in message:
+                        logger.debug("Receive sd_notify 'entering maintenance mode'")
+                        break
+                except Exception as e:
+                    logger.debug("Error reading from notify socket: %s", e)
+                    break
+            f.set_result(False)
+
+        self.serving_signal = asyncio.get_running_loop().create_future()
+        t = threading.Thread(target=poll_status, args=[self.notify_socket, self.serving_signal, self.logger], daemon=True)
+        t.start()
 
     def _cleanup_notify_socket(self) -> None:
         """Clean up the sd_notify socket."""
         if self.notify_socket is not None:
             self.notify_socket.close()
             self.notify_socket = None
+        if self.serving_signal is not None:
+            self.serving_signal.cancel()
+            self.serving_signal = None
         self.notify_socket_path.unlink(missing_ok=True)
 
     def check_serving_notification(self) -> bool:
@@ -748,22 +775,11 @@ class ScyllaServer:
             return True
         if self.notify_socket is None:
             return False
-        # Try to read all available messages from the socket
-        while True:
-            try:
-                data = self.notify_socket.recv(4096)
-                # sd_notify message format: "STATUS=serving\n" or "READY=1\nSTATUS=serving\n"
-                message = data.decode('utf-8', errors='replace')
-                if 'STATUS=serving' in message:
-                    self._received_serving = True
-                    self.logger.debug("Received sd_notify 'serving' message")
-                    return True
-            except BlockingIOError:
-                # No more messages available
-                break
-            except Exception as e:
-                self.logger.debug("Error reading from notify socket: %s", e)
-                break
+        if self.serving_signal is None:
+            return False
+        if self.serving_signal.done():
+            self._received_serving = self.serving_signal.result()
+            self.serving_signal = None
         return False
 
     async def try_get_host_id(self, api: ScyllaRESTAPIClient) -> Optional[HostID]:
@@ -861,7 +877,7 @@ class ScyllaServer:
                                 return
                         await report_error("the node startup failed, but the log file doesn't contain the expected error")
                 await report_error("failed to start the node")
-
+            self.logger.info("Wait me %s expect %s is %s", self.server_id, expected_server_up_state, server_up_state)
             if await self.try_get_host_id(api):
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
