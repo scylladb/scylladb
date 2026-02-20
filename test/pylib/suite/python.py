@@ -51,7 +51,7 @@ class PythonTestSuite(TestSuite):
         elif env_pool_size is not None:
             pool_size = int(env_pool_size)
         else:
-            pool_size = cfg.get("pool_size", 2)
+            pool_size = cfg.get("pool_size_per_vcpu", 1) * os.cpu_count()
         self.dirties_cluster = set(cfg.get("dirties_cluster", []))
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)
