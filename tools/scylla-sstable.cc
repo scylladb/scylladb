@@ -52,6 +52,7 @@
 #include "tools/utils.hh"
 #include "types/json_utils.hh"
 #include "locator/host_id.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -2243,6 +2244,27 @@ void dump_schema_operation(schema_ptr schema, reader_permit permit, const std::v
     fmt::print(std::cout, "{}\n", schema_desc.create_statement.value().linearize());
 }
 
+struct named_mutation_source {
+    sstring name;
+    mutation_source source;
+};
+
+std::vector<named_mutation_source> create_mutation_sources(const std::vector<sstables::shared_sstable>& sstables, bool merge) {
+    auto sources = sstables
+        | std::views::transform([] (const sstables::shared_sstable& sst) { return named_mutation_source{fmt::to_string(sst->get_filename()), sst->as_mutation_source()}; })
+        | std::ranges::to<std::vector<named_mutation_source>>();
+
+    if (merge) {
+        auto named_sources = std::exchange(sources, {});
+        auto sources_to_merge = named_sources
+            | std::views::transform([] (const named_mutation_source& ms) { return ms.source; })
+            | std::ranges::to<std::vector<mutation_source>>();
+        sources.push_back(named_mutation_source{"<combined>", make_combined_mutation_source(std::move(sources_to_merge))});
+    }
+
+    return sources;
+}
+
 void filter_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
     if (sstables.empty()) {
@@ -2264,22 +2286,7 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
         : sst_man.get_preferred_sstable_version();
 
-    struct named_mutation_source {
-        sstring name;
-        mutation_source source;
-    };
-
-    auto sources = sstables
-        | std::views::transform([] (const sstables::shared_sstable& sst) { return named_mutation_source{fmt::to_string(sst->get_filename()), sst->as_mutation_source()}; })
-        | std::ranges::to<std::vector<named_mutation_source>>();
-
-    if (vm.count("merge")) {
-        auto named_sources = std::exchange(sources, {});
-        auto sources_to_merge = named_sources
-            | std::views::transform([] (const named_mutation_source& ms) { return ms.source; })
-            | std::ranges::to<std::vector<mutation_source>>();
-        sources.push_back(named_mutation_source{"<combined>", make_combined_mutation_source(std::move(sources_to_merge))});
-    }
+    auto sources = create_mutation_sources(sstables, vm.count("merge"));
 
     const auto partitions = get_partitions(schema, vm);
 
@@ -2315,6 +2322,85 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
                 encoding_stats{}).get();
 
         fmt::print(std::cout, "output written to {}\n", new_sst->get_filename());
+    }
+}
+
+void split_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    if (!vm.count("split-token")) {
+        throw std::invalid_argument("no split tokens specified, use --split-token");
+    }
+
+    const auto output_dir = vm["output-dir"].as<std::string>();
+    validate_output_dir(output_dir);
+
+    const auto local = data_dictionary::make_local_options(output_dir);
+
+    const auto new_format = sstables::sstable_format_types::big;
+    const auto new_version = vm.contains("sstable-version")
+        ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
+        : sst_man.get_preferred_sstable_version();
+
+    // Parse split tokens
+    auto split_token_strings = vm["split-token"].as<std::vector<sstring>>();
+    std::vector<dht::token> split_tokens;
+    split_tokens.reserve(split_token_strings.size());
+    for (const auto& token_str : split_token_strings) {
+        try {
+            split_tokens.push_back(dht::token::from_sstring(token_str));
+        } catch (...) {
+            throw std::invalid_argument(fmt::format("invalid token: {}", token_str));
+        }
+    }
+
+    // Sort tokens to ensure proper ordering
+    std::ranges::sort(split_tokens);
+
+    auto sources = create_mutation_sources(sstables, vm.count("merge"));
+
+    sst_log.info("Splitting {} sstable(s) by {} token(s)", sources.size(), split_tokens.size());
+
+    // Create classifier function that maps tokens to groups
+    auto classify = [split_tokens = std::move(split_tokens)] (dht::token t) -> mutation_writer::token_group_id {
+        // Find the first split token that is greater than t
+        // The token belongs to the group with that index
+        auto it = std::ranges::upper_bound(split_tokens, t);
+        return std::distance(split_tokens.begin(), it);
+    };
+
+    for (const auto& [name, source] : sources) {
+        fmt::print(std::cout, "Splitting {}...\n", name);
+
+        std::vector<std::string> output_files;
+
+        auto consumer = [&] (mutation_reader reader) -> future<> {
+            const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
+            auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+
+            auto writer_cfg = sst_man.configure_writer("scylla-sstable");
+
+            co_await new_sst->write_components(
+                    std::move(reader),
+                    1,
+                    schema,
+                    writer_cfg,
+                    encoding_stats{});
+
+            output_files.push_back(fmt::to_string(new_sst->get_filename()));
+        };
+
+        auto reader = source.make_mutation_reader(schema, permit);
+
+        mutation_writer::segregate_by_token_group(std::move(reader), classify, std::move(consumer)).get();
+
+        fmt::print(std::cout, "  Generated {} output sstable(s):\n", output_files.size());
+        for (const auto& file : output_files) {
+            fmt::print(std::cout, "    {}\n", file);
+        }
     }
 }
 
@@ -2684,6 +2770,39 @@ For more information, see: {}
                 typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
             }},
             filter_operation},
+/* split */
+    {{"split",
+            "Split sstable(s) by token boundaries",
+fmt::format(R"(
+Split input sstable(s) into multiple output sstables based on the provided
+token boundaries. The input sstable(s) are divided according to the specified
+split tokens, creating one output sstable per token range.
+
+Tokens should be provided via the --split-token option. Multiple tokens can
+be specified by repeating the option. The tokens will be sorted automatically
+to ensure proper ordering.
+
+For N split tokens, N+1 output sstables will be generated:
+- First sstable: from minimum token to first split token
+- Middle sstables: between consecutive split tokens
+- Last sstable: from last split token to maximum token
+
+By default, each input sstable is split individually. Use --merge to split
+the combined content of all input sstables, producing a single set of output
+sstables.
+
+Output sstables use the latest supported sstable format (can be changed with
+--sstable-version) and are written to the directory specified by --output-dir.
+
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#split")),
+            {
+                typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
+                typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
+                typed_option<std::vector<sstring>>("split-token,t", "token boundary for splitting (can be specified multiple times)"),
+                typed_option<>("merge", "combine all input sstable(s) into a single stream before splitting"),
+            }},
+            split_operation},
 };
 
 } // anonymous namespace
