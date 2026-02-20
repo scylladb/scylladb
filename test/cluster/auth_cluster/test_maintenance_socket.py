@@ -13,8 +13,11 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.cluster.conftest import cluster_con
 from test.pylib.manager_client import ManagerClient
 
+import logging
 import pytest
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
@@ -29,9 +32,11 @@ async def test_maintenance_socket(manager: ManagerClient):
         "authorizer": "CassandraAuthorizer",
     }
 
+    logger.info("Starting server with auth enabled")
     server = await manager.server_add(config=config)
     socket = await manager.server_get_maintenance_socket_path(server.server_id)
 
+    logger.info("Verifying unauthenticated connection is rejected")
     try:
         cluster = Cluster([server.ip_addr])
         cluster.connect()
@@ -40,6 +45,7 @@ async def test_maintenance_socket(manager: ManagerClient):
     else:
         pytest.fail("Client should not be able to connect if auth provider is not specified")
 
+    logger.info("Connecting as superuser to set up roles and keyspaces")
     cluster = cluster_con([server.ip_addr],
                           auth_provider=PlainTextAuthProvider(username="cassandra", password="cassandra"))
     session = cluster.connect()
@@ -51,6 +57,7 @@ async def test_maintenance_socket(manager: ManagerClient):
     session.execute("CREATE TABLE ks2.t1 (pk int PRIMARY KEY, val int);")
     session.execute("GRANT SELECT ON ks1.t1 TO john;")
 
+    logger.info("Verifying user 'john' cannot access ks2.t1")
     cluster = cluster_con([server.ip_addr], auth_provider=PlainTextAuthProvider(username="john", password="password"))
     session = cluster.connect()
     try:
@@ -60,10 +67,11 @@ async def test_maintenance_socket(manager: ManagerClient):
     else:
         pytest.fail("User 'john' has no permissions to access ks2.t1")
 
+    logger.info("Connecting via maintenance socket")
     maintenance_cluster = cluster_con([UnixSocketEndPoint(socket)], load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(socket)]))
     maintenance_session = maintenance_cluster.connect()
 
-    # check that the maintenance session has superuser permissions
+    logger.info("Verifying maintenance session has superuser permissions")
     maintenance_session.execute("SELECT * FROM ks1.t1")
     maintenance_session.execute("SELECT * FROM ks2.t1")
     maintenance_session.execute("INSERT INTO ks1.t1 (pk, val) VALUES (1, 1);")
