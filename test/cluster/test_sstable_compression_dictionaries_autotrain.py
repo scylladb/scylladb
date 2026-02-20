@@ -54,7 +54,7 @@ async def test_autoretrain_dict(manager: ManagerClient):
     uncompressed_size = blob_size * n_blobs * rf
 
     # Start with compressor without a dictionary
-    cfg = { "sstable_compression_user_table_options": "ZstdCompressor" }
+    cfg = { "sstable_compression_user_table_options": { 'sstable_compression': 'ZstdCompressor' } }
 
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(2, cmdline=[
