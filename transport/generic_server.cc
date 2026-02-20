@@ -251,7 +251,9 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
         _prev_conns_cpu_concurrency = concurrency;
     }))
     , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
-    , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
+    // Total semaphore capacity is concurrency - 1 + nr_listeners;
+    // start with concurrency - 1, each listen() adds 1.
+    , _conns_cpu_concurrency_semaphore(_prev_conns_cpu_concurrency - 1, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
     , _shutdown_timeout(std::chrono::seconds{cfg.shutdown_timeout_in_seconds})
 {
 }
@@ -355,6 +357,8 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
         throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
+    // Each listener's do_accepts loop needs at least 1 unit to accept.
+    _conns_cpu_concurrency_semaphore.signal(1);
     _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr, is_tls)).discard_result();
 }
 
