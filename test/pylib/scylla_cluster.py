@@ -13,6 +13,7 @@ from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
 import itertools
+import threading
 import logging
 import os
 import pathlib
@@ -411,6 +412,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+        self.serving_signal = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
 
         workdir = self.vardir / shortname
@@ -728,13 +730,37 @@ class ScyllaServer:
             return
         # Remove existing socket file if present
         self.notify_socket_path.unlink(missing_ok=True)
-        self.notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC)
+        self.notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
         self.notify_socket.bind(str(self.notify_socket_path))
         self._received_serving = False
+        self.serving_signal = threading.Event()
+        def poll_status():
+            # Try to read all available messages from the socket
+            ev = self.serving_signal
+            while True:
+                s = self.notify_socket;
+                if not s:
+                    self.logger.debug("stopping status reading thread")
+                    break
+                try:
+                    data = s.recv(4096)
+                    # sd_notify message format: "STATUS=serving\n" or "READY=1\nSTATUS=serving\n"
+                    message = data.decode('utf-8', errors='replace')
+                    if 'STATUS=serving' in message:
+                        self._received_serving = True
+                        self.logger.debug("Received sd_notify 'serving' message")
+                        ev.set()
+                except Exception as e:
+                    self.logger.debug("Error reading from notify socket: %s", e)
+                    break
+
+        t = threading.Thread(target=poll_status, daemon=True)
+        t.start()
 
     def _cleanup_notify_socket(self) -> None:
         """Clean up the sd_notify socket."""
         if self.notify_socket is not None:
+            self.notify_socket.shutdown(socket.SHUT_RDWR)
             self.notify_socket.close()
             self.notify_socket = None
         self.notify_socket_path.unlink(missing_ok=True)
@@ -746,25 +772,10 @@ class ScyllaServer:
         """
         if self._received_serving:
             return True
-        if self.notify_socket is None:
+        if self.serving_signal is None:
             return False
-        # Try to read all available messages from the socket
-        while True:
-            try:
-                data = self.notify_socket.recv(4096)
-                # sd_notify message format: "STATUS=serving\n" or "READY=1\nSTATUS=serving\n"
-                message = data.decode('utf-8', errors='replace')
-                if 'STATUS=serving' in message:
-                    self._received_serving = True
-                    self.logger.debug("Received sd_notify 'serving' message")
-                    return True
-            except BlockingIOError:
-                # No more messages available
-                break
-            except Exception as e:
-                self.logger.debug("Error reading from notify socket: %s", e)
-                break
-        return False
+        self.serving_signal.wait()
+        return self._received_serving
 
     async def try_get_host_id(self, api: ScyllaRESTAPIClient) -> Optional[HostID]:
         """Try to get the host id (also tests Scylla REST API is serving)"""
