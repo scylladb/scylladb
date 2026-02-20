@@ -9,37 +9,39 @@ import json
 
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
+from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import reconnect_driver
 from test.cluster.object_store.conftest import format_tuples
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
+from test.pylib.tablets import get_all_tablet_replicas
 
 logger = logging.getLogger(__name__)
 
 
-def create_ks_and_cf(cql, object_storage):
+def create_ks_and_cf(cql, object_storage, replication_factor=1) -> tuple[str, str]:
     ks = 'test_ks'
     cf = 'test_cf'
 
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                      'replication_factor': '1'})
+                                      'replication_factor': str(replication_factor)})
     storage_opts = format_tuples(type=f'{object_storage.type}',
                                  endpoint=object_storage.address,
                                  bucket=object_storage.bucket_name)
 
     cql.execute((f"CREATE KEYSPACE {ks} WITH"
                   f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-    cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+    cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text ) WITH TABLETS = {{'min_tablet_count': 4}};")
 
-    rows = [('0', 'zero'),
-            ('1', 'one'),
-            ('2', 'two')]
-    for row in rows:
+    inserted_rows = [('0', 'zero'),
+                     ('1', 'one'),
+                     ('2', 'two')]
+    for row in inserted_rows:
         cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
         cql.execute(cql_fmt.format(ks, cf, *row))
 
-    return ks, cf
+    return ks, cf, inserted_rows
 
 
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
@@ -63,7 +65,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
     cql = manager.get_cql()
     workdir = await manager.server_get_workdir(server.server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage)
 
     assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
     # Sanity check that the path is constructed correctly
@@ -76,7 +78,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
 
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+    assert len(rows) == len(inserted_rows), f'Test table has {len(rows)} rows, expected {len(inserted_rows)}'
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
 
@@ -121,7 +123,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, _ = create_ks_and_cf(cql, object_storage)
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
     # Mark the sstables as "removing" to simulate the problem
@@ -162,11 +164,11 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
     cql = manager.get_cql()
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage)
 
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
-    assert len(rows) > 0, 'Test table is empty'
+    assert len(rows) == len(inserted_rows), f'Test table has {len(rows)} rows, expected {len(inserted_rows)}'
 
     await manager.api.flush_keyspace(server.ip_addr, ks)
     # Move the sstables into "quarantine"
@@ -224,7 +226,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     cql = manager.get_cql()
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
-    ks, cf = create_ks_and_cf(cql, object_storage)
+    ks, cf, _ = create_ks_and_cf(cql, object_storage)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
 
@@ -306,5 +308,70 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
+
+
+@pytest.mark.asyncio
+async def test_rf3_with_three_servers(manager: ManagerClient, object_storage):
+    '''verify sstable ownership with RF=3, and that data is properly replicated and can be read after restart'''
     
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options']}
+    
+    # Add 3 servers to the cluster, each in a different rack
+    servers = []
+    num_racks = 3
+    for rack_num in range(0, num_racks):
+        property_file = {"dc": "dc1", "rack": f"r{rack_num}"}
+        server = await manager.server_add(config=cfg, property_file=property_file)
+        servers.append(server)
+    
+    cql = manager.get_cql()    
+    ks, cf, inserted_rows = create_ks_and_cf(cql, object_storage, replication_factor=num_racks)
+    
+    print('Flush keyspace on all servers')
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+    
+    # Get the table ID
+    tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
+    print(f'Table ID: {tid.id}')
+    
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[1], ks, cf)
+    print(f'Found {len(tablet_replicas)} tablets')
+    
+    # Create host_id to IP mapping
+    hosts = {await manager.get_host_id(s.server_id): s.ip_addr for s in servers}
+    
+    # Print tablet replica information
+    for idx, tablet in enumerate(tablet_replicas):
+        replica_ips = [hosts[r[0]] for r in tablet.replicas]
+        print(f'Tablet {idx}: last_token={tablet.last_token}, replicas={replica_ips}')
+        assert len(replica_ips) == num_racks, f'Expected RF={num_racks} replicas, got {len(replica_ips)}'
+        
+
+    print('Restart scylla')
+    for server in servers:
+        await manager.server_restart(server.server_id)
+    cql = await reconnect_driver(manager)
+    print(f'Reconnected to cluster after restart')
+
+    res = cql.execute("SELECT * FROM system.sstables;")
+    sstable_entries = list(res)
+    print(f'Found {len(sstable_entries)} SSTable entries in system.sstables')
+    
+    # Verify all entries belong to our table
+    for row in sstable_entries:
+        assert row.owner == tid.id, \
+            f'Unexpected entry owner in registry: {row.owner}, expected {tid.id}'
+        assert row.status == 'sealed', \
+            f'Unexpected entry status in registry: {row.status}'
+        print(f'SSTable generation {row.generation}: owner={row.owner}, status={row.status}')
+
+    # Verify data can be read back from all nodes
+    stmt = SimpleStatement(f"SELECT * FROM {ks}.{cf};", consistency_level=ConsistencyLevel.ALL)
+    res = cql.execute(stmt)
+    read_rows = {x.name: x.value for x in res}
+    assert len(read_rows) == len(inserted_rows), f'Test table has {len(read_rows)} rows, expected {len(inserted_rows)}'
 
