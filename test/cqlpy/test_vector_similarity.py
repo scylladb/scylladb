@@ -56,6 +56,9 @@ def compute_similarity(similarity_function, v1, v2):
         dot_product = sum(a * b for a, b in zip(v1, v2))
         return (1 + dot_product) / 2
 
+def assert_similarity(actual, expected):
+    assert isclose(actual, expected, abs_tol=1e-5)
+
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
 def test_vector_similarity_fails_on_non_float_vector_column(cql, table1, similarity_function):
@@ -135,16 +138,16 @@ def test_vector_similarity_returns_null_on_null_arguments(cql, table1, similarit
 def test_vector_similarity_allow_both_vector_columns_and_literals_as_arguments(cql, table1, similarity_function):
     result = cql.execute(f"SELECT pk, similarity_{similarity_function}([1.1, 1.2, 20.25], [1.8, 0.5, 20.03]) FROM {table1}")
     for row in result:
-        assert isclose(row[1], compute_similarity(similarity_function, [1.1, 1.2, 20.25], [1.8, 0.5, 20.03]), abs_tol=1e-5)
+        assert_similarity(row[1], compute_similarity(similarity_function, [1.1, 1.2, 20.25], [1.8, 0.5, 20.03]))
     result = cql.execute(f"SELECT pk, v1, v2, similarity_{similarity_function}(v1, v2) FROM {table1}")
     for row in result:
-        assert isclose(row[3], compute_similarity(similarity_function, row.v1, row.v2), abs_tol=1e-5)
+        assert_similarity(row[3], compute_similarity(similarity_function, row.v1, row.v2))
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}(v1, [1.8, 0.5, 20.03]) FROM {table1}")
     for row in result:
-        assert isclose(row[2], compute_similarity(similarity_function, row.v1, [1.8, 0.5, 20.03]), abs_tol=1e-5)
+        assert_similarity(row[2], compute_similarity(similarity_function, row.v1, [1.8, 0.5, 20.03]))
     result = cql.execute(f"SELECT pk, v2, similarity_{similarity_function}([1.1, 1.2, 20.25], v2) FROM {table1}")
     for row in result:
-        assert isclose(row[2], compute_similarity(similarity_function, [1.1, 1.2, 20.25], row.v2), abs_tol=1e-5)
+        assert_similarity(row[2], compute_similarity(similarity_function, [1.1, 1.2, 20.25], row.v2))
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
@@ -212,14 +215,14 @@ def test_vector_similarity_with_column_and_literal(cql, table1, similarity_funct
     query_vector = [0.707107, 0.0, -0.707107]
     result = cql.execute(f"SELECT v1, similarity_{similarity_function}(v1, {query_vector}) FROM {table1}")
     for row in result:
-        isclose(row[1], compute_similarity(similarity_function, row.v1, query_vector))
+        assert_similarity(row[1], compute_similarity(similarity_function, row.v1, query_vector))
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
 def test_vector_similarity_with_two_columns(cql, table1, similarity_function):
     result = cql.execute(f"SELECT v1, v2, similarity_{similarity_function}(v1, v2) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, row.v2))
+        assert_similarity(row[2], compute_similarity(similarity_function, row.v1, row.v2))
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
@@ -228,7 +231,7 @@ def test_vector_similarity_with_two_literals(cql, table1, similarity_function):
     v2 = [0.707107, 0.0, -0.707107]
     result = cql.execute(f"SELECT pk, similarity_{similarity_function}({v1}, {v2}) FROM {table1}")
     for row in result:
-        isclose(row[1], compute_similarity(similarity_function, v1, v2))
+        assert_similarity(row[1], compute_similarity(similarity_function, v1, v2))
 
 
 @pytest.mark.parametrize("similarity_function", sorted(set(similarity_functions) - {"cosine"}))
@@ -236,13 +239,13 @@ def test_vector_similarity_with_zero_vectors(cql, table1, similarity_function):
     zero = [0.0, 0.0, 0.0]
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}(v1, {zero}) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, zero))
+        assert_similarity(row[2], compute_similarity(similarity_function, row.v1, zero))
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}({zero}, v1) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, zero, row.v1))
+        assert_similarity(row[2], compute_similarity(similarity_function, zero, row.v1))
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}({zero}, {zero}) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, zero, zero))
+        assert_similarity(row[2], compute_similarity(similarity_function, zero, zero))
 
 
 def test_vector_similarity_cosine_with_zero_vectors(cql, table1):
@@ -271,15 +274,15 @@ def test_vector_similarity_with_bind_variables(cql, table1, similarity_function)
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(v1, ?) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, query_vector))
+        assert_similarity(row[2], compute_similarity(similarity_function, row.v1, query_vector))
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}({query_vector}, ?) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, query_vector, query_vector))
+        assert_similarity(row[2], compute_similarity(similarity_function, query_vector, query_vector))
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, v1) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, query_vector, row.v1))
+        assert_similarity(row[2], compute_similarity(similarity_function, query_vector, row.v1))
     with pytest.raises(InvalidRequest, match="Cannot infer type of argument ?"):
         cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, ?) FROM {table1}")
 
@@ -291,11 +294,11 @@ def test_vector_similarity_with_bind_variables_set(cql, table1, similarity_funct
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(v1, ?) FROM {table1}")
     result = cql.execute(stmt, ({1.0, 2.0, 3.0},))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, {1.0, 2.0, 3.0}))
+        assert_similarity(row[2], compute_similarity(similarity_function, row.v1, {1.0, 2.0, 3.0}))
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, v1) FROM {table1}")
     result = cql.execute(stmt, ({1.0, 2.0, 3.0},))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, {1.0, 2.0, 3.0}, row.v1))
+        assert_similarity(row[2], compute_similarity(similarity_function, {1.0, 2.0, 3.0}, row.v1))
     with pytest.raises(InvalidRequest, match="Cannot infer type of argument ?"):
         cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, ?) FROM {table1}")
 
@@ -317,10 +320,10 @@ def test_cassandra_documentation_compatibility(cql, test_keyspace, similarity_fu
             assert row[1] is None
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.1, 0.2]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][0])
+            assert_similarity(row[1], expected_results[similarity_function][0])
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [-0.1, -0.2]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][1])
+            assert_similarity(row[1], expected_results[similarity_function][1])
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.9, 0.8]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][2])
+            assert_similarity(row[1], expected_results[similarity_function][2])
