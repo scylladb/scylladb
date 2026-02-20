@@ -14,6 +14,7 @@
 #include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
+#include "cql3/untyped_result_set.hh"
 
 static logging::logger large_data_logger("large_data");
 
@@ -113,6 +114,37 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
     return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
 }
 
+future<> large_data_handler::maybe_update_large_data_entries_sstable_name(sstables::shared_sstable sst, sstring new_name) {
+    SCYLLA_ASSERT(running());
+    auto schema = sst->get_schema();
+    auto old_name = sst_filename(*sst);
+    using ldt = sstables::large_data_type;
+    auto above_threshold = [sst] (ldt type) -> bool {
+        auto entry = sst->get_large_data_stat(type);
+        return entry && entry->above_threshold;
+    };
+
+    future<> large_partitions = make_ready_future<>();
+    if (above_threshold(ldt::partition_size) || above_threshold(ldt::rows_in_partition)) {
+        large_partitions = with_sem([schema, old_name, new_name, this] () mutable {
+            return update_large_data_entries_sstable_name(*schema, std::move(old_name), std::move(new_name), db::system_keyspace::LARGE_PARTITIONS);
+        });
+    }
+    future<> large_rows = make_ready_future<>();
+    if (above_threshold(ldt::row_size)) {
+        large_rows = with_sem([schema, old_name, new_name, this] () mutable {
+            return update_large_data_entries_sstable_name(*schema, std::move(old_name), std::move(new_name), db::system_keyspace::LARGE_ROWS);
+        });
+    }
+    future<> large_cells = make_ready_future<>();
+    if (above_threshold(ldt::cell_size) || above_threshold(ldt::elements_in_collection)) {
+        large_cells = with_sem([schema, old_name, new_name, this] () mutable {
+            return update_large_data_entries_sstable_name(*schema, std::move(old_name), std::move(new_name), db::system_keyspace::LARGE_CELLS);
+        });
+    }
+    return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
+}
+
 cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service& feat,
         utils::updateable_value<uint32_t> partition_threshold_mb,
         utils::updateable_value<uint32_t> row_threshold_mb,
@@ -147,8 +179,10 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
 {}
 
 template <typename... Args>
-future<> cql_table_large_data_handler::try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
-        std::string_view size_desc, std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const {
+future<> cql_table_large_data_handler::do_insert_large_data_entry(std::string_view large_table,
+        sstring ks_name, sstring cf_name, sstring sstable_name,
+        int64_t size, sstring partition_key, db_clock::time_point compaction_time,
+        const std::vector<sstring>& extra_fields, Args&&... args) const {
     auto sys_ks = _sys_ks.get_permit();
     if (!sys_ks) {
         co_return;
@@ -162,6 +196,17 @@ future<> cql_table_large_data_handler::try_record(std::string_view large_table, 
     }
     const sstring req = seastar::format("INSERT INTO system.large_{}s (keyspace_name, table_name, sstable_name, {}_size, partition_key, compaction_time{}) VALUES (?, ?, ?, ?, ?, ?{}) USING TTL 2592000",
             large_table, large_table, extra_fields_str, extra_values);
+    co_await sys_ks->execute_cql(req, ks_name, cf_name, sstable_name, size, partition_key, compaction_time, args...)
+            .discard_result()
+            .handle_exception([ks_name, cf_name, large_table = sstring(large_table), sstable_name] (std::exception_ptr ep) {
+                large_data_logger.warn("Failed to add a record to system.large_{}s: ks = {}, table = {}, sst = {} exception = {}",
+                        large_table, ks_name, cf_name, sstable_name, ep);
+            });
+}
+
+template <typename... Args>
+future<> cql_table_large_data_handler::try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
+        std::string_view size_desc, std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const {
     const schema &s = *sst.get_schema();
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
@@ -169,12 +214,8 @@ future<> cql_table_large_data_handler::try_record(std::string_view large_table, 
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
     large_data_logger.warn("Writing large {} {}/{}: {} ({}) to {}", desc, ks_name, cf_name, extra_path, size_desc, sstable_name);
-    co_await sys_ks->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
-            .discard_result()
-            .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
-                large_data_logger.warn("Failed to add a record to system.large_{}s: ks = {}, table = {}, sst = {} exception = {}",
-                        large_table, ks_name, cf_name, sstable_name, ep);
-            });
+    co_await do_insert_large_data_entry(large_table, std::move(ks_name), std::move(cf_name), std::move(sstable_name),
+            size, std::move(pk_str), timestamp, extra_fields, std::forward<Args>(args)...);
 }
 
 future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key,
@@ -259,5 +300,60 @@ future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s
                 large_data_logger.warn("Failed to drop entries from {}: ks = {}, table = {}, sst = {} exception = {}",
                         large_table_name, s.ks_name(), s.cf_name(), sstable_name, ep);
             });
+}
+
+cql_table_large_data_handler::row_reinsert_func cql_table_large_data_handler::make_row_reinsert_func(std::string_view large_table_name, const sstring& ks_name, const sstring& cf_name, const sstring& new_name) const {
+    if (large_table_name == system_keyspace::LARGE_PARTITIONS) {
+        return [this, ks_name, cf_name, new_name] (const cql3::untyped_result_set_row& row) {
+            return do_insert_large_data_entry("partition", ks_name, cf_name, new_name,
+                    row.get_as<int64_t>("partition_size"), row.get_as<sstring>("partition_key"), row.get_as<db_clock::time_point>("compaction_time"),
+                    {"rows", "range_tombstones", "dead_rows"},
+                    data_value(row.get_or<int64_t>("rows", 0)),
+                    data_value(row.get_or<int64_t>("range_tombstones", 0)),
+                    data_value(row.get_or<int64_t>("dead_rows", 0)));
+        };
+    } else if (large_table_name == system_keyspace::LARGE_ROWS) {
+        return [this, ks_name, cf_name, new_name] (const cql3::untyped_result_set_row& row) {
+            return do_insert_large_data_entry("row", ks_name, cf_name, new_name,
+                    row.get_as<int64_t>("row_size"), row.get_as<sstring>("partition_key"), row.get_as<db_clock::time_point>("compaction_time"),
+                    {"clustering_key"},
+                    row.get_as<sstring>("clustering_key"));
+        };
+    } else {
+        return [this, ks_name, cf_name, new_name] (const cql3::untyped_result_set_row& row) {
+            return do_insert_large_data_entry("cell", ks_name, cf_name, new_name,
+                    row.get_as<int64_t>("cell_size"), row.get_as<sstring>("partition_key"), row.get_as<db_clock::time_point>("compaction_time"),
+                    {"clustering_key", "column_name", "collection_elements"},
+                    row.get_as<sstring>("clustering_key"),
+                    row.get_as<sstring>("column_name"),
+                    data_value(row.get_or<int64_t>("collection_elements", 0)));
+        };
+    }
+}
+
+future<> cql_table_large_data_handler::update_large_data_entries_sstable_name(const schema& s, sstring old_name, sstring new_name, std::string_view large_table_name) const {
+    auto sys_ks = _sys_ks.get_permit();
+    SCYLLA_ASSERT(sys_ks);
+    // sstable_name is a clustering key, so we can't update it in place.
+    // Instead, select all rows with the old name, re-insert with the new name, then delete the old rows.
+    const sstring select_req =
+            seastar::format("SELECT * FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
+                    large_table_name);
+    large_data_logger.debug("Updating sstable_name in {}: ks = {}, table = {}, old_sst = {} -> new_sst = {}",
+            large_table_name, s.ks_name(), s.cf_name(), old_name, new_name);
+    try {
+        auto ks_name = s.ks_name();
+        auto cf_name = s.cf_name();
+        auto reinsert = make_row_reinsert_func(large_table_name, ks_name, cf_name, new_name);
+        auto result = co_await sys_ks->execute_cql(select_req, ks_name, cf_name, old_name);
+        for (auto& row : *result) {
+            co_await reinsert(row);
+        }
+        // Delete old entries
+        co_await delete_large_data_entries(s, std::move(old_name), large_table_name);
+    } catch (...) {
+        large_data_logger.warn("Failed to update sstable_name in {}: ks = {}, table = {}, old_sst = {}, new_sst = {}, exception = {}",
+                large_table_name, s.ks_name(), s.cf_name(), old_name, new_name, std::current_exception());
+    }
 }
 }

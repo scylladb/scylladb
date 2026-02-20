@@ -107,7 +107,8 @@ Here are the different component types:
 
 
 * Scylla (`Scylla.db`)  
-  A file holding scylla-specific metadata about the SSTable, such as sharding information, extended features support, and sstabe-run identifier.
+  A file holding scylla-specific metadata about the SSTable, such as sharding information, extended features support, sstable-run identifier, and CRC32 digests of all SSTable component files.
+  When component digests are present, the file also contains a trailing CRC32 digest of its own serialized metadata (excluding the digest itself).
 
 
 * Partition Key Index (`Partitions.db`)  

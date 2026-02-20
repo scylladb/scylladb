@@ -94,6 +94,9 @@ public:
     sstables::shared_sstable make_sstable(sstables::sstable_state) const override {
         return table().make_sstable();
     }
+    sstables::shared_sstable make_sstable(sstables::sstable_state, sstables::sstable_version_types version) const override {
+        return table().make_sstable(sstables::sstable_state::normal, version);
+    }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _sstables_manager.configure_writer(std::move(origin));
     }
@@ -113,6 +116,9 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
+    }
+    bool incremental_backups_enabled() const noexcept override {
+        return table().incremental_backups_enabled();
     }
     bool tombstone_gc_enabled() const noexcept override {
         return table().tombstone_gc_enabled();

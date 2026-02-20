@@ -13,14 +13,18 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
 
+#include "sstables/checksum_utils.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
+#include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
@@ -398,22 +402,43 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
+future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const std::string& dir_path, uint32_t new_level, bool update_sstable_id = false) {
+    auto modifier = [new_level] (sstables::sstable& sst) {
+        sst.mutate_sstable_level(new_level);
+    };
+    auto creator = [&env, &dir_path] (shared_sstable sstp) {
+        return env.make_sstable(sstp->get_schema(), dir_path, sstp->get_version());
+    };
+
+    auto new_sst = co_await sstp->link_with_rewritten_component(std::move(creator), component_type::Statistics, modifier, update_sstable_id);
+    co_await sstp->unlink();
+    sstp = new_sst;
+
+    sstp = co_await env.reusable_sst(uncompressed_schema(), dir_path, sstp->generation());
+    co_return sstp;
+}
+
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
-        auto uncompressed_dir_copy = env.tempdir().path();
-        for (const auto& entry : std::filesystem::directory_iterator(uncompressed_dir().c_str())) {
-            std::filesystem::copy(entry.path(), uncompressed_dir_copy / entry.path().filename());
-        }
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
 
-        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
-        auto file_path = sstable::filename(uncompressed_dir_copy.native(), "ks", "cf", la, generation_from_value(1), big, component_type::Data);
-        auto exists = file_exists(file_path).get();
-        BOOST_REQUIRE(exists);
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sstp = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts);
 
-        // mutate_sstable_level results in statistics rewrite
-        sstp->mutate_sstable_level(10).get();
+        auto toc_path = fmt::to_string(sstp->toc_filename());
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
 
-        sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
+        BOOST_REQUIRE(sstp->get_sstable_level() != 10);
+
+        sstp = mutate_sstable_level(env, sstp, dir_path, 10).get();
+        sstp = env.reusable_sst(schema, dir_path, sstp->generation()).get();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
@@ -878,4 +903,113 @@ BOOST_AUTO_TEST_CASE(test_parse_path_bad) {
     for (auto path : paths) {
         BOOST_CHECK_THROW(parse_path(path), std::exception);
     }
+}
+
+using compress_sstable = tests::random_schema_specification::compress_sstable;
+static future<> test_component_digest_persistence(component_type component, sstable::version_types version, compress_sstable compress = compress_sstable::no, bool rewrite_statistics = false) {
+    return test_env::do_with_async([component, version, compress, rewrite_statistics] (test_env& env) mutable {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8),
+            compress);
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts);
+
+        auto& components = sstables::test(sst_original).get_components();
+        bool has_component = components.find(component) != components.end();
+        BOOST_REQUIRE(has_component);
+
+        auto toc_path = fmt::to_string(sst_original->toc_filename());
+        auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name());
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+
+        std::optional<uint32_t> original_digest;
+        if (rewrite_statistics) {
+            auto original_sstable_id = sst_original->sstable_identifier();
+            original_digest = sst_original->get_component_digest(component);
+            BOOST_REQUIRE(original_digest.has_value());
+
+            sst_original = mutate_sstable_level(env, sst_original, dir_path, 10, true).get();
+            entry_desc.generation = sst_original->generation();
+
+            auto new_digest = sst_original->get_component_digest(component);
+            BOOST_REQUIRE(new_digest.has_value());
+            BOOST_REQUIRE(original_digest.value() != new_digest.value());
+
+            BOOST_REQUIRE_NE(original_sstable_id, sst_original->sstable_identifier());
+        }
+
+        sst_original = nullptr;
+
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        sst_reopened->load(schema->get_sharder()).get();
+
+        auto loaded_digest = sst_reopened->get_component_digest(component);
+        BOOST_REQUIRE(loaded_digest.has_value());
+
+        auto f = open_file_dma(sstables::test(sst_reopened).filename(component).native(), open_flags::ro).get();
+        auto stream = make_file_input_stream(f);
+        auto close_stream = deferred_close(stream);
+        auto component_data = util::read_entire_stream_contiguous(stream).get();
+        auto calculated_digest = crc32_utils::checksum(component_data.begin(), component_data.size());
+        BOOST_REQUIRE_EQUAL(calculated_digest, loaded_digest.value());
+
+        // calculate scylla component digest, by reading file_size - sizeof(uint32_t)
+        auto f2 = open_file_dma(sstables::test(sst_reopened).filename(sstables::component_type::Scylla).native(), open_flags::ro).get();
+        auto stream2 = make_file_input_stream(f2);
+        auto close_stream2 = deferred_close(stream2);
+        auto scylla_data = util::read_entire_stream_contiguous(stream2).get();
+        auto calc_scylla_digest = crc32_utils::checksum(scylla_data.begin(), scylla_data.size() - sizeof(uint32_t));
+        BOOST_REQUIRE_EQUAL(calc_scylla_digest, sst_reopened->get_component_digest(sstables::component_type::Scylla).value());
+    });
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_index) {
+    return test_component_digest_persistence(component_type::Index, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_partitions) {
+    return test_component_digest_persistence(component_type::Partitions, sstable::version_types::ms);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_rows) {
+    return test_component_digest_persistence(component_type::Rows, sstable::version_types::ms);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_summary) {
+    return test_component_digest_persistence(component_type::Summary, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_filter) {
+    return test_component_digest_persistence(component_type::Filter, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_compression) {
+    return test_component_digest_persistence(component_type::CompressionInfo, sstable::version_types::me, compress_sstable::yes);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_toc) {
+    return test_component_digest_persistence(component_type::TOC, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_statistics) {
+    return test_component_digest_persistence(component_type::Statistics, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_statistics_rewrite) {
+    return test_component_digest_persistence(component_type::Statistics, sstable::version_types::me, compress_sstable::no, true);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_data) {
+    return test_component_digest_persistence(component_type::Data, sstable::version_types::me);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
+    return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
 }

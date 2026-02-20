@@ -630,8 +630,13 @@ private:
 
     // Returns the closed writer
     std::unique_ptr<file_writer> close_writer(std::unique_ptr<file_writer>& w);
+    uint32_t close_digest_writer(std::unique_ptr<file_writer>& w);
 
     void close_data_writer();
+    void close_index_writer();
+    void close_rows_writer();
+    void close_partitions_writer();
+
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
             consume(tombstone());
@@ -947,21 +952,21 @@ void writer::init_file_writers() {
 
     if (_sst.has_component(component_type::Index)) {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
-        _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.index_filename());
+        _index_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.index_filename());
     }
     if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
-        _rows_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), component_name(_sst, component_type::Rows));
+        _rows_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Rows));
         _bti_row_index_writer = trie::bti_row_index_writer(*_rows_writer);
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
-        _partitions_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), component_name(_sst, component_type::Partitions));
+        _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
         _bti_partition_index_writer = trie::bti_partition_index_writer(*_partitions_writer);
     }
     if (_delayed_filter) {
         file_output_stream_options options;
         options.buffer_size = 32 * 1024;
         _hashes_writer = std::make_unique<file_writer>(_sst.make_component_file_writer(component_type::TemporaryHashes, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::exclusive).get());
+            sstable_write_open_flags).get());
     }
 }
 
@@ -969,6 +974,12 @@ std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& 
     auto writer = std::move(w);
     writer->close();
     return writer;
+}
+
+uint32_t writer::close_digest_writer(std::unique_ptr<file_writer>& w) {
+    auto writer = close_writer(w);
+    auto chksum_wr = static_cast<crc32_digest_file_writer*>(writer.get());
+    return chksum_wr->full_checksum();
 }
 
 void writer::close_data_writer() {
@@ -979,6 +990,35 @@ void writer::close_data_writer() {
         _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
         _sst.write_digest(_sst._components->compression.get_full_checksum());
+    }
+}
+
+void writer::close_index_writer() {
+    if (_index_writer) {
+        _sst.get_components_digests().map[component_type::Index] = close_digest_writer(_index_writer);
+    }
+}
+
+void writer::close_partitions_writer() {
+    if (_partitions_writer) {
+        _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
+            _sst.get_version(),
+            _first_key.value(),
+            _last_key.value());
+        _sst.get_components_digests().map[component_type::Partitions] = close_digest_writer(_partitions_writer);
+    }
+}
+
+void writer::close_rows_writer() {
+    if (_rows_writer) {
+        // Append some garbage padding to the file just to ensure that it's never empty.
+        // (Otherwise it would be empty if the sstable contains only small partitions).
+        // This is a hack to work around some bad interactions between zero-sized files
+        // and object storage. (It seems that e.g. minio considers a zero-sized file
+        // upload to be a no-op, which breaks some assumptions).
+        uint32_t garbage = seastar::cpu_to_be(0x13371337);
+        _rows_writer->write(reinterpret_cast<const char*>(&garbage), sizeof(garbage));
+        _sst.get_components_digests().map[component_type::Rows] = close_digest_writer(_rows_writer);
     }
 }
 
@@ -1630,27 +1670,10 @@ void writer::consume_end_of_stream() {
         _collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
-  if (_index_writer) {
-    close_writer(_index_writer);
-  }
+    close_index_writer();
 
-    if (_partitions_writer) {
-        _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
-            _sst.get_version(),
-            _first_key.value(),
-            _last_key.value());
-        close_writer(_partitions_writer);
-    }
-    if (_rows_writer) {
-        // Append some garbage padding to the file just to ensure that it's never empty.
-        // (Otherwise it would be empty if the sstable contains only small partitions).
-        // This is a hack to work around some bad interactions between zero-sized files
-        // and object storage. (It seems that e.g. minio considers a zero-sized file
-        // upload to be a no-op, which breaks some assumptions).
-        uint32_t garbage = seastar::cpu_to_be(0x13371337);
-        _rows_writer->write(reinterpret_cast<const char*>(&garbage), sizeof(garbage));
-        close_writer(_rows_writer);
-    }
+    close_partitions_writer();
+    close_rows_writer();
 
     if (_hashes_writer) {
         close_writer(_hashes_writer);

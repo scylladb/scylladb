@@ -111,6 +111,7 @@ public:
     virtual reader_permit make_compaction_reader_permit() const override { return _semaphore.make_permit(); }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable(sstables::sstable_state) const override { return _sstable_factory(); }
+    virtual sstables::shared_sstable make_sstable(sstables::sstable_state, sstables::sstable_version_types) const override { return _sstable_factory(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return _sst_man.configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
@@ -122,6 +123,7 @@ public:
         return make_ready_future<>();
     }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
+    virtual bool incremental_backups_enabled() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
