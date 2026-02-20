@@ -23,18 +23,17 @@ seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential
     static constexpr size_t Schema = log2floor(Precision);
     res.buckets.resize(hist.size() - 1);
     uint64_t cummulative_count = 0;
-    res.sample_sum = 0;
+
     res.native_histogram = seastar::metrics::native_histogram_info{Schema, MIN_ID};
     for (size_t i = 0; i < hist.NUM_BUCKETS - 1; i++) {
         auto& v = res.buckets[i];
         v.upper_bound = hist.get_bucket_lower_limit(i + 1);
         cummulative_count += hist.get(i);
         v.count = cummulative_count;
-        res.sample_sum += hist.get(i) * v.upper_bound;
     }
     // The count serves as the infinite bucket
     res.sample_count = cummulative_count + hist.get(hist.NUM_BUCKETS - 1);
-    res.sample_sum += hist.get(hist.NUM_BUCKETS - 1) * hist.get_bucket_lower_limit(hist.NUM_BUCKETS - 1);
+    res.sample_sum = hist.sum();
     return res;
 }
 
