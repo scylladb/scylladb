@@ -51,30 +51,3 @@ def get_coroutine():
         name = resolve(vtable_addr)
         if name and name.strip() == target:
             print(f"coroutine_config={obj_addr.cast(gdb.lookup_type('uintptr_t'))}")
-
-
-def coroutine_debug_config(tmpdir):
-    """
-    Check if scylla_find agrees with find_vptrs, for debugging.
-
-    Execute GDB commands for coroutine debugging with detailed output.
-    This test fails sometimes, but rarely and unreliably.
-    We want to get a coredump from it the next time it fails.
-    Sending a SIGSEGV should induce that.
-    https://github.com/scylladb/scylladb/issues/22501
-    """
-    target = 'service::topology_coordinator::run() [clone .resume]'
-    target_addr = int(gdb.parse_and_eval(f"&'{target}'"))
-    find_command = f"scylla find -a 0x{target_addr:x}"
-    gdb.write(f"Didn't find {target} (0x{target_addr:x}). Running '{find_command}'\n")
-    mem_range = get_seastar_memory_start_and_size()
-    gdb.execute(find_command)
-    gdb.write(f"Memory range: 0x{mem_range[0]:x} 0x{mem_range[1]:x}\n")
-    gdb.write("Found coroutines:\n")
-    for obj_addr, vtable_addr in find_vptrs():
-        name = resolve(vtable_addr)
-        if name and '.resume' in name.strip():
-            gdb.write(f"{name}\n")
-    core_filename = f"{tmpdir}/../scylla_gdb_coro_task-{uuid.uuid4()}.core"
-    gdb.execute(f"gcore {core_filename}")
-    raise gdb.error(f"No coroutine frames found with expected name. Dumped Scylla core to {core_filename}")
