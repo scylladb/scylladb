@@ -10,6 +10,7 @@
 
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include "locator/tablets.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
@@ -26,6 +27,8 @@ namespace sstables { class storage_manager; }
 
 namespace netw { class messaging_service; }
 namespace db {
+struct sstable_info;
+class system_distributed_keyspace;
 namespace view {
 class view_builder;
 class view_building_worker;
@@ -59,6 +62,8 @@ struct stream_progress {
         assert(completed <= total);
     }
 };
+
+struct minimal_sst_info;
 
 // The handler of the 'storage_service/load_new_ss_tables' endpoint which, in
 // turn, is the target of the 'nodetool refresh' command.
@@ -96,6 +101,11 @@ private:
             shared_ptr<stream_progress> progress);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
+    future<std::vector<std::vector<minimal_sst_info>>> get_snapshot_sstables(locator::global_tablet_id tid, sstring snap_name, sstring endpoint, sstring bucket) const;
+    future<utils::chunked_vector<db::sstable_info>> get_owned_sstables(locator::global_tablet_id, utils::chunked_vector<db::sstable_info> sst_infos) const;
+    future<minimal_sst_info> download_sstable(table_id tid, sstables::shared_sstable sstable) const;
+    future<> attach_sstable(table_id tid, const minimal_sst_info& min_info) const;
+
 public:
     sstables_loader(sharded<replica::database>& db,
             sharded<service::storage_service>& ss,
@@ -133,6 +143,8 @@ public:
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
             sstring prefix, std::vector<sstring> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
+
+    future<> load_snapshot_sstables(locator::global_tablet_id tid, sstring snap_name, sstring endpoint, sstring bucket);
 
     class download_task_impl;
 };
