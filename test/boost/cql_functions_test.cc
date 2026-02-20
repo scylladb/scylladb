@@ -68,7 +68,7 @@ SEASTAR_TEST_CASE(test_functions) {
                         res.push_back(to_bytes_opt(rw[0]));
                     }
                 }
-                virtual void visit(const result_message::bounce_to_shard& rows) override { throw "bad"; }
+                virtual void visit(const result_message::bounce& rows) override { throw "bad"; }
                 virtual void visit(const result_message::exception&) override { throw "bad"; }
             };
             validator v;

@@ -7,6 +7,8 @@
  */
 
 #include "coordinator.hh"
+#include "db/consistency_level_type.hh"
+#include "raft/raft.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -36,6 +38,24 @@ struct coordinator::operation_ctx {
     const locator::tablet_info& tablet_info;
 };
 
+// Select closest replica from a tablet replica set, preferring replicas in same rack
+static locator::host_id select_closest_replica(const locator::tablet_replica_set& replicas, const dht::token& token, const locator::topology& topo, shared_ptr<raft::failure_detector> failure_detector) {
+    // We need to convert tablet_replica_set to host_id_vector_replica_set first for sort_by_proximity
+    host_id_vector_replica_set hosts;
+    hosts.reserve(replicas.size());
+    for (const auto& replica : replicas) {
+        if (failure_detector->is_alive(raft::server_id{replica.host.uuid()})) {
+            hosts.push_back(replica.host);
+        }
+    }
+    if (hosts.empty()) {
+        // If all replicas are down, there's no node worth forwarding to, so we return an exception
+        throw exceptions::unavailable_exception(format("All replicas for token {} are down", token), db::consistency_level::ONE, 1, 0);
+    }
+    topo.sort_by_proximity(topo.my_host_id(), hosts);
+    return hosts.front();
+}
+
 auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token) 
     -> future<value_or_redirect<operation_ctx>>
 {
@@ -61,8 +81,8 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
 
     if (!contains(tablet_info.replicas, this_replica)) {
-        const auto* target = find_replica(tablet_info, this_replica.host);
-        co_return need_redirect{target ? *target : tablet_info.replicas.at(0)};
+        auto target = select_closest_replica(tablet_info.replicas, token, erm->get_token_metadata().get_topology(), _groups_manager.failure_detector());
+        co_return need_redirect{std::move(target)};
     }
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
     auto raft_server = co_await _groups_manager.acquire_server(raft_info.group_id);

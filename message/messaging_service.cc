@@ -56,6 +56,7 @@
 #include "service/topology_guard.hh"
 #include "service/raft/join_node.hh"
 #include "db/view/view_building_state.hh"
+#include "transport/server.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -134,6 +135,7 @@
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
+#include "idl/forward_cql.dist.impl.hh"
 #include "gms/feature_service.hh"
 
 namespace netw {
@@ -748,6 +750,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::FORWARD_CQL_EXECUTE:
+    case messaging_verb::FORWARD_CQL_PREPARE:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:

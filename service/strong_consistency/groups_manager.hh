@@ -107,6 +107,10 @@ public:
 
     // Called during node shutdown. Waits for all raft::server instances to stop.
     future<> stop();
+
+    shared_ptr<raft::failure_detector> failure_detector() {
+        return _raft_gr.failure_detector();
+    }
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,

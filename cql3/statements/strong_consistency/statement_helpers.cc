@@ -16,16 +16,14 @@
 namespace cql3::statements::strong_consistency {
 future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement(query_processor& qp,
         const query_options& options,
-        const locator::tablet_replica& target)
+        const locator::tablet_replica& target,
+        db::timeout_clock::time_point timeout)
 {
+    auto&& func_values_cache = const_cast<cql3::query_options&>(options).take_cached_pk_function_calls();
     const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
     if (target.host != my_host_id) {
-        throw exceptions::invalid_request_exception(format(
-            "Strongly consistent writes can be executed only on the leader node, "
-            "leader id {}, current host id {}",
-            target.host, my_host_id));
+        co_return qp.bounce_to_node(target, timeout, std::move(func_values_cache));
     }
-    auto&& func_values_cache = const_cast<cql3::query_options&>(options).take_cached_pk_function_calls();
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
 }
 
