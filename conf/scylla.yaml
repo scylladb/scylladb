@@ -874,7 +874,16 @@ maintenance_socket: ignore
 # The `tablets` option cannot be changed using `ALTER KEYSPACE`.
 tablets_mode_for_new_keyspaces: enabled
 
-# Enforce RF-rack-valid keyspaces.
+# Require every tablet-enabled keyspace to be RF-rack-valid.
+#
+# A tablet-enabled keyspace is RF-rack-valid when, for each data center,
+# its replication factor (RF) is 0, 1, or exactly equal to the number of
+# racks in that data center. Setting the RF to the number of racks ensures
+# that a single rack failure never results in data unavailability.
+#
+# When set to true, CREATE KEYSPACE and ALTER KEYSPACE statements that
+# would produce an RF-rack-invalid keyspace are rejected.
+# When set to false, such statements are allowed but emit a warning.
 rf_rack_valid_keyspaces: false
 
 #
