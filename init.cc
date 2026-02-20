@@ -29,7 +29,9 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
 
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.contains("seeds")) {
-        for (const auto& seed : utils::split_comma_separated_list(seed_provider.parameters.at("seeds"))) {
+        const sstring seeds_str = seed_provider.parameters.at("seeds");
+        startlog.info("Configured seeds: {}", seeds_str);
+        for (const auto& seed : utils::split_comma_separated_list(seeds_str)) {
             try {
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {

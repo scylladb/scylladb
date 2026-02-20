@@ -16,7 +16,6 @@ pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Test is disabled due to scylladb/scylladb#28153")
 async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     """
     Issue https://github.com/scylladb/scylladb/issues/14945.
@@ -32,10 +31,11 @@ async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
      3. Make sure the node started successfully since it's already bootstrapped (i.e. is a cluster member).
     """
 
+    non_existent = IPAddress("non_existent.invalid")
     s1 = await manager.server_add(start=False)
 
     # Start the node with an invalid seed and make sure it fails with an error message.
-    await manager.server_start(s1.server_id, seeds=[IPAddress("no_address")],
+    await manager.server_start(s1.server_id, seeds=[non_existent],
                                expected_error="Bad configuration: invalid value in 'seeds'", wait_interval=20)
 
     # Start the node with default seeds, to make it join the cluster.
@@ -45,4 +45,4 @@ async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     await manager.server_stop_gracefully(s1.server_id)
 
     # Start the node with an invalid seed. and make sure it starts successfully.
-    await manager.server_start(s1.server_id, seeds=[IPAddress("no_address")], wait_interval=20)
+    await manager.server_start(s1.server_id, seeds=[non_existent], wait_interval=20)
