@@ -1,31 +1,96 @@
 #!/bin/bash -e
 
-trap 'echo "error $? in $0 line $LINENO"' ERR
-
-if ! command -v buildah > /dev/null; then
-    echo install buildah 1.19.3 or later
+# This script requires bash 4+ for associative arrays (declare -A).
+# macOS ships with bash 3.2; re-exec with a newer bash if available.
+if (( BASH_VERSINFO[0] < 4 )); then
+    for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "$candidate" ]]; then
+            exec "$candidate" "${BASH_SOURCE[0]}" "$@"
+        fi
+    done
+    echo "Error: bash 4+ is required (for associative arrays)."
+    echo "macOS ships with bash 3.2. Install a newer bash:"
+    echo "  brew install bash"
     exit 1
 fi
 
-bv=$(buildah --version)
-# translate to array of version components
-bv="${bv#buildah version }"
-bv="${bv% (*}"
-bv=(${bv//./ })
+trap 'echo "error $? in $0 line $LINENO"' ERR
 
-maj=${bv[0]}
-min=${bv[1]}
-patch=${bv[2]}
+OS="$(uname -s)"
 
-ok=$(( maj > 1 || ( maj == 1 && min > 19 ) || ( maj == 1 && min == 19 && patch >= 3 ) ))
+# Portable realpath replacement for macOS (which lacks GNU realpath -m --relative-to)
+portable_relpath() {
+    local target="$1"
+    local base="$2"
+    if command -v realpath > /dev/null 2>&1 && realpath --version > /dev/null 2>&1; then
+        # GNU realpath
+        realpath -m --relative-to="$base" "$target"
+    elif command -v python3 > /dev/null 2>&1; then
+        python3 -c "import os, sys; print(os.path.relpath(os.path.abspath(sys.argv[1]), sys.argv[2]))" "$target" "$base"
+    else
+        # Fallback: just return the target as-is
+        echo "$target"
+    fi
+}
 
-if (( ! ok )); then 
-    echo install buildah 1.19.3 or later
-    exit 1
+portable_realpath() {
+    local path="$1"
+    if command -v realpath > /dev/null 2>&1 && realpath --version > /dev/null 2>&1; then
+        realpath "$path"
+    else
+        # macOS: use python3 or cd-based approach
+        if [[ -d "$path" ]]; then
+            (cd "$path" && pwd -P)
+        elif [[ -f "$path" ]]; then
+            (cd "$(dirname "$path")" && echo "$(pwd -P)/$(basename "$path")")
+        else
+            # Path doesn't exist yet, resolve what we can
+            if command -v python3 > /dev/null 2>&1; then
+                python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$path"
+            else
+                echo "$path"
+            fi
+        fi
+    fi
+}
+
+# Determine the build tool: buildah on Linux, podman on macOS
+if [[ "$OS" == "Darwin" ]]; then
+    if ! command -v podman > /dev/null; then
+        echo "On macOS, install podman (brew install podman)"
+        exit 1
+    fi
+    BUILD_TOOL=podman
+else
+    if ! command -v buildah > /dev/null; then
+        echo install buildah 1.19.3 or later
+        exit 1
+    fi
+    BUILD_TOOL=buildah
+
+    bv=$(buildah --version)
+    # translate to array of version components
+    bv="${bv#buildah version }"
+    bv="${bv% (*}"
+    bv=(${bv//./ })
+
+    maj=${bv[0]}
+    min=${bv[1]}
+    patch=${bv[2]}
+
+    ok=$(( maj > 1 || ( maj == 1 && min > 19 ) || ( maj == 1 && min == 19 && patch >= 3 ) ))
+
+    if (( ! ok )); then
+        echo install buildah 1.19.3 or later
+        exit 1
+    fi
 fi
 
 if ! command -v skopeo > /dev/null; then
-    echo install the skopeo package for registry inspection
+    echo "install the skopeo package for registry inspection"
+    if [[ "$OS" == "Darwin" ]]; then
+        echo "  brew install skopeo"
+    fi
     exit 1
 fi
 
@@ -36,12 +101,17 @@ fi
 
 archs=(amd64 arm64)
 
-# docker arch has a diffrent spelling than uname arch
+# docker arch has a different spelling than uname arch
 declare -A arch_unames=(
     [amd64]=x86_64
     [arm64]=aarch64
 )
+
 current_arch_uname="$(uname -m)"
+# macOS on Apple Silicon reports arm64, normalize to aarch64
+if [[ "$current_arch_uname" == "arm64" ]]; then
+    current_arch_uname="aarch64"
+fi
 
 declare -A docker_arch=(
     [x86_64]=amd64
@@ -81,7 +151,7 @@ while [[ $# -gt 0 ]]; do
                 usage
                 exit 1
             fi
-            CLANG_ARCHIVES[x86_64]="$(realpath -m --relative-to=. "$2")"
+            CLANG_ARCHIVES[x86_64]="$(portable_relpath "$2" .)"
             shift 2
             ;;
         "--clang-archive-aarch64")
@@ -89,7 +159,7 @@ while [[ $# -gt 0 ]]; do
                 usage
                 exit 1
             fi
-            CLANG_ARCHIVES[aarch64]="$(realpath -m --relative-to=. "$2")"
+            CLANG_ARCHIVES[aarch64]="$(portable_relpath "$2" .)"
             shift 2
             ;;
         "--disable-multiarch")
@@ -123,17 +193,21 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
 fi
 
 if ! "${DISABLE_MULTIARCH}"; then
-    for arch in "${archs[@]}"; do
-        # translate from docker arch to uname arch
-        arch_uname="${arch_unames[$arch]}"
-        if [[ "${current_arch_uname}" == "${arch_uname}" ]]; then
-            continue
-        fi
-        if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
-            echo install qemu-user-static
-            exit 1
-        fi
-    done
+    if [[ "$OS" != "Darwin" ]]; then
+        # On Linux, check for qemu-user-static for cross-arch emulation.
+        # On macOS, Podman Desktop handles multi-arch natively via Rosetta/QEMU.
+        for arch in "${archs[@]}"; do
+            # translate from docker arch to uname arch
+            arch_uname="${arch_unames[$arch]}"
+            if [[ "${current_arch_uname}" == "${arch_uname}" ]]; then
+                continue
+            fi
+            if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
+                echo install qemu-user-static
+                exit 1
+            fi
+        done
+    fi
 fi
 
 # set default archive path if not specified
@@ -185,7 +259,27 @@ for key in ${!CLANG_ARCHIVES[@]}; do
     CLANG_ARCHIVES_STR+="${key}:${val}"
 done
 
-buildah bud ${PLATFORM} --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" -v "$(realpath ./):/mnt:Z" --build-arg CLANG_BUILD="${CLANG_BUILD}" --build-arg CLANG_ARCHIVES="${CLANG_ARCHIVES_STR}"
+SRCDIR="$(portable_realpath ./)"
+
+if [[ "$BUILD_TOOL" == "buildah" ]]; then
+    # Linux: use buildah bud with manifest support
+    # :Z relabels the volume for SELinux
+    buildah bud ${PLATFORM} --jobs 0 --squash --no-cache --pull \
+        -f tools/toolchain/Dockerfile \
+        --manifest "$(<tools/toolchain/image)" \
+        -v "${SRCDIR}:/mnt:Z" \
+        --build-arg CLANG_BUILD="${CLANG_BUILD}" \
+        --build-arg CLANG_ARCHIVES="${CLANG_ARCHIVES_STR}"
+else
+    # macOS: use podman build
+    # No :Z label (SELinux not applicable on macOS)
+    podman build ${PLATFORM} --no-cache --pull-always \
+        -f tools/toolchain/Dockerfile \
+        --manifest "$(<tools/toolchain/image)" \
+        -v "${SRCDIR}:/mnt" \
+        --build-arg CLANG_BUILD="${CLANG_BUILD}" \
+        --build-arg CLANG_ARCHIVES="${CLANG_ARCHIVES_STR}"
+fi
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
