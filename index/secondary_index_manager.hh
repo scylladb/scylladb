@@ -118,6 +118,7 @@ public:
     stats(const sstring& ks_name, const sstring& index_name);
     stats(const stats&) = delete;
     stats& operator=(const stats&) = delete;
+    void deregister();
     void add_latency(std::chrono::steady_clock::duration d);
 };
 
