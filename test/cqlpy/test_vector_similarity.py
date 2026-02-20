@@ -212,14 +212,14 @@ def test_vector_similarity_with_column_and_literal(cql, table1, similarity_funct
     query_vector = [0.707107, 0.0, -0.707107]
     result = cql.execute(f"SELECT v1, similarity_{similarity_function}(v1, {query_vector}) FROM {table1}")
     for row in result:
-        isclose(row[1], compute_similarity(similarity_function, row.v1, query_vector))
+        assert isclose(row[1], compute_similarity(similarity_function, row.v1, query_vector), abs_tol=1e-5)
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
 def test_vector_similarity_with_two_columns(cql, table1, similarity_function):
     result = cql.execute(f"SELECT v1, v2, similarity_{similarity_function}(v1, v2) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, row.v2))
+        assert isclose(row[2], compute_similarity(similarity_function, row.v1, row.v2), abs_tol=1e-5)
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)
@@ -228,7 +228,7 @@ def test_vector_similarity_with_two_literals(cql, table1, similarity_function):
     v2 = [0.707107, 0.0, -0.707107]
     result = cql.execute(f"SELECT pk, similarity_{similarity_function}({v1}, {v2}) FROM {table1}")
     for row in result:
-        isclose(row[1], compute_similarity(similarity_function, v1, v2))
+        assert isclose(row[1], compute_similarity(similarity_function, v1, v2), abs_tol=1e-5)
 
 
 @pytest.mark.parametrize("similarity_function", sorted(set(similarity_functions) - {"cosine"}))
@@ -236,13 +236,13 @@ def test_vector_similarity_with_zero_vectors(cql, table1, similarity_function):
     zero = [0.0, 0.0, 0.0]
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}(v1, {zero}) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, zero))
+        assert isclose(row[2], compute_similarity(similarity_function, row.v1, zero), abs_tol=1e-5)
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}({zero}, v1) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, zero, row.v1))
+        assert isclose(row[2], compute_similarity(similarity_function, zero, row.v1), abs_tol=1e-5)
     result = cql.execute(f"SELECT pk, v1, similarity_{similarity_function}({zero}, {zero}) FROM {table1}")
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, zero, zero))
+        assert isclose(row[2], compute_similarity(similarity_function, zero, zero), abs_tol=1e-5)
 
 
 def test_vector_similarity_cosine_with_zero_vectors(cql, table1):
@@ -262,15 +262,15 @@ def test_vector_similarity_with_bind_variables(cql, table1, similarity_function)
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(v1, ?) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, query_vector))
+        assert isclose(row[2], compute_similarity(similarity_function, row.v1, query_vector), abs_tol=1e-5)
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}({query_vector}, ?) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, query_vector, query_vector))
+        assert isclose(row[2], compute_similarity(similarity_function, query_vector, query_vector), abs_tol=1e-5)
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, v1) FROM {table1}")
     result = cql.execute(stmt, (query_vector,))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, query_vector, row.v1))
+        assert isclose(row[2], compute_similarity(similarity_function, query_vector, row.v1), abs_tol=1e-5)
     with pytest.raises(InvalidRequest, match="Cannot infer type of argument ?"):
         cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, ?) FROM {table1}")
 
@@ -282,11 +282,11 @@ def test_vector_similarity_with_bind_variables_set(cql, table1, similarity_funct
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(v1, ?) FROM {table1}")
     result = cql.execute(stmt, ({1.0, 2.0, 3.0},))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, row.v1, {1.0, 2.0, 3.0}))
+        assert isclose(row[2], compute_similarity(similarity_function, row.v1, {1.0, 2.0, 3.0}), abs_tol=1e-5)
     stmt = cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, v1) FROM {table1}")
     result = cql.execute(stmt, ({1.0, 2.0, 3.0},))
     for row in result:
-        isclose(row[2], compute_similarity(similarity_function, {1.0, 2.0, 3.0}, row.v1))
+        assert isclose(row[2], compute_similarity(similarity_function, {1.0, 2.0, 3.0}, row.v1), abs_tol=1e-5)
     with pytest.raises(InvalidRequest, match="Cannot infer type of argument ?"):
         cql.prepare(f"SELECT pk, v1, similarity_{similarity_function}(?, ?) FROM {table1}")
 
@@ -308,10 +308,10 @@ def test_cassandra_documentation_compatibility(cql, test_keyspace, similarity_fu
             assert row[1] is None
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.1, 0.2]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][0])
+            assert isclose(row[1], expected_results[similarity_function][0], abs_tol=1e-5)
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [-0.1, -0.2]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][1])
+            assert isclose(row[1], expected_results[similarity_function][1], abs_tol=1e-5)
         result = cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.9, 0.8]) FROM {table}")
         for row in result:
-            isclose(row[1], expected_results[similarity_function][2])
+            assert isclose(row[1], expected_results[similarity_function][2], abs_tol=1e-5)
