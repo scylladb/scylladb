@@ -6096,4 +6096,140 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
     do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
 }
 
+// The purpose of this test is to emulate a tablet aware restore process
+// When a snapshot is taken, load balancing is disabled, so we record the tablet count in a manifest for backup.
+// During restore, we set both min_tablet_count and max_tablet_count hints to the same value
+// The test makes sure that during restore the tablet count <= max_tablet_count hint which 
+// allows us to leverage file-based streaming of SSTables, ensuring each SSTable is fully contained within a single tablet.
+SEASTAR_THREAD_TEST_CASE(test_tablet_count_fixed_by_table_properties) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(16);
+    
+    do_with_cql_env_thread([&cfg] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 1);
+
+        // keyspace 'initial' wants 8 tablets. We want to make sure that initial tablet count is greater than max_tablet_count hint
+        // to ensure that the hint is respected.
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 8);
+        
+        // Step 1: Create a table 
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0); 
+
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 8);
+
+        // Step 2: Drop the table
+        e.execute_cql(fmt::format("DROP TABLE {}.table1", ks_name1)).get();
+
+        // Step 3: Create the same table with min_tablet_count=4 and max_tablet_count=4
+        auto force_tablet_count = 4;
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': {}, 'max_tablet_count': {}}}",
+                              ks_name1, force_tablet_count, force_tablet_count)).get();
+        
+        // We need fetch the table again as the previous table was dropped and recreated                      
+        table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+        //Initially table will be empty
+        load_stats.set_size(table1, 0);
+
+        // Step 4: Make sure the tablet count is equal to force_tablet_count
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        // Step 5: Increase the load and make sure tablet count remains equal to force_tablet_count
+        load_stats.set_size(table1, default_target_tablet_size * force_tablet_count * 128);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        // this should force tablets to be merged, the max_tablet_count hint will no longer be respected.
+        cfg.db_config->tablets_per_shard_goal(force_tablet_count / 2);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_LE(get_tablet_count(), force_tablet_count);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_options_min_and_max_tablet_count) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(16);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 8);
+
+        // Test valid combinations
+        {
+            // min=64, max=128 - both powers of 2, should work
+            BOOST_CHECK_NO_THROW(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 64, 'max_tablet_count': 128}}",
+                ks_name1)).get());
+        }
+
+        {
+            // min=100, max=200 - rounds to min=128, max=128, should work
+            BOOST_CHECK_NO_THROW(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 100, 'max_tablet_count': 200}}",
+                ks_name1)).get());
+        }
+
+        // Test invalid combinations that should throw exceptions
+        {
+            // min=100, max=100 - rounds to min=128, max=64, invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table3 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 100, 'max_tablet_count': 100}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
+        {
+            // min=65, max=127 - rounds to min=128, max=64, invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table4 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 65, 'max_tablet_count': 127}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
+       {
+            // min=129, max=128 - even without rounding, min > max is invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table6 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 129, 'max_tablet_count': 128}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
+    }, cfg).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
