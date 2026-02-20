@@ -449,3 +449,68 @@ def test_repair_incremenatal_repair(nodetool, mode):
 Starting repair with task_id={id1} keyspace=ks table=table1
 Repair with task_id={id1} finished
 """
+
+def test_cluster_repair_table_dropped(nodetool):
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    res = nodetool("cluster", "repair", "ks", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}, {"ks": "ks", "cf": "table2"}]),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "table1",
+                "tokens": "all"},
+            response={"message": "Can't find a column family table1 in keyspace ks", "code": 400}, response_status=400),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "table2",
+                "tokens": "all"},
+            response={"tablet_task_id": id1}),
+        expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id1}",
+            response={"state": "done"}),
+        ])
+
+    assert _remove_log_timestamp(res.stdout) == f"""\
+Starting repair with task_id={id1} keyspace=ks table=table2
+Repair with task_id={id1} finished
+"""
+
+def test_cluster_repair_specified_table_dropped(nodetool):
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    check_nodetool_fails_with_error_contains(
+            nodetool,
+            ("cluster", "repair", "ks", "table1", "table2"),
+            {"expected_requests": [
+                expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+                expected_request(
+                    "POST",
+                    "/storage_service/tablets/repair",
+                    params={
+                        "ks": "ks",
+                        "table": "table1",
+                        "tokens": "all"},
+                    response={"message": "Can't find a column family table1 in keyspace ks", "code": 400}, response_status=400),
+                expected_request(
+                    "POST",
+                    "/storage_service/tablets/repair",
+                    params={
+                        "ks": "ks",
+                        "table": "table2",
+                        "tokens": "all"},
+                    response={"tablet_task_id": id1}),
+                expected_request(
+                    "GET",
+                    f"/task_manager/wait_task/{id1}",
+                    response={"state": "done"}),
+                ]
+            },
+            [f"Can't find a column family table1 in keyspace ks"])
