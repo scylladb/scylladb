@@ -59,6 +59,9 @@ public:
 
     const azure_test_env& test_env() const;
 
+    // Returns namespace FD for mock server, or -1 if using real Azure
+    int netns_fd() const;
+
     seastar::future<> setup();
     seastar::future<> teardown();
 
@@ -71,13 +74,17 @@ public:
  * also helping clean up test local objects.
  * 
  * If no suite-level azure_kms_fixture is active, it
- * will create one in setup and kill it in teardown
+ * will create one in setup and kill it in teardown.
+ *
+ * Automatically enters the mock server's network namespace
+ * in setup() if using a local mock server.
  */
 class local_azure_kms_wrapper 
     : public azure_test_env
 {
     std::unique_ptr<azure_kms_fixture> _local;
     azure_mode _mode;
+    int _orig_netns_fd = -1;  // Original namespace to restore in teardown
 public:
     local_azure_kms_wrapper(azure_mode = azure_mode::any);
     ~local_azure_kms_wrapper();

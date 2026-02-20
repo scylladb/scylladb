@@ -54,6 +54,9 @@ public:
     // this will be empty if using real KMS.
     const std::string& endpoint() const;
 
+    // Returns namespace FD for mock server, or -1 if using real KMS
+    int netns_fd() const;
+
     seastar::future<> setup();
     seastar::future<> teardown();
 
@@ -66,10 +69,14 @@ public:
  * also helping clean up test local objects.
  * 
  * If no suite-level aws_kms_fixture is active, it
- * will create one in setup and kill it in teardown
+ * will create one in setup and kill it in teardown.
+ *
+ * Automatically enters the mock server's network namespace
+ * in setup() if using a local mock server.
  */
 class local_aws_kms_wrapper {
     std::unique_ptr<aws_kms_fixture> _local;
+    int _orig_netns_fd = -1;  // Original namespace to restore in teardown
 public:
     local_aws_kms_wrapper();
     ~local_aws_kms_wrapper();

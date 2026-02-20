@@ -60,5 +60,7 @@ namespace tests::proc {
         input_stream<char> cout();
         input_stream<char> cerr();
         output_stream<char> cin();
+
+        pid_t pid() const;
     };
 }
