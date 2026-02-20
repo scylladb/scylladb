@@ -15,6 +15,7 @@
 #include "tools/utils.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 
 using namespace seastar;
 using namespace tools::utils;
@@ -65,7 +66,7 @@ struct serializing_visitor {
         std::vector<bytes> serialized_values;
         serialized_values.reserve(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
-            serialized_values.push_back(type.types().at(i)->from_string(values.at(i)));
+            serialized_values.push_back(to_bytes(type.types().at(i)->from_string(values.at(i))));
         }
         return type.serialize_value(serialized_values);
     }
@@ -419,7 +420,8 @@ $ scylla types {{action}} --help
         switch (handler.index()) {
             case 0:
                 {
-                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex) | std::ranges::to<std::vector>();
+                    auto from_hex_func = [] (const sstring& hex_str) { return from_hex(hex_str); };
+                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex_func) | std::ranges::to<std::vector>();
                     std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);
                 }
                 break;

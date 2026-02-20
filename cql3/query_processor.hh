@@ -36,6 +36,9 @@
 #include "db/auth_version.hh"
 #include "service/storage_proxy_fwd.hh"
 
+namespace utils {
+class chunked_string;
+}
 
 namespace lang { class manager; }
 namespace service {
@@ -146,12 +149,12 @@ public:
     static const sstring CQL_VERSION;
 
     static prepared_cache_key_type compute_id(
-            std::string_view query_string,
+            utils::chunked_string_view query_string,
             std::string_view keyspace,
             dialect d);
 
-    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
-    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d);
+    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(utils::chunked_string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,
             memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
@@ -426,10 +429,10 @@ public:
 
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, service::query_state& query_state, dialect d);
+    prepare(utils::chunked_string query_string, service::query_state& query_state, dialect d);
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, const service::client_state& client_state, dialect d);
+    prepare(utils::chunked_string query_string, const service::client_state& client_state, dialect d);
 
     future<> stop();
 
@@ -471,7 +474,7 @@ public:
     future<> announce_schema_statement(const statements::schema_altering_statement&, service::group0_batch& mc);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
-            const std::string_view& query,
+            utils::chunked_string_view query,
             const service::client_state& client_state,
             dialect d);
 

@@ -9,6 +9,7 @@
 #include "cql3/statements/sl_prop_defs.hh"
 #include "types/duration.hh"
 #include "types/concrete_types.hh"
+#include "utils/chunked_string.hh"
 #include <boost/algorithm/string/predicate.hpp>
 
 namespace cql3 {

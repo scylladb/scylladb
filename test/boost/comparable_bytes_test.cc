@@ -31,6 +31,7 @@
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
+#include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_data_value(data_value::make_null(int32_type)) == comparable_bytes_opt());
@@ -854,7 +855,7 @@ SEASTAR_TEST_CASE(test_compatibility) {
 
                 bytes serialized_bytes;
                 if (type->is_native()) {
-                    serialized_bytes = type->from_string(actual_value);
+                    serialized_bytes = to_bytes(type->from_string(actual_value));
                 } else {
                     // Workaround for composite types as abstract_type::from_string() doesn't support them.
                     serialized_bytes = from_json_object(*type, rjson::parse(actual_value));

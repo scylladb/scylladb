@@ -12,6 +12,7 @@
 #include "tools/json_mutation_stream_parser.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/rjson.hh"
+#include "utils/chunked_string.hh"
 
 namespace tools {
 namespace {
@@ -330,7 +331,7 @@ private:
 
     bool parse_column_value() {
         try {
-            _column->value.emplace(_column->def->type->from_string(*_string));
+            _column->value.emplace(to_bytes(_column->def->type->from_string(*_string)));
         } catch (...) {
             return error("failed to parse cell value: {}", std::current_exception());
         }

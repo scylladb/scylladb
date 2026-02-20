@@ -19,8 +19,6 @@
 #include "bytes.hh"
 #include "utils/bit_cast.hh"
 
-enum class mutable_view { no, yes, };
-
 /// Fragmented buffer
 ///
 /// Concept `FragmentedBuffer` is satisfied by any class that is a range of
@@ -208,6 +206,11 @@ struct fragment_range {
     size_t size_bytes() const { return view.size_bytes(); }
     bool empty() const { return view.empty(); }
 };
+
+template <FragmentedView View>
+inline bool is_single_fragment(View v) {
+    return v.empty() || v.size_bytes() == v.current_fragment().size();
+}
 
 template<FragmentedView View>
 requires (!FragmentRange<View>)

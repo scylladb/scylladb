@@ -18,6 +18,7 @@
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
+#include "utils/chunked_string.hh"
 #include "types/json_utils.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -665,7 +666,7 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
 }
 
 BOOST_AUTO_TEST_CASE(test_duration_type_validation) {
-    duration_type->validate(duration_type->from_string("1m23us"));
+    duration_type->validate(managed_bytes_view(duration_type->from_string("1m23us")));
     using exception_predicate::message_equals;
     BOOST_REQUIRE_EXCEPTION(
             duration_type->validate(from_hex("ff")),

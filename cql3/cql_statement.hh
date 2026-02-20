@@ -13,6 +13,7 @@
 #include "timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
+#include "utils/chunked_string.hh"
 
 namespace service {
 
@@ -49,7 +50,7 @@ class cql_statement {
     audit::audit_info_ptr _audit_info;
 public:
     // CQL statement text
-    seastar::sstring raw_cql_statement;
+    utils::chunked_string raw_cql_statement;
 
     // Returns true for statements that needs guard to be taken before the execution
     virtual bool needs_guard(query_processor& qp, service::query_state& state) const {
