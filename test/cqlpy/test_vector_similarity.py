@@ -5,7 +5,7 @@
 import pytest
 from .util import new_test_table, is_scylla
 from cassandra.protocol import InvalidRequest
-from math import sqrt, isclose
+from math import sqrt, isclose, nan, isnan
 
 
 ###############################################################################
@@ -46,7 +46,7 @@ def compute_similarity(similarity_function, v1, v2):
         norm_v = sqrt(sum(x**2 for x in v1))
         norm_q = sqrt(sum(x**2 for x in v2))
         if norm_v == 0 or norm_q == 0:
-            raise ValueError("Cosine similarity is not defined for zero vectors")
+            return nan
         cosine = dot / (norm_v * norm_q)
         return (1 + cosine) / 2
     elif similarity_function == "euclidean":
@@ -247,13 +247,22 @@ def test_vector_similarity_with_zero_vectors(cql, table1, similarity_function):
 
 def test_vector_similarity_cosine_with_zero_vectors(cql, table1):
     zero = [0.0, 0.0, 0.0]
+    queries = [
+        f"SELECT pk, v1, similarity_cosine(v1, {zero}) FROM {table1}",
+        f"SELECT pk, v1, similarity_cosine({zero}, v1) FROM {table1}",
+        f"SELECT pk, v1, similarity_cosine({zero}, {zero}) FROM {table1}",
+    ]
     expected_error = "Function system.similarity_cosine doesn't support all-zero vectors"
-    with pytest.raises(InvalidRequest, match=expected_error):
-        cql.execute(f"SELECT pk, v1, similarity_cosine(v1, {zero}) FROM {table1}")
-    with pytest.raises(InvalidRequest, match=expected_error):
-        cql.execute(f"SELECT pk, v1, similarity_cosine({zero}, v1) FROM {table1}")
-    with pytest.raises(InvalidRequest, match=expected_error):
-        cql.execute(f"SELECT pk, v1, similarity_cosine({zero}, {zero}) FROM {table1}")
+    for query in queries:
+        # Scylla returns NaN for cosine similarity with zero vectors, while Cassandra throws an error.
+        # We allow for this difference as we want the rescoring
+        if is_scylla(cql):
+            result = cql.execute(query)
+            for row in result:
+                assert isnan(row[2])
+        else:
+            with pytest.raises(InvalidRequest, match=expected_error):
+                cql.execute(query)
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)

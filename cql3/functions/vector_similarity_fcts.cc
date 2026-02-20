@@ -69,7 +69,7 @@ float compute_cosine_similarity(std::span<const float> v1, std::span<const float
     }
 
     if (squared_norm_a == 0 || squared_norm_b == 0) {
-        throw exceptions::invalid_request_exception("Function system.similarity_cosine doesn't support all-zero vectors");
+        return std::numeric_limits<float>::quiet_NaN();
     }
 
     // The cosine similarity is in the range [-1, 1].
