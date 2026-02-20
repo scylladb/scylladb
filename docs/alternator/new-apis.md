@@ -184,7 +184,7 @@ entire data center, or other data centers, in that case.
 It replaces the older approach which was named "vnodes". See
 [Data Distribution with Tablets](../architecture/tablets.rst) for details.
 
-In this version, tablet support is almost complete, so new
+In this version, tablet support is complete, so new
 Alternator tables default to following what the global configuration flag
 [tablets_mode_for_new_keyspaces](../reference/configuration-parameters.rst#confval-tablets_mode_for_new_keyspaces)
 tells them to.
@@ -207,9 +207,3 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
-Because the tablets support is incomplete, when tablets are enabled for an
-Alternator table, the following features will not work for this table:
-
-* Enabling Streams with CreateTable or UpdateTable doesn't work
-  (results in an error).
-  See <https://github.com/scylladb/scylla/issues/23838>.
