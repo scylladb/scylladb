@@ -150,6 +150,7 @@ public:
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     future<> load_snapshot_sstables(locator::global_tablet_id tid, sstring snap_name, sstring endpoint, sstring bucket);
+    future<> restore_tablets(table_id, sstring snap_name, sstring endpoint, sstring bucket, std::vector<sstring> manifests);
 
     class download_task_impl;
 };

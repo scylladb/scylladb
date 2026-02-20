@@ -961,6 +961,8 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
     tm.register_module("sstables_loader", _task_manager_module);
     ser::sstables_loader_rpc_verbs::register_restore_tablet(&_messaging, [this] (const rpc::client_info& cinfo, locator::global_tablet_id gid, sstring snap_name, sstring endpoint, sstring bucket) -> future<restore_result> {
         llog.info("Loading sstables for tablet {} from {}/{}", gid, endpoint, bucket);
+        co_await load_snapshot_sstables(gid, snap_name, endpoint, bucket);
+        llog.debug("Finished loading sstables for tablet {}", gid);
         co_return restore_result{};
     });
 }
@@ -985,4 +987,10 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
                                                                                   std::vector<dht::token_range>&& tablets_ranges) {
     return tablet_sstable_streamer::get_sstables_for_tablets(sstables, std::move(tablets_ranges));
+}
+
+future<> sstables_loader::restore_tablets(table_id tid, sstring snap_name, sstring endpoint, sstring bucket, std::vector<sstring> manifests) {
+    auto m = manifests | std::views::transform([] (const auto& m) { return std::filesystem::path(m); }) | std::ranges::to<utils::chunked_vector<std::filesystem::path>>();
+    co_await service::populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, endpoint, bucket, std::move(m));
+    co_await _ss.local().restore_tablets(tid, snap_name, endpoint, bucket);
 }

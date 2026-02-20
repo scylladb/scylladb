@@ -538,6 +538,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
 
         apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} endpoint={} bucket={}", keyspace, table, snapshot, endpoint, bucket);
+        co_await sst_loader.local().restore_tablets(table_id, snapshot, endpoint, bucket, std::move(manifests));
 
         co_return json_void();
     });

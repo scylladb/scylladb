@@ -62,6 +62,7 @@
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "sstables_loader.hh"
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
@@ -71,6 +72,7 @@
 #include "utils/updateable_value.hh"
 #include "repair/repair.hh"
 #include "idl/repair.dist.hh"
+#include "idl/sstables_loader.dist.hh"
 
 #include "service/topology_coordinator.hh"
 
@@ -1311,6 +1313,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         background_action_holder cleanup;
         background_action_holder repair;
         background_action_holder repair_update_compaction_ctrl;
+        background_action_holder restore;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
@@ -1971,6 +1974,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
                     break;
+                case locator::tablet_transition_stage::restore: {
+                    if (action_failed(tablet_state.restore)) {
+                        if (do_barrier()) {
+                            updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                        }
+                        break;
+                    }
+                    if (advance_in_background(gid, tablet_state.restore, "restore", [this, gid, &tmap] () -> future<> {
+                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        auto config = tinfo.restore_cfg;
+                        auto replicas = tinfo.replicas;
+
+                        rtlogger.info("Restoring tablet={} from {} on {}", gid, config.snapshot_name, replicas);
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, cfg = std::move(config)] (locator::tablet_replica r) -> future<> {
+                            if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, gid, cfg.snapshot_name, cfg.endpoint, cfg.bucket);
+                                rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+                            }
+                        });
+                    })) {
+                        rtlogger.debug("Clearing restore transition for {}", gid);
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                    }
+                }
+                    break;
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
                         if (tablet_state.session_id.uuid().is_null()) {
@@ -2149,6 +2177,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 break;
             case locator::tablet_transition_kind::repair:
+                [[fallthrough]];
+            case locator::tablet_transition_kind::restore:
                 [[fallthrough]];
             case locator::tablet_transition_kind::intranode_migration:
                 break;

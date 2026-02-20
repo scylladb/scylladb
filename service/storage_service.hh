@@ -1057,6 +1057,7 @@ public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
+    future<> restore_tablets(table_id, sstring snap_name, sstring endpoint, sstring bucket);
     future<> set_tablet_balancing_enabled(bool);
 
     future<> await_topology_quiesced();
