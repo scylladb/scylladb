@@ -167,10 +167,6 @@ private:
     std::unique_ptr<strategy_control> _strategy_control;
 
     shared_tombstone_gc_state _shared_tombstone_gc_state;
-    // TODO: tombstone_gc_state should now have value semantics, but the code
-    // still uses it with reference semantics (inconsistently though).
-    // Drop this member, once the code is converted into using value semantics.
-    tombstone_gc_state _tombstone_gc_state;
 
     utils::disk_space_monitor::subscription _out_of_space_subscription;
 private:
@@ -455,10 +451,6 @@ public:
     static compaction_data create_compaction_data();
 
     compaction::strategy_control& get_strategy_control() const noexcept;
-
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
-        return _tombstone_gc_state;
-    };
 
     shared_tombstone_gc_state& get_shared_tombstone_gc_state() noexcept {
         return _shared_tombstone_gc_state;

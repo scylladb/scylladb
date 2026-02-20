@@ -1079,7 +1079,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
         return make_compacting_reader(std::move(rd),
                                       gc_clock::time_point::max(),
                                       can_always_purge,
-                                      tombstone_gc_state(nullptr));
+                                      tombstone_gc_state::for_tests());
     };
 
     auto reversed_forward_reader = assert_that(compacted(

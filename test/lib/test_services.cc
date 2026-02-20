@@ -48,7 +48,7 @@ public:
     explicit compaction_group_view(table_for_tests::data& data, sstables::sstables_manager& sstables_manager)
             : _data(data)
             , _sstables_manager(sstables_manager)
-            , _tombstone_gc_state(nullptr)
+            , _tombstone_gc_state(tombstone_gc_state::for_tests())
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
             , _group_id("table_for_tests::compaction_group_view")
@@ -117,7 +117,7 @@ public:
     bool tombstone_gc_enabled() const noexcept override {
         return table().tombstone_gc_enabled();
     }
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+    tombstone_gc_state get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {
