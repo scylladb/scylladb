@@ -674,7 +674,7 @@ future<> schema_applier::merge_tables_and_views()
         view_ptr vp = create_view_from_mutations(_proxy, std::move(sm), user_types, base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
-        // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
+        // (this could happen when skipping major versions during an upgrade, which may be unsupported.)
         check_no_legacy_secondary_index_mv_schema(_proxy.local().get_db().local(), vp, base_schema);
 
         return vp;
