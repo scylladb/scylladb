@@ -33,6 +33,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
 
+static logging::logger elogger("alternator-streams");
+
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
  * for types that are ostreamable/string constructible/castable.
@@ -428,6 +430,25 @@ using namespace std::chrono_literals;
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 
+// find the parent shard in previous generation for the given child shard
+// takes care of wrap-around case in vnodes
+// prev_streams must be sorted by token
+const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id> &prev_streams, const cdc::stream_id &child) {
+    if (prev_streams.empty()) {
+        // something is really wrong - streams are empty
+        // let's try internal_error in hope it will be notified and fixed
+        on_internal_error(elogger, fmt::format("streams are empty for generation {}", prev_timestamp));
+    }
+    auto it = std::lower_bound(prev_streams.begin(), prev_streams.end(), child.token(), [](const cdc::stream_id& id, const dht::token& t) {
+        return id.token() < t;
+    });
+    if (it == prev_streams.end()) {
+        // wrap around case - take first
+        it = prev_streams.begin();
+    }
+    return *it;
+}
+
 future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_stream++;
 
@@ -578,16 +599,8 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             auto shard = rjson::empty_object();
 
             if (prev != e) {
-                auto& pids = prev->second.streams;
-                auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const cdc::stream_id& id) {
-                    return t < id.token();
-                });
-                if (pid != pids.begin()) {
-                    pid = std::prev(pid);
-                }
-                if (pid != pids.end()) {
-                    rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
-                }
+                auto &pid = find_parent_shard_in_previous_generation(prev->first, prev->second.streams, id);
+                rjson::add(shard, "ParentShardId", shard_id(prev->first, pid));
             }
 
             last.emplace(ts, id);
