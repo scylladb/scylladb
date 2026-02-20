@@ -1265,7 +1265,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
             utils::updateable_value(serialize_multiplier),
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
-            utils::updateable_value(preemptive_abort_factor));
+            utils::updateable_value(preemptive_abort_factor),
+            0);
 
     auto stop_sem = deferred_stop(sem_group);
 
@@ -1362,6 +1363,175 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
         }
         check_sem_group();
     }
+}
+
+// Test shared pool memory split, borrowing, and returning
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_shared_pool) {
+    const ssize_t total_memory = 100 * 1024;
+    const int max_count = 100;
+    const uint32_t shared_pool_percent = 50;
+
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(100);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
+
+    reader_concurrency_semaphore_group sem_group(total_memory, max_count, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor),
+            shared_pool_percent);
+    auto stop_sem = deferred_stop(sem_group);
+
+    auto sg1 = create_scheduling_group("test_sg1", 1000).get();
+    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto sg2 = create_scheduling_group("test_sg2", 1000).get();
+    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+
+    sem_group.add_or_update(sg1, 1000);
+    sem_group.add_or_update(sg2, 1000);
+    sem_group.wait_adjust_complete().get();
+
+    auto& sem1 = sem_group.get(sg1);
+    auto& shared_pool = sem_group.get_shared_pool();
+    const ssize_t expected_ded_per_sg = (total_memory * (100 - shared_pool_percent) / 100) / 2;
+    const ssize_t expected_shared_pool = total_memory * shared_pool_percent / 100;
+
+    // 1. Verify split
+    BOOST_CHECK_EQUAL(shared_pool.total_memory(), expected_shared_pool);
+    // Allow small rounding differences (due to integer division and remainder distribution)
+    BOOST_CHECK_LE(std::abs(sem1.available_resources().memory - expected_ded_per_sg), 2);
+
+    // 2. Verify borrowing and returning
+    auto permit = sem1.obtain_permit(nullptr, "test", 0, db::no_timeout, {}).get();
+    const ssize_t dedicated_mem = sem1.initial_resources().memory;
+
+    {
+        // Consume dedicated memory
+        auto units_dedicated = permit.consume_memory(dedicated_mem);
+        BOOST_CHECK_EQUAL(sem1.available_resources().memory, 0);
+        BOOST_CHECK_EQUAL(shared_pool.available_memory(), expected_shared_pool);
+
+        // Borrow from shared pool
+        const ssize_t borrow_amt = 1024;
+        auto units_borrowed = permit.consume_memory(borrow_amt);
+        BOOST_CHECK_LT(shared_pool.available_memory(), expected_shared_pool);
+        BOOST_CHECK_GE(shared_pool.available_memory(), expected_shared_pool - borrow_amt);
+
+        // Units go out of scope here, returning memory
+    }
+
+    // 3. Verify memory restored
+    BOOST_CHECK_EQUAL(shared_pool.available_memory(), expected_shared_pool);
+    BOOST_CHECK_EQUAL(sem1.available_resources().memory, dedicated_mem);
+}
+
+// Test that multiple semaphores can borrow from the same shared pool
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_multiple_borrowers) {
+    const ssize_t total_memory = 20 * 1024;
+    const int max_count = 100;
+    const uint32_t shared_pool_percent = 50;
+
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(100);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
+
+    reader_concurrency_semaphore_group sem_group(total_memory, max_count, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor),
+            shared_pool_percent);
+    auto stop_sem = deferred_stop(sem_group);
+
+    auto sg1 = create_scheduling_group("test_sg1", 1000).get();
+    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto sg2 = create_scheduling_group("test_sg2", 1000).get();
+    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+
+    sem_group.add_or_update(sg1, 1000);
+    sem_group.add_or_update(sg2, 1000);
+    sem_group.wait_adjust_complete().get();
+
+    auto& sem1 = sem_group.get(sg1);
+    auto& sem2 = sem_group.get(sg2);
+    auto& shared_pool = sem_group.get_shared_pool();
+
+    const ssize_t dedicated1 = sem1.initial_resources().memory;
+    const ssize_t dedicated2 = sem2.initial_resources().memory;
+    const ssize_t shared_memory = shared_pool.total_memory();
+
+    auto permit1 = sem1.obtain_permit(nullptr, "test1", 0, db::no_timeout, {}).get();
+    auto permit2 = sem2.obtain_permit(nullptr, "test2", 0, db::no_timeout, {}).get();
+
+    {
+        // Both semaphores exhaust their dedicated memory
+        auto units1_dedicated = permit1.consume_memory(dedicated1);
+        auto units2_dedicated = permit2.consume_memory(dedicated2);
+        BOOST_CHECK_EQUAL(shared_pool.available_memory(), shared_memory);
+
+        // Both borrow from shared pool
+        const ssize_t borrow1 = 1024;
+        const ssize_t borrow2 = 2048;
+        auto units1_borrowed = permit1.consume_memory(borrow1);
+        auto units2_borrowed = permit2.consume_memory(borrow2);
+
+        BOOST_CHECK_LE(shared_pool.available_memory(), shared_memory - borrow1 - borrow2);
+    }
+
+    BOOST_CHECK_EQUAL(shared_pool.available_memory(), shared_memory);
+    BOOST_CHECK_EQUAL(sem1.available_resources().memory, dedicated1);
+    BOOST_CHECK_EQUAL(sem2.available_resources().memory, dedicated2);
+}
+
+// Test that shared_pool_percent of 0 means no shared pool is used
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_zero_shared_pool) {
+    const ssize_t total_memory = 10 * 1024;
+    const int max_count = 100;
+    const uint32_t shared_pool_percent = 0;
+
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(2);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(3);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(1);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
+
+
+    reader_concurrency_semaphore_group sem_group(total_memory, max_count, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor),
+            shared_pool_percent);
+    auto stop_sem = deferred_stop(sem_group);
+
+    auto sg = create_scheduling_group("test_sg", 1000).get();
+    auto destroy_sg = defer([&] { destroy_scheduling_group(sg).get(); });
+
+    sem_group.add_or_update(sg, 1000);
+    sem_group.wait_adjust_complete().get();
+
+    BOOST_CHECK_EQUAL(sem_group.get_shared_pool().total_memory(), 0);
+    BOOST_CHECK_EQUAL(sem_group.get(sg).initial_resources().memory, total_memory);
+}
+
+// Test invalid shared_pool_percent throws
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_invalid_percent) {
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(2);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(3);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(1);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
+
+    BOOST_CHECK_THROW(
+        reader_concurrency_semaphore_group(10 * 1024, 100, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor),
+            101),  // Invalid: > 100
+        exceptions::configuration_exception
+    );
 }
 
 namespace {
@@ -1698,6 +1868,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
     db_cfg.enable_commitlog(false);
     db_cfg.reader_concurrency_semaphore_serialize_limit_multiplier.set(2, utils::config_file::config_source::CommandLine);
     db_cfg.reader_concurrency_semaphore_kill_limit_multiplier.set(4, utils::config_file::config_source::CommandLine);
+    db_cfg.reader_concurrency_semaphore_shared_pool_percent.set(0); // Disable shared pool
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
         auto tbl = create_memory_limit_table(env, 54);
