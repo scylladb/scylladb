@@ -12,7 +12,7 @@ Do the following in the top-level Scylla source directory:
 2. Run `ninja dist-dev` (with the same mode name as above) to prepare
    the distribution artifacts.
 
-3. Run `./dist/docker/debian/build_docker.sh --mode dev`
+3. Run `./dist/docker/redhat/build_docker.sh --mode dev`
    
    This creates a docker image as a **file**, in the OCI format, and prints
    its name, looking something like:
