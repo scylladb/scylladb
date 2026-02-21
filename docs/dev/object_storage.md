@@ -291,6 +291,7 @@ The `table` member contains metadata about the table being snapshot.
 - `tablets_type`:
     - `none` - if the keyspace uses vnodes replication
     - `powof2` - if the keyspace uses tables replication, and the tablet token ranges are based on powers of 2.
+    - `arbitrary` - if the keyspace uses tables replication, and the tablet token ranges and count can be arbitrary.
 - `tablet_count` - Optional. If `tablets_type` is not `none`, contains the number of tablets allcated in the table. If `tablets_type` is `powof2`, tablet_count would be a power of 2.
 
 The `sstables` member is a list containing metadata about the SSTables in the snapshot.

@@ -15,6 +15,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/bitops.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/json/json_elements.hh>
@@ -34,6 +35,7 @@
 #include "utils/logalloc.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/div_ceil.hh"
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
@@ -727,9 +729,6 @@ public:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
         return get_compaction_group();
     }
-    size_t log2_storage_groups() const override {
-        return 0;
-    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return *_single_sg;
     }
@@ -790,9 +789,7 @@ private:
     // that were previously split.
     void handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
-    // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
-    // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
-    // are merged into a new storage group with id (X >> 1).
+    // Called when coordinator executes tablet merge.
     void handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
@@ -814,8 +811,8 @@ private:
         auto idx = id.value();
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         if (idx >= tablet_count()) {
-            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
-                                                    idx, log2_storage_groups(), tablet_count(), t));
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size={} token={}",
+                                                    idx, tablet_count(), t));
         }
         auto& sg = storage_group_for_id(idx);
         if (!t.is_minimum() && !t.is_maximum() && !sg.token_range().contains(t, dht::token_comparator())) {
@@ -893,9 +890,6 @@ public:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
 
-    size_t log2_storage_groups() const override {
-        return log2ceil(tablet_map().tablet_count());
-    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return storage_group_for_id(storage_group_of(token).first);
     }
@@ -3060,40 +3054,60 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
     size_t new_tablet_count = new_tmap.tablet_count();
     storage_group_map new_storage_groups;
 
-    unsigned log2_reduce_factor = log2ceil(old_tablet_count / new_tablet_count);
-    unsigned merge_size = 1 << log2_reduce_factor;
+    // The algorithm assumes that every new tablet has a last token which is equal to the last token of some old tablet.
+    // The old and new counts can be arbitrary, given that this holds.
 
-    if (merge_size != 2) {
-        throw std::runtime_error(format("Tablet count was not reduced by a factor of 2 (old: {}, new {}) for table {}",
+    if (old_tablet_count < new_tablet_count) {
+        throw std::runtime_error(format("Tablet count should be smaller on merge (old: {}, new {}) for table {}",
                                  old_tablet_count, new_tablet_count, table_id));
     }
 
-    for (auto& [id, sg] : _storage_groups) {
-        // Pick first (even) tablet of each sibling pair.
-        if (id % merge_size != 0) {
-            continue;
-        }
-        auto new_tid = id >> log2_reduce_factor;
-        auto new_range = new_tmap.get_token_range(locator::tablet_id(new_tid));
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range, make_repair_sstable_classifier_func());
-        for (auto& view : new_cg->all_views()) {
+    locator::tablet_id current_new(0); // Valid when bool(new_sg)
+    lw_shared_ptr<storage_group> new_sg;
+
+    auto open_new_group = [&] (locator::tablet_id new_tid) {
+        current_new = new_tid;
+        new_sg = allocate_storage_group(new_tmap, new_tid, new_tmap.get_token_range(new_tid));
+        for (auto& view : new_sg->main_compaction_group()->all_views()) {
             auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
             _compaction_reenablers_for_merging.push_back(std::move(cre));
         }
-        auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
+    };
 
-        for (unsigned i = 0; i < merge_size; i++) {
-            auto group_id = id + i;
+    auto seal_new_group = [&] {
+        new_storage_groups[size_t(current_new)] = std::move(new_sg);
+    };
 
-            auto it = _storage_groups.find(group_id);
-            if (it == _storage_groups.end()) {
-                throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
+    std::optional<locator::tablet_id> tid = old_tmap.first_tablet();
+    while (tid) {
+        locator::tablet_id group_id = *tid;
+        tid = old_tmap.next_tablet(*tid);
+
+        auto it = _storage_groups.find(size_t(group_id));
+        if (it == _storage_groups.end()) {
+            continue;
+        }
+
+        auto old_first_token = old_tmap.get_first_token(group_id);
+        if (new_sg && old_first_token > new_tmap.get_last_token(current_new)) {
+            seal_new_group();
+        }
+
+        if (!new_sg) {
+            auto new_id = new_tmap.get_tablet_id(old_tmap.get_last_token(group_id));
+            if (old_first_token < new_tmap.get_first_token(new_id)) {
+                on_internal_error(tlogger, format("Old tablet {} (range: {}) is not enclosed in new tablet {} (range: {})",
+                                  group_id, old_tmap.get_token_range(group_id), new_id, new_tmap.get_token_range(new_id)));
             }
+            open_new_group(new_id);
+        }
+
+        {
             auto& sg = it->second;
-            sg->for_each_compaction_group([&new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
-                cg->update_id(new_tid);
+            sg->for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                cg->update_id(size_t(current_new));
                 tlogger.debug("Adding merging_group: sstables_repaired_at={} old_range={} new_range={} old_tid={} new_tid={} old_group_id={}",
-                        cg->get_sstables_repaired_at(), cg->token_range(), new_range, cg->group_id(), new_tid, group_id);
+                        cg->get_sstables_repaired_at(), cg->token_range(), new_sg->token_range(), cg->group_id(), current_new, group_id);
                 new_sg->add_merging_group(cg);
             });
             // Cannot wait for group to be closed, since it can only return after some long-running operation
@@ -3104,7 +3118,9 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
                });
             });
         }
-        new_storage_groups[new_tid] = std::move(new_sg);
+    }
+    if (new_sg) {
+        seal_new_group();
     }
     _storage_groups = std::move(new_storage_groups);
     _merge_completion_event.signal();
@@ -3534,7 +3550,22 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
+static std::string get_tablets_type(locator::tablet_layout layout) {
+    switch (layout) {
+        case locator::tablet_layout::pow_of_2: return "powof2";
+        case locator::tablet_layout::arbitrary: return "arbitrary";
+    }
+    on_internal_error(tlogger, format("Unknown tablet layout: {}", static_cast<int>(layout)));
+}
+
+static future<> write_manifest(const locator::topology& topology,
+                               snapshot_writer& writer,
+                               std::vector<snapshot_sstable_set> sstable_sets,
+                               sstring name,
+                               db::snapshot_options opts,
+                               schema_ptr schema,
+                               std::optional<int64_t> tablet_count,
+                               std::optional<locator::tablet_layout> tablet_layout) {
     manifest_json manifest;
 
     manifest_json::info info;
@@ -3561,8 +3592,8 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
     table.keyspace_name = schema->ks_name();
     table.table_name = schema->cf_name();
     table.table_id = to_sstring(schema->id());
-    table.tablets_type = tablet_count ? "powof2" : "none";
     table.tablet_count = tablet_count.value_or(0);
+    table.tablets_type = tablet_layout ? get_tablets_type(*tablet_layout) : "none";
     manifest.table = std::move(table);
 
     for (const auto& fsp : sstable_sets) {
@@ -3692,13 +3723,19 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             ex = std::move(ptr);
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
-        const auto& topology = sharded_db.local().get_token_metadata().get_topology();
+        // Use table's effective replication map to get token metadata.
+        // When this is snapshot on table drop, the global token metadata will not have tablets for this table anymore.
+        auto& tm = t.get_effective_replication_map()->get_token_metadata();
+        const auto& topology = tm.get_topology();
         std::optional<int64_t> min_tablet_count;
+        std::optional<locator::tablet_layout> tablet_layout;
         if (t.uses_tablets()) {
             SCYLLA_ASSERT(!tablet_counts.empty());
             min_tablet_count = *std::ranges::min_element(tablet_counts);
+            tablet_layout = tm.tablets().get_tablet_map(s->id()).get_layout();
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s,
+                                min_tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });

@@ -20,6 +20,7 @@
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/div_ceil.hh"
 #include "db/config.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
@@ -1438,7 +1439,7 @@ public:
             }
 
             if (!t2_opt) {
-                on_internal_error(lblogger, format("Unable to find sibling tablet during co-location check for table {}", table));
+                return make_ready_future<>();
             }
             auto t2 = *t2_opt;
 
@@ -1557,8 +1558,7 @@ public:
                 // Merge finalization will have to recheck that all sibling tablets are co-located.
 
                 if (!t2_opt) {
-                    on_internal_error(lblogger, format("Unable to find sibling tablet during co-location, with tablet count {}, for table {}",
-                                                       tmap.tablet_count(), table));
+                    return make_ready_future<>(); // Tablet doesn't have a sibling, it's already colocated.
                 }
                 auto t2 = *t2_opt;
 
@@ -1688,7 +1688,10 @@ public:
         sstring target_tablet_count_reason; // Winning rule for target_tablet_count value.
         std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
 
-        size_t target_tablet_count_aligned; // target_tablet_count aligned to power of 2.
+        // Final tablet count.
+        // It's target_tablet_count aligned to power of 2 if arbitrary_tablet_boundaries feature is not enabled.
+        size_t target_tablet_count_aligned;
+
         resize_decision::way_type resize_decision; // Decision which should be emitted to achieve target_tablet_count_aligned.
     };
 
@@ -1758,6 +1761,64 @@ public:
         }
 
         return {tablet_count, format("min_per_shard_tablet_count={:.3f} in DC {}", min_per_shard_tablet_count, *winning_dc)};
+    }
+
+    std::optional<uint64_t> get_avg_tablet_size(const tablet_map& tmap, table_id table, tablet_id tid) const {
+        if (!_table_load_stats) {
+            return std::nullopt;
+        }
+
+        if (_force_capacity_based_balancing) {
+            if (auto i = _table_load_stats->tables.find(table); i != _table_load_stats->tables.end()) {
+                return i->second.size_in_bytes / tmap.tablet_count();
+            }
+            return std::nullopt;
+        }
+
+        return _table_load_stats->get_avg_tablet_size(tmap, global_tablet_id{table, tid});
+    }
+
+    // Produces merge plan.
+    // This is not about deciding if we should merge, but how to do a merge.
+    // Returns resize_decision::none if we cannot decide how to do a merge, e.g. due to missing tablet stats.
+    resize_decision_way make_merge_decision(table_id table, const tablet_map& tmap) const {
+        if (tmap.tablet_count() % 2 == 0) {
+            return resize_decision::merge{};
+        }
+
+        if (!_db.features().arbitrary_tablet_boundaries) {
+            on_internal_error(lblogger, format("Odd tablet count found for table {}, but arbitrary_tablet_boundaries feature is disabled", table));
+        }
+
+        if (_force_capacity_based_balancing) {
+            // We don't have per-tablet stats. Choose at random among even-indexed ids.
+            return resize_decision::merge{
+                .isolated_tablet = tablet_id((rand_int() % div_ceil(tmap.tablet_count(), 2)) * 2)
+            };
+        }
+
+        // Choose the largest tablet because that will minimize imbalance post-merge.
+        // Choose among even-indexed ids, because only then all other tablets have siblings.
+        uint64_t max_size = 0;
+        std::optional<tablet_id> max_tid;
+        for (size_t i = 0; i < tmap.tablet_count(); i += 2) {
+            auto tid = tablet_id(i);
+            if (auto tablet_size = get_avg_tablet_size(tmap, table, tid)) {
+                lblogger.trace("Tablet {}:{} has average size of {}", table, tid, tablet_size);
+                if (!max_tid || *tablet_size > max_size) {
+                    max_size = *tablet_size;
+                    max_tid = tid;
+                }
+            } else {
+                lblogger.info("Cannot pick isolated replica for merge decision of table {}: stats incomplete for tablet {}", table, tid);
+                return resize_decision::none{};
+            }
+        }
+
+        lblogger.debug("Picked {}.{} as isolated tablet for merge", table, *max_tid);
+        return resize_decision::merge{
+            .isolated_tablet = max_tid
+        };
     }
 
     future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
@@ -1843,7 +1904,7 @@ public:
                     // so it would get cancelled only when crossing back the half-way point.
                     if (avg_tablet_size < target_min_tablet_size(target_tablet_size) ||
                         (cur_decision.is_merge() && avg_tablet_size <= target_tablet_size)) {
-                        tablet_count_from_size /= 2;
+                        tablet_count_from_size = div_ceil(tablet_count_from_size, 2);
                     }
                 }
 
@@ -1996,12 +2057,27 @@ public:
         //   table_plan.resize_decision
 
         for (auto&& [table, table_plan] : plan.tables) {
-            table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+            if (_db.features().arbitrary_tablet_boundaries) {
+                table_plan.target_tablet_count_aligned = table_plan.target_tablet_count;
+            } else {
+                table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+            }
 
             if (table_plan.target_tablet_count_aligned > table_plan.current_tablet_count) {
                 table_plan.resize_decision = locator::resize_decision::split();
             } else if (table_plan.target_tablet_count_aligned < table_plan.current_tablet_count) {
-                table_plan.resize_decision = locator::resize_decision::merge();
+                // Needed to avoid oscillations, because we reduce the count by a factor of 2.
+                // FIXME: Once we have a way to split individual tablets, we can achieve exactly the desired tablet count.
+                if (div_ceil(table_plan.current_tablet_count, 2) >= table_plan.target_tablet_count_aligned) {
+                    auto& tmap = _tm->tablets().get_tablet_map(table);
+                    auto cur_decision = tmap.resize_decision();
+                    if (cur_decision.is_merge()) {
+                        // Preserve isolated tablet choice if we're already merging
+                        table_plan.resize_decision = std::get<resize_decision::merge>(cur_decision.way);
+                    } else {
+                        table_plan.resize_decision = make_merge_decision(table, tmap);
+                    }
+                }
             }
 
             lblogger.debug("Table {}, {} => {} ({}: {}), resize: {}", table,
@@ -2400,12 +2476,11 @@ public:
             return;
         }
         auto siblings = tmap.sibling_tablets(tablet.tablet);
-        if (!siblings) {
-            on_internal_error(lblogger, format("Unable to find sibling tablet of {} during merge", tablet));
+        if (siblings.second) {
+            auto left_sibling = global_tablet_id{tablet.table, siblings.first};
+            auto right_sibling = global_tablet_id {tablet.table, *siblings.second};
+            erase_candidate(shard_info, migration_tablet_set {colocated_tablets {left_sibling, right_sibling}});
         }
-        auto left_sibling = global_tablet_id{tablet.table, siblings->first};
-        auto right_sibling = global_tablet_id{tablet.table, siblings->second};
-        erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
     }
 
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
@@ -3932,10 +4007,6 @@ public:
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
         auto& table_plan = plan.tables[s.id()];
-        if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
-            lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
-                    table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
-        }
         auto tablet_count = table_plan.target_tablet_count_aligned;
         auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
         return map;
@@ -4056,7 +4127,7 @@ private:
     future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() * 2);
+        tablet_map new_tablets(tablets.tablet_count() * 2, tablets.has_raft_info(), tablet_map::initialized_later());
 
         for (tablet_id tid : tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -4066,8 +4137,8 @@ private:
 
             auto& tablet_info = tablets.get_tablet_info(tid);
 
-            new_tablets.set_tablet(new_left_tid, tablet_info);
-            new_tablets.set_tablet(new_right_tid, tablet_info);
+            new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
+            new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4075,21 +4146,28 @@ private:
         co_return std::move(new_tablets);
     }
 
-    // The merging of tablet is completely based on the power-of-two constraint.
-    // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() / 2);
+        tablet_map new_tablets(div_ceil(tablets.tablet_count(), 2), tablets.has_raft_info(), tablet_map::initialized_later());
 
-        for (tablet_id tid : new_tablets.tablet_ids()) {
-            co_await coroutine::maybe_yield();
+        std::optional<tablet_id> new_tid = new_tablets.first_tablet();
+        co_await tablets.for_each_sibling_tablets([&] (tablet_desc left, std::optional<tablet_desc> right) {
+            if (!new_tid) {
+                on_internal_error(lblogger, "Invalid merge, more sibling sets than new tablets.");
+            }
 
-            tablet_id old_left_tid = tablet_id(tid.value() << 1);
-            tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
+            if (!right) {
+                new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(left.tid), *left.info);
+                new_tid = new_tablets.next_tablet(*new_tid);
+                return make_ready_future<>();
+            }
 
-            auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
-            auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+            tablet_id old_left_tid = left.tid;
+            tablet_id old_right_tid = right->tid;
+
+            auto& left_tablet_info = *left.info;
+            auto& right_tablet_info = *right->info;
 
             auto sorted = [] (tablet_replica_set set) {
                 std::ranges::sort(set, std::less<tablet_replica>());
@@ -4108,7 +4186,13 @@ private:
             }
             lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
-            new_tablets.set_tablet(tid, *merged_tablet_info);
+            new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
+            new_tid = new_tablets.next_tablet(*new_tid);
+            return make_ready_future<>();
+        });
+
+        if (new_tid) {
+            on_internal_error(lblogger, "Invalid merge, more new tablets than sibling sets.");
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",

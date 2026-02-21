@@ -30,6 +30,17 @@ enum class token_kind {
     after_all_keys,
 };
 
+struct raw_token {
+    int64_t value;
+
+    // The token must be of token_kind::key kind.
+    explicit raw_token(const token&);
+    explicit raw_token(int64_t v) : value(v) {};
+
+    std::strong_ordering operator<=>(const raw_token& o) const noexcept = default;
+    std::strong_ordering operator<=>(const token& o) const noexcept;
+};
+
 class token {
     // INT64_MIN is not a legal token, but a special value used to represent
     // infinity in token intervals.
@@ -51,6 +62,7 @@ public:
     constexpr token() noexcept : token(kind::before_all_keys, 0) {}
 
     constexpr explicit token(int64_t d) noexcept : token(kind::key, normalize(d)) {}
+    token(raw_token raw) noexcept : token(raw.value) {}
 
     // This constructor seems redundant with the bytes_view constructor, but
     // it's necessary for IDL, which passes a deserialized_bytes_proxy here.
@@ -223,6 +235,23 @@ public:
     }
 };
 
+inline
+raw_token::raw_token(const token& t)
+    : value(t.raw())
+{ }
+
+inline
+std::strong_ordering raw_token::operator<=>(const token& o) const noexcept {
+    switch (o._kind) {
+        case token::kind::before_all_keys:
+            return std::strong_ordering::greater;
+        case token::kind::after_all_keys:
+            return std::strong_ordering::less;
+        case token::kind::key:
+            return value <=> o._data;
+    }
+}
+
 inline constexpr std::strong_ordering tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
     if (l1 == l2) {
         return std::strong_ordering::equal;
@@ -306,6 +335,10 @@ inline constexpr token bias(uint64_t n) {
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
 token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
+// Generates 'count' tokens uniformly distributed in the token ring. Sorted.
+// All values are in the range [first_token(), last_token()]
+utils::chunked_vector<dht::raw_token> get_uniform_tokens(size_t count);
+
 struct token_comparator {
     // Return values are those of a trichotomic comparison.
     constexpr std::strong_ordering operator()(const token& t1, const token& t2) const noexcept {
@@ -326,6 +359,14 @@ struct fmt::formatter<dht::token> : fmt::formatter<string_view> {
         } else {
             return fmt::format_to(ctx.out(), "{}", dht::token::to_int64(t));
         }
+    }
+};
+
+template <>
+struct fmt::formatter<dht::raw_token> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const dht::raw_token& t, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", t.value);
     }
 };
 
