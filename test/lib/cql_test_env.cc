@@ -546,6 +546,7 @@ private:
             cfg->schema_commitlog_directory.set(cfg->commitlog_directory() + "/schema");
             cfg->hints_directory.set(data_dir_path + "/hints.dir");
             cfg->view_hints_directory.set(data_dir_path + "/view_hints.dir");
+            cfg->logstor_directory.set(data_dir_path + "/logstor.dir");
             cfg->num_tokens.set(256);
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
@@ -553,6 +554,7 @@ private:
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->schema_commitlog_directory().c_str());
+            create_directories(cfg->logstor_directory().c_str());
             create_directories(cfg->hints_directory().c_str());
             create_directories(cfg->view_hints_directory().c_str());
             for (unsigned i = 0; i < smp::count; ++i) {

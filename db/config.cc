@@ -655,6 +655,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory where hints files are stored if hinted handoff is enabled.")
     , view_hints_directory(this, "view_hints_directory", value_status::Used, "",
         "The directory where materialized-view updates are stored while a view replica is unreachable.")
+    , logstor_directory(this, "logstor_directory", value_status::Used, "",
+        "The directory where data files for key-value storage are stored.")
     , saved_caches_directory(this, "saved_caches_directory", value_status::Unused, "",
         "The directory location where table key and row caches are stored.")
     /**
@@ -838,6 +840,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* offheap_objects  Native memory, eliminating NIO buffer heap overhead.")
     , memtable_cleanup_threshold(this, "memtable_cleanup_threshold", value_status::Invalid, .11,
         "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load.")
+    , kv_storage_disk_size_in_mb(this, "kv_storage_disk_size_in_mb", value_status::Used, 2048,
+        "Total size in megabytes allocated for key-value storage on disk.")
+    , kv_storage_file_size_in_mb(this, "kv_storage_file_size_in_mb", value_status::Used, 32,
+        "Total size in megabytes allocated for each key-value storage file on disk.")
+    , kv_storage_separator_delay_limit_ms(this, "kv_storage_separator_delay_limit_ms", value_status::Used, 100,
+        "Maximum delay in milliseconds for key-value storage separator debt control.")
+    , kv_storage_separator_max_memory_in_mb(this, "kv_storage_separator_max_memory_in_mb", value_status::Used, 256,
+        "Maximum memory in megabytes for key-value storage separator memory buffers.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
@@ -1257,6 +1267,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
     , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache.")
     , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog.")
+    , enable_kv_storage(this, "enable_kv_storage", value_status::Used, false, "Enable tables with key-value storage engine.")
     , volatile_system_keyspace_for_testing(this, "volatile_system_keyspace_for_testing", value_status::Used, false, "Don't persist system keyspace - testing only!")
     , api_port(this, "api_port", value_status::Used, 10000, "Http Rest API port.")
     , api_address(this, "api_address", value_status::Used, "", "Http Rest API address.")
@@ -1663,6 +1674,7 @@ void db::config::setup_directories() {
     maybe_in_workdir(data_file_directories, "data");
     maybe_in_workdir(hints_directory, "hints");
     maybe_in_workdir(view_hints_directory, "view_hints");
+    maybe_in_workdir(logstor_directory, "logstor");
     maybe_in_workdir(saved_caches_directory, "saved_caches");
 }
 
@@ -1832,7 +1844,8 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
-        {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES}
+        {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},
+        {"kv-storage", feature::KV_STORAGE}
     };
 }
 
