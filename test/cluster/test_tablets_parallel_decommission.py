@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.manager_client import ManagerClient
@@ -159,19 +160,6 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
         await gather_safely(*tasks)
 
 
-async def get_task_for_node(manager: ManagerClient, api_node: IPAddress, node_id: str):
-    """
-    Returns task id of task which works on a given node_id, based on task's `entity` field.
-    """
-
-    tasks = await manager.api.get_tasks(api_node, 'node_ops')
-    logger.info(f'tasks: {tasks}')
-    task = next(t for t in tasks if t['entity'] == node_id)
-    task_id = task['task_id']
-    logger.info(f'decommission task: {task_id}')
-    return task_id
-
-
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_can_be_canceled(manager: ManagerClient):
@@ -199,13 +187,13 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
         decomm_hostid = await manager.get_host_id(servers[1].server_id)
 
-        await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
-
-        tasks = await manager.api.get_tasks(servers[0].ip_addr, 'node_ops')
-        logger.info(f'tasks: {tasks}')
-        task = next(t for t in tasks if t['type'] == 'decommission')
-        task_id = task['task_id']
+        tm = TaskManagerClient(manager.api)
+        task = await tm.wait_task_appears(servers[0].ip_addr, 'node_ops', task_type='decommission', entity=decomm_hostid)
+        logger.info(f'task: {task}')
+        task_id = task.task_id
         logger.info(f'decommission task: {task_id}')
+
+        await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
 
         # Aborting in a pending or paused state should be immediate even if migrations are ongoing.
         await manager.api.abort_task(servers[0].ip_addr, task_id)
@@ -226,7 +214,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
 
         logger.info('Verify start_time is preserved by abort')
         task2 = await manager.api.get_task_status(servers[0].ip_addr, task_id)
-        assert task2['start_time'] == task['start_time']
+        assert task2['start_time'] == task.start_time
 
         logger.info('Verify aborting during paused state')
 
@@ -234,7 +222,8 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
         await manager.api.enable_injection(coord_serv.ip_addr, "wait_after_tablet_cleanup", one_shot=True)
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
         await coord_log.wait_for('Waiting after tablet cleanup', from_mark=mark)
-        task_id = await get_task_for_node(manager, servers[0].ip_addr, decomm_hostid)
+        task = await tm.wait_task_appears(servers[0].ip_addr, 'node_ops', task_type='decommission', entity=decomm_hostid)
+        task_id = task.task_id
         await manager.api.abort_task(servers[0].ip_addr, task_id)
         await manager.api.wait_task(servers[0].ip_addr, task_id)
         await manager.api.message_injection(coord_serv.ip_addr, "wait_after_tablet_cleanup")
@@ -509,9 +498,9 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
         await manager.api.enable_injection(coord_serv.ip_addr, "topology_coordinator_pause_before_processing_backlog", one_shot=True)
         await manager.api.message_injection(coord_serv.ip_addr, "migration_streaming_wait")
 
-        tasks = await manager.api.get_tasks(servers[0].ip_addr, 'node_ops')
-        logger.info(f'tasks: {tasks}')
-        decomm_task = next(t['task_id'] for t in tasks if t['type'] == 'decommission')
+        tm = TaskManagerClient(manager.api)
+        task = await tm.wait_task_appears(servers[0].ip_addr, 'node_ops', task_type='decommission')
+        decomm_task = task.task_id
         logger.info(f'decommission task: {decomm_task}')
 
         await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
