@@ -73,6 +73,13 @@ public:
         }
     }
 
+    void erase(const index_key& key, log_location loc) {
+        auto it = _index.find(key);
+        if (it != _index.end() && it->location == loc) {
+            _index.erase(key);
+        }
+    }
+
     auto begin() const { return _index.begin(); }
     auto end() const { return _index.end(); }
 };
@@ -116,6 +123,10 @@ public:
 
     std::pair<bool, std::optional<index_entry>> insert_if_newer(const index_key& key, index_entry new_entry) {
         return get_bucket(key).insert_if_newer(key, std::move(new_entry));
+    }
+
+    void erase(const index_key& key, log_location loc) {
+        get_bucket(key).erase(key, loc);
     }
 
     class const_iterator {

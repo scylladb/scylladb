@@ -72,6 +72,10 @@ future<> logstor::do_barrier() {
     return _segment_manager.do_barrier();
 }
 
+future<> logstor::truncate_table(table_id tid) {
+    return _segment_manager.truncate_table(tid);
+}
+
 future<> logstor::write(const mutation& m, group_id group) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 

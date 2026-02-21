@@ -687,6 +687,8 @@ public:
         }
     }
 
+    future<std::vector<log_segment_id>> free_compaction_groups(table_id);
+
     future<> write_to_separator(separator&, write_buffer&, log_location base_location);
     future<> write_to_separator(separator&, log_segment_id);
     future<> flush_separator(separator&);
@@ -703,6 +705,7 @@ private:
     future<> compact_segments(group_id gid, std::vector<log_segment_id> segments);
 
     void remove_segment(segment_descriptor& desc);
+    future<std::pair<compaction_group_it, std::vector<log_segment_id>>> remove_compaction_group(compaction_group_it);
 
     separator::buffer& get_separator_buffer(separator& sep, const log_record_writer& writer);
 
@@ -927,6 +930,8 @@ public:
     }
 
     future<> do_barrier();
+
+    future<> truncate_table(table_id table);
 
 private:
 
@@ -1505,6 +1510,31 @@ future<> segment_manager_impl::free_segment(log_segment_id segment_id) {
     co_return;
 }
 
+future<> segment_manager_impl::truncate_table(table_id table) {
+    logstor_logger.info("Truncating table {}", table);
+
+    auto holder = _async_gate.hold();
+
+    // do a barrier to ensure all the table's data is flushed to segments
+    // in the table's compaction groups. we assume there are no new writes
+    // to the table by this point.
+    co_await do_barrier();
+
+    // stop and free the compaction groups of the table.
+    auto segments = co_await _compaction_mgr.free_compaction_groups(table);
+
+    // free all segments and remove their records from the index.
+    for (auto seg_id : segments) {
+        logstor_logger.debug("Freeing segment {} of truncated table {}", seg_id, table);
+        co_await for_each_record(seg_id, [this] (log_location loc, log_record record) {
+            _index.erase(record.key, loc);
+            return make_ready_future<>();
+        });
+
+        co_await free_segment(seg_id);
+    }
+}
+
 future<> segment_manager_impl::for_each_record(log_segment_id segment_id,
                                 std::function<future<>(log_location, log_record)> callback) {
     auto holder = _async_gate.hold();
@@ -1829,6 +1859,42 @@ void compaction_manager::remove_segment(segment_descriptor& desc) {
         }
         _compaction_groups.erase(it);
     }
+}
+
+future<std::pair<compaction_manager::compaction_group_it, std::vector<log_segment_id>>>
+compaction_manager::remove_compaction_group(compaction_group_it it) {
+    std::vector<log_segment_id> segments;
+    auto& cg = it->second;
+    auto& hist = cg.segment_hist;
+    while (!hist.empty()) {
+        co_await coroutine::maybe_yield();
+        auto& desc = hist.one_of_largest();
+        auto seg_id = _sm.desc_to_segment_id(desc);
+        segments.push_back(seg_id);
+        hist.erase(desc);
+    }
+
+    if (_next_group_for_compaction == it) {
+        ++_next_group_for_compaction;
+    }
+    it = _compaction_groups.erase(it);
+    co_return std::make_pair(it, std::move(segments));
+}
+
+future<std::vector<log_segment_id>> compaction_manager::free_compaction_groups(table_id table) {
+    co_await disable_auto_compaction(table);
+
+    std::vector<log_segment_id> segments_to_free;
+
+    auto it = _compaction_groups.lower_bound(group_id{table, 0});
+    while (it != _compaction_groups.end() && it->first.table == table) {
+        co_await coroutine::maybe_yield();
+        auto [next_it, segments] = co_await remove_compaction_group(it);
+        segments_to_free.insert(segments_to_free.end(), segments.begin(), segments.end());
+        it = next_it;
+    }
+
+    co_return std::move(segments_to_free);
 }
 
 separator::buffer& compaction_manager::get_separator_buffer(separator& sep, const log_record_writer& writer) {
@@ -2201,6 +2267,10 @@ size_t segment_manager::get_segment_size() const noexcept {
 
 future<> segment_manager::do_barrier() {
     return _impl->do_barrier();
+}
+
+future<> segment_manager::truncate_table(table_id table) {
+    return _impl->truncate_table(table);
 }
 
 }

@@ -330,3 +330,53 @@ async def test_compaction(manager: ManagerClient):
         metrics = await manager.metrics.query(servers[0].ip_addr)
         segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
         assert segments_compacted == 4, f"Expected 4 segments to be compacted, but got {segments_compacted}"
+
+@pytest.mark.asyncio
+async def test_drop_table(manager: ManagerClient):
+    """
+    Test log compaction by creating dead data and verifying space reclamation.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace']
+    cfg = {'enable_kv_storage': True, 'experimental_features': ['kv-storage']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        # create another table that will not be dropped to verify it's not affected
+        await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        # write data to fill few segments
+        value_size = 30 * 1024
+        value = 'x' * value_size
+        for i in range(20):
+            await cql.run_async(f"INSERT INTO {ks}.test1 (pk, v) VALUES ({i}, '{value}')")
+            await cql.run_async(f"INSERT INTO {ks}.test2 (pk, v) VALUES ({i}, '{value}')")
+
+        await cql.run_async(f"DROP TABLE {ks}.test1")
+
+        # verify test2 is not affected
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test2 WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} in test2, but got {len(rows)}"
+            assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2, but got {len(rows[0].v)}"
+
+        # recreate the table and verify that old data is not visible
+        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test1 WHERE pk = {i}")
+            assert len(rows) == 0, f"Expected no rows for key {i} after table drop, but got {len(rows)}"
+
+        # write new data to the recreated table and verify
+        await cql.run_async(f"INSERT INTO {ks}.test1 (pk, v) VALUES (1, 'new_value')")
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test1 WHERE pk = 1")
+        assert len(rows) == 1, f"Expected 1 row for key 1 after new insert, but got {len(rows)}"
+        assert rows[0].v == 'new_value', f"Expected value 'new_value' for key 1 after new insert, but got {rows[0].v}"
+
+        # verify test2 again
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test2 WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} in test2 after all operations, but got {len(rows)}"
+            assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"

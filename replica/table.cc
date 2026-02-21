@@ -4035,6 +4035,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     co_return rp;
 }
 
+future<> table::discard_kv_storage() {
+    if (_logstor) {
+        co_await _logstor->truncate_table(_schema->id());
+    }
+}
+
 void table::mark_ready_for_writes(db::commitlog* cl) {
     if (!_readonly) {
         on_internal_error(dblog, ::format("table {}.{} is already writable", _schema->ks_name(), _schema->cf_name()));
