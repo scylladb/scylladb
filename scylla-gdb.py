@@ -606,14 +606,27 @@ class std_unordered_map:
     def __bool__(self):
         return self.__nonzero__()
 
+absl_kBitCount = 16
 
 class flat_hash_map:
     def __init__(self, ref):
         kt = ref.type.template_argument(0)
         vt = ref.type.template_argument(1)
         slot_ptr_type = gdb.lookup_type('::std::pair<const {}, {} >'.format(str(kt), str(vt))).pointer()
-        self.slots = ref['slots_'].cast(slot_ptr_type)
-        self.size = ref['size_']
+        try:
+            # abseil >= lts_2026_01_07
+            value = ref['settings_']['value']
+            self.size = value['size_']['data_'] >> (1 + absl_kBitCount)
+            capacity = int(value['capacity_'])
+            heap_or_soo = value['heap_or_soo_']
+            if capacity <= 1:
+                # SOO mode: slot data stored inline in soo_data
+                self.slots = heap_or_soo['soo_data'].address.cast(slot_ptr_type)
+            else:
+                self.slots = heap_or_soo['heap']['slot_array']['p'].cast(slot_ptr_type)
+        except gdb.error:
+            self.slots = ref['slots_'].cast(slot_ptr_type)
+            self.size = ref['size_']
 
     def __len__(self):
         return self.size
@@ -640,7 +653,13 @@ class absl_container:
     def __init__(self, ref):
         self.val = ref
         HasInfozShift = 1
-        self.size = ref["settings_"]["value"]["size_"] >> HasInfozShift
+        try:
+            # abseil >= lts_2026_01_07
+            self.size = ref["settings_"]["value"]["size_"]["data_"] >> (HasInfozShift + absl_kBitCount)
+            self.new_layout = True
+        except gdb.error:
+            self.size = ref["settings_"]["value"]["size_"] >> HasInfozShift
+            self.new_layout = False
 
     def __len__(self):
         return self.size
@@ -649,10 +668,29 @@ class absl_container:
         if self.size == 0:
             return
         capacity = int(self.val["settings_"]["value"]["capacity_"])
-        control = self.val["settings_"]["value"]["control_"]
-        # for the map the slot_type is std::pair<K, V>
         slot_type = gdb.lookup_type(str(self.val.type.strip_typedefs()) + "::slot_type")
-        slots = self.val["settings_"]["value"]["slots_"].cast(slot_type.pointer())
+
+        if self.new_layout:
+            # abseil >= lts_2026_01_07: SOO (Small Object Optimization) support.
+            # When capacity <= 1, the table may be in SOO mode where the single
+            # slot is stored inline in heap_or_soo_.soo_data (no control bytes).
+            heap_or_soo = self.val["settings_"]["value"]["heap_or_soo_"]
+            if capacity <= 1:
+                # SOO mode: slot data is stored directly in soo_data
+                soo_data = heap_or_soo["soo_data"]
+                slot = soo_data.address.cast(slot_type.pointer())
+                if slot[0]['value'].type.name.find("::map_slot_type") != -1:
+                    yield slot[0]['key'], slot[0]['value']['second']
+                else:
+                    yield slot[0]['key'], slot[0]['value']
+                return
+            # Non-SOO mode: control and slots are in heap
+            heap = heap_or_soo["heap"]
+            control = heap["control"]["p"]
+            slots = heap["slot_array"]["p"].cast(slot_type.pointer())
+        else:
+            control = self.val["settings_"]["value"]["control_"]
+            slots = self.val["settings_"]["value"]["slots_"].cast(slot_type.pointer())
         for i in range(capacity):
             ctrl_t = int(control[i])
             # if the control is empty or deleted, its value is less than -1, see
