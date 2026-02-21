@@ -35,6 +35,7 @@
 #include "bytes.hh"
 
 #include <cstdint>
+#include <bit>
 
 using vint_size_type = bytes::size_type;
 
@@ -49,7 +50,9 @@ struct unsigned_vint final {
 
     static value_type deserialize(bytes_view v);
 
-    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
+    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte) {
+        return 1 + std::countl_zero(static_cast<uint8_t>(~first_byte));
+    }
 };
 
 struct signed_vint final {
@@ -61,5 +64,7 @@ struct signed_vint final {
 
     static value_type deserialize(bytes_view v);
 
-    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
+    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte) {
+        return unsigned_vint::serialized_size_from_first_byte(first_byte);
+    }
 };

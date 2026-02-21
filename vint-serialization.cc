@@ -18,15 +18,6 @@
 
 static_assert(-1 == ~0, "Not a twos-complement architecture");
 
-// Accounts for the case that all bits are zero.
-static vint_size_type count_leading_zero_bits(uint64_t n) noexcept {
-    if (n == 0) {
-        return vint_size_type(std::numeric_limits<uint64_t>::digits);
-    }
-
-    return vint_size_type(count_leading_zeros(n));
-}
-
 static constexpr uint64_t encode_zigzag(int64_t n) noexcept {
     // The right shift has to be arithmetic and not logical.
     return (static_cast<uint64_t>(n) << 1) ^ static_cast<uint64_t>(n >> 63);
@@ -55,16 +46,9 @@ int64_t signed_vint::deserialize(bytes_view v) {
     return decode_zigzag(un);
 }
 
-vint_size_type signed_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
-    return unsigned_vint::serialized_size_from_first_byte(first_byte);
-}
-
 // The number of additional bytes that we need to read.
 static vint_size_type count_extra_bytes(int8_t first_byte) {
-    // Sign extension.
-    const int64_t v(first_byte);
-
-    return count_leading_zero_bits(static_cast<uint64_t>(~v)) - vint_size_type(64 - 8);
+    return std::countl_zero(static_cast<uint8_t>(~first_byte));
 }
 
 static void encode(uint64_t value, vint_size_type size, bytes::iterator out) {
@@ -138,9 +122,4 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     }
 #endif
     return result;
-}
-
-vint_size_type unsigned_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
-    int8_t first_byte_casted = first_byte;
-    return 1 + (first_byte_casted >= 0 ? 0 : count_extra_bytes(first_byte_casted));
 }

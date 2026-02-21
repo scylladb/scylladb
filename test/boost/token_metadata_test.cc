@@ -332,3 +332,27 @@ SEASTAR_THREAD_TEST_CASE(test_stale_version_notification) {
 
     BOOST_TEST(my_stream.str().find("topology version 0 held for") != std::string::npos);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_raw_token) {
+    const auto t1 = dht::token::from_int64(1);
+    const auto t2 = dht::token::from_int64(2);
+
+    dht::raw_token_opt rt_opt;
+    BOOST_REQUIRE(!rt_opt);
+    rt_opt = dht::raw_token(t1);
+    BOOST_REQUIRE(*rt_opt == t1);
+
+    BOOST_REQUIRE(dht::raw_token() == dht::minimum_token());
+    BOOST_REQUIRE(dht::raw_token() < dht::raw_token(dht::first_token()));
+    BOOST_REQUIRE(dht::raw_token() < dht::first_token());
+    BOOST_REQUIRE(dht::raw_token() < dht::maximum_token());
+
+    auto rt1 = dht::raw_token(t1);
+    BOOST_REQUIRE(bool(rt1));
+    BOOST_REQUIRE(rt1 > dht::raw_token());
+    BOOST_REQUIRE(rt1 > dht::minimum_token());
+    BOOST_REQUIRE_EQUAL(rt1, t1);
+    BOOST_REQUIRE(rt1 == t1);
+    BOOST_REQUIRE(rt1 < t2);
+    BOOST_REQUIRE(rt1 < dht::maximum_token());
+}
