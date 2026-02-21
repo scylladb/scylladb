@@ -2004,9 +2004,7 @@ static std::optional<ann_ordering_info> get_ann_ordering_info(
 
     auto indexes = sim.list_indexes();
     auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
-        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
-                       ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ANN_CUSTOM_INDEX_OPTION) &&
-               (ind.target_column() == prepared_ann_ordering.first->name_as_text());
+        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), prepared_ann_ordering.first->name_as_text());
     });
 
     if (it == indexes.end()) {
