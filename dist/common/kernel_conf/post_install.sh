@@ -31,6 +31,23 @@ EOS
     sysctl -p /etc/sysctl.d/99-scylla-perfevent.conf
 fi
 
+# Tune tcp_mem to max out at 3% of total system memory.
+# Seastar defaults to allocating 93% of physical memory. The kernel's default
+# allocation for TCP is ~9%. This adds up to 102%. Reduce the TCP allocation
+# to 3% to avoid OOM.
+PAGE_SIZE=$(getconf PAGE_SIZE)
+TOTAL_MEM_KB=$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)
+TOTAL_MEM_BYTES=$((TOTAL_MEM_KB * 1024))
+TCP_MEM_MAX=$((TOTAL_MEM_BYTES * 3 / 100))
+TCP_MEM_MAX_PAGES=$((TCP_MEM_MAX / PAGE_SIZE))
+TCP_MEM_MID_PAGES=$((TCP_MEM_MAX * 2 / 3 / PAGE_SIZE))
+TCP_MEM_MIN_PAGES=$((TCP_MEM_MAX / 2 / PAGE_SIZE))
+cat << EOS > /etc/sysctl.d/99-scylla-tcp.conf
+# Scylla: limit TCP memory to 3% of total system memory
+net.ipv4.tcp_mem = $TCP_MEM_MIN_PAGES $TCP_MEM_MID_PAGES $TCP_MEM_MAX_PAGES
+EOS
+sysctl -p /etc/sysctl.d/99-scylla-tcp.conf || :
+
 if [ ! -d /run/systemd/system ]; then
     exit 0
 fi
