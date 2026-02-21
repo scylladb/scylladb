@@ -60,7 +60,8 @@ namespace utils {
  * is split linearly to 'Precision' number of buckets.
  *
  * The total number of buckets is:
- *   NUM_BUCKETS = log2(Max/Min)*Precision +1
+ *   NUM_BUCKETS = log2(Max/Min)*Precision +1                   (when Min >= Precision)
+ *   NUM_BUCKETS = (Precision - Min) + log2(Max/Precision)*Precision +1 (when Min < Precision)
  *
  * For example, if the Min value is 128, the Max is 1024 and the Precision is 4, the number of buckets is 13.
  *
@@ -74,6 +75,9 @@ namespace utils {
  * Each range is split into 4 (The Precision).
  * 128            | 256            | 512            | 1024
  * 128 160 192 224| 256 320 384 448| 512 640 768 896|
+ *
+ * When Min < Precision, buckets [Min..Precision) are linear (unit steps), and
+ * the exponential bucketing starts at Precision.
  *
  * To get the exponential part of an index you divide by the Precision.
  * The linear part of the index is Modulus the precision.
@@ -107,18 +111,20 @@ namespace utils {
  * ================================
  * For Min, Max and Precision, choose numbers that are a power of 2.
  *
- * Limitation: You must set the MIN value to be higher or equal to the Precision.
+ * Min can be smaller than Precision. In that case, the range [Min..Precision) uses
+ * unit-sized buckets, and the exponential bucketing starts at Precision.
  *
  */
 template<uint64_t Min, uint64_t Max, size_t Precision>
-requires (Min >= Precision && Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
+requires (Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
 class approx_exponential_histogram {
 public:
-
-    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max/Min);
-    static constexpr size_t NUM_BUCKETS = NUM_EXP_RANGES * Precision + 1;
     static constexpr unsigned PRECISION_BITS = log2floor(Precision);
-    static constexpr unsigned BASESHIFT = log2floor(Min);
+    static constexpr size_t LINEAR_BUCKETS = (Min < Precision) ? (Precision - Min) : 0;
+    static constexpr uint64_t EFFECTIVE_MIN = (Min < Precision) ? Precision : Min;
+    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max / EFFECTIVE_MIN);
+    static constexpr size_t NUM_BUCKETS = LINEAR_BUCKETS + NUM_EXP_RANGES * Precision + 1;
+    static constexpr unsigned BASESHIFT = log2floor(EFFECTIVE_MIN);
     static constexpr uint64_t LOWER_BITS_MASK = Precision - 1;
 private:
     std::array<uint64_t, NUM_BUCKETS> _buckets;
@@ -136,8 +142,14 @@ public:
         if (bucket_id == NUM_BUCKETS - 1) {
             return Max;
         }
+        if constexpr (LINEAR_BUCKETS) {
+            if (bucket_id < LINEAR_BUCKETS) {
+                return Min + bucket_id;
+            }
+            bucket_id -= LINEAR_BUCKETS;
+        }
         int16_t exp_rang = (bucket_id >> PRECISION_BITS);
-        return (Min << exp_rang) +  ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
+        return (EFFECTIVE_MIN << exp_rang) + ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
     }
 
     /*!
@@ -154,7 +166,7 @@ public:
 
     /*!
      * \brief Find the bucket index for a given value
-     * The position of a value that is lower or equal to Min will always be 0.
+     * The position of a value that is lower than Min will always be 0.
      * The position of a value that is higher or equal to MAX will always be NUM_BUCKETS - 1.
      */
     uint16_t find_bucket_index(uint64_t val) const {
@@ -164,9 +176,18 @@ public:
         if (val <= Min) {
             return 0;
         }
+        if constexpr (LINEAR_BUCKETS) {
+            if (val < Precision) {
+                return val - Min;
+            }
+        }
         uint16_t range = log2floor(val);
-        val >>= range - PRECISION_BITS; // leave the top most N+1 bits where N is the resolution.
-        return ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
+        val >>= range - PRECISION_BITS;
+        uint16_t index = ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
+        if constexpr (LINEAR_BUCKETS) {
+            index += LINEAR_BUCKETS;
+        }
+        return index;
     }
 
     /*!
