@@ -1714,7 +1714,9 @@ std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& t
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
         auto str = value_cast<sstring>(t);
-        SCYLLA_ASSERT(str == dht::token::from_sstring(str).to_sstring());
+        if (str != dht::token::from_sstring(str).to_sstring()) {
+            on_internal_error(slogger, format("decode_tokens: invalid token string '{}'", str));
+        }
         tset.insert(dht::token::from_sstring(str));
     }
     return tset;
@@ -3191,7 +3193,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                     };
                 }
             } else if (must_have_tokens(nstate)) {
-                on_fatal_internal_error(slogger, format(
+                on_internal_error(slogger, format(
                         "load_topology_state: node {} in {} state but missing ring slice", host_id, nstate));
             }
         }
@@ -3273,7 +3275,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             // Currently, at most one node at a time can be in transitioning state.
             if (!map->empty()) {
                 const auto& [other_id, other_rs] = *map->begin();
-                on_fatal_internal_error(slogger, format(
+                on_internal_error(slogger, format(
                     "load_topology_state: found two nodes in transitioning state: {} in {} state and {} in {} state",
                     other_id, other_rs.state, host_id, nstate));
             }
@@ -3331,8 +3333,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                 format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
                         NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
                 gen_id.id);
-            SCYLLA_ASSERT(gen_rows);
-            if (gen_rows->empty()) {
+            if (!gen_rows || gen_rows->empty()) {
                 on_internal_error(slogger, format(
                     "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
             }
