@@ -4526,6 +4526,9 @@ table::enable_auto_compaction() {
     // FIXME: unmute backlog. turn table backlog back on.
     //      see table::disable_auto_compaction() notes.
     _compaction_disabled_by_user = false;
+    if (_logstor) {
+        _logstor->enable_auto_compaction(_schema->id());
+    }
     trigger_compaction();
 }
 
@@ -4559,9 +4562,13 @@ table::disable_auto_compaction() {
     //   for new submissions
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
-        return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
-        });
+        if (_logstor) {
+            return _logstor->disable_auto_compaction(_schema->id());
+        } else {
+            return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
+                return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+            });
+        }
     });
 }
 

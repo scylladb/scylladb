@@ -49,7 +49,11 @@ public:
     static void free_crypto();
 
     void enable_auto_compaction();
+    void enable_auto_compaction(table_id);
+
     future<> disable_auto_compaction();
+    future<> disable_auto_compaction(table_id);
+
     future<> trigger_compaction(bool major = false);
 
     future<> do_barrier();

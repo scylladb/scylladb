@@ -68,7 +68,11 @@ public:
                             std::function<future<>(log_location, log_record)> callback);
 
     void enable_auto_compaction();
+    void enable_auto_compaction(table_id);
+
     future<> disable_auto_compaction();
+    future<> disable_auto_compaction(table_id);
+
     future<> trigger_compaction(bool major = false);
 
     size_t get_segment_size() const noexcept;

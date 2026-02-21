@@ -578,6 +578,7 @@ private:
 
     struct compaction_group {
         segment_descriptor_hist segment_hist;
+        bool compaction_enabled{true};
     };
 
     using compaction_group_map = std::map<group_id, compaction_group>;
@@ -624,9 +625,32 @@ public:
         _cfg.compaction_enabled = true;
     }
 
+    void enable_auto_compaction(table_id table) {
+        auto lower = _compaction_groups.lower_bound(group_id{table, 0});
+        for (auto it = lower; it != _compaction_groups.end() && it->first.table == table; ++it) {
+            it->second.compaction_enabled = true;
+        }
+    }
+
     future<> disable_auto_compaction() {
         _cfg.compaction_enabled = false;
         return _compaction_action.join();
+    }
+
+    future<> disable_auto_compaction(group_id gid) {
+        auto it = _compaction_groups.find(gid);
+        if (it != _compaction_groups.end()) {
+            it->second.compaction_enabled = false;
+            co_await _compaction_action.join();
+        }
+    }
+
+    future<> disable_auto_compaction(table_id table) {
+        auto lower = _compaction_groups.lower_bound(group_id{table, 0});
+        for (auto it = lower; it != _compaction_groups.end() && it->first.table == table; ++it) {
+            it->second.compaction_enabled = false;
+        }
+        co_await _compaction_action.join();
     }
 
     future<> trigger_compaction(bool major) {
@@ -878,10 +902,20 @@ public:
         _compaction_mgr.enable_auto_compaction();
     }
 
+    void enable_auto_compaction(table_id tid) {
+        logstor_logger.info("Enabling automatic compaction for table {}", tid);
+        _compaction_mgr.enable_auto_compaction(tid);
+    }
+
     future<> disable_auto_compaction() {
         logstor_logger.info("Disabling automatic compaction");
         _cfg.compaction_enabled = false;
         co_await _compaction_mgr.disable_auto_compaction();
+    }
+
+    future<> disable_auto_compaction(table_id tid) {
+        logstor_logger.info("Disabling automatic compaction for table {}", tid);
+        co_await _compaction_mgr.disable_auto_compaction(tid);
     }
 
     future<> trigger_compaction(bool major = false) {
@@ -1649,9 +1683,11 @@ compaction_manager::select_segments_for_compaction() {
         auto& [gid, cg] = *_next_group_for_compaction;
         ++_next_group_for_compaction;
 
-        auto candidates = select_segments_for_compaction(cg);
-        if (candidates.size() > 0) {
-            co_return std::make_pair(gid, std::move(candidates));
+        if (cg.compaction_enabled) {
+            auto candidates = select_segments_for_compaction(cg);
+            if (candidates.size() > 0) {
+                co_return std::make_pair(gid, std::move(candidates));
+            }
         }
 
         if (_next_group_for_compaction == _compaction_groups.end()) {
@@ -2142,9 +2178,19 @@ future<> segment_manager::for_each_record(const std::vector<log_segment_id>& seg
 void segment_manager::enable_auto_compaction() {
     _impl->enable_auto_compaction();
 }
+
+void segment_manager::enable_auto_compaction(table_id tid) {
+    _impl->enable_auto_compaction(tid);
+}
+
 future<> segment_manager::disable_auto_compaction() {
     return _impl->disable_auto_compaction();
 }
+
+future<> segment_manager::disable_auto_compaction(table_id tid) {
+    return _impl->disable_auto_compaction(tid);
+}
+
 future<> segment_manager::trigger_compaction(bool major) {
     return _impl->trigger_compaction(major);
 }

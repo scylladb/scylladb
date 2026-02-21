@@ -52,8 +52,16 @@ void logstor::enable_auto_compaction() {
     _segment_manager.enable_auto_compaction();
 }
 
+void logstor::enable_auto_compaction(table_id tid) {
+    _segment_manager.enable_auto_compaction(tid);
+}
+
 future<> logstor::disable_auto_compaction() {
     return _segment_manager.disable_auto_compaction();
+}
+
+future<> logstor::disable_auto_compaction(table_id tid) {
+    return _segment_manager.disable_auto_compaction(tid);
 }
 
 future<> logstor::trigger_compaction(bool major) {
