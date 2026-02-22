@@ -17,7 +17,7 @@ SYNOPSIS
                    [(-u <username> | --username <username>)] snapshot
                    [(-cf <table> | --column-family <table> | --table <table>)]
                    [(-kc <kclist> | --kc.list <kclist>)]
-                   [(-sf | --skip-flush)] [(-t <tag> | --tag <tag>)] [--] [<keyspaces...>]
+                   [(-sf | --skip-flush)] [(-t <tag> | --tag <tag>)] [--ttl <ttl>] [--] [<keyspaces...>]
 
 OPTIONS
 .......
@@ -38,6 +38,10 @@ Parameter                                                             Descriptio
 -sf / --skip-flush                                                    Do not flush memtables before snapshotting (snapshot will not contain unflushed data)
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 -t <tag> / --tag <tag>                                                The name of the snapshot
+--------------------------------------------------------------------  -------------------------------------------------------------------------------------
+--ttl <ttl>                                                           The time-to-live for the snapshot, optionally followed by:
+                                                                      's' for seconds (the default), 'm' for minutes, 'h' for hours, or 'd' for days.
+                                                                      Missing TTL, or 0, mean no TTL
 ====================================================================  =====================================================================================
 
 ``--`` This option can be used to separate command-line options from the list of argument, (useful when arguments might be mistaken for command-line options.

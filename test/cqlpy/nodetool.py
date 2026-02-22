@@ -115,14 +115,19 @@ def compact_keyspace(cql, ks, flush_memtables=True):
         args.extend([ks, cf])
         run_nodetool(cql, "compact", *args)
 
-def take_snapshot(cql, table, tag, skip_flush):
+def take_snapshot(cql, table, tag, skip_flush, ttl=""):
     ks, cf = table.split('.')
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params={'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush})
+        params = {'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush}
+        if ttl:
+            params['ttl'] = ttl
+        requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params=params)
     else:
         args = ['--tag', tag, '--table', cf]
         if skip_flush:
             args.append('--skip-flush')
+        if ttl:
+            args.extend(['--ttl', ttl])
         args.append(ks)
         run_nodetool(cql, "snapshot", *args)
 

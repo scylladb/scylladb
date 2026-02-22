@@ -66,6 +66,13 @@ struct scrub_info {
 
 scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req);
 
+// TTL is given as a number with an optional a suffix of:
+// s - seconds (default)
+// m - minutes
+// h - hours
+// d - days
+std::optional<std::chrono::seconds> validate_ttl(std::string_view);
+
 void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, service::raft_group0_client&);
 void unset_storage_service(http_context& ctx, httpd::routes& r);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);

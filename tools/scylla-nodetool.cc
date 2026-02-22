@@ -2379,16 +2379,23 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
         params["sf"] = "false";
     }
 
+    if (vm.contains("ttl")) {
+        params["ttl"] = vm["ttl"].as<sstring>();
+    } else {
+        params["ttl"] = "0";
+    }
+
     client.post("/storage_service/snapshots", params);
 
     if (kn_msg.empty()) {
         kn_msg = params["kn"];
     }
 
-    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}}}\n",
+    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}, ttl={}}}\n",
             kn_msg,
             params["tag"],
-            params["sf"]);
+            params["sf"],
+            params["ttl"]);
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
@@ -4615,6 +4622,7 @@ For more information, see: {}
                     typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
                     typed_option<sstring>("tag,t", "The name of the snapshot"),
                     typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
+                    typed_option<sstring>("ttl", "The TTL for the snapshot, optionally followed by 's' for seconds (the default), 'm' for minutes, 'h' for hours, or 'd' for days. Missing TTL, or 0, mean no TTL"),
                 },
                 {
                     typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
