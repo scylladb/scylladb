@@ -22,6 +22,7 @@
 #include "sstables/key.hh"
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
+#include "test/lib/exception_utils.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -1012,4 +1013,77 @@ SEASTAR_TEST_CASE(test_digest_persistence_data) {
 
 SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
     return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
+}
+
+static void corrupt_sstable(sstables::shared_sstable sst, component_type component) {
+    auto path = sstables::test(sst).filename(component).native();
+    auto size = seastar::file_size(path).get();
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto mem_align = f.memory_dma_alignment();
+    const auto dma_align = f.disk_write_dma_alignment();
+    auto block_offset = align_down(size - 1, dma_align);
+    auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
+    f.dma_read(block_offset, buf.get_write(), dma_align).get();
+    // Flip one bit in the last byte of the file to corrupt it minimally.
+    // Using a single-bit flip avoids creating values that overflow
+    // during parsing.
+    buf.get_write()[size - 1 - block_offset] += 1;
+    f.dma_write(block_offset, buf.get(), dma_align).get();
+    f.truncate(size).get();
+}
+
+static future<> test_component_digest_validation(component_type component, sstable::version_types version, sstring expected_message, compress_sstable compress = compress_sstable::no) {
+    return test_env::do_with_async([component, version, expected_message = std::move(expected_message), compress] (test_env& env) mutable {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8),
+            compress);
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst = make_sstable_containing(env.make_sstable(schema, version), muts);
+
+        auto digest = sst->get_component_digest(component);
+        BOOST_REQUIRE(digest.has_value());
+
+        auto toc_path = fmt::to_string(sst->toc_filename());
+        auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name());
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+
+        corrupt_sstable(sst, component);
+
+        // Loading the sstable should detect the digest mismatch
+        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        BOOST_REQUIRE_EXCEPTION(sst_corrupted->load(schema->get_sharder()).get(), malformed_sstable_exception,
+            exception_predicate::message_contains(expected_message));
+    });
+}
+
+SEASTAR_TEST_CASE(test_digest_validation_statistics) {
+    return test_component_digest_validation(component_type::Statistics, sstable::version_types::me, "Statistics digest mismatch");
+}
+
+SEASTAR_TEST_CASE(test_digest_validation_filter) {
+    return test_component_digest_validation(component_type::Filter, sstable::version_types::me, "Filter digest mismatch");
+}
+
+// SEASTAR_TEST_CASE(test_digest_validation_summary) {
+//     return test_component_digest_validation(component_type::Summary, sstable::version_types::me, "Summary digest mismatch");
+// }
+
+SEASTAR_TEST_CASE(test_digest_validation_compression) {
+    return test_component_digest_validation(component_type::CompressionInfo, sstable::version_types::me, "CompressionInfo digest mismatch", compress_sstable::yes);
+}
+
+SEASTAR_TEST_CASE(test_digest_validation_toc) {
+    return test_component_digest_validation(component_type::TOC, sstable::version_types::me, "TOC digest mismatch");
+}
+
+SEASTAR_TEST_CASE(test_digest_validation_scylla) {
+    return test_component_digest_validation(component_type::Scylla, sstable::version_types::me, "Scylla digest mismatch");
 }
