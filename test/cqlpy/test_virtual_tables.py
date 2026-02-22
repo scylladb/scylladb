@@ -3,18 +3,21 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+from typing import Tuple
+
 import pytest
 from . import nodetool
 from . import util
 import json
 import glob
 import os
+import time
 
 from collections import defaultdict
 
 from test.pylib.skip_types import skip_env
 
-def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_dir):
+def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_dir, expiry: int = None):
     results = list(cql.execute(f"SELECT keyspace_name, table_name, snapshot_name, live, total FROM system.snapshots"))
     for res in results:
         if res.snapshot_name in expected_snapshots:
@@ -23,8 +26,10 @@ def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_d
             expected_snapshots[res.snapshot_name].remove(t)
             verify_snapshot_dir(scylla_data_dir, res.keyspace_name, res.table_name, res.snapshot_name)
 
-    for _, expected_tables in expected_snapshots.items():
-        assert not expected_tables, f"Not all expected snapshots were listed: expected_snapshots={expected_snapshots}"
+    now = time.time()
+    if not expiry or int(now) < int(expiry):
+        for _, expected_tables in expected_snapshots.items():
+            assert not expected_tables, f"Not all expected snapshots were listed: expected_snapshots={expected_snapshots} {now=} {expiry=}"
 
 def snapshot_dir_exists(scylla_data_dir, keyspace_name, table_name, snapshot_name) -> Tuple[str, bool]:
     path = os.path.join(scylla_data_dir, keyspace_name, f"{table_name}-*")
@@ -50,14 +55,24 @@ def test_snapshots_table(scylla_only, cql, test_keyspace, scylla_data_dir):
         keyspace_name, table_name = table.split('.')
         verify_snapshot_dir(scylla_data_dir, keyspace_name, table_name, test_tag, False)
 
-def test_snapshots_dropped_table(scylla_only, cql, test_keyspace, scylla_data_dir):
+@pytest.mark.parametrize("ttl", [0, 5])
+def test_snapshots_dropped_table(scylla_only, cql, test_keyspace, scylla_data_dir, ttl):
+    cql.execute(f"UPDATE system.config SET value = '{ttl}' WHERE name = 'auto_snapshot_ttl'")
     test_tag = util.unique_name()
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
-        nodetool.take_snapshot(cql, table, test_tag, False)
-        verify_snapshots(cql, {test_tag: {table}}, scylla_data_dir)
-        nodetool.del_snapshot(cql, test_tag)
+        expiry = int(time.time() + ttl) if ttl else None
+        nodetool.take_snapshot(cql, table, test_tag, False, ttl)
+        verify_snapshots(cql, {test_tag: {table}}, scylla_data_dir, expiry)
         keyspace_name, table_name = table.split('.')
+        if ttl:
+            deadline = expiry + 10
+            time.sleep(ttl)
+            while snapshot_dir_exists(scylla_data_dir, keyspace_name, table_name, test_tag)[1] and time.time() < deadline:
+                time.sleep(1)
+        else:
+            # For ttl == 0, explicitly delete the snapshot and verify removal.
+            nodetool.del_snapshot(cql, test_tag)
         verify_snapshot_dir(scylla_data_dir, keyspace_name, table_name, test_tag, False)
 
 def test_snapshots_multiple_keyspaces(scylla_only, cql, scylla_data_dir):
