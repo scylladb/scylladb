@@ -2308,6 +2308,7 @@ future<> view_builder::drain() {
     vlogger.info("Draining view builder");
     _as.request_abort();
     co_await _mnotifier.unregister_listener(this);
+    co_await _ops_gate.close();
     co_await _vug.drain();
     co_await _sem.wait();
     _sem.broken();
@@ -2742,30 +2743,48 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
     }
 
     // Do it in the background, serialized and broadcast from shard 0.
-    static_cast<void>(dispatch_create_view(ks_name, view_name).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_create_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
         vlogger.warn("Failed to dispatch view creation {}.{}: {}", ks_name, view_name, ep);
     }));
 }
 
-void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+future<> view_builder::dispatch_update_view(sstring ks_name, sstring view_name) {
     if (should_ignore_tablet_keyspace(_db, ks_name)) {
-        return;
+        co_return;
     }
 
+    [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::nullopt);
+
+    auto view = view_ptr(_db.find_schema(ks_name, view_name));
+    auto step_it = _base_to_build_step.find(view->view_info()->base_id());
+    if (step_it == _base_to_build_step.end()) {
+        co_return; // In case all the views for this CF have finished building already.
+    }
+    auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+        return bs.view->id() == view->id();
+    });
+    if (status_it != step_it->second.build_status.end()) {
+        status_it->view = std::move(view);
+    }
+}
+
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
     // Do it in the background, serialized.
-    (void)with_semaphore(_sem, view_builder_semaphore_units, [ks_name, view_name, this] {
-        auto view = view_ptr(_db.find_schema(ks_name, view_name));
-        auto step_it = _base_to_build_step.find(view->view_info()->base_id());
-        if (step_it == _base_to_build_step.end()) {
-            return;// In case all the views for this CF have finished building already.
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_update_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (const seastar::gate_closed_exception&) {
+            vlogger.warn("Ignoring gate_closed_exception during view update {}.{}", ks_name, view_name);
+        } catch (const seastar::broken_named_semaphore&) {
+            vlogger.warn("Ignoring broken_named_semaphore during view update {}.{}", ks_name, view_name);
+        } catch (const replica::no_such_column_family&) {
+            vlogger.warn("Ignoring no_such_column_family during view update {}.{}", ks_name, view_name);
         }
-        auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
-            return bs.view->id() == view->id();
-        });
-        if (status_it != step_it->second.build_status.end()) {
-            status_it->view = std::move(view);
-        }
-    }).handle_exception_type([] (replica::no_such_column_family&) { });
+    }));
 }
 
 future<> view_builder::dispatch_drop_view(sstring ks_name, sstring view_name) {
@@ -2827,7 +2846,9 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
     }
 
     // Do it in the background, serialized and broadcast from shard 0.
-    static_cast<void>(dispatch_drop_view(ks_name, view_name).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_drop_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
         vlogger.warn("Failed to dispatch view drop {}.{}: {}", ks_name, view_name, ep);
     }));
 }
