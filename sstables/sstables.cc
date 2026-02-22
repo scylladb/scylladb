@@ -855,12 +855,13 @@ static inline sstring parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
-future<std::vector<sstring>> sstable::read_and_parse_toc(file f) {
-    return with_closeable(make_file_input_stream(f), [] (input_stream<char>& in) -> future<std::vector<sstring>> {
+future<std::pair<std::vector<sstring>, uint32_t>> sstable::read_and_parse_toc(file f) {
+    return with_closeable(make_file_input_stream(f), [] (input_stream<char>& in) -> future<std::pair<std::vector<sstring>, uint32_t>> {
         std::vector<sstring> components;
         auto all = co_await util::read_entire_stream_contiguous(in);
+        auto digest = crc32_utils::checksum(all.begin(), all.size());
         boost::split(components, all, boost::is_any_of("\n"));
-        co_return components;
+        co_return std::make_pair(std::move(components), digest);
     });
 }
 
@@ -874,7 +875,8 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
     try {
         auto toc_type = cfg.unsealed_sstable ? component_type::TemporaryTOC : component_type::TOC;
         co_await do_read_simple(toc_type, [&] (version_types v, file f) -> future<> {
-            auto comps = co_await read_and_parse_toc(f);
+            auto [comps, digest] = co_await read_and_parse_toc(f);
+            _toc_digest = digest;
             for (auto& c: comps) {
                 // accept trailing newlines
                 if (c == "") {
@@ -1085,6 +1087,42 @@ future<> sstable::read_simple(T& component) {
     });
 }
 
+template <component_type Type, typename T>
+future<std::optional<uint32_t>> sstable::read_simple_with_digest(T& component) {
+    std::optional<uint32_t> digest;
+    co_await do_read_simple(Type, [&] (version_types v, file&& f, uint64_t size) -> future<> {
+        std::exception_ptr ex;
+        auto r = digest_file_random_access_reader(f, size, sstable_buffer_size);
+        try {
+            co_await parse(*_schema, v, r, component);
+            digest = r.digest();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await r.close();
+
+        maybe_rethrow_exception(std::move(ex));
+    });
+    co_return digest;
+}
+
+template <component_type Type, typename T>
+future<> sstable::read_simple_and_verify_digest(T& comp) {
+    auto component_digest = get_component_digest(Type);
+    if (component_digest) {
+        auto computed_digest_opt = co_await read_simple_with_digest<Type>(comp);
+        uint32_t computed_digest;
+        if (computed_digest_opt) {
+            computed_digest = *computed_digest_opt;
+        } else {
+            computed_digest = co_await compute_component_file_digest(Type);
+        }
+        validate_component_digest(Type, computed_digest);
+    } else {
+        co_await read_simple<Type>(comp);
+    }
+}
+
 void sstable::do_write_simple(file_writer& writer,
                               noncopyable_function<void (version_types, file_writer&)> write_component) {
     write_component(_version, writer);
@@ -1141,7 +1179,7 @@ future<> sstable::read_compression() {
         co_return;
     }
 
-    co_await read_simple<component_type::CompressionInfo>(_components->compression);
+    co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
     auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
     _components->compression.set_compressor(std::move(compressor));
     _components->compression.discard_hidden_options();
@@ -1175,6 +1213,35 @@ void sstable::validate_partitioner() {
                             _schema->get_partitioner().name()));
     }
 
+}
+
+future<uint32_t> sstable::compute_component_file_digest(component_type type) const {
+    auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+    auto size = co_await f.size();
+    if (type == component_type::Scylla && _components->scylla_metadata->digest) {
+        // For Scylla metadata, the digest is stored at the end of the file, so we need to exclude it from the checksum calculation.
+        size -= sizeof(uint32_t);
+    }
+    co_return co_await compute_component_file_digest(std::move(f), size);
+}
+
+future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
+    return with_closeable(make_file_input_stream(std::move(f), 0, size, {.buffer_size = sstable_buffer_size}), [] (input_stream<char>& in) -> future<uint32_t> {
+        uint32_t digest = crc32_utils::init_checksum();
+        while (auto buf = co_await in.read()) {
+            digest = crc32_utils::checksum(digest, buf.get(), buf.size());
+        }
+        co_return digest;
+    });
+}
+
+void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
+    auto expected = get_component_digest(type);
+    if (expected && *expected != computed_digest) {
+        throw malformed_sstable_exception(
+            fmt::format("{} digest mismatch in {}: expected {}, computed {}",
+                        type, get_filename(), *expected, computed_digest));
+    }
 }
 
 void sstable::validate_min_max_metadata() {
@@ -1364,7 +1431,7 @@ double sstable::estimate_droppable_tombstone_ratio(const gc_clock::time_point& c
 }
 
 future<> sstable::read_statistics() {
-    return read_simple<component_type::Statistics>(_components->statistics);
+    co_await read_simple_and_verify_digest<component_type::Statistics>(_components->statistics);
 }
 
 future<> sstable::read_partitions_db_footer() {
@@ -1518,7 +1585,7 @@ future<> sstable::read_summary() noexcept {
         // We'll try to keep the main code path exception free, but if an exception does happen
         // we can try to regenerate the Summary.
         try {
-            co_return co_await read_simple<component_type::Summary>(_components->summary);
+            co_await read_simple_and_verify_digest<component_type::Summary>(_components->summary);
         } catch (...) {
             auto ep = std::current_exception();
             sstlog.warn("Couldn't read summary file {}: {}.", this->filename(component_type::Summary), ep);
@@ -1680,7 +1747,7 @@ future<> sstable::read_filter(sstable_open_config cfg) {
 
     return seastar::async([this] () mutable {
         sstables::filter filter;
-        read_simple<component_type::Filter>(filter).get();
+        read_simple_and_verify_digest<component_type::Filter>(filter).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), get_filter_format(_version));
@@ -2174,9 +2241,14 @@ sstable::read_scylla_metadata() noexcept {
         if (!has_component(component_type::Scylla)) {
             return make_ready_future<>();
         }
-        return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] {
+        return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] -> future<>  {
             _features = _components->scylla_metadata->get_features();
             _components->digest = get_component_digest(component_type::Data);
+
+            validate_component_digest(component_type::TOC, _toc_digest);
+
+            auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
+            validate_component_digest(component_type::Scylla, computed_digest);
         });
     });
 }
