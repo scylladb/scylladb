@@ -10,6 +10,7 @@
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "service/storage_proxy.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/groups_manager.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
@@ -82,7 +83,8 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db)
 {
 }
 
-future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
+future<value_or_redirect<>> coordinator::mutate(service::storage_proxy& proxy,
+        schema_ptr schema,
         const dht::token& token,
         mutation_gen&& mutation_gen)
 {
@@ -112,6 +114,15 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         const auto [ts, term] = get<raft_server::timestamp_with_term>(disposition);
 
         utils::chunked_vector<mutation> muts {mutation_gen(ts)};
+        auto cdc = proxy.get_cdc_service();
+        if (cdc && cdc->needs_cdc_augmentation(muts)) {
+            // A few arguments needs to be refined before going out of experimental:
+            // - timeout - its value is actually nevel used (see SCYLLADB-741)
+            // - tr_state - pass valid tracing pointer
+            auto [new_muts, _] = co_await cdc->augment_mutation_call(lowres_clock::time_point::max(), std::move(muts), nullptr, db::consistency_level::LOCAL_ONE);
+            muts = std::move(new_muts);
+        }
+
         logger.debug("mutate(): add_entry({}), term {}", muts, term);
         const raft_command command {
             .mutations{muts.begin(), muts.end()}
